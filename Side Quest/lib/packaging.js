@@ -242,6 +242,23 @@ function selfCheck({ type, sections = {}, sourceMarkdown = '', htmlPath = null, 
     const lost = cites.filter((u) => !H.includes(u));
     add('citations survive', lost.length === 0, lost.length ? `${lost.length}/${cites.length} lost (first: ${lost[0].slice(0, 60)})` : `${cites.length}/${cites.length} present`);
   }
+  // HOUSE CONSTRAINTS (S4) — checked in the BUILD, not requested in the prompt. Both of these were
+  // prose instructions the model was asked to honour, which means they held right up until the one
+  // draft where they didn't and nobody counted. Measured against the shape's own declared ceiling.
+  try {
+    const _prose = String(sourceMarkdown || '')
+      .replace(/```[\s\S]*?```/g, ' ')                    // code blocks are not prose
+      .replace(/\(source:[^)]*\)/gi, ' ')                 // nor are citations
+      .replace(/https?:\/\/\S+/g, ' ');
+    const dashes = (_prose.match(/[—–]/g) || []).length;
+    add('no em/en dashes', dashes === 0, dashes ? `${dashes} found — house style writes them out` : 'none');
+    let maxWords = 0;
+    try { maxWords = require('../studio/doc_shapes').shapeFor(type).maxWords || 0; } catch {}
+    if (maxWords) {
+      const words = _prose.trim().split(/\s+/).filter(Boolean).length;
+      add('within the word ceiling', words <= maxWords, `${words} words (ceiling ${maxWords})`);
+    }
+  } catch (e) { add('house constraints', false, e.message); }
   // TIER GATE (S2) — the epistemic half of the self-check. Every other check above asks whether the
   // document RENDERED; this one asks whether it should go out at all. A figure with no source is
   // Tier 3 and must not print; a figure from an interested party that the prose does not attribute

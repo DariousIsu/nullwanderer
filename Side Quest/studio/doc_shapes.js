@@ -80,6 +80,10 @@
         { key: 'conclusion', title: 'Conclusion', required: true, note: 'Restate the thesis and end on a call to action.' },
       ],
       lengthRule: 'Typically 700–800 words.',
+      // The same ceiling as a NUMBER, so the build can check it instead of hoping the model counted.
+      // The methodology this mirrors says its op-eds were "held to the project's 700-word ceiling,
+      // verified by word count in the build" — a rule stated only in prose is a rule nobody enforces.
+      maxWords: 800,
     },
     report: {
       label: 'Report',

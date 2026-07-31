@@ -13491,6 +13491,36 @@ async function runTopicalResearchPass(focus) {
       section = `## ${nextFacet}\n${body.slice(0, 1200) || '_not found this pass_'}`;
     }
     section = section.trim();
+    // ⭐ S3 — ADVERSARIAL VERIFY on a research claim (methodology parity). The organ already existed
+    // for her CODE work (rehearsal_driver O6) and had never been pointed at research: generation and
+    // verification are different postures, and a model asked to check its own dossier will defend it.
+    // Argument runs only — refuting needs a thesis to refute, and on a neutral briefing there is
+    // nothing to be wrong ABOUT. Advisory and clearly labelled, never a gate: same posture as O6,
+    // and the tier gate (S2) is where a claim is actually stopped.
+    if (_thesis && section) {
+      try {
+        const _cl = require('./lib/cloud_logic');
+        const ref = await _cl.ask({
+          task: 'research_refute', v: 1, think: false,
+          input: { thesis: _thesis, hostile_reader: _hostile || '(unspecified)', vulnerability: nextFacet, section: section.slice(0, 6000) },
+          want: `You are a REFUTER working for the HOSTILE READER. Your ONLY job is to BREAK this section as support for the thesis: name the specific claim that does not hold, the number that is misread, the source that is the subject talking about itself, or the counter-evidence it left out. Do not praise it and do not summarise it. Default to "refuted" when uncertain.
+Reply ONLY: {"verdict": "survives"|"refuted", "attack": "<the strongest single attack a hostile reader makes on this section — or, for survives, the hardest one you tried and why it failed>"}`,
+          validate: (raw) => {
+            try {
+              const m = String(raw || '').match(/\{[\s\S]*\}/);
+              if (!m) return { valid: false, error: 'no JSON object' };
+              const o = JSON.parse(m[0]);
+              if (o.verdict !== 'survives' && o.verdict !== 'refuted') return { valid: false, error: 'verdict must be survives|refuted' };
+              return { valid: true, value: { verdict: o.verdict, attack: String(o.attack || '').slice(0, 500) } };
+            } catch (e) { return { valid: false, error: e.message }; }
+          },
+        });
+        if (ref && ref.verdict) {
+          section += `\n\n> **Adversarial check — ${ref.verdict.toUpperCase()}** (a separate pass argued the hostile reader's side)${ref.attack ? `\n> ${ref.attack}` : ''}`;
+          console.log(`[topical] adversarial check on "${nextFacet}" → ${ref.verdict.toUpperCase()}`);
+        }
+      } catch (e) { console.error('[topical] adversarial check failed (section ships without it):', e.message); }
+    }
     const header = covered.length === 0 ? `# ${kind === 'forecast' ? 'Forecast' : kind === 'argument' ? 'The case' : 'Briefing'}: ${goal}\n\n---\n\n` : '';
     try { await filesLib.dispatch({ tag: 'file-append', attrs: { path: file }, body: `${header}${section}\n\n` }); }
     catch (e) { console.error('[topical] append failed:', e.message); }

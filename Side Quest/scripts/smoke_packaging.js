@@ -102,6 +102,39 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     try { fsn.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
 
+  // --- ⭐ S4 house constraints + S2 tier gate, checked in the BUILD not asked for in the prompt ---
+  {
+    const base = { type: 'op_ed', sections: {}, htmlPath: null, pdfPath: null };
+    // em/en dashes: a prose rule nobody can enforce by asking
+    const dash = pkg.selfCheck({ ...base, sourceMarkdown: 'The grid was underbuilt — badly — for a decade.' });
+    ok(dash.checks.some((c) => c.name === 'no em/en dashes' && !c.ok), '⭐ em dashes are CAUGHT, not requested');
+    const clean = pkg.selfCheck({ ...base, sourceMarkdown: 'The grid was underbuilt, badly, for a decade.' });
+    ok(clean.checks.some((c) => c.name === 'no em/en dashes' && c.ok), 'clean prose passes the dash check');
+    // …but a dash inside a URL or a citation is not house style, it is data
+    const inUrl = pkg.selfCheck({ ...base, sourceMarkdown: 'See https://example.com/a—b for detail.' });
+    ok(inUrl.checks.some((c) => c.name === 'no em/en dashes' && c.ok), '⭐ a dash inside a URL is data, not prose');
+
+    // word ceiling: the shape declares 800, so the build can count
+    const long = pkg.selfCheck({ ...base, sourceMarkdown: 'word '.repeat(900) });
+    ok(long.checks.some((c) => c.name === 'within the word ceiling' && !c.ok), '⭐ the 800-word ceiling is COUNTED');
+    const short = pkg.selfCheck({ ...base, sourceMarkdown: 'word '.repeat(100) });
+    ok(short.checks.some((c) => c.name === 'within the word ceiling' && c.ok), 'a short piece passes the ceiling');
+    // a shape with no declared ceiling is not invented one
+    const noCeil = pkg.selfCheck({ ...base, type: 'report', sourceMarkdown: 'word '.repeat(3000) });
+    ok(!noCeil.checks.some((c) => c.name === 'within the word ceiling'), 'a shape with no declared ceiling gets no word check');
+
+    // tier gate rides selfCheck: an uncited figure must not print
+    const uncited = pkg.selfCheck({ ...base, sourceMarkdown: 'Transmission fell to 55 miles in 2023.' });
+    ok(uncited.checks.some((c) => c.name === 'every figure is sourced' && !c.ok), '⭐ an uncited figure fails the deliverable check');
+    const cited = pkg.selfCheck({ ...base, sourceMarkdown: 'Transmission fell to 55 miles in 2023 (source: https://gridstrategies.com/r).' });
+    ok(cited.checks.some((c) => c.name === 'every figure is sourced' && c.ok), 'a cited figure passes');
+    // rule B only runs when the caller says whose claim it is
+    const attributed = pkg.selfCheck({ ...base, subject: 'Meta Platforms', sourceMarkdown: 'Grants hit $58 million (source: https://about.meta.com/x).' });
+    ok(attributed.checks.some((c) => c.name === 'interested figures are attributed' && !c.ok), '⭐ an interested figure with no attribution fails');
+    const noSubject = pkg.selfCheck({ ...base, sourceMarkdown: 'Grants hit $58 million (source: https://about.meta.com/x).' });
+    ok(!noSubject.checks.some((c) => c.name === 'interested figures are attributed'), 'without a subject that check does not run at all');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
