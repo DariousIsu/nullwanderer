@@ -177,9 +177,21 @@ const CATEGORIES = [
     // Smuggling carriers. Bidi overrides can make a line render as something other than what it
     // says; dense zero-width runs hide text from a human reviewer but not from the model. Low
     // severity because a CMS emits a stray U+200B often enough to be ordinary.
+    // ⚠ ONLY THE TWO ACTUAL OVERRIDES. The class used to span U+202A–U+202E and U+2066–U+2069,
+    // which lumps the genuine spoofing characters in with ordinary internationalization. boot152
+    // flagged a Google Scholar result — "‪Linfeng Zhang‬ - ‪Google 学术搜索‬" — wrapped in U+202A
+    // (LEFT-TO-RIGHT EMBEDDING) and U+202C (POP): exactly correct handling of mixed CJK/Latin text,
+    // which is every page she reads on this topic. Embeddings (202A/202B), the pop (202C) and the
+    // modern isolates (2066–2069) are all benign. LEFT-TO-RIGHT and RIGHT-TO-LEFT OVERRIDE (202D,
+    // 202E) are the ones that force display order against the content — the actual attack, and the
+    // only two this category was ever named for.
+    // Written as explicit escapes: an invisible character pasted into source is unreadable in a
+    // diff and one stray edit away from silently meaning something else.
+    //   U+202D LEFT-TO-RIGHT OVERRIDE · U+202E RIGHT-TO-LEFT OVERRIDE  → the attack
+    //   U+200B-200D zero-width space/non-joiner/joiner · U+FEFF BOM  → hidden only in a RUN
     name: 'hidden_text', severity: 'low',
-    re: /[‪-‮⁦-⁩]|[​-‍﻿]{4,}/,
-    why: 'carries bidi-override or hidden zero-width characters',
+    re: /[\u202D\u202E]|[\u200B-\u200D\uFEFF]{4,}/,
+    why: 'carries a bidi OVERRIDE or a run of hidden zero-width characters',
   },
 ];
 
