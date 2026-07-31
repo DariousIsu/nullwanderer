@@ -173,5 +173,36 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
   ok(ag.validate('{"defer": false, "item": "", "when": "", "days": 0}').valid, 'a clean "not a hold" verdict parses');
 }
 
+// ── LINEAGE INHERITANCE: a spawned thread continues its parent run's document ────────────────
+// Measured live 2026-07-31: #3640 concluded with a 43,324-char deliverable and spawned three
+// follow-ups; #3643 went active and began researching AISI from scratch six minutes after the
+// document covering AISI was written. 8 of 8 spawned threads had base_doc=NONE, because base_doc
+// was only ever set on the user-work driver's path — the one that handles Lucas's own threads.
+{
+  const meta = {
+    'thread.3643.spawned_from': '3640',      // spawned by a concluded run
+    'thread.3638.spawned_from': 'subc',      // spawned by the subconscious — no parent RUN
+    'thread.3699.spawned_from': '3698',      // parent exists but never landed a deliverable
+    'thread.4000.spawned_from': '4000',      // pathological self-reference
+  };
+  const docs = { 'directed-3640': { id: 11754, title: 'Research — China AI and materials research' } };
+  const deps = { db: { getMeta: (k) => meta[k], getDocumentByRef: (r) => docs[r] || null } };
+
+  const hit = uw.inheritedBaseDocId(3643, { deps });
+  ok(hit && hit.docId === 11754 && hit.parentId === 3640, '⭐ a spawned thread inherits its parent run\'s deliverable, by LINEAGE not by matching');
+  ok(hit && /China AI and materials/.test(hit.title), 'and carries the title, so the inheritance can be logged honestly');
+
+  ok(uw.inheritedBaseDocId(3638, { deps }) === null, 'a subconscious-born thread inherits nothing — there is no parent RUN (the common, correct null)');
+  ok(uw.inheritedBaseDocId(3699, { deps }) === null, 'a parent that never landed a deliverable gives nothing');
+  ok(uw.inheritedBaseDocId(4000, { deps }) === null, 'a thread cannot inherit from itself');
+  ok(uw.inheritedBaseDocId(1234, { deps }) === null, 'a thread with no spawned_from at all inherits nothing');
+
+  // Never throw into the research loop — a bookkeeping lookup must not be able to stop a run.
+  const boom = { db: { getMeta: () => { throw new Error('db down'); }, getDocumentByRef: () => null } };
+  ok(uw.inheritedBaseDocId(3643, { deps: boom }) === null, 'a failing db yields null, never an exception into the run');
+  const boom2 = { db: { getMeta: () => '3640', getDocumentByRef: () => { throw new Error('gone'); } } };
+  ok(uw.inheritedBaseDocId(3643, { deps: boom2 }) === null, 'a failing doc lookup yields null too');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

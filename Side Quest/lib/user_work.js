@@ -106,6 +106,43 @@ function pickUserThread(threads, { now = 0, newsAtOf = () => 0 } = {}) {
   return best;
 }
 
+/**
+ * ⭐ A SPAWNED THREAD INHERITS ITS PARENT RUN'S DELIVERABLE — by LINEAGE, not by matching.
+ *
+ * Measured 2026-07-31, minutes after it happened: #3640 concluded, wrote a 43,324-character
+ * deliverable on China's AI-materials institutes, and spawned three follow-up threads — "what is
+ * AISI's annual budget and funding sources", "what is the quantitative scale of its compute",
+ * "who holds the top executive role". #3643 went ACTIVE and began researching AISI from scratch
+ * while the document covering AISI sat right there, written six minutes earlier.
+ *
+ * Every spawned thread measured had base_doc=NONE (8 of 8, across three different parents),
+ * because base_doc was only ever set on the user-work driver's path — the one that handles LUCAS's
+ * threads. A thread the program spawned for itself could never get one.
+ *
+ * This is the case the topic-MATCHING approach was built for and kept missing: the living-doc
+ * matcher fires on roughly 1 research thread in 18, because guessing which of 92 deliverables
+ * covers a topic is genuinely hard. But a spawned thread does not need guessing. It has its
+ * parent's id. The deliverable is stored at the derivable ref `directed-<parentId>`, so the link
+ * is a lookup, not a heuristic — the same lesson the civic store learned the expensive way: where
+ * a real lineage exists, use it, and never reach for fuzzy matching beside it.
+ *
+ * Returns the parent deliverable's doc id, or null. Null is the correct and common answer: a
+ * subconscious-born thread carries `spawned_from='subc'` (no parent RUN, so nothing to inherit),
+ * and a parent that never landed a deliverable has nothing to give.
+ */
+function inheritedBaseDocId(threadId, { deps = {} } = {}) {
+  const db = deps.db || require('./db');
+  let parent = null;
+  try { parent = db.getMeta(`thread.${Number(threadId) || 0}.spawned_from`); } catch { return null; }
+  const pid = String(parent == null ? '' : parent).trim();
+  if (!/^\d+$/.test(pid)) return null;                       // 'subc' and friends: no parent run
+  if (Number(pid) === Number(threadId)) return null;         // a thread cannot inherit from itself
+  try {
+    const doc = db.getDocumentByRef(`directed-${pid}`);
+    return doc && doc.id ? { docId: doc.id, parentId: Number(pid), title: doc.title || '' } : null;
+  } catch { return null; }
+}
+
 // THE LIVING DOCUMENT (Lucas 2026-07-30: "a concept built as an actionable living document —
 // the task bounces off that document over time"): match a new research thread to an EXISTING
 // landed research doc so the run CONTINUES it instead of restarting at zero. Same 2-token topic
@@ -268,4 +305,4 @@ When defer is false, item/when may be empty and days 0.`,
   };
 }
 
-module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };
+module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, inheritedBaseDocId, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };

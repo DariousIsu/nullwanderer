@@ -12974,7 +12974,23 @@ async function runDirectedResearchPass(focus) {
       // sources — "(source: <url>)" from the visited list only, never an invented one.
       const _baseDoc = (() => {
         try {
-          const id = parseInt(db.getMeta(`focus.${focus.id}.base_doc`) || '0', 10);
+          let id = parseInt(db.getMeta(`focus.${focus.id}.base_doc`) || '0', 10);
+          // LINEAGE INHERITANCE. base_doc used to be set in exactly ONE place — the user-work
+          // driver, which only handles Lucas's own threads — so a thread the program spawned for
+          // itself could never have one. Measured live: #3640 concluded with a 43,324-char
+          // deliverable and spawned three follow-ups; #3643 went active and started researching
+          // AISI from scratch six minutes after the document covering AISI was written. 8 of 8
+          // spawned threads had none. Resolving it HERE (lazily, at the read) covers every seed
+          // path at once instead of patching each one. Memoized so the lookup and its log line
+          // happen once per run, not once per synthesis.
+          if (!id) {
+            const inh = require('./lib/user_work').inheritedBaseDocId(focus.id, { deps: { db } });
+            if (inh) {
+              id = inh.docId;
+              db.setMeta(`focus.${focus.id}.base_doc`, String(id));
+              console.log(`[user-work] #${focus.id} inherits its parent run's document — doc #${id} from #${inh.parentId} ("${String(inh.title).slice(0, 60)}")`);
+            }
+          }
           if (!id) return null;
           const d = db.getDocumentById(id);
           return d ? { title: d.title, extract: String(d.body || '').slice(-3000) } : null;
