@@ -282,8 +282,17 @@ ok(r.coverageLine(9, 64).includes('9 of 64'), 'coverageLine: accepts a raw count
     '⭐ the generic contact-first ladder is GONE when the run has its own plan (the defect)');
   ok(/do not substitute a leadership roster or a contact hunt/.test(withPlan),
     'the specific substitution that was happening is named and refused');
-  ok(/a roster and a contact page do NOT make a run saturated/.test(withPlan),
+  ok(/a roster and a contact page do NOT make a run saturated/i.test(withPlan),
     'SATURATION is judged against the run\'s own questions, not against having found people');
+  // ⭐ …AND THE BAR MUST BE REACHABLE. First draft required "every question answered", but the
+  // open-question generator ADDS facets during the run — a plan that grows while you work it can
+  // never be finished. Measured: targets ending on the pass cap went 27% → 83%, and the saturation
+  // signal died, so "done" and "out of budget" became indistinguishable.
+  ok(/added nothing new about .* and the questions that remain are ones its sources plainly cannot answer/.test(withPlan),
+    'an exhausted-sources escape exists, so saturation is not unreachable-by-construction');
+  ok(/EITHER is true/.test(withPlan), 'and the two doors are stated as alternatives, not a single bar');
+  ok(/neither does an open list you have no way to close/.test(withPlan),
+    'the escape is bounded — it is exhaustion, not permission to stop early');
 
   // The ladder is still RIGHT for a cold prospecting target — it was only ever wrong as an override.
   const noPlan = r.buildDeepenPrompt({ goal: 'profile this firm', target: 'Acme Corp' });
