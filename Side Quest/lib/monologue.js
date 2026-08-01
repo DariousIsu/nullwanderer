@@ -1202,7 +1202,7 @@ async function _runOneTick() {
   // Lane window AND the pool-wide pace. Failing the pool gate demotes the tier to local rather than
   // silencing the thought — the subconscious keeps running, it just stops reaching for the cloud.
   const _budgetOk = subc.budgetOk(_getMeta, Date.now(), cfg.subcBudgetTokensPerHour())
-    && require('./quota_gate').allow('idle', { estimate: 1800 }).allow;
+    && require('./quota_gate').allow('idle', { estimate: 1 }).allow;
   const _tier = subc.decideTier(
     { mode: modeIsThreadReview ? 'thread-review' : (activeFocus ? 'focus' : 'free'), activeFocus: !!activeFocus, novelty: noveltyHint, importance: 0 },
     { threshold: cfg.subcMeritThreshold(), budgetOk: _budgetOk, mode: cfg.subcTierMode() }
@@ -1815,9 +1815,9 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
   if (!subc.budgetOk(_gm, nowTs, cfg.graphwalkBudgetTokensPerHour(), GRAPHWALK_BUDGET_KEY)) return false;
   // ⭐ THE POOL-WIDE GATE, on top of this lane's own rolling window. The per-lane windows are rate
   // limiters with no notion of a period, so four lanes can each be "within budget" while the shared
-  // allowance drains — measured 2026-07-31 at 90% used with two days to reset, this lane alone
-  // burning 41,944 tok/h. lib/quota paces against remaining/time-left instead. Fails open.
-  if (!require('./quota_gate').allow('idle', { estimate: 1400 }).allow) return false;
+  // allowance drains — measured 2026-07-31 at 90.8% of the WEEK used with two days to reset.
+  // estimate is in REQUESTS (the unit the provider bills): one graph-walk move, one call.
+  if (!require('./quota_gate').allow('idle', { estimate: 1 }).allow) return false;
   if (!echoSuit.liveReady()) return false;   // no graph → nothing to build; stay quiet
 
   // CLOUD cortex seam: the interpreter (candidate extraction + dossier synthesis). This is STRUCTURED
@@ -2043,7 +2043,7 @@ async function runPullerMove(_recentTurns, { mode = 'both', candidatesOverride =
   const subc = require('./subconscious');
   const _gm = (k) => db.getMeta(k); const _sm = (k, v) => db.setMeta(k, v);
   if (!subc.budgetOk(_gm, nowTs, cfg.pullerBudgetTokensPerHour(), PULLER_BUDGET_KEY)) return false;
-  if (!require('./quota_gate').allow('idle', { estimate: 200 }).allow) return false;   // pool-wide pace
+  if (!require('./quota_gate').allow('idle', { estimate: 1 }).allow) return false;   // pool-wide pace (REQUESTS)
   const pdb = require('./puller_db');
   const contactCard = require('../studio/contact_card');
   const beliefsLib = require('../studio/puller_beliefs');

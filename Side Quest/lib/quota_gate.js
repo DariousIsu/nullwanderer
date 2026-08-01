@@ -8,14 +8,18 @@
  * emptied. One gate, or it fragments again.
  *
  * CONFIG (meta keys, all operator-set — the provider's counter is not readable from here):
- *   quota.limit_tokens  tokens in the period. UNSET → no ceiling, everything allowed, and the status
- *                       line says so rather than implying a limit exists.
+ *   quota.limit_compute  COMPUTE UNITS in the period (params-in-billions x tokens/1000). UNSET →
+ *                       no ceiling, everything allowed, and the status line says so.
  *   quota.mark_pct      usage observed on the provider's dashboard at the mark, 0..1
  *   quota.mark_at       when that mark was taken (epoch ms)
  *   quota.reset_at      when the pool refills (epoch ms)
  *
- * Spend after the mark is measured by lib/usage_meter (real prompt+eval tokens off the API response),
- * so the estimate is an operator observation plus a measurement, never a guess by this process.
+ * Spend after the mark is measured from lib/usage_meter's PER-MODEL token totals, weighted by model
+ * size — so the estimate is an operator observation plus a measurement, never a guess by this process.
+ *
+ * ⚠ The unit is COMPUTE, not requests and not tokens. The provider bills compute, and the two naive
+ * units disagree about which lane is expensive: gemma4:31b has 3x the REQUESTS of deepseek-v4-flash
+ * and less of the bar. Weighting by model size reproduces the dashboard's proportions.
  */
 'use strict';
 
@@ -28,15 +32,26 @@ function _meta(k, d = '') { try { return _db().getMeta(k) || d; } catch { return
 function _num(k, d = 0) { const v = Number(_meta(k, '')); return Number.isFinite(v) ? v : d; }
 
 /** The pool's current state, from config + the real token meter. */
+/** Weighted compute the app has metered in [since, now]. Reads usage_meter's per-model token totals. */
+function _computeSince(since, now) {
+  try {
+    const um = require('./usage_meter');
+    const s = um.summary({ now, windowMs: Math.max(1, now - since) });
+    const byModel = (s && s.byModel) || {};
+    let total = 0;
+    for (const [model, tokens] of Object.entries(byModel)) total += quota.costOf({ model, tokens });
+    return total;
+  } catch { return 0; }
+}
+
 function state(now = Date.now()) {
-  const limit = _num('quota.limit_tokens', 0);
+  const limit = _num('quota.limit_compute', 0);
   const markAt = _num('quota.mark_at', 0);
   let spentSince = 0;
   try {
-    // Everything metered since the mark, across every model — the pool is shared, so the ledger is too.
-    const um = require('./usage_meter');
-    const s = um.summary({ now, windowMs: Math.max(1, now - markAt) });
-    spentSince = (s && s.total) || 0;
+    // COMPUTE since the mark: the meter records tokens PER MODEL, so weight each model's tokens by
+    // its size. Counting calls or raw tokens both mis-rank the lanes — see lib/quota's header.
+    spentSince = _computeSince(markAt, now);
   } catch {}
   return quota.state({
     limit, markPct: _num('quota.mark_pct', 0), markAt, spentSince,
@@ -44,12 +59,11 @@ function state(now = Date.now()) {
   });
 }
 
-/** Tokens metered across ALL lanes in the trailing hour — the rate the pace check is against. */
+/** COMPUTE across ALL lanes in the trailing hour — the rate the pace check is against. */
 function spentLastHour(now = Date.now()) {
   try {
     const um = require('./usage_meter');
-    const s = um.summary({ now, windowMs: quota.HOUR });
-    return (s && s.total) || 0;
+    return _computeSince(now - quota.HOUR, now);
   } catch { return 0; }
 }
 
@@ -58,7 +72,7 @@ function spentLastHour(now = Date.now()) {
  * meta key is absent would be a worse bug than the one it prevents.
  *
  * @param {string} lane      'interactive' | 'directed' | 'research' | 'idle'
- * @param {number} estimate  expected tokens for this call
+ * @param {number} estimate  expected COMPUTE for this call — quota.costOf({model, tokens})
  */
 function allow(lane, { estimate = 0, now = Date.now(), quiet = false } = {}) {
   try {

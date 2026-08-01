@@ -1,6 +1,35 @@
 /*
  * lib/quota.js — ONE budget for a FINITE POOL that refills on a date.
  *
+ * ⭐ THE UNIT IS COMPUTE. Not tokens, not requests — both of which this file tried first and both of
+ * which are wrong in ways that point at the wrong fix.
+ *
+ * The dashboard settles it. Requests this week against the share of the bar each model occupies:
+ *
+ *     gemma4:31b        69,659 requests  — a MODEST slice
+ *     deepseek-v4-flash 22,619 requests  — the LARGEST slice
+ *     gpt-oss:120b      10,535 requests
+ *     minimax-m3         1,071 · kimi-k2.7-code 430 · deepseek-v4-pro 475 · kimi-k2.6 158
+ *     mistral-large-3:675b 2 · qwen3.5:397b 1
+ *
+ * A third of the calls, more than the compute. So counting REQUESTS says "gemma is 66% of the
+ * problem" and counting TOKENS says something else again, while the truth is that one deepseek call
+ * costs several gemma calls. Both earlier units would have sent us optimising the wrong lane.
+ *
+ * COMPUTE ≈ PARAMETERS × TOKENS, the standard first-order approximation (inference FLOPs scale with
+ * model size and with how much text passes through it). So cost is weighted by model, and the weight
+ * is read from the model's own name where it states its size — gemma4:31b is 31, gpt-oss:120b is 120,
+ * mistral-large-3:675b is 675. That is a 20x spread across the fleet, which no unweighted counter can
+ * see.
+ *
+ * WHAT THAT MAKES THE LEVER: model ROUTING. One 120B call costs roughly four 31B calls of the same
+ * length; a 675B call costs twenty. Batching helps, going local helps more, and demoting a lane from
+ * a big model to a small one helps most of all — that is the control the earlier drafts could not
+ * even express.
+ *
+ * TWO WINDOWS, because the provider enforces two: a SESSION allowance that resets hourly and a WEEKLY
+ * one. They are independent — pass whichever is being checked; the caller holds both.
+ *
  * THE PROBLEM THIS EXISTS FOR. 2026-07-31: the Ollama cloud allowance hit 90% with two days left on
  * the period. Nothing in the app noticed, because nothing in the app knew a period existed.
  *
@@ -53,13 +82,53 @@ const TIER_FLOOR = { interactive: 0.00, directed: 0.03, research: 0.10, idle: 0.
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
+// COMPUTE WEIGHT per model, in billions of parameters — the size term of params x tokens.
+//
+// Read from the model's OWN NAME wherever it states its size ("gemma4:31b" -> 31, "gpt-oss:120b" ->
+// 120, "mistral-large-3:675b" -> 675). Parsing the name rather than keeping a table means a model we
+// have never seen still gets a real weight the first time it is used, instead of silently costing
+// whatever the default happens to be — and this fleet changes often.
+//
+// Names that do not state a size get NAMED_WEIGHTS, and anything still unknown gets DEFAULT_WEIGHT.
+// The default is deliberately NOT small: an unrecognised model is more likely to be a new frontier
+// model than a tiny one, and under-weighting it is the expensive direction of the error.
+const NAMED_WEIGHTS = {
+  // stated sizes are absent from these names; figures are order-of-magnitude, for pacing only
+  'deepseek-v4-flash': 100,   // "flash" is the small tier, but it out-consumes 3x its count in
+                              // gemma4:31b calls on the dashboard, so it is NOT a 31b-class cost
+  'deepseek-v4-pro': 400,
+  'minimax-m3': 200,
+  'kimi-k2.6': 300,
+  'kimi-k2.7-code': 300,
+};
+const DEFAULT_WEIGHT = 100;
+
+/** Compute weight for a model, in billions of parameters. Pure; never throws. */
+function weightFor(model) {
+  const m = String(model || '').toLowerCase().trim();
+  if (!m) return DEFAULT_WEIGHT;
+  for (const [k, w] of Object.entries(NAMED_WEIGHTS)) if (m.includes(k)) return w;
+  // "…:31b", "…-675b", "…120b" — the size the model states about itself.
+  const hit = m.match(/(\d+(?:\.\d+)?)\s*b\b/);
+  if (hit) { const n = Number(hit[1]); if (Number.isFinite(n) && n > 0) return n; }
+  return DEFAULT_WEIGHT;
+}
+
+/**
+ * Compute cost of one call, in weight-tokens (billions-of-params x thousands-of-tokens).
+ * Scaled by 1e-3 on tokens so the numbers stay human-sized in logs.
+ */
+function costOf({ model = '', tokens = 0 } = {}) {
+  return weightFor(model) * (Math.max(0, num(tokens)) / 1000);
+}
+
 /**
  * Where the pool stands.
  *
- * @param {number} s.limit        tokens in the period (0/unknown → unlimited)
+ * @param {number} s.limit        COMPUTE UNITS in the period (0/unknown → unlimited)
  * @param {number} s.markPct      operator's observed usage at the mark, 0..1
  * @param {number} s.markAt       when that mark was taken (epoch ms)
- * @param {number} s.spentSince   tokens this app has metered SINCE the mark
+ * @param {number} s.spentSince   compute units this app has metered SINCE the mark
  * @param {number} s.resetAt      when the pool refills (epoch ms)
  * @param {number} now
  */
@@ -95,8 +164,8 @@ function state({ limit = 0, markPct = 0, markAt = 0, spentSince = 0, resetAt = 0
  *
  * @param {string} o.lane          one of TIER
  * @param {object} o.st            state() result
- * @param {number} o.spentLastHour tokens across ALL lanes in the trailing hour
- * @param {number} o.estimate      tokens this call is expected to cost
+ * @param {number} o.spentLastHour compute units across ALL lanes in the trailing hour
+ * @param {number} o.estimate      compute units this call is expected to cost (see costOf)
  */
 function check({ lane = 'idle', st = null, spentLastHour = 0, estimate = 0 } = {}) {
   const tier = TIER[lane] != null ? lane : 'idle';
@@ -118,7 +187,7 @@ function check({ lane = 'idle', st = null, spentLastHour = 0, estimate = 0 } = {
   if (num(spentLastHour) + num(estimate) > allowedThisHour) {
     return {
       allow: false,
-      reason: `over burn-down pace: ${Math.round(num(spentLastHour)).toLocaleString()} tok in the last hour vs ${Math.round(allowedThisHour).toLocaleString()} sustainable for ${tier} (${Math.round(st.remaining).toLocaleString()} left, ${st.hoursLeft.toFixed(1)}h to reset)`,
+      reason: `over burn-down pace: ${Math.round(num(spentLastHour)).toLocaleString()} compute in the last hour vs ${Math.round(allowedThisHour).toLocaleString()} sustainable for ${tier} (${Math.round(st.remaining).toLocaleString()} left, ${st.hoursLeft.toFixed(1)}h to reset)`,
       usedPct: st.usedPct,
       pacePerHour: st.pacePerHour,
     };
@@ -129,8 +198,8 @@ function check({ lane = 'idle', st = null, spentLastHour = 0, estimate = 0 } = {
 /** One line for the log / status surface. Honest when nothing is configured. */
 function describe(st) {
   if (!st || !st.known) return 'quota: not configured (no ceiling enforced)';
-  return `quota: ${Math.round(st.usedPct * 100)}% used · ${Math.round(st.remaining).toLocaleString()} tok left · `
-    + `${st.hoursLeft.toFixed(1)}h to reset · sustainable ${Math.round(st.pacePerHour).toLocaleString()} tok/h`;
+  return `quota: ${Math.round(st.usedPct * 100)}% used · ${Math.round(st.remaining).toLocaleString()} compute left · `
+    + `${st.hoursLeft.toFixed(1)}h to reset · sustainable ${Math.round(st.pacePerHour).toLocaleString()}/h`;
 }
 
-module.exports = { state, check, describe, TIER, TIER_FLOOR, HOUR };
+module.exports = { state, check, describe, weightFor, costOf, TIER, TIER_FLOOR, HOUR, NAMED_WEIGHTS, DEFAULT_WEIGHT };
