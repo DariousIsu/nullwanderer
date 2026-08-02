@@ -154,4 +154,19 @@ function selfTest({ suite = null, timeoutMs = null } = {}) {
   });
 }
 
-module.exports = { ROOT, ALLOW_DIRS, resolveSafe, sourceMap, readSource, searchSource, selfTest, allSourceFiles: _allSourceFiles };
+// ── SELF-CODE-REVIEW INTENT ────────────────────────────────────────────────────────────────────
+// Detect a request to REVIEW / EVALUATE her OWN code — the trigger that must route the turn to the
+// OPERATOR, the only lane that carries these source tools. Without it, "access your code base and run
+// a full review" lands on a conversational route with NO source tools, and she CONFABULATES a review
+// she never runs ("I'm pulling up the files and running a diagnostic — report shortly", nothing ever
+// comes). Behavior-level, not a phrase list: a review/audit/read verb applied to her own code/source.
+const _SELF_CODE = /\b(?:your|my|her|its|zoe'?s|own)\s+(?:own\s+)?(?:code[\s-]?base|codebase|source[\s-]?code|source|code|implementation|program|modules?|repo(?:sitory)?)\b/i;
+const _BARE_CODE = /\b(?:code[\s-]?base|codebase|source[\s-]?code)\b/i;
+const _REVIEW_VERB = /\b(?:re-?view\w*|evaluat\w*|audit\w*|analy[sz]\w*|assess\w*|inspect\w*|critiqu\w*|examin\w*|debug\w*|diagnos\w*|read|reading|check|checking|look(?:ing)?\s+(?:at|over|through)|go(?:ing)?\s+(?:over|through)|walk(?:ing)?\s+through)\b/i;
+function isSelfCodeReview(msg) {
+  const s = String(msg || '');
+  if (s.length < 6) return false;
+  return _REVIEW_VERB.test(s) && (_SELF_CODE.test(s) || _BARE_CODE.test(s));
+}
+
+module.exports = { ROOT, ALLOW_DIRS, resolveSafe, sourceMap, readSource, searchSource, selfTest, allSourceFiles: _allSourceFiles, isSelfCodeReview };

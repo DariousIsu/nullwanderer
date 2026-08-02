@@ -46,6 +46,15 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(/no matches/.test(ss.searchSource('zz_never_in_any_file_zz')), 'no matches says so honestly');
   ok(typeof ss.searchSource('[invalid(regex') === 'string', 'an invalid regex falls back to literal, never throws');
 
+  // --- self-code-review intent (the trigger that routes "review your code" to the operator) ---
+  ok(ss.isSelfCodeReview('access your code base and run a full review and report'), 'catches "access your code base and run a full review"');
+  ok(ss.isSelfCodeReview('read your code'), 'catches "read your code"');
+  ok(ss.isSelfCodeReview('what about evaluating her own code'), 'catches the "evaluating her own code" gerund');
+  ok(ss.isSelfCodeReview('can you analyze your implementation'), 'catches analyze + your implementation');
+  ok(!ss.isSelfCodeReview('review the contacts we hold'), 'a review of NON-code data is not self-code-review');
+  ok(!ss.isSelfCodeReview('are you ready to go'), '"ready" does not trip the read verb');
+  ok(!ss.isSelfCodeReview('look at your calendar'), '"look at your calendar" is not code');
+
   // --- the gate self-test (one FAST pure suite, end-to-end through her own binary) ---
   ok(/not a valid suite/.test(await ss.selfTest({ suite: '../../evil.js' })), 'selfTest suite name is jailed');
   ok(/no such suite/.test(await ss.selfTest({ suite: 'smoke_never_existed.js' })), 'a missing suite says so');

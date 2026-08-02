@@ -7210,15 +7210,25 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // classified "can you do a frequency analysis of everyone in those documents" as route=answer,
     // so the operator never ran and her "give me a moment to process" dangled forever). A detected
     // set-analysis ask IS a task by construction.
-    if (opMode !== 'off' && (routeAllowsAny('lookup', 'task') || docSetBlock) && (needsExternal || isAssignment || docSetBlock) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && userMessage && userMessage.trim().length > 6) {
+    // SELF-CODE-REVIEW (2026-08-02): "review / evaluate / read your own code" must reach the OPERATOR —
+    // the only lane carrying source_map / source_read / source_search / self_test. Without this it lands
+    // on a conversational route with NO source tools and she CONFABULATES a review she never runs ("I'm
+    // pulling up the files and running a diagnostic — report shortly", nothing ever comes). Mirror the
+    // docSetBlock override: force the operator in directed mode. isAssignment stays FALSE, so the
+    // research-run/focus machinery is NOT spun for a code review — this is a source-review, not a project.
+    const selfCodeReview = (() => { try { return require('./lib/self_source').isSelfCodeReview(userMessage); } catch { return false; } })();
+    if (opMode !== 'off' && (routeAllowsAny('lookup', 'task') || docSetBlock || selfCodeReview) && (needsExternal || isAssignment || docSetBlock || selfCodeReview) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && userMessage && userMessage.trim().length > 6) {
       // directed (in-turn completion mode) when this is an assignment (intake gate, or regex
-      // fallback) — or a set-analysis ask, which needs the multi-step script budget.
-      const directed = isAssignment || !!docSetBlock;
+      // fallback) — or a set-analysis ask, or a self-code-review, which need the multi-step budget.
+      const directed = isAssignment || !!docSetBlock || selfCodeReview;
       // Immediate feedback — the agent loop can take a few seconds. Use a REQUEST-SERVING placeholder
       // ("on it — starting on that now"), NOT the self-focused "I'm in the middle of something" busy
       // line, which reads as brushing Lucas off the instant he hands her a task.
       try { sendBusy(require('./lib/snapback').pickWorkingLine(Date.now(), { task: directed })); } catch {}
-      const opRes = await runCloudOperator({ userMessage, context: (docSetBlock ? `${docSetBlock}\n\n` : '') + (distilledBrief || retrievedKnowledgeBlock || ''), task: directed });
+      const _codeReviewSteer = selfCodeReview
+        ? 'THIS IS A REQUEST TO REVIEW YOUR OWN CODE — and you HAVE the tools for it: source_map {} (the file map of the program you run on), source_read {"path":"lib/x.js"} (read a whole file), source_search {"pattern":"…"} (find where something lives / who calls it), self_test {"suite":"smoke_x.js"} (run your own offline gate — the honest "am I healthy?"). ACTUALLY RUN THEM this turn — source_map first, then source_read the files that matter; self_test if health is in question. Report REAL findings (file:line, concrete issues), never a summary of intent. Do NOT describe a diagnostic you did not run and do NOT promise a report "shortly" — produce it now from what the tools return.\n\n'
+        : '';
+      const opRes = await runCloudOperator({ userMessage, context: _codeReviewSteer + (docSetBlock ? `${docSetBlock}\n\n` : '') + (distilledBrief || retrievedKnowledgeBlock || ''), task: directed });
       if (directed) console.log('[operator] directed TASK → in-turn completion mode (8 steps / 90s)');
       if (opRes && opRes.answer) {
         operatorAnswer = opRes.answer;
