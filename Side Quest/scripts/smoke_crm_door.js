@@ -87,6 +87,32 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     ok(calls.create === 1, `repeat: create_contact called exactly once (${calls.create})`);
   }
 
+  // 3c. ORG DRIFT (boot-final 08-01: Jeannie Garner ×2 from one PDF): the extractor hands the SAME
+  // person with a DIFFERENT org string per chunk ("Florida League of Cities" vs none), so the
+  // org-scoped session key misses and the door-minted row has no AccountId for the block search to
+  // corroborate. Same session + same blockKey + same FULL first name = the door's own creation.
+  {
+    const calls = { create: 0, ids: 800 };
+    const suit3 = { connected: true, dispatch: async (msg) => {
+      if (msg.name === 'create_contact') { calls.create++; return { ok: true, text: JSON.stringify({ action: 'created', contact_id: calls.ids++ }) }; }
+      if (msg.name === 'update_contact') { return { ok: true, text: JSON.stringify({ updated_fields: [] }) }; }
+      return { ok: true, text: '{}' };
+    } };
+    door._resetForTest();
+    const d3 = door.getDoor(suit3);
+    const r1 = await d3.upsertPersonObject(door.personObjectFromCard({ name: 'Jeannie Garner', company: 'Florida League of Cities' }, [{ type: 'role', value: 'Executive Director/CEO' }]));
+    ok(r1.action === 'created' && r1.contactId === 800, `org-drift: first discovery creates (${r1.action} #${r1.contactId})`);
+    const r2 = await d3.upsertPersonObject(door.personObjectFromCard({ name: 'Jeannie Garner', company: null }, [{ type: 'role', value: 'Executive Director/CEO' }]));
+    ok(r2.contactId === 800 && r2.action !== 'created', `org-drift: same name, org dropped → SAME row (${r2.action} #${r2.contactId})`);
+    const r3 = await d3.upsertPersonObject(door.personObjectFromCard({ name: 'Jeannie Garner', company: 'FLC' }, []));
+    ok(r3.contactId === 800 && r3.action !== 'created', `org-drift: same name, org renamed → SAME row (${r3.action} #${r3.contactId})`);
+    ok(calls.create === 1, `org-drift: create_contact called exactly once (${calls.create})`);
+    // SAFETY: a DIFFERENT full first name under the same blockKey (garner|j) is NOT the same person —
+    // the name-only session fallback compares the FULL first name, so John still mints.
+    const r4 = await d3.upsertPersonObject(door.personObjectFromCard({ name: 'John Garner', company: null }, []));
+    ok(r4.action === 'created' && r4.contactId === 801, `org-drift safety: same blockKey, different full first name → new mint (${r4.action} #${r4.contactId})`);
+  }
+
   // 4. Graceful gating: no Echo / not connected → null (a safe no-op, never a throw).
   door._resetForTest();
   ok(door.getDoor(null) === null, 'no echoSuit → null (no-op)');

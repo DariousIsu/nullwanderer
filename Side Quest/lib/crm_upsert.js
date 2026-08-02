@@ -97,7 +97,7 @@ function createCrmUpserter({ callTool, readCrm, log = () => {} } = {}) {
     const key = blockKey(parts.FirstName, parts.LastName);
     if (!key) return { contactId: null, how: 'no-name', candidates: 0 };
 
-    const cands = readCrm.findByBlock(key, { jurisdiction, org });
+    const cands = readCrm.findByBlock(key, { jurisdiction, org, first: parts.FirstName });
     if (cands.length === 1) return { contactId: cands[0], how: 'block+jurisdiction', candidates: 1 };
     if (cands.length > 1) {
       // AMBIGUOUS. Do not guess and do not mint a duplicate on top of a duplicate — hold it.

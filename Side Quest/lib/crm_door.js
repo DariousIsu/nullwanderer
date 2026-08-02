@@ -21,7 +21,14 @@ let _door = null, _crm = null, _failed = false, _warnedMissing = false;
 // contact has no account row yet, so org-corroboration can never match the row THIS DOOR just
 // created — every chunk re-discovered the person and re-minted. The door remembers its own
 // creations for the session; a repeat resolves to the remembered row and lands as an update.
-const _sessionCreates = new Map();   // `${blockKey}|${org}` → contactId
+// boot-final 08-01 (Jeannie Garner ×2 from one PDF, 25s apart): the cache was org-scoped
+// (`${blockKey}|${org}`), so org drift between extraction chunks ("Florida League of Cities" vs
+// none) defeated it — and a door-minted row has no AccountId, so the block search's org
+// corroborator can never match it either. The org scope also hid a collision: blockKey holds only
+// the first INITIAL, so two no-org "J. Garner"s would collapse. The key is now blockKey + FULL
+// first name and org-independent: same session + same full name IS this door's own creation.
+// (Names alone still never match DB rows; this map only holds ids the door minted this session.)
+const _sessionCreates = new Map();   // `${blockKey}|${firstNameLower}` → contactId
 
 function getDoor(echoSuit) {
   if (_door) return _door;
@@ -40,7 +47,7 @@ function getDoor(echoSuit) {
         const r = strongStmt[col].get(val);
         return r ? r.id : null;
       },
-      findByBlock(key, { jurisdiction, org } = {}) {
+      findByBlock(key, { jurisdiction, org, first } = {}) {
         // IDENTITY SAFETY (2026-07-29): "a name alone NEVER matches" is crm_upsert's own invariant,
         // but this wiring ran the block bare — personObjectFromCard carries no jurisdiction and `org`
         // was ignored — so ONE same-surname row anywhere in the 113k-row CRM "matched" and a
@@ -49,8 +56,9 @@ function getDoor(echoSuit) {
         // door MINTS instead (Echo's strong-id dedupe still guards true re-adds) — a duplicate row is
         // recoverable, a false merge is not ([[resolver-false-identification]]).
         const [last, fi] = String(key).split('|');
-        const ck = `${key}|${String(org || '').toLowerCase().trim()}`;
-        if (_sessionCreates.has(ck)) return [_sessionCreates.get(ck)];
+        const firstLower = String(first || '').toLowerCase().trim();
+        const ck = `${key}|${firstLower}`;
+        if (firstLower && _sessionCreates.has(ck)) return [_sessionCreates.get(ck)];
         if (!jurisdiction && !org) return [];
         // Compare the surname as blockKey normalized it (letters only) — the raw LOWER(TRIM())
         // compare could never equal the stripped key for O'Brien / hyphenated / spaced surnames,
@@ -89,7 +97,8 @@ function getDoor(echoSuit) {
             const U = require('./crm_upsert');
             const parts = U.splitName((obj && obj.name) || '');
             const k = U.blockKey(parts.FirstName, parts.LastName);
-            if (k) _sessionCreates.set(`${k}|${String((obj && obj.org) || '').toLowerCase().trim()}`, r.contactId);
+            const fl = String(parts.FirstName || '').toLowerCase().trim();
+            if (k && fl) _sessionCreates.set(`${k}|${fl}`, r.contactId);
           }
         } catch { /* cache is best-effort */ }
         return r;
