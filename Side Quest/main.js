@@ -1777,6 +1777,45 @@ app.whenReady().then(() => {
     console.log('[main] decompose backlog sweep started (2 docs / 5min, budgeted)');
   }
 
+  // DOC-CONTACT SWEEP — the driver lib/doc_contacts never had. The store, the scan ledger, and
+  // gatherHeldContacts' third source all existed; nothing ever called pendingDocs(), so the corpus
+  // sat at 34 scanned docs while parish research held ~1,468 gov-domain addresses (the "she offered
+  // to research what she already holds" failure). Same discipline as the decompose sweep above:
+  // a couple of docs per tick, self-enforced daily chunk budget, one run in flight, defer while
+  // booting or while he types.
+  {
+    const SWEEP_MS = 5 * 60 * 1000;
+    let _inFlight = false;
+    const runDocContactSweep = async () => {
+      if (_inFlight) return;
+      if (_bootGraceActive()) { _logBootDefer('doc-contact-sweep'); return; }
+      if (_conversationActive()) { _logLoadDeferral('doc-contact-sweep'); return; }
+      _inFlight = true;
+      try {
+        if (String(process.env.ZOE_AUTO_INGEST || '1').trim() === '0') return;
+        const src = (() => { try { return (require('./lib/models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch { return null; } })();
+        if (!src) return;                                        // extraction is a cloud call
+        const decompLane = require('./lib/decomp_lane');
+        const contactExtract = require('./lib/contact_extract');
+        const { completeDetailed } = require('./lib/ollama');
+        const model = config.extractionModel() || config.subconsciousModel();
+        const extract = decompLane.makeCloudExtractor({
+          completeFn: completeDetailed, model, base: src.base, token: src.token,
+          buildPrompt: contactExtract.buildCardsPrompt, parse: contactExtract.parseDocCards, numPredict: 700,
+        });
+        const sweep = require('./lib/doc_contact_sweep');
+        const r = await sweep.runTick(db, { limit: 2, extract, log: (m) => console.log('[doc-contact-sweep]', m) });
+        if (r.scanned) {
+          console.log(`[doc-contact-sweep] scanned ${r.scanned} doc(s) → +${r.found} contact(s) — budget ${r.budget.spent + r.chunksSpent}/${r.budget.limit} chunks today`);
+        }
+      } catch (e) { console.error('[doc-contact-sweep]', e.message); }
+      finally { _inFlight = false; }
+    };
+    setTimeout(() => { runDocContactSweep().catch(() => {}); }, 150000);   // after boot settles, offset from decomp
+    setInterval(() => { runDocContactSweep().catch(() => {}); }, SWEEP_MS).unref?.();
+    console.log('[main] doc-contact sweep started (2 docs / 5min, budgeted — un-traps research contacts)');
+  }
+
   // NEWS DATA-STREAM COLLECTOR — fills the ISOLATED news bucket (data/news_bucket.db) from the RSS
   // subscriptions on a backend timer, independent of the Monitors widget. Model-free; raw items NEVER
   // reach memory (sq.db) — only compressed news objects promote (nightly). Reuses the feeds:fetch path.
