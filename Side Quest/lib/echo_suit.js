@@ -483,7 +483,12 @@ class EchoSuit {
     const _t0 = Date.now();
     let _res = null;
     const _toName = (tag && (tag.name || tag.kind || tag.tag || tag.query)) || 'tool';
-    const _TMO = process.env.ZOE_TOOL_DISPATCH_TIMEOUT_MS != null ? Number(process.env.ZOE_TOOL_DISPATCH_TIMEOUT_MS) : 90000;
+    const _TMO_DEFAULT = process.env.ZOE_TOOL_DISPATCH_TIMEOUT_MS != null ? Number(process.env.ZOE_TOOL_DISPATCH_TIMEOUT_MS) : 90000;
+    // A caller may RAISE the per-call budget for a KNOWN-heavy, idle-gated maintenance op that nobody is
+    // waiting on — e.g. the full-corpus run_blocking_dedup sweep, measured ~74s+ of legit work (prefilter
+    // over 1.8M entities + a 1.2M-pair self-join), which the 90s default silently ABANDONS. The default
+    // stays the ceiling for every interactive/agent-loop call, so a hung tool still can't stall a turn.
+    const _TMO = (Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0) ? opts.timeoutMs : _TMO_DEFAULT;
     try {
       _res = await _raceTimeout(this._maybeMemoized(tag, opts), _TMO, _toName);
       return _res;

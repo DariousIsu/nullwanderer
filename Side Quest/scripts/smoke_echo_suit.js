@@ -132,6 +132,20 @@ function mockClient(overrides = {}) {
     ok('transport throw -> caught, fed back', crashed.isError === true && /Echo call failed/.test(crashed.text));
   }
 
+  console.log('\nper-call dispatch timeout override (heavy idle-gated maintenance):');
+  {
+    const slow = (ms, val) => () => new Promise((res) => setTimeout(() => res({ content: [{ type: 'text', text: val }] }), ms));
+    const suit = S.createSuit({ client: mockClient({ tools: { get_entity: slow(120, 'Entity: slow one.') } }) });
+    await suit.connect();
+    const prev = process.env.ZOE_TOOL_DISPATCH_TIMEOUT_MS;
+    process.env.ZOE_TOOL_DISPATCH_TIMEOUT_MS = '40';                  // default budget BELOW the 120ms tool
+    const abandoned = await suit.dispatch({ kind: 'do', name: 'get_entity', args: { id: 1 } });
+    ok('a slow tool is abandoned at the default budget', abandoned.timedOut === true && abandoned.isError === true);
+    const raised = await suit.dispatch({ kind: 'do', name: 'get_entity', args: { id: 2 } }, { timeoutMs: 4000 });
+    ok('a per-call timeoutMs override lets the SAME slow tool complete', !raised.isError && /slow one/.test(raised.text));
+    if (prev == null) delete process.env.ZOE_TOOL_DISPATCH_TIMEOUT_MS; else process.env.ZOE_TOOL_DISPATCH_TIMEOUT_MS = prev;
+  }
+
   console.log('\ndispatchAll (end-to-end from her output):');
   {
     const suit = S.createSuit({ client: mockClient() });

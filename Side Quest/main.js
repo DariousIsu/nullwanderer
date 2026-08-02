@@ -996,6 +996,11 @@ app.whenReady().then(() => {
   const KGDEDUP_MIN_GAP_MS = (parseFloat(process.env.ZOE_KG_DEDUP_MIN_GAP_MIN) || 180) * 60 * 1000; // floor (3h)
   const KGDEDUP_FULL_GAP_MS = (parseFloat(process.env.ZOE_KG_DEDUP_FULL_DAYS) || 7) * 24 * 60 * 60 * 1000; // full-sweep net
   const KGDEDUP_SANITY_CAP = parseInt(process.env.ZOE_KG_DEDUP_SANITY_CAP || '', 10) || 8000;      // per-run burst guard
+  // A FULL-corpus blocking sweep (changed_since=null) is ~74s+ of legit work (prefilter over 1.8M
+  // entities + a 1.2M-pair self-join) and the 90s dispatch default silently ABANDONS it — which also
+  // (nightly) stamps last_kg_dedup_full_at as if the net ran. These sweeps are idle-gated housekeeping
+  // nobody waits on, so give them a longer per-call budget. Incremental passes finish in ~7s, unaffected.
+  const KGDEDUP_DISPATCH_MS = (parseFloat(process.env.ZOE_KG_DEDUP_TIMEOUT_MIN) || 4) * 60 * 1000; // 4-min leash for the full sweep
   let kgDedupRunning = false;
   const maybeRunKgDedup = async () => {
     if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_KG_DEDUP_ENABLED || '').trim())) return;  // arm deliberately
@@ -1014,7 +1019,7 @@ app.whenReady().then(() => {
       const dueFull = Date.now() - parseInt(db.getMeta('last_kg_dedup_full_at') || '0', 10) >= KGDEDUP_FULL_GAP_MS;
       const since = dueFull ? null : (parseInt(db.getMeta('last_kg_dedup_ts') || '0', 10) || (nowSec - 7 * 86400));
       const args = (since == null) ? {} : { changed_since: since };
-      const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_blocking_dedup', args });
+      const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_blocking_dedup', args }, { timeoutMs: KGDEDUP_DISPATCH_MS });
       let rep = null; try { rep = JSON.parse(dr && dr.text); } catch {}
       if (rep && rep.new != null) {
         // IN-LINE AUDIT: an anomalous burst (way past the steady trickle) → do NOT advance the cursor; leave
@@ -1132,10 +1137,13 @@ app.whenReady().then(() => {
       //    never re-touched. Cheap to land (signature-dedup skips everything already proposed).
       let swept = 0;
       try {
-        const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_blocking_dedup', args: {} });
+        const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_blocking_dedup', args: {} }, { timeoutMs: KGDEDUP_DISPATCH_MS });
         let drep = null; try { drep = JSON.parse(dr && dr.text); } catch {}
         swept = (drep && drep.new) || 0;
-        db.setMeta('last_kg_dedup_full_at', String(Date.now()));       // nightly owns the full net now — keeps the 7-day net quiet
+        // Only claim the full net ran if the sweep actually COMPLETED. A dispatch timeout/soft-error
+        // resolves (never throws), so without this guard an ABANDONED sweep would still stamp the net
+        // "done" and silence the 7-day safety net — the exact silent failure the longer leash prevents.
+        if (dr && !dr.isError) db.setMeta('last_kg_dedup_full_at', String(Date.now()));   // nightly owns the full net now — keeps the 7-day net quiet
       } catch (e) { console.error('[kg-nightly] blocking sweep failed:', e.message); }
       // 2) Drain the FAST-ANCHORED queue toward empty (bounded). Anchored rarely parks, so it converges; a
       //    parked proposal STAYS pending (store.run_adjudication contract), so we break the moment a batch
