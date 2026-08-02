@@ -171,6 +171,39 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     ok(/UNSATISFIED/.test(r5.steps[0].result), 'and the failed one still gets the UNSATISFIED marker (same treatment as a solo step)');
   }
 
+  // --- NARRATED-DONE defer-leak (2026-08-02, live self-code-review): the model gathered, then emitted a bare
+  //     {"thought":"I've completed the review…"} with NO action and NO final. The loop used to return that raw
+  //     JSON as the answer, which the voicer turned into a defer ("starting on that now, I'll report when
+  //     ready") — the exact failure Lucas kept hitting. It must instead COMPILE from the gathered work. ---
+  console.log('\nnarrated-done → compile from work (not a voiced {"thought":…} defer):');
+  {
+    const script = [
+      '{"thought":"read the entry file","action":{"tool":"source_read","args":{"path":"main.js"}}}',
+      '{"thought":"I\'ve completed the review. I read 7 key files (main.js, autonomy.js, board.js, db.js) — all healthy."}', // narrated done, NO final
+    ];
+    let si = 0;
+    const complete = async (msgs) => {
+      const last = Array.isArray(msgs) ? String(msgs[msgs.length - 1].content || '') : '';
+      if (/out of tool steps/i.test(last)) return { text: 'REVIEW — main.js: the operator gate forces source review; no blocking defects in the entry path. autonomy.js: idle driver bounded. Grounded in the 1 file read.' };
+      if (/Re-emit it as EXACTLY ONE valid JSON/i.test(last)) return { text: script[1] };   // model insists it's done
+      return { text: script[si++] };
+    };
+    const tools = { source_read: async () => 'main.js contents: turn routing, operator gate at ~7228 …' };
+    const rr = await op.runOperator({ userMessage: 'access your code base and run a full review', deps: { complete, tools }, maxSteps: 6 });
+    ok(rr && /^REVIEW/.test(rr.answer || '') && !/"thought"/.test(rr.answer || ''),
+      'a narrated-done {"thought":…} is NOT voiced — the loop compiles the real review from gathered work');
+    ok(rr && rr.steps.length === 1 && rr.steps[0].tool === 'source_read',
+      'the compile draws from the gathered source_read step');
+  }
+
+  // --- narrated-done with NOTHING gathered → null answer (drops to the normal local reply), never raw JSON ---
+  {
+    const complete = async () => ({ text: '{"thought":"I\'m done — nothing to add."}' });   // bare thought on step 1, no work
+    const rr = await op.runOperator({ userMessage: 'x', deps: { complete, tools: {} }, maxSteps: 4 });
+    ok(rr && (rr.answer == null || rr.answer === ''),
+      'narrated-done with no gathered work → null answer (local-reply fallback), never a raw {"thought":…}');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

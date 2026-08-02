@@ -305,6 +305,28 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
   const cOpts = { num_predict: numPredict, ...(model ? { model } : {}) };
   const capChars = _contextCap();
   let repaired = false;
+  // FORCE A FINAL from the work already gathered — the same compile the out-of-steps path uses.
+  const _forceFinalFromWork = async () => {
+    try {
+      const res = await complete([{ role: 'user', content: `You are out of tool steps. Using ONLY the work below, give Zoe the complete grounded answer to: "${String(userMessage).slice(0, capChars)}".${history}\n\nReply with the answer text only.` }], cOpts);
+      const ft = (typeof res === 'string') ? res : ((res && res.text) || '');
+      return ft.trim() || null;
+    } catch { return null; }
+  };
+  // A chunk of model text that carried NO runnable step. Genuine PROSE is the answer. But a JSON step-object
+  // that carried neither an action nor a final — the model NARRATING being done ({"thought":"I've completed
+  // the review…"}) instead of emitting {"final":…} — must NOT be voiced: returning it shipped raw {"thought":…}
+  // JSON to Lucas, which read as a defer ("starting on that now"). Compile the real answer from gathered work
+  // instead; null (cloud down / nothing gathered) drops the turn to a normal local reply, never to raw JSON.
+  const _answerFromLeftover = async (leftover) => {
+    const t = String(leftover || '').trim();
+    // A genuine answer is natural language — it NEVER starts with "{". Anything "{"-leading here is a JSON
+    // artifact (a bare {"thought":…} narration, an actionless object, or truncated JSON — a real {"final":…}
+    // was already returned upstream), and looksLikeJsonStep misses the bare-thought case, so key off the brace.
+    if (t && !t.startsWith('{')) return t;            // genuine prose → the answer
+    if (!steps.length) return null;                  // JSON artifact / empty + nothing gathered → nothing to voice
+    return await _forceFinalFromWork();              // narrated-done / un-parseable JSON → compile from work
+  };
   for (let i = 0; i < maxSteps; i++) {
     if (nowFn() - t0 > maxMs) break;   // over the wall-clock budget → stop looping, force a final below
     let res;
@@ -330,12 +352,12 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
         if (p2) { parsed = p2; text = t2; }
       } catch { /* repair is best-effort — fall through to the prose contract */ }
     }
-    if (!parsed) return _finalize(steps, text.trim() || null);              // plain prose → treat as the answer
+    if (!parsed) return _finalize(steps, await _answerFromLeftover(text));  // plain prose → answer; leaked JSON → compile
     if (parsed.final !== undefined) return _finalize(steps, parsed.final);
 
     // ── MULTI-ACTION STEP (2.4). One round-trip may carry several INDEPENDENT lookups. ──────────
     const { list: asked, dropped } = actionsOf(parsed);
-    if (!asked.length) return _finalize(steps, text.trim() || null);   // a step object with no runnable tool
+    if (!asked.length) return _finalize(steps, await _answerFromLeftover(text));   // step object w/ no runnable tool → compile, never voice raw JSON
     const { list: batch, deferred } = cutAtObservePoint(asked);
 
     // Run ONE action and shape its result. Factored out so the concurrent and sequential paths
@@ -382,12 +404,8 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
     }
     if (dropped) history += `\n  [NOT RUN: ${dropped} action(s) over the ${MAX_BATCH}-per-step limit — ask again for the ones you still need.]`;
   }
-  // out of steps → force a final answer from what we gathered
-  try {
-    const res = await complete([{ role: 'user', content: `You are out of tool steps. Using ONLY the work below, give Zoe the complete grounded answer to: "${String(userMessage).slice(0, capChars)}".${history}\n\nReply with the answer text only.` }], cOpts);
-    const text = (typeof res === 'string') ? res : ((res && res.text) || '');
-    return _finalize(steps, text.trim() || null);
-  } catch { return _finalize(steps, null); }
+  // out of steps → force a final answer from what we gathered (same compile as the narrated-done path)
+  return _finalize(steps, await _forceFinalFromWork());
 }
 
 module.exports = { runOperator, parseAction, looksLikeJsonStep, isDirectedTask, parseSliceResult, operatorModel, _operatorComplete, TOOL_SPEC, TOOL_SPEC_CORE, TOOL_SPEC_TAIL, DEFAULT_MAX_STEPS, actionsOf, batchIsReadOnly, cutAtObservePoint, MAX_BATCH, READ_SAFE, OBSERVE_AFTER };
