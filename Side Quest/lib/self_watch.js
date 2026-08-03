@@ -59,8 +59,19 @@ const SIGNAL_LANES = {
   'analysis': 'analysis',
   'harvest': 'harvest',
   'firewall': 'firewall',   // fetched content flagged / a laundered need refused — a signal, never noise
+  // Diagnostic lanes (2026-08-03) — the reply/model/memory instrumentation, tied into her own
+  // diagnostics rather than being stripped: personal-memory growth, warmth economics, idle depth.
+  'owner-ingest': 'memory', // a person/org/meeting he named became an owner-world node
+  'owner-sync': 'memory',   // his calendar synced into the identity graph
+  'warm': 'models',         // warm-keeper: which main model was held hot / skipped
+  'idle-depth': 'idle',     // the anticipatory ladder's tier per tick
+  'echo': 'echo',           // Echo transport events incl. the stale-socket reconnect+retry
 };
 const ANOMALY_RES = [/Traceback \(most recent/i, /\bUncaught\b/, /\bFAILED\b/, /\bUnhandled(?:PromiseRejection)?\b/i];
+// Diagnostic prefixes that denote a REAL failure even at warn level, so a RECURRENCE surfaces on the
+// obs bus and (past the mint threshold) opens a capability need — self-repair on her own instruments.
+// reply-diag = the cloud reply came back empty (the load-only miss the reply root-fix addressed).
+const ANOMALY_PREFIXES = new Set(['reply-diag']);
 const SELF_PREFIXES = ['[watch]', '[obs]'];
 
 // ── pure classification (offline-smokeable) ───────────────────────────────────────────────────
@@ -70,7 +81,7 @@ function classify(line, level = 'info') {
   for (const p of SELF_PREFIXES) if (s.startsWith(p)) return { action: 'ignore' };
   const m = /^\[([a-z0-9-]+)\]/i.exec(s.trim());
   const prefix = m ? m[1].toLowerCase() : null;
-  const anomalous = level === 'error' || ANOMALY_RES.some((re) => re.test(s)) || (prefix === 'window');
+  const anomalous = level === 'error' || ANOMALY_RES.some((re) => re.test(s)) || (prefix === 'window') || (prefix && ANOMALY_PREFIXES.has(prefix));
   if (anomalous) return { action: 'anomaly', prefix: prefix || '(raw)', lane: prefix && SIGNAL_LANES[prefix] ? SIGNAL_LANES[prefix] : 'anomaly', ref: _ref(s, prefix) };
   if (prefix && SIGNAL_LANES[prefix]) return { action: 'store', prefix, lane: SIGNAL_LANES[prefix], ref: _ref(s, prefix) };
   return { action: 'count', prefix: prefix || '(raw)' };

@@ -55,7 +55,16 @@ function tokensOf(usage) {
   return Number.isFinite(tot) && tot > 0 ? tot : 0;
 }
 
+// Most recent timestamp we saw a call for `model` (exact match), or 0 if never. Lets the warm-keeper
+// skip a model that real traffic already keeps hot — so we only spend pings on an idle replier.
+function lastSeen(model, before = Date.now()) {
+  const m = String(model || '');
+  let ts = 0;
+  for (const e of _log) { if (e.model === m && e.ts <= before && e.ts > ts) ts = e.ts; }
+  return ts;
+}
+
 function reset() { _log.length = 0; }
 function _size() { return _log.length; }
 
-module.exports = { record, summary, tokensOf, reset, _size, DAY_MS, HOUR_MS, RETAIN_MS };
+module.exports = { record, summary, tokensOf, lastSeen, reset, _size, DAY_MS, HOUR_MS, RETAIN_MS };

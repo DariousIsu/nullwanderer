@@ -30,6 +30,8 @@ const MAX_STAGE_STRIKES = 3;
 const FOLLOW_EVERY_LINES = 4;   // synthesize a running understanding after this many new caption lines
 const FOLLOW_MAX_WAIT_MS = 25000;   // ...or after this long with ANY pending lines, so sparse meetings still get understood (don't sit forever short of the line count)
 const LEAVE_SILENCE_MS = 300000;   // after a clear sign-off AND she's effectively alone, if captions stay quiet THIS long she hangs up (5 min; 90s was far too eager — a quiet stretch mid-meeting ≠ over)
+const ALONE_LEAVE_MS = 240000;     // effectively ALONE (attendee panel ≤1) for THIS long → leave, no verbal sign-off needed. The real-world "everyone dropped off" signal the sign-off gate kept missing (Lucas: "she still doesn't know when to leave").
+const MAX_MEETING_MS = 3 * 3600000; // hard backstop: never sit in a call past 3h whatever the captions do — the "stuck in observing forever" state now has a ceiling.
 const MEETING_RESEARCH_GAP_MS = 30000;   // M2: governed cadence for in-meeting background research (steady, not spammy)
 
 // ── WHO SHE TALKS TO IN A MEETING ───────────────────────────────────────────────────────────────
@@ -296,6 +298,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_left_ticks', '0');
   db.setMeta('gmeet_pending', ''); db.setMeta('gmeet_pending_lines', '0'); db.setMeta('gmeet_pending_since', ''); db.setMeta('gmeet_understanding', '');
   db.setMeta('gmeet_signoff_seen', ''); db.setMeta('gmeet_last_caption_at', '');
+  db.setMeta('gmeet_alone_since', ''); db.setMeta('gmeet_leave_requested', '');   // fresh leave-timers per meeting
   db.setMeta('gmeet_understanding_log', ''); db.setMeta('gmeet_last_recap', '');
   db.setMeta('gmeet_present', '[]'); db.setMeta('gmeet_directives', '[]');
   db.setMeta('gmeet_started_at', String(Date.now()));   // M1: transcript scope anchor
@@ -803,6 +806,30 @@ async function runTick(ctx = {}) {
   }
 
   if (stage === 'observing') {
+    const _tNow = d.now ? d.now() : Date.now();
+    // Shared leave: hang up in HER own browser, recap, mark done, clear the per-meeting timers. EVERY
+    // leave trigger (chat / max-duration / alone / sign-off) funnels through this one sequence.
+    const _leaveAndFinish = async (reason, msg) => {
+      const lv = await d.leaveMeeting(d.web).catch(() => ({ ok: false }));
+      const recap = await synthesizeMeeting(d, ctx).catch(() => '');
+      db.setMeta('gmeet_signoff_seen', ''); db.setMeta('gmeet_last_caption_at', ''); db.setMeta('gmeet_left_ticks', '0');
+      db.setMeta('gmeet_alone_since', ''); db.setMeta('gmeet_leave_requested', '');
+      set('done'); db.setMeta('gmeet_ended_at', String(Date.now()));   // arms post-meeting recall in context.js
+      surface(msg, `(gmeet) ${reason}`);
+      if (recap) surface(`Here's what I took from the meeting — ${recap}`, '(gmeet) meeting recap');
+      return { stage, ok: true, note: `${reason} → left call → done${recap ? ' + recap' : ''}${lv && lv.ok ? '' : ' (leave click unconfirmed)'}` };
+    };
+    // LEAVE TRIGGER — CHAT: Lucas said "the meeting is over" / told her to leave (flag set by the chat
+    // path in main.js). Honor it immediately — no sign-off, silence, or alone-check required.
+    if (db.getMeta('gmeet_leave_requested') === '1') {
+      return await _leaveAndFinish('left on request', `Got it — you said the meeting's over, so I've left the call. Back to my own time.`);
+    }
+    // LEAVE TRIGGER — MAX DURATION backstop: never sit in a call past MAX_MEETING_MS whatever the
+    // captions do (the "stuck in observing forever" state now has a hard ceiling).
+    const _startedAt = parseInt(db.getMeta('gmeet_started_at') || '0', 10) || 0;
+    if (_startedAt && (_tNow - _startedAt) >= MAX_MEETING_MS) {
+      return await _leaveAndFinish('max duration', `We've been in this meeting a long while — I've stepped out to free myself up. Say the word if you want me back in.`);
+    }
     // LEAVE DETECTION: if she's no longer in the meeting (navigated away / call ended),
     // end after 2 consecutive misses so observing can't monopolize the idle loop forever
     // (the freeze: a stale 'observing' from an ended meeting starved her of all cognition).
@@ -821,6 +848,22 @@ async function runTick(ctx = {}) {
       return { stage, ok: true, note: `not in meeting (${n}/2) — will end if it persists` };
     }
     db.setMeta('gmeet_left_ticks', '0');
+    // LEAVE TRIGGER — ALONE too long: the attendee panel is down to just her (≤1) for ALONE_LEAVE_MS →
+    // the meeting is over even with NO verbal sign-off (people simply dropped off). This is the signal
+    // the sign-off-only gate kept missing, and why she sat in an ended call. Reset the clock the instant
+    // anyone else is present, so a momentary scrape blip mid-meeting can't hang her up.
+    try {
+      const _present = parseAttendees(await d.scrapeAttendees(d.web)).length;
+      if (_present <= 1) {
+        if (!db.getMeta('gmeet_alone_since')) db.setMeta('gmeet_alone_since', String(_tNow));
+        const _since = parseInt(db.getMeta('gmeet_alone_since') || '0', 10) || _tNow;
+        if ((_tNow - _since) >= ALONE_LEAVE_MS) {
+          return await _leaveAndFinish('alone — everyone left', `Looks like everyone's dropped off, so I've left the call — I'm back to my own time.`);
+        }
+      } else {
+        db.setMeta('gmeet_alone_since', '');
+      }
+    } catch { /* scrape failure → keep observing; the max-duration + sign-off paths still bound it */ }
     // Dedupe by exact speaker|text against what she's already surfaced — captions scroll
     // and the active line mutates in place, so an index-into-the-list breaks; a seen-set
     // is robust to both. (10s observe ticks usually catch a line after it finalizes.)

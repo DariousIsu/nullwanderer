@@ -125,6 +125,26 @@ function get(coord, { deps = {} } = {}) {
   return { ...obj, edges };
 }
 
+// Slug a name into a coordinate id fragment (stable, url-ish).
+function _slug(s) { return String(s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'x'; }
+
+// The coordinate prefix per type — matches lib/manifest's scheme (person:/org:/event:/self:).
+const _PREFIX = { person: 'person', org: 'org', meeting: 'event', event: 'event', self: 'self' };
+
+// MINT (or update) an owner-world node from a plain name — the LIVING-store entry point (owner_ingest).
+// Derives a stable coord from type+name, folds the name into aliases, and upserts (idempotent). Returns
+// the coord so the caller can wire edges. Never throws.
+function mint({ type = 'person', ns = null, name, aliases = [], summary = '', attrs = {}, source = '' } = {}, { deps = {}, now = Date.now() } = {}) {
+  const nm = String(name || '').trim();
+  if (!nm) return null;
+  const pfx = _PREFIX[type] || 'person';
+  const namespace = ns || (type === 'org' ? 'work' : 'owner');
+  const coord = `${pfx}:${namespace}/${_slug(nm)}`;
+  const al = [...new Set([nm.toLowerCase(), ...(aliases || []).map((a) => String(a).toLowerCase())].filter((a) => a && a.length > 1))];
+  try { ensureSchema(deps); upsert({ coord, type, ns: namespace, name: nm, aliases: al, summary, attrs, source }, { deps, now }); } catch { return null; }
+  return coord;
+}
+
 // RESOLVE a bare mention against the owner-world by exact alias match (case-insensitive). This is the
 // keyed lookup that must win over civic namesakes: "Alice" here → the daughter, not a legislator. Returns
 // the manifest-shaped resolution { status:'resolved', object } or null (→ caller falls through to civic).
@@ -142,4 +162,4 @@ function resolve(mention, { deps = {} } = {}) {
   return null;
 }
 
-module.exports = { seed, ensureSchema, upsert, addEdge, get, resolve, SEED_OBJECTS, SEED_EDGES };
+module.exports = { seed, ensureSchema, upsert, addEdge, get, resolve, mint, SEED_OBJECTS, SEED_EDGES };

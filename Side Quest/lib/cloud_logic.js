@@ -121,7 +121,7 @@ async function streamCloud(messages, { temperature = 0.6, num_predict = null, mo
   let tokens = 0;
   const startedAt = Date.now();
   try {
-    await stream({
+    const _sres = await stream({
       model, messages, base: cloud.base,
       headers: cloud.token ? { Authorization: `Bearer ${cloud.token}` } : {},
       // An explicit caller num_predict still wins — some callers deliberately want a short answer.
@@ -133,7 +133,8 @@ async function streamCloud(messages, { temperature = 0.6, num_predict = null, mo
       },
       onThinking: (t) => { thinking += t; tokens += 1; },
     });
-    return { text, thinking, model, tokens, elapsedMs: Date.now() - startedAt };
+    // doneReason lets the caller distinguish a genuine empty from a cloud LOAD-ONLY close (see ollama.js).
+    return { text, thinking, model, tokens, elapsedMs: Date.now() - startedAt, doneReason: (_sres && _sres.done_reason) || null };
   } catch (e) {
     console.error('[cloud_logic] cloud stream failed:', e.message);
     // Partial text is still worth returning — an answer cut off at 400 tokens beats discarding it

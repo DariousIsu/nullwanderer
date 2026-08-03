@@ -1506,6 +1506,19 @@ app.whenReady().then(() => {
   setTimeout(runRouteDrain, 60 * 1000);          // first drain ~1m after boot
   setInterval(runRouteDrain, 2 * 60 * 1000);     // then every 2m — keeps route_obs a small tail
 
+  // WARM-KEEPER (2026-08-03): hold the interactive replier (kimi-k2.6) HOT on ollama.com so it stops
+  // cold-load-only'ing every user turn. Cost-aware — skips any model real traffic already touched this
+  // interval (gpt-oss/gemma stay warm on curation/distillation for free). See lib/warm_keeper.js.
+  const _warm = require('./lib/warm_keeper');
+  const runWarmKeeper = async () => {
+    try {
+      const rep = await _warm.tick({ db });
+      if (rep && (rep.pinged || []).length) console.log(`[warm] pinged ${rep.pinged.join(',')} → warm=[${(rep.warm || []).join(',')}] cold=[${(rep.cold || []).join(',')}]${(rep.skipped || []).length ? ` (skipped ${rep.skipped.join(',')})` : ''}`);
+    } catch (e) { console.error('[warm] tick failed:', e.message); }
+  };
+  setTimeout(runWarmKeeper, 15 * 1000);                          // first warm ~15s after boot
+  setInterval(runWarmKeeper, _warm.intervalMs(db)).unref?.();    // then on the configured cadence (default 75s)
+
   // Email: surface a credential problem early rather than at first send.
   if (emailLib.isConfigured()) {
     emailLib.verify().then(r => {
@@ -5150,6 +5163,26 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // source. Only HIS turns (hers would let her corroborate herself). Fire-and-forget, flag-gated
   // (`convo.encounters`, default off), and it can never break the turn.
   try { require('./lib/convo_encounters').fromUserTurn(userTurnRow && userTurnRow.id, userMessage).catch(() => {}); } catch {}
+  // OWNER-WORLD LIVING INGEST (2026-08-03): his turns GROW his personal-memory graph. A colleague, org, or
+  // recurring meeting he NAMES becomes a resolvable owner-world node hung off him (person:owner/…), so
+  // "our meetings" / "who's X" traverse HIS neighborhood instead of falling through to the civic graph or
+  // the web. The audit root: owner_world was a frozen 7-node seed that never learned. Fire-and-forget,
+  // pre-gated + fail-soft — never touches the turn.
+  try {
+    require('./lib/owner_ingest').ingestFromTurn({ userMessage, turnId: userTurnRow && userTurnRow.id })
+      .then((r) => { if (r && !r.skipped) { const np = (r.people || []).length, no = (r.orgs || []).length, nm = (r.meetings || []).length; if (np + no + nm) console.log(`[owner-ingest] +${np} people +${no} orgs +${nm} meetings, ${r.edges || 0} edges → owner-world`); } })
+      .catch(() => {});
+  } catch {}
+  // MEETING-OVER CHAT TRIGGER (2026-08-03): if Lucas says the meeting is over / tells her to leave WHILE
+  // she's in a Google Meet, set the leave flag — the gmeet tick (which owns the browser) hangs up on its
+  // next pass. Decoupled through meta so the chat path never touches the meeting's browser deps directly.
+  try {
+    const _gm = require('./lib/gmeet');
+    if (_gm.active() && /\b(?:the\s+)?(?:meeting|call)(?:'?s| is| was)?\s*(?:over|done|ended|finished|wrapped(?:\s*up)?|adjourned)\b|\b(?:you\s+can\s+|please\s+|go\s+ahead\s+and\s+)?(?:leave|exit|drop\s*off|hang\s*up|step\s*out\s*of|get\s+out\s+of)\s+(?:the\s+)?(?:meeting|call)\b|\bend\s+the\s+(?:meeting|call)\b/i.test(String(userMessage || ''))) {
+      db.setMeta('gmeet_leave_requested', '1');
+      console.log('[gmeet] chat leave-trigger — "meeting is over" → leave flag set; the tick will hang up');
+    }
+  } catch {}
   // Blackboard: a user message is the StuckDetector's reset boundary — events
   // after it start a fresh "interactive slice" so a new instruction is never read
   // as part of a prior spiral.
@@ -6253,9 +6286,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     let _llmC = null;
     try { _llmC = await require('./lib/contacts_intent').classify(userMessage, { recent: '' }); }
     catch (e) { console.error('[contacts-intent] call failed:', e.message); _llmC = null; }
-    if (_llmC == null) _contactsQ = _rx();                                   // cloud down → regex fallback
-    else if (_llmC.isQuery) _contactsQ = _llmC;                              // LLM says list → its filters (PRIMARY)
-    else { const _r = _rx(); _contactsQ = _r.isQuery ? _r : { isQuery: false }; }   // LLM says no → honor, regex catches a miss
+    if (_llmC == null) _contactsQ = _rx();                                   // cloud DOWN → regex is the only fallback
+    else _contactsQ = _llmC.isQuery ? _llmC : { isQuery: false };            // LLM CONSULTED → TRUST it both ways.
+    // The regex must NOT override a comprehended "no". contacts_query.detect matches the mere NOUN
+    // ("contacts"/"power"/sector words), so it hijacked a RESEARCH ask — "I pulled the attached contacts,
+    // but I want more info about the parish Monroe is in, who provides their power, any datacenter plans"
+    // (Monroe turn, 2026-08-03) — into a 100k-row contact-list dump + a deflecting "want me to research it?".
+    // The module is LLM-PRIMARY by design; a confident negative from the classifier wins. The regex survives
+    // only as the cloud-down fallback above. [[detectors-vs-comprehension]] — cap the BEHAVIOR, not phrasings.
     if (routerOn && _contactsQ.isQuery) console.log(`[contacts-intent] ${_llmC && _llmC.isQuery ? 'LLM' : 'regex'} → list (type=${_contactsQ.type || '-'} grade=${_contactsQ.grade || '-'} state=${_contactsQ.state || '-'} sectors=${(_contactsQ.sectors || []).join('/') || '-'})`);
   }
   let turnRoute = require('./lib/turn_router').computeTurnRoute({
@@ -6663,6 +6701,19 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       if (red && red.topic) {
         const focusLib = require('./lib/focus');
         const f = focusLib.getCurrent();
+        // REFINEMENT vs PIVOT (2026-08-03): if the steered topic MATCHES the CURRENT directed focus, this
+        // is a REFINEMENT / re-ordering of the SAME work — fold it in, do NOT park + fork a new thread.
+        // The bug (Lucas): "refine this to the Monroe radius, research first" forked a new thread every
+        // time — the focus was parked BEFORE the topic-match, so it could never match ITSELF, and the
+        // Monroe work fragmented across #3678/#3680/#3681. Match the current focus's OWN thread FIRST.
+        let _curThread = null; try { _curThread = (f && f.id) ? db.getOpenThread(f.id) : null; } catch {}
+        const _refinesCurrent = !!(f && focusLib.isDirected(f) && _curThread && uw.matchThreadToTopic(red.topic, [_curThread]));
+        if (_refinesCurrent) {
+          try { db.touchOpenThread(f.id, `refinement from ${userName}: ${red.topic}`); } catch {}
+          directedStopHandled = true;   // fully handled — no park, no fork
+          composedUserMessage += `\n\n[${userName} REFINED your CURRENT working focus (thread #${f.id}) — "${red.topic}". This is the SAME work, narrowed or re-ordered, NOT a new direction: it folds into what you are already doing, and NO thread was opened or parked. Say plainly you've folded the refinement into your current focus — do NOT promise actions beyond this, and do NOT claim a pivot or a parked/queued thread.]`;
+          console.log(`[user-work] REFINEMENT folded into current focus #${f.id} ("${String(red.topic).slice(0, 60)}") — no new thread`);
+        } else {
         let parkedNote = '';
         // IMMEDIATE steering parks the live focus; a QUEUED one ("finish Y first, then X") lets
         // the current work conclude — the seed preference below still guarantees X goes next.
@@ -6688,6 +6739,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           const when = red.immediate ? 'is queued as the very next driven focus and will start within minutes' : 'is queued to start as soon as the current work concludes';
           composedUserMessage += `\n\n[${userName} just REDIRECTED your working focus to: "${red.topic}". This IS registered in your program: thread #${target.id} ${when}.${parkedNote} Say plainly that the pivot is registered${parkedNote ? ' and what was parked' : ''} — do NOT promise any actions beyond this.]`;
           console.log(`[user-work] REDIRECT registered (${red.immediate ? 'immediate' : 'queued'}) → next seed = thread #${target.id} ("${String(target.content).slice(0, 60)}")${parkedNote ? ' · previous focus parked' : ''}`);
+        }
         }
       }
     }
@@ -7801,8 +7853,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           // a tool. Buried at the top of a 34k identity blob it was present but not used.
           sections: { identity: _identityWithoutSuit(messages, suit), plan, references, manifest, tools: suit || '', memory: memorySec, grounding: groundingSec },
         });
-        cloudMessages = built.messages;
-        console.log(`[package] ${pkg.describe(built.report)}`);
+        // ROOT FIX (2026-08-03): built.messages is a SINGLE system message (the package). Using it as
+        // the WHOLE cloud request left ollama.com with NO user turn to answer — it returns
+        // done_reason:"load" + empty content and generates nothing (the true cause of CLOUD wrote=0
+        // every boot; misdiagnosed as streaming/warmth/size). Keep the package as the SYSTEM prompt but
+        // append the real conversation turns so the latest user message is actually present.
+        const _pkgSys = (built.messages && built.messages[0]) || { role: 'system', content: '' };
+        const _convoTurns = (messages || []).filter((m) => m && m.role && m.role !== 'system');
+        cloudMessages = [_pkgSys, ..._convoTurns];
+        console.log(`[package] ${pkg.describe(built.report)} + ${_convoTurns.length} convo turn(s)`);
       } catch (e) { console.error('[main] package build failed — sending the plain prompt:', e.message); }
       let _cloudChunks = 0;
       const _cloudOpts = {
@@ -7849,7 +7908,43 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         try { r = await require('./lib/cloud_logic').streamCloud(cloudMessages, { ..._cloudOpts, model: _fbModel }); }
         catch (e) { console.error('[main] cloud fallback failed:', e.message); }
       }
+      // NON-STREAMING CLOUD FALLBACK (2026-08-03 — PROVEN ROOT FIX). The cloud's STREAMING endpoint
+      // returns done_reason:"load" with EMPTY content on a cold/rebalanced instance and closes without
+      // generating — this is why every reply had been falling to the weak local voice (CLOUD wrote=0
+      // across every boot). Confirmed live: gemma NON-streaming raw=259 at 15:26:44 vs the SAME model
+      // STREAMING text=0 at 15:26:52, and non-streaming is 199/200 successful in cloud_traces. The
+      // /api/chat stream:false path BLOCKS until the model loads AND generates, so a blocking completion
+      // reliably writes the reply where the stream could not. think:false keeps the <think>/<say> tag
+      // contract; the full text is fed to the parser exactly as the streamed tokens would have been.
+      // Guarded on _cloudChunks===0 so a partial stream is never double-fed. This sits BEFORE the
+      // miss-backoff so a working blocking completion doesn't trip the cooldown.
       if (!(r && r.text && r.text.trim()) && _cloudChunks === 0) {
+        // Try the primary replier first, then the WARM fallback model. Live audit 2026-08-03: kimi-k2.6
+        // (used only for replies) is always COLD on ollama.com and load-only's on BOTH stream and
+        // non-stream; gemma4:31b-cloud is kept WARM by the every-few-minutes distiller and its
+        // NON-streaming path is 199/200 in cloud_traces. So the reliable writer is a warm model over the
+        // blocking endpoint — iterate and take the first that yields real text.
+        const _nsModels = [...new Set([_cloudOpts.model, _fbModel, 'gpt-oss:120b-cloud', 'gemma4:31b-cloud'].filter(Boolean))];
+        console.warn(`[main] cloud STREAM empty (doneReason=${r && r.doneReason}) — writing the reply NON-STREAMING (blocking), trying: ${_nsModels.join(' → ')}`);
+        for (const _m of _nsModels) {
+          const _t0 = Date.now();
+          try {
+            const _c = await require('./lib/cloud_logic')._complete(cloudMessages, { model: _m, think: false, temperature: 0.7, num_predict: 2048 });
+            if (_c && _c.text && _c.text.trim()) {
+              parser.feed(_c.text);
+              _cloudChunks++;   // mark that cloud content arrived, so the miss-backoff below stays untripped
+              r = { text: _c.text, thinking: '', model: _c.model, tokens: 0, elapsedMs: Date.now() - _t0, partial: false };
+              console.log(`[main] cloud wrote the reply NON-STREAMING — ${_c.model}, ${_c.text.length}ch in ${Date.now() - _t0}ms`);
+              break;
+            }
+            console.warn(`[main] non-streaming ${_m} returned no content${_m === _nsModels[_nsModels.length - 1] ? ' — giving up' : ' — trying next'}`);
+          } catch (e) { console.error(`[main] non-streaming ${_m} failed:`, e.message); }
+        }
+      }
+      if (!(r && r.text && r.text.trim()) && _cloudChunks === 0) {
+        // TEMP DIAG (2026-08-03) — cloud stream returned no usable content across primary+fallback.
+        // Is the output going to the reasoning channel (thinking) or genuinely nothing? This pins it.
+        try { console.warn(`[reply-diag] cloud empty — last model=${r && r.model} text=${(r && r.text || '').length}c thinking=${(r && r.thinking || '').length}c thinkSample=${JSON.stringify((r && r.thinking || '').slice(0, 160))}`); } catch {}
         _bkState = _bk.onFailure(_bkState, Date.now());
         try { db.setMeta('cloud_reply.backoff', JSON.stringify(_bkState)); } catch {}
         console.warn(`[main] cloud writer miss #${_bkState.streak} — cooling down ${Math.round(_bk.next(_bkState.streak) / 1000)}s before the next attempt`);
@@ -9753,7 +9848,7 @@ async function runCloudOperator(opts) {
   return require('./lib/lane').run({ autonomous: !!(opts && opts.autonomous) }, () => _runCloudOperator(opts || {}));
 }
 
-async function _runCloudOperator({ userMessage, context, task = false, autonomous = false, maintain = false, toolNames = null, model = null, toolSpec = null }) {
+async function _runCloudOperator({ userMessage, context, task = false, autonomous = false, maintain = false, toolNames = null, model = null, toolSpec = null, budgetMult = 1 }) {
   try {
     const operator = require('./lib/operator');
     // Per-tool timeout: a slow/hung capability (Echo down, a stalled page) can't block the turn —
@@ -9784,7 +9879,12 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
       // 12/180s (was 8/90s): parity with the chat lane's MAX_ECHO_HOPS=12, and each step now carries
       // full-size tool results (operator.js reads them at toolResultChars, not a 1,200-char keyhole),
       // so later steps are worth their wall-clock. Chat turns keep the snappy 4/45s defaults.
-      maxSteps: task ? 12 : undefined, maxMs: task ? 180000 : undefined,
+      // IDLE-DEPTH BUDGET (Slice 1): the anticipatory ladder scales the AUTONOMOUS task budget by how deep
+      // the idle tick has earned to go (lib/idle_depth). Deeper idle → more steps/time to reach further;
+      // bounded so a deep tier can't run away (steps ≤2×, time ≤300s) and floored so a shallow tier still
+      // completes (≥6 steps). Other brakes (research throttle, slot pool) still bind. NOT a data gate.
+      maxSteps: task ? Math.max(6, Math.round(12 * Math.min(Math.max(Number(budgetMult) || 1, 0.5), 2))) : undefined,
+      maxMs: task ? Math.min(300000, Math.round(180000 * Math.max(Number(budgetMult) || 1, 0.75))) : undefined,
       numPredict: task ? config.sectionNumPredict() : undefined,   // a list/write-up can be long — don't truncate it at generation (cloud-leverage: deeper write-ups)
       model, toolSpec                         // per-lane model + tool menu (null = single-lane defaults)
     });
@@ -10148,6 +10248,11 @@ async function autonomyTick() {
     // Warm the calendar context so the manifest sees his week (TTL-guarded — usually a no-op). The
     // hoisted attendee lookup rides EVERY refresh path now, not just this tick's.
     try { await require('./lib/week_context').refresh({ gcalOpts: gcalOpts(), now, deps: { crmLookup: _attendeeCrmLookup } }); } catch {}
+    // OWNER-WORLD CALENDAR SYNC (Slice B): his upcoming meetings become owner-world event nodes hung off
+    // him (Lucas ATTENDS event; event WITH each KNOWN owner-world attendee), so "next meeting with X"
+    // traverses the identity graph. Precision-preserving (links only people already in his world). Cheap +
+    // fail-soft; runs on the same cadence the week refresh already does.
+    try { const _s = require('./lib/owner_ingest').syncCalendar({ deps: {} }); if (_s && !_s.skipped && _s.events.length) console.log(`[owner-sync] calendar → ${_s.events.length} meeting node(s), ${_s.linked} attendee link(s)`); } catch {}
     // O0.h HARVEST CATCH-UP (2026-07-23, one-shot): all 136 banked conversations were promoted by
     // the pass that ran BEFORE the harvest existed, so the mine never ran once and the decider has
     // never seen a conversation-born lead — the root of "she keeps pulling up the same random
@@ -10209,7 +10314,17 @@ async function autonomyTick() {
     } catch (e) { console.error('[approvals] snapshot refresh failed:', e.message); }
     const manifest = autonomy.buildManifest({ db, now, deps: { forecast: () => lastForecast } });
     if (!manifest.text) { console.log('[autonomy] empty manifest — nothing to choose from'); return; }
-    const decision = await autonomy.decide({ manifestText: manifest.text, history: autonomy.historyRead(H.getMeta), now });
+    // IDLE-DEPTH LADDER (Slice 1, LOG-ONLY this pass): how deep this tick has EARNED to go, derived from
+    // time since the last user turn. Budget-gating on this lands next; for now we watch the ladder compute
+    // against real idle before it changes behavior. Tier gates BUDGET only — access to data/tools stays
+    // TOTAL at every tier (see lib/idle_depth.js). No behavior change yet.
+    let _idleDepth = null;
+    try {
+      const _il = require('./lib/idle_depth');
+      _idleDepth = _il.tier(now - lastTurnTs, _il.optsFromMeta((k) => { try { return db.getMeta(k); } catch { return null; } }));
+      console.log(_il.describe(_idleDepth));
+    } catch (e) { console.error('[idle-depth] compute failed:', e.message); }
+    const decision = await autonomy.decide({ manifestText: manifest.text, history: autonomy.historyRead(H.getMeta), now, depth: _idleDepth });
     if (!decision) {
       autonomy.historyPush(H, { ts: now, move: 'nothing', outcome: 'no decision (cloud unavailable or invalid)' });
       console.log('[autonomy] no decision (cloud unavailable/invalid) — tick ends');
@@ -10360,7 +10475,7 @@ async function autonomyTick() {
       } catch {}
       let boardId = null;
       try { boardId = require('./lib/board').start({ lane: 'autonomy', kind: 'inquiry', target: `#${inqId} ${String(row.question).slice(0, 60)}`, note: _autonomySlot ? `on ${_autonomySlot}` : null }).id; } catch {}
-      const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: true, autonomous: true });
+      const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: true, autonomous: true, budgetMult: _idleDepth ? _idleDepth.budgetMult : 1 });
       try { require('./lib/board').beat(boardId); } catch {}
       let env = null;
       if (res && res.answer) {
@@ -10679,7 +10794,7 @@ async function autonomyTick() {
       }
       boardId = reg.id;
     } catch {}
-    const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: decision.move === 'build' || decision.move === 'maintain', autonomous: true, maintain: decision.move === 'maintain' });
+    const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: decision.move === 'build' || decision.move === 'maintain', autonomous: true, maintain: decision.move === 'maintain', budgetMult: _idleDepth ? _idleDepth.budgetMult : 1 });
     try { require('./lib/board').beat(boardId); } catch {}
     // S3 VERIFY — the run is judged against the plan's own `expect` before it is recorded. An
     // unmet expectation is written into history, where the next decision reads it as "this

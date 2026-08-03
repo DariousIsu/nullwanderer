@@ -78,6 +78,15 @@ function isUnboundedGoal(text) {
   return UNBOUNDED_RE.test(String(text || ''));
 }
 
+// AUTONOMOUS MAPPING SWEEP (2026-08-03): the per-state / per-place government-mapping backlog seeds one
+// open_thread PER state ("Compile … municipal government … for … Wyoming", "VALIDATE the elected officials
+// of … Colorado", per-county/parish/township). These are LEGITIMATE distinct work — never collapse them —
+// but they are BACKGROUND mapping, not conversational commitments Lucas made. Left undifferentiated they
+// flood the thread list (59 of 72) and bury his ~13 real focuses, so he/she "loses track". This flags them
+// so the conversational surfaces (the autonomy manifest, status) can show HIS threads apart from the sweep.
+const MAPPING_RE = /^\s*(?:Compile and keep current the (?:municipal|town\/township|county|parish|borough|village)\b|VALIDATE the elected officials of\b)/i;
+function isAutonomousMapping(content) { return MAPPING_RE.test(String(content || '')); }
+
 /**
  * Extract any goals from a user message and insert into open_threads.
  * Returns array of inserted thread objects.
@@ -398,6 +407,7 @@ function detectAndCountMentions(text, activeThreads) {
 module.exports = {
   extractFromUserTurn,
   isUnboundedGoal,
+  isAutonomousMapping,
   matchCarriedThread,
   freshest,
   humanAge,

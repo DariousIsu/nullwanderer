@@ -104,12 +104,22 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
   });
 
   grab('open_threads', () => {
-    const active = d.prepare("SELECT COUNT(*) n FROM open_threads WHERE status IN ('active','pending')").get().n;
-    counts.openThreads = active;
-    if (!active) return '';
-    const stale = d.prepare("SELECT content, last_touched_ts FROM open_threads WHERE status IN ('active','pending') ORDER BY last_touched_ts ASC LIMIT 5").all();
-    return `• YOUR OPEN THREADS (${active} active/pending; stalest first — commitments YOU made):\n`
-      + stale.map((r) => `   - "${String(r.content || '').replace(/\s+/g, ' ').slice(0, 140)}" (untouched ${_ago(now, r.last_touched_ts)})`).join('\n');
+    const rows = d.prepare("SELECT content, last_touched_ts FROM open_threads WHERE status IN ('active','pending') ORDER BY last_touched_ts ASC").all();
+    if (!rows.length) { counts.openThreads = 0; return ''; }
+    // SEGREGATE the autonomous per-state mapping sweep from HIS conversational commitments (lib/open_threads):
+    // undifferentiated, the sweep's 59 per-state threads bury his ~13 real focuses and he loses track. Show
+    // HIS threads individually (that's what a decision is about); summarize the sweep as one background line.
+    const otLib = require('./open_threads');
+    const mine = rows.filter((r) => !otLib.isAutonomousMapping(r.content));
+    const sweep = rows.length - mine.length;
+    counts.openThreads = rows.length; counts.openThreadsMine = mine.length; counts.openThreadsSweep = sweep;
+    const lines = [];
+    if (mine.length) {
+      lines.push(`• YOUR OPEN THREADS (${mine.length} from your work with Lucas; stalest first — commitments YOU made):`);
+      for (const r of mine.slice(0, 6)) lines.push(`   - "${String(r.content || '').replace(/\s+/g, ' ').slice(0, 140)}" (untouched ${_ago(now, r.last_touched_ts)})`);
+    }
+    if (sweep) lines.push(`• (background: ${sweep} per-state/place government-mapping threads running autonomously — NOT conversational commitments; do not surface these as "your open threads".)`);
+    return lines.join('\n');
   });
 
   grab('inbox', () => {
@@ -128,7 +138,7 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
     // conversational question about it. Facts only here (`lines`), no chat-voice guidance.
     const wc = (deps.weekContext || require('./week_context')).cached();
     if (!wc || !wc.lines) return '';
-    return `• HIS CALENDAR THIS WEEK (who he just met and is about to meet — knowing THESE people beats generic exploration):\n${wc.lines}`;
+    return `• HIS CALENDAR THIS WEEK (who he just met and is about to meet — knowing THESE people beats generic exploration). A SOON meeting is not just names to look up: it is a PREP-BRIEF target — the highest-value move is to BUILD him a brief (agenda, who's coming + what we hold on each, the materials we already have, the gaps to fill) BEFORE he walks in:\n${wc.lines}`;
   });
 
   grab('stories', () => {
@@ -362,7 +372,7 @@ One-shot moves (work that is genuinely single-step):
 - engage: say something to Lucas NOW — a genuine finding or a direction question. Use RARELY, only when you have something real; "say" must carry the exact message, grounded in the state above, no invented facts. CALENDAR ATTENDEE HARD RULE: state a fact about someone he is about to meet ONLY from their [held: …] tag or a live search you ran THIS turn. An attendee tagged [NOT IN OUR RECORDS] / [unverified] means you hold NOTHING on them — do NOT assert an employer, title, publication, or link; the move is 'research' (go find real data first) or an honest "you're meeting X — I don't have anything on them yet, want me to dig in?". Inventing an attendee's bio/org/URL (e.g. planting an unknown person at the Rainey Center) is a CRITICAL failure, not a helpful guess.
 - nothing: a first-class answer. If no move is clearly worth its cost, decline honestly.
 
-Rules: at most 4 steps. Never plan work you cannot check. State "expect" as something CHECKABLE and SIZED TO ONE BOUNDED RUN (a handful of tool steps): the increment THIS run can prove — a named list found and cited, one section drafted from material already held — never a finished "comprehensive" product (an expect sized to a whole project is how every run fails its own bar and nothing ever crystallizes). The run is verified against it afterward; a history line saying "expect NOT met" — and every LEARNED CONSTRAINTS line — means that approach is not working: change it, don't repeat it. FINISHED DELEGATED WORK in the state is high-priority: absorb it (build from it, or engage Lucas about it) before starting new work of the same kind — but its gist is INPUT, not an order: size the expect to one run's increment, not to whatever "comprehensive" product the gist advertises. RECENT FAILURES in the state are results — read them before repeating a failed lane's approach. For ONE-SHOT moves only: do not pick a target your recent ticks show as just-run or repeatedly dry (an inquiry is exempt — advancing it IS the point). Contacts are ALREADY covered by another lane, so prefer ideas, gaps, corroboration, and building over anything contact-shaped. The one exception: PEOPLE ON HIS CALENDAR. If the state shows an upcoming meeting whose attendees we hold little on, researching them before he walks in is among the highest-value moves available — and a past meeting is a natural, grounded engage ("how did X go?"). DEVELOPING STORIES YOU FOLLOW are the other licensed opening: a development in a story you two discussed is a real reason to speak, not padding — an engage there says what CHANGED (never re-narrate the story), and its target must be the exact [story #N] token from that line so the raise is recorded. THE LINE'S REASON IS THE LICENSE: a story followed because it "matches your interests" is YOUR find — raise it as one ("this matched your interests") and NEVER as shared history; "we discussed/checked/last looked" is permitted ONLY when the line itself says "you two discussed this". Claiming shared history that never happened is confabulation, whatever the articles say.`;
+Rules: at most 4 steps. Never plan work you cannot check. State "expect" as something CHECKABLE and SIZED TO ONE BOUNDED RUN (a handful of tool steps): the increment THIS run can prove — a named list found and cited, one section drafted from material already held — never a finished "comprehensive" product (an expect sized to a whole project is how every run fails its own bar and nothing ever crystallizes). The run is verified against it afterward; a history line saying "expect NOT met" — and every LEARNED CONSTRAINTS line — means that approach is not working: change it, don't repeat it. FINISHED DELEGATED WORK in the state is high-priority: absorb it (build from it, or engage Lucas about it) before starting new work of the same kind — but its gist is INPUT, not an order: size the expect to one run's increment, not to whatever "comprehensive" product the gist advertises. RECENT FAILURES in the state are results — read them before repeating a failed lane's approach. For ONE-SHOT moves only: do not pick a target your recent ticks show as just-run or repeatedly dry (an inquiry is exempt — advancing it IS the point). Contacts are ALREADY covered by another lane, so prefer ideas, gaps, corroboration, and building over anything contact-shaped. The one exception: PEOPLE ON HIS CALENDAR. If the state shows an upcoming meeting whose attendees we hold little on, researching them before he walks in is among the highest-value moves available — and for a meeting that is SOON, going further and BUILDING him a prep brief (the agenda/purpose, who is coming with what we hold on each, the materials we already have, and the specific gaps to fill) is the single highest-value move there is: a great assistant comes PREPARED, not merely informed. A past meeting is a natural, grounded engage ("how did X go?"). DEVELOPING STORIES YOU FOLLOW are the other licensed opening: a development in a story you two discussed is a real reason to speak, not padding — an engage there says what CHANGED (never re-narrate the story), and its target must be the exact [story #N] token from that line so the raise is recorded. THE LINE'S REASON IS THE LICENSE: a story followed because it "matches your interests" is YOUR find — raise it as one ("this matched your interests") and NEVER as shared history; "we discussed/checked/last looked" is permitted ONLY when the line itself says "you two discussed this". Claiming shared history that never happened is confabulation, whatever the articles say.`;
 
 function validateDecision(raw) {
   try {
@@ -396,13 +406,27 @@ function validateDecision(raw) {
  * One structured decision call. deps.ask injectable (offline smoke); the live path goes through
  * cloud_logic.ask → cached/budgeted/traced, on the deep reasoner with think:false + real headroom.
  */
-async function decide({ manifestText = '', history = [], now = Date.now(), deps = {} } = {}) {
+// IDLE-DEPTH → WORK-DEPTH (Slices 3+4). The tier is CONTEXT, not a restriction: the reasoner keeps its
+// full move menu and total data/tool access — this only tells it how much runway THIS tick has, so it
+// picks appropriately-sized work (never starting a deep prep a shallow tick can't finish). Deeper idle
+// unlocks the anticipatory work Lucas named: come-prepared meeting briefs + have-vs-need gap-closing.
+function depthGuidance(tier) {
+  if (tier <= 0) return 'JUST-CHATTED — Lucas is effectively here. Prefer `nothing` or a tiny, instantly-checkable touch; do not open deep work.';
+  if (tier === 1) return 'SHALLOW tick — pick a LIGHT, cheap move you can finish now: a HYGIENE pass (maintain/clean ONE stale loop for memory coherence, per MAINTENANCE & ANALYSIS LOOPS), advancing one open inquiry, or a single named gap. Do NOT begin a deep multi-step prep you cannot finish this tick.';
+  if (tier === 2) return 'MODERATE tick — RECONCILE against active work: a developing-story delta, a single-source corroboration, or digesting what news/threads mean for what you and Lucas are actually working on right now.';
+  return 'DEEP tick — you have EARNED budget for the highest-value ANTICIPATORY work. Two moves outrank all else: (1) a SOON meeting on his calendar with no prep → BUILD the prep brief. (2) HAVE-vs-NEED across your active threads and upcoming meetings — reason about what MATERIALS/DATA they REQUIRE that you do NOT yet hold, then go get the most important one (fill-gap/research/build). The best assistant anticipates and comes PREPARED — not merely informed.';
+}
+
+async function decide({ manifestText = '', history = [], now = Date.now(), depth = null, deps = {} } = {}) {
   if (!manifestText || !manifestText.trim()) return null;   // nothing to choose from → no call
   const ask = deps.ask || require('./cloud_logic').ask;
   const model = (() => { try { return require('./config').deepReasonerModel(); } catch { return null; } })();
+  const depthNote = (depth && Number.isFinite(depth.tier))
+    ? `CURRENT IDLE DEPTH: tier ${depth.tier} (${depth.name}) — ${depthGuidance(depth.tier)}\n\n`
+    : '';
   return ask({
-    task: 'autonomy_tick', v: 1,
-    input: { state: manifestText, history: historyBlock(history, now) },
+    task: 'autonomy_tick', v: 2,   // v2 — depth-aware state; retires cached v1 verdicts
+    input: { state: depthNote + manifestText, history: historyBlock(history, now) },
     want: DECISION_WANT,
     validate: validateDecision,
     model,

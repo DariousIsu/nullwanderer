@@ -69,12 +69,18 @@ async function streamChat({ model, messages, options = {}, onToken, onThinking, 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
+    // TEMP DIAG (2026-08-03): cloud streaming returns empty (text=0/thinking=0) while non-streaming
+    // works. Dump the RAW stream head + headers for cloud calls to reveal the actual wire format.
+    const _isCloud = !!(_base && _base !== OLLAMA_BASE);
+    let _diagDumped = false, _anyChunk = false;
+    if (_isCloud) { try { console.warn(`[stream-diag] ${model} status=${res.status} ct=${(res.headers.get && res.headers.get('content-type')) || '?'}`); } catch {} }
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       kick();   // activity → reset the inactivity watchdog
       buf += decoder.decode(value, { stream: true });
+      if (_isCloud && !_diagDumped) { _diagDumped = true; _anyChunk = true; try { console.warn(`[stream-diag] ${model} rawHead=${JSON.stringify(buf.slice(0, 500))}`); } catch {} }
 
       let nl;
       while ((nl = buf.indexOf('\n')) !== -1) {
@@ -103,7 +109,13 @@ async function streamChat({ model, messages, options = {}, onToken, onThinking, 
           }
           if (obj.done) {
             try { const um = require('./usage_meter'); um.record(obj.model || (body && body.model), um.tokensOf({ prompt_eval_count: obj.prompt_eval_count, eval_count: obj.eval_count })); } catch {}   // meter real spend
-            return;
+            // Surface done_reason so callers can tell a real "stop" from a LOAD-ONLY close. On
+            // ollama.com CLOUD a cold/rebalanced instance answers a stream:true request with a single
+            // {done_reason:"load", content:""} chunk and closes WITHOUT generating (confirmed live
+            // 2026-08-03: gemma non-streaming raw=259 vs the SAME model streaming text=0, seconds
+            // apart). The reply path reads this to fall to a blocking completion instead of the weak
+            // local voice.
+            return { done_reason: obj.done_reason || null };
           }
         } catch {
           // ignore malformed line

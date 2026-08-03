@@ -140,6 +140,16 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
     + 'is a conversation to develop, NOT a task to go execute.');
   lines.push('   – asking you to KNOW something → deref the held coordinates for depth (<recall '
     + 'coord="type:ns/id"/>), and look up a genuine GAP; say plainly what you do not hold rather than inventing it.');
+  // ⭐ REACH, DON'T SHRUG (audit 2026-08-03): asked "how many objects and connections?" she answered
+  // "not explicitly quantified" and grabbed a stray "6 LAMP members" fact — the number was one tool call
+  // away. A COUNT/TOTAL/figure that lives in her OWN stores must be QUERIED, never guessed or declared
+  // unknown. This is the "reason about what the question needs, then go GET it" rule, in the reply path.
+  lines.push('   – asking HOW MANY / HOW MUCH / a COUNT, TOTAL, size or specific figure that lives in your '
+    + 'OWN stores (objects, connections, contacts, records, rows — anything the manifest lists a table for, or '
+    + 'the knowledge graph) → do NOT answer "not quantified", "not specified", or guess from a stray fact. '
+    + 'ISSUE THE TOOL CALL and answer from what it returns: <echo-do name="db_query">{"sql":"SELECT COUNT(*) …"}</echo-do> '
+    + 'for a mapped table, or stats / graph_overview for the knowledge graph totals. A figure you can query is '
+    + 'NEVER "unknown" — reaching for it is the difference between a records clerk and a research assistant.');
   lines.push('   – wanting something DONE → do it (the assignment rules below apply).');
   // ⭐ AN ASSIGNMENT IS NOT A QUESTION. Live 2026-07-21: "I need a research paper on the last nine
   // months of China AI announcements…" — five distinct sub-questions, one of them a 29-nation

@@ -159,7 +159,16 @@ async function refresh({ gcalOpts = {}, deps = {}, now = Date.now(), force = fal
     }
     const heldLookup = heldMap ? ((nm) => heldMap[String(nm).toLowerCase().trim()] || null) : (deps.heldLookup || null);
     const { lines, text } = formatWeek((r && r.items) || [], { now, heldLookup });
-    _cache = { text, lines, at: now };
+    // Expose a compact UPCOMING-event list (title + start + attendee names) so the identity graph can
+    // sync his real meetings into owner-world (owner_ingest.syncCalendar) — "next meeting with X"
+    // then traverses Lucas→ATTENDS→event→WITH→person instead of falling through to the web.
+    const events = ((r && r.items) || [])
+      .filter((e) => e && e.status !== 'cancelled' && _endMs(e) >= now)
+      .sort((a, b) => _startMs(a) - _startMs(b))
+      .slice(0, 8)
+      .map((e) => ({ title: String((e && e.summary) || '').trim(), startMs: _startMs(e), endMs: _endMs(e), attendees: _attendeeNames(e) }))
+      .filter((e) => e.title);
+    _cache = { text, lines, events, at: now };
     if (text) console.log(`[week] calendar context refreshed — ${lines.split('\n').length} event line(s)`);
   } catch (e) {
     console.error('[week] refresh failed (keeping stale):', e.message);
@@ -178,7 +187,7 @@ function blockFor({ gcalOpts = {}, now = Date.now(), deps = {} } = {}) {
 }
 
 function cached() { return _cache; }
-function _resetCache() { _cache = { text: '', lines: '', at: 0 }; }   // tests
+function _resetCache() { _cache = { text: '', lines: '', events: [], at: 0 }; }   // tests
 
 /**
  * Is this message a question about HIS schedule/calendar — one answerable from the events she
