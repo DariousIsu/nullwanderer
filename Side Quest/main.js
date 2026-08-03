@@ -7836,6 +7836,19 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         try { r = await require('./lib/cloud_logic').streamCloud(cloudMessages, _cloudOpts); }
         catch (e) { console.error('[main] cloud reply failed (retry):', e.message); }
       }
+      // CLOUD FALLBACK TIER (2026-08-03) — the primary replier can give NO usable content: a reasoner
+      // (deepseek) emits its answer to message.thinking and leaves content empty, which the voice path
+      // can't speak; or the primary is 503-storming. Rather than drop straight to the weak local voice,
+      // try ONE clean cloud model first (model.replier_fallback, default gemma4:31b-cloud). Guarded on
+      // _cloudChunks===0: a partial stream is never re-run (it would double-feed the parser). A working
+      // fallback means the CLOUD is up — only the primary model was wrong — so this sits BEFORE the
+      // miss-backoff below, which must trip only on a true cloud outage (both tiers empty).
+      const _fbModel = (() => { try { return (db.getMeta('model.replier_fallback') || 'gemma4:31b-cloud').trim() || null; } catch { return 'gemma4:31b-cloud'; } })();
+      if (!(r && r.text && r.text.trim()) && _cloudChunks === 0 && _fbModel && _fbModel !== _cloudOpts.model) {
+        console.warn(`[main] primary replier (${_cloudOpts.model || 'curator'}) returned no content — trying cloud fallback ${_fbModel} before the local voice`);
+        try { r = await require('./lib/cloud_logic').streamCloud(cloudMessages, { ..._cloudOpts, model: _fbModel }); }
+        catch (e) { console.error('[main] cloud fallback failed:', e.message); }
+      }
       if (!(r && r.text && r.text.trim()) && _cloudChunks === 0) {
         _bkState = _bk.onFailure(_bkState, Date.now());
         try { db.setMeta('cloud_reply.backoff', JSON.stringify(_bkState)); } catch {}
