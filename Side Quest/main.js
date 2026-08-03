@@ -7181,6 +7181,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // 24B trying to remember a tag. Substantive turns only; fail-safe (null → the normal local reply).
   // Reversible: db meta operator.mode = full (default) | off.
   let operatorAnswer = null;
+  let operatorDirected = false;   // the operator produced a DIRECTED deliverable (verbatim-delivery contract, not a voiced chat answer)
   try {
     const opMode = (() => { try { return (db.getMeta('operator.mode') || 'full').trim(); } catch { return 'full'; } })();
     // (intakeRoute / isAssignment were computed BEFORE the deliverable poll above — reused here.)
@@ -7240,6 +7241,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       if (directed) console.log('[operator] directed TASK → in-turn completion mode (8 steps / 90s)');
       if (opRes && opRes.answer) {
         operatorAnswer = opRes.answer;
+        if (directed) operatorDirected = true;   // verbatim-delivery contract → survives a cloud-voice outage (direct-deliver below)
         const block = directed
           ? `[DELIVER THIS TO ${userName} — the complete result of the task you just ran. Present the FULL thing in your own voice: keep EVERY item, do NOT summarize, shorten, or drop any of it. A brief one-line intro is fine, then the complete result. If you also saved it to a file, mention where, but still include it all here:\n${operatorAnswer}]`
           : require('./lib/answer_draft').buildVoiceBlock(operatorAnswer, userName);
@@ -7873,6 +7875,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   } catch (e) { console.error('[fit] local fit failed — sending unfitted:', e.message); }
   try {
     if (replyWriter !== MODEL) { /* the cloud already wrote it — skip the local generation entirely */ }
+    else if (operatorDirected && operatorAnswer && operatorAnswer.trim()) {
+      // CLOUD VOICE DOWN + a DIRECTED DELIVERABLE: the operator already wrote the complete review/result.
+      // Re-voicing it through the local 8192-ctx model silently truncates a large deliverable — the mid-
+      // stream cut-off (2026-08-02, self-code-review under a cloud 503 storm). The deliverable is finished
+      // prose under a verbatim contract, so deliver it DIRECTLY through the same say pipeline — the whole
+      // thing, no window truncation, no lossy paraphrase. Defensive: neutralize any literal closing tag in
+      // the content (a ZW space after "<") so it can't end the say early.
+      console.warn(`[main] cloud voice unavailable + directed deliverable → delivering operator answer directly (${operatorAnswer.length}ch, no local re-voice)`);
+      const _safe = String(operatorAnswer).replace(/<\/(say|think)>/gi, '<​/$1>');
+      parser.feed(`<say>${_safe}</say>`);
+      replyWriter = 'operator-direct';
+    }
     else await streamChat({
       model: MODEL,
       messages: _localMessages,
