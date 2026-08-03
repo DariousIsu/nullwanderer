@@ -154,6 +154,17 @@ const CURATED = [
   ['open_threads', 'live work: research threads and their status'],
   ['self_model', 'her own stated preferences, opinions and identity'],
   ['knowledge', 'facts she has kept, with provenance'],
+  // Answer-bearing stores added 2026-08-03 (manifest-coverage audit): each ranked below the puller/
+  // news firehoses and so lost its fill slot, leaving the cloud unable to db_query her own documents,
+  // commitments, or procedures — it hallucinated table names (rehearsals/urls/promote_thresholds) instead.
+  ['documents', 'documents she has INGESTED — the full text of what she read/fetched (query by id or title)'],
+  ['doc_contacts', 'people EXTRACTED from those documents'],
+  ['commitments', 'what she has COMMITTED to do, with status'],
+  ['procedures', 'step-by-step how-tos she has recorded'],
+  ['workstreams', 'her active workstreams and their state'],
+  ['reflections', 'her notes-to-self between turns'],
+  ['known_incorrect', 'claims she has learned are WRONG — check here before asserting'],
+  ['news.news_items', 'the news she has collected — current-events lookups'],
 ];
 // Accumulating logs. Real data, but nothing a question is ever answered FROM — listing them spends
 // the manifest's scarcest bytes telling her about her own exhaust.
