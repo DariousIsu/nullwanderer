@@ -2,15 +2,17 @@
  * Context distillation (Front/Cortex architecture, Phase 1) — stop drowning the front model.
  *
  * Every chat turn injects a firehose (retrieved knowledge, past turns, recent thoughts/readings,
- * open threads, positions, reflections…). A local model chokes on it → flat, off-voice replies.
- * This routes the BULKY VARIABLE context through a fast cloud "utility" model that returns a TIGHT
- * BRIEF — only what bears on THIS turn — which the front model then voices from. Anchors (awareness,
- * persona, self-narrative, protocols) are NOT distilled; they stay verbatim.
+ * open threads, positions, reflections…). Left raw it bloats the cloud package and blows the small
+ * LOCAL fallback window. This routes the BULKY VARIABLE context through a fast cloud "utility" model
+ * that returns a TIGHT BRIEF — only what bears on THIS turn. Anchors (awareness, persona,
+ * self-narrative, protocols) are NOT distilled; they stay verbatim.
  *
- * Principle: cloud THINKS (distills), local SPEAKS. The distiller emits a brief (facts+guidance),
- * never her words. Every call flows through cloud_logic.ask → cached, budgeted, and TRACED as
- * training data (cloud-think → local-voice pairs). Fail-safe: cloud down/error → null → caller uses
- * the full local context unchanged. Deps injectable → fully offline-testable.
+ * Architecture (post-flip): the CLOUD writes the reply (streamCloud in runChatTurn's reply path, on
+ * the replier model — model.replier, else it rode the curator). The local front model does NOT voice
+ * normally — it only speaks as a FALLBACK when the cloud is unavailable, which is why this brief must
+ * stay small enough to fit its ~8k window. The distiller emits a brief (facts+guidance), never her
+ * words. Every call flows through cloud_logic.ask → cached, budgeted, TRACED. Fail-safe: cloud
+ * down/error → null → caller uses the full local context unchanged. Deps injectable → offline-testable.
  */
 
 'use strict';
