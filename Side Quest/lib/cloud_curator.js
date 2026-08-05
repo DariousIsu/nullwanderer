@@ -129,16 +129,21 @@ function preClean({ apply = false, now = Date.now() } = {}) {
 // curator model and calls it via ollama.complete. FAIL-SAFE: returns null when the cloud
 // tier or a curator model isn't configured, so every cloud stage degrades to a no-op
 // (never a crash, never a wrong write) until the key + model.curator are set.
-let _curatorModelCache = null;
+let _curatorModelCache = null;   // { model, ts }
+// M3.3b — a TTL, not a permanent cache. The old cache resolved the model ONCE per process, so a runtime
+// models.setModelFor('curator', …) or an auto-pick that later went unavailable was stuck until reboot
+// (the same "ignored until reboot" class the reply path already fixed). Re-resolve every ~10min; if a
+// re-resolve comes back empty, keep the last good model rather than regressing to null.
+const _CURATOR_MODEL_TTL_MS = 10 * 60 * 1000;
 // Resolve the curator's cloud model the same way the editor path does (lib then env), and if
-// nothing's configured, auto-pick a reachable cloud model so it works out of the box. Cached.
+// nothing's configured, auto-pick a reachable cloud model so it works out of the box. Cached with a TTL.
 async function _resolveCuratorModel(models, cloud) {
-  if (_curatorModelCache) return _curatorModelCache;
+  if (_curatorModelCache && (Date.now() - _curatorModelCache.ts) < _CURATOR_MODEL_TTL_MS) return _curatorModelCache.model;
   let m = models.getModelFor('curator', null) || models.getModelFor('editor', null)
     || (process.env.AGENT_MODEL_ON_DEMAND_BACKGROUND || '').trim() || null;
   if (!m && cloud) { try { const list = await models.listFromSource(cloud); if (list && list.length) m = list[0].name; } catch {} }
-  if (m) _curatorModelCache = m;
-  return m;
+  if (m) { _curatorModelCache = { model: m, ts: Date.now() }; return m; }
+  return _curatorModelCache ? _curatorModelCache.model : null;   // re-resolve failed → keep the last good model, never regress to null
 }
 
 async function _cloudComplete(messages, { temperature = 0.2, num_predict = 220 } = {}) {
@@ -150,11 +155,18 @@ async function _cloudComplete(messages, { temperature = 0.2, num_predict = 220 }
   if (!cloud) return null;
   const model = await _resolveCuratorModel(models, cloud);
   if (!model) return null;
+  // M3.3c — FIT THE MODEL'S REAL WINDOW, not the local model's 8192. The curator runs on a 131k-window
+  // cloud model (gpt-oss:120b) but its inputs run ~10k+ tokens, so a hardcoded num_ctx:8192 silently
+  // dropped the tail of every curation payload. cloud_window.resolve discovers the model's window, caps
+  // it at the working ceiling, and FAILS SAFE to 8192 — so this can only widen, never break. num_predict
+  // stays caller-controlled (each stage tunes its own output budget).
+  let num_ctx = 8192;
+  try { const w = await require('./cloud_window').resolve({ model, base: cloud.base, token: cloud.token }); if (w && w.num_ctx) num_ctx = w.num_ctx; } catch {}
   try {
     return await ollama.complete({
       model, messages, base: cloud.base,
       headers: cloud.token ? { Authorization: `Bearer ${cloud.token}` } : {},
-      options: { temperature, top_p: 0.9, num_ctx: 8192, num_predict }
+      options: { temperature, top_p: 0.9, num_ctx, num_predict }
     });
   } catch (e) { console.error('[curator] cloud call failed:', e.message); return null; }
 }

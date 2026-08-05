@@ -109,6 +109,11 @@ const ctxOf = (n) => ({ modelContext: async () => n });
       'callers can ask what window the NEXT call gets, instead of guessing and mis-budgeting');
     ok(/num_ctx: win\.num_ctx/.test(src), 'the resolved window reaches the request');
     ok(/num_predict = null/.test(src), 'num_predict defaults to unset so the window sizes it');
+    // M3.3c — the curator's own cloud call must resolve the window too (it ran a 131k model at 8192).
+    const cur = fs.readFileSync(path.join(__dirname, '..', 'lib', 'cloud_curator.js'), 'utf8');
+    const curCode = cur.split(/\r?\n/).filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    ok(!/num_ctx: 8192/.test(curCode), 'REGRESSION: the curator cloud call no longer hardcodes num_ctx 8192');
+    ok(/require\('\.\/cloud_window'\)\.resolve\(/.test(cur), 'the curator resolves the model window before completing (M3.3c)');
     const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
     ok(!/think: false,[\s\S]{0,120}num_predict: 900/.test(m), 'REGRESSION: the reply call no longer pins 900 output tokens');
   }
