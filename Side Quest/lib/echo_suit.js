@@ -19,6 +19,15 @@
 const echo = require('./echo');
 const kga = require('./kg_activity');   // kg:activity push bus — match.hit recognition arc (Slice 2b)
 
+// ANTI-FAB PROBE (C-gate, 2026-08-05): the last time a contact-WRITE tool actually LANDED a successful write.
+// metacognition's DB-claim gate reads this to catch a "saved/added to the contacts database" claim that never
+// wrote (live confab: "Done — Tom Arceneaux is in the contacts database with mayor@…" while the row's email
+// stayed NULL). Stamped centrally in dispatch() so it catches a write from ANY caller (operator tool loop
+// included). A tool that dispatches OK but returns its OWN {ok:false}/error does NOT stamp — that IS the miss.
+let _lastContactWriteTs = 0;
+const _CONTACT_WRITE_TOOLS = new Set(['create_contact', 'update_contact', 'upsert_account', 'update_account', 'create_account']);
+function lastContactWriteTs() { return _lastContactWriteTs; }
+
 const cap = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''));
 // A tool call that failed on ARGS (not data) — worth one corrected retry in routeNeed.
 const ARG_ERR_RE = /unexpected keyword|validation error|field required|missing .*argument|not a valid|invalid argument|no such (?:column|table)|required (?:property|argument)/i;
@@ -308,7 +317,7 @@ function filterToolMap(jsonText, query, limit = 15) {
   if (terms.length) hits = all.filter(t => { const hay = (t.name + ' ' + t.desc).toLowerCase(); return terms.some(w => hay.includes(w)); });
   if (!hits.length) {
     const overview = Object.entries(buckets).map(([i, l]) => `${i} (${(l || []).length})`).join(', ');
-    return `No tool matched "${query}". Intent buckets: ${overview}. Try different words, or <echo-do name="get_tool_map">{"grouping":"flat"}</echo-do> to see them all.`;
+    return `No tool matched "${query}". Intent buckets: ${overview}. Try different words, or <echo-do name="get_tool_map">{"grouping":"alphabetical"}</echo-do> to see them all.`;
   }
   const lines = hits.slice(0, limit).map(t => `• ${t.name} [${t.intent}] — ${cap(t.desc, 90)}`);
   const more = hits.length > limit ? `\n(+${hits.length - limit} more — narrow your terms, then <echo-do name="describe_tool">{"name":"…"}</echo-do> to inspect one)` : '';
@@ -512,6 +521,16 @@ class EchoSuit {
           autonomous: require('./lane').isAutonomous(opts.autonomous === undefined ? undefined : !!opts.autonomous),
         });
       } catch { /* never let observation break dispatch */ }
+      // C-gate stamp: a contact-write tool that ACTUALLY landed (transport ok AND the tool's own result isn't
+      // an error). Feeds metacognition's DB-claim anti-fab gate. A dispatched-but-rejected write does NOT
+      // stamp — leaving the "added to the database" claim correctly flagged as a confab.
+      try {
+        if (tag && tag.kind === 'do' && _CONTACT_WRITE_TOOLS.has(tag.name)) {
+          let okWrite = _res && _res.ok !== false && !_res.isError;
+          if (okWrite && _res.text) { try { const _j = JSON.parse(_res.text); if (_j && (_j.ok === false || _j.error)) okWrite = false; } catch { /* non-JSON success text is fine */ } }
+          if (okWrite) _lastContactWriteTs = Date.now();
+        }
+      } catch { /* stamping never breaks dispatch */ }
     }
   }
 
@@ -1645,7 +1664,7 @@ function routeCacheStats() {
 }
 
 module.exports = {
-  routeCacheStats, _raceTimeout,
+  routeCacheStats, _raceTimeout, lastContactWriteTs,
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
   placeholderComplaint, sanitizeFtsQuery, prepareDoArgs, recipeMisrouteHint,
   setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates, _salienceDominant

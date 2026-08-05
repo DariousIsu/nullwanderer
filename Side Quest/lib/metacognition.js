@@ -187,4 +187,127 @@ function meetingActionHonestyDirective(userName = 'Lucas') {
   return `[REALITY CHECK — you are NOT in a meeting or call right now, and you have NOT joined or started one this turn. Do NOT say you are "joining", "in", or "on" a meeting or call, and do not narrate any action (joining, opening, searching, pulling up) you are not actually taking. You can talk with ${userName} about the meeting normally — help him get ready, answer about it, note who's in it — but never claim to be doing something that isn't happening. If he wants you to join, say plainly you'll need the link (and that a Teams meeting isn't something you can join yet).]`;
 }
 
-module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, mentionsMeeting, claimsMeetingAction, meetingActionHonestyDirective, DATETIME_SELF_RE, ELECTION_RECENCY_RE };
+// ── ARTIFACT-CLAIM VERIFICATION (2026-08-04, foundational) ──────────────────────────────────────
+// The audit caught the free-form reply path confabulating COMPLETED DELIVERABLES: "It's done — the dossier
+// is saved at notes/directed-3686-dossier.md" (no such file), "I put 994 contacts on your canvas" (no such
+// table). These are FALSIFIABLE claims — a named file either exists or it doesn't; a canvas write either
+// happened this turn or it didn't — so they can be checked against reality deterministically, unlike a fuzzy
+// factual assertion. The reply STREAMS live (we can't un-say it), so the consumer VERIFIES at finalize and
+// appends an honest correction when a claim doesn't check out. Ground-truth probes are injected
+// (deps.fileExists(path)->bool, deps.canvasWroteThisTurn()->bool) so this stays pure + smoke-testable, and
+// both fail OPEN (a probe error never manufactures a false accusation). FUTURE/intent ("I'll save it to X")
+// is excluded — only a COMPLETED-artifact assertion is falsifiable.
+const _ART_FUTURE_RE = /\b(i'?ll|i will|i'?m going to|going to|gonna|let me|about to|i can|i could|i'?d|would you like|want me to|shall i|planning to|next i|then i)\b/i;
+// a path token: notes/x.md, data/y.db, C:\a\b.json, ./p/q.txt — a dir separator OR a known file extension.
+const _ART_PATH_RE = /((?:[A-Za-z]:)?[\w.\-]*[\/\\][\w.\-\/\\]*\.\w{1,6}|[\w.\-]+\.(?:md|txt|json|csv|pdf|db|docx?|xlsx?|html?|png|jpg))/g;
+// Branch 1: a save/write VERB followed by a location preposition ("saved it … at/to X"). Branch 2: an
+// artifact noun explicitly asserted COMPLETE ("the dossier is saved", "the report has been written"). Bare
+// "the report at X" / "the config in Y" is a REFERENCE, not a save-claim — it must NOT match (false-positive
+// corrections erode trust), so branch 2 requires an is/has-been + completion verb, never a bare "at".
+const _ART_FILE_DONE_RE = /\b(saved|wrote|written|stored|created|generated|exported|compiled)\b[^.!?\n]*\b(?:at|to|in|as|into)\b|\b(?:dossier|file|document|report|note|brief|memo|spreadsheet|markdown|deliverable)\b[^.!?\n]*\b(?:is|has been|it'?s|now)\s*(?:saved|stored|written|created|generated)\b/i;
+const _ART_CANVAS_DONE_RE = /\bcanvas\b/i;
+const _ART_CANVAS_VERB_RE = /\b(put|placed|added|dropped|posted|loaded|saved|filled|wrote|is on|are on|onto|now on|updated)\b/i;
+// DB-WRITE: a claim that a contact/record was SAVED to the contacts DB / CRM this turn, when no write actually
+// landed (live 2026-08-05: "Done — Tom Arceneaux is in the contacts database with mayor@…" — the row's email
+// stayed NULL; the write never persisted). Branch 1 = a save/add VERB into a store ("added it to the contacts
+// database", "saved to the CRM", "recorded in the database"). Branch 2 = a specific record asserted PRESENT
+// ("Tom is now in the contacts database", "he's in the CRM"). A COUNT/reference ("we have 1,065 in the
+// database") uses "have" and matches NEITHER branch → no false positive.
+const _ART_DB_DONE_RE = /\b(added|saved|stored|recorded|logged|created|inserted|put|entered)\b[^.!?\n]*\b(?:to|in|into|onto)\b[^.!?\n]*\b(?:contacts?(?:\s+(?:database|db|list|record))?|crm|database|records?)\b|\b(?:is|are|now|has been|have been|it'?s|he'?s|she'?s|they'?re)\b[^.!?\n]*\b(?:in|on)\b[^.!?\n]*\b(?:contacts?\s+(?:database|db|list)|crm|database)\b/i;
+
+// IMAGE: a claim to have CREATED an image — or that one is "on your canvas" / "here it is" / "generating now"
+// — when NO image was generated this turn. The free-form/operator path narrates image DELIVERY without an
+// executed generation (live #10872: "…Generating now." rendered nothing; the operator never emitted a draw
+// tag). The draw-intercept's honest-count already covers the case where generation DID run; this backstops
+// every phrasing the intercept can't anticipate. imageGenThisTurn()->bool is injected (fails OPEN). Two tiers:
+// a create-verb + image-NOUN claim is caught anywhere; a bare progress/delivery phrase ("generating now",
+// "on your canvas", "here it is") is caught only when the reply is clearly ABOUT an image (an image noun
+// appears somewhere in the say), so it can't fire on non-image progress ("creating the report now").
+const _ART_IMG_NOUN = 'images?|pictures?|pics?|portraits?|illustrations?|drawings?|renders?|renderings?|photos?|photographs?|artworks?|sketch(?:es)?';
+const _ART_IMG_CTX_RE = new RegExp('\\b(?:' + _ART_IMG_NOUN + '|artwork)\\b', 'i');
+const _ART_IMG_MAKE_RE = new RegExp('\\b(?:generated|drew|rendered|created|made|produced|painted|sketched|whipped up|cooked up)\\b[^.!?\\n]*\\b(?:' + _ART_IMG_NOUN + ')\\b', 'i');
+const _ART_IMG_PROGRESS_RE = /\b(?:generating|rendering|drawing|creating|painting)\b[^.!?\n]*\b(?:now|it|them|this|that|one|for you)\b|\bhere (?:it|they) (?:is|are)\b|\bon (?:your|the) canvas\b|\bputting (?:it|them|these|those)\b[^.!?\n]*\bcanvas\b|\b(?:it'?s|they'?re|it is|they are)\s+(?:ready|done)\b|\bcoming (?:right )?up\b/i;
+
+// Verify falsifiable artifact claims in `say` against reality. Returns { ok, violations:[{kind,claim}] }.
+function verifyArtifactClaims(say, { fileExists = null, canvasWroteThisTurn = null, imageGenThisTurn = null, dbWroteThisTurn = null } = {}) {
+  const violations = [];
+  const sentences = String(say || '').split(/(?<=[.!?])\s+|\n+/);
+  const _imgCtx = typeof imageGenThisTurn === 'function' && _ART_IMG_CTX_RE.test(String(say || ''));
+  for (const sent of sentences) {
+    const s = sent.trim();
+    if (s.length < 6 || _ART_FUTURE_RE.test(s)) continue;   // skip intent/offers — only completed claims are falsifiable
+    // FILE: a save/at assertion naming a path that does not exist.
+    if (typeof fileExists === 'function' && _ART_FILE_DONE_RE.test(s)) {
+      let m; _ART_PATH_RE.lastIndex = 0;
+      while ((m = _ART_PATH_RE.exec(s)) !== null) {
+        const p = String(m[1] || '').replace(/[`'".,)]+$/, '').trim();
+        if (!p) continue;
+        let exists = true; try { exists = !!fileExists(p); } catch { exists = true; }   // fail OPEN
+        if (!exists) violations.push({ kind: 'file', claim: p });
+      }
+    }
+    // CANVAS: an assertion that something is/was placed on the canvas with NO canvas write this turn.
+    if (typeof canvasWroteThisTurn === 'function' && _ART_CANVAS_DONE_RE.test(s) && _ART_CANVAS_VERB_RE.test(s)) {
+      let wrote = true; try { wrote = !!canvasWroteThisTurn(); } catch { wrote = true; }   // fail OPEN
+      if (!wrote) violations.push({ kind: 'canvas', claim: s.slice(0, 90) });
+    }
+    // IMAGE: an image-creation/delivery claim with NO generation this turn. Tier 1 (create-verb + image-noun)
+    // fires anywhere; Tier 2 (bare progress/delivery) only inside image context, so "generating the report
+    // now" can't trip it. One violation per turn is enough — the correction speaks to the whole reply.
+    if (typeof imageGenThisTurn === 'function' && !violations.some((v) => v.kind === 'image')) {
+      if (_ART_IMG_MAKE_RE.test(s) || (_imgCtx && _ART_IMG_PROGRESS_RE.test(s))) {
+        let made = true; try { made = !!imageGenThisTurn(); } catch { made = true; }   // fail OPEN
+        if (!made) violations.push({ kind: 'image', claim: s.slice(0, 90) });
+      }
+    }
+    // DB-WRITE: a "saved/added to the contacts database / CRM" claim with NO contact write that landed this
+    // turn. One violation per turn is enough. Fails OPEN (probe error → assume it wrote, never a false scold).
+    if (typeof dbWroteThisTurn === 'function' && !violations.some((v) => v.kind === 'db') && _ART_DB_DONE_RE.test(s)) {
+      let wrote = true; try { wrote = !!dbWroteThisTurn(); } catch { wrote = true; }   // fail OPEN
+      if (!wrote) violations.push({ kind: 'db', claim: s.slice(0, 90) });
+    }
+  }
+  const seen = new Set();
+  const uniq = violations.filter((v) => { const k = v.kind + ':' + v.claim; if (seen.has(k)) return false; seen.add(k); return true; });
+  return { ok: uniq.length === 0, violations: uniq };
+}
+
+// EMAIL GROUNDING (2026-08-04). The free-form operator PATTERN-GUESSES addresses (first.last@domain) that it
+// never actually fetched — the audit's "pattern-derived emails I couldn't confirm". An email is a hard,
+// checkable fact: it is grounded ONLY if it appears verbatim in the turn's EVIDENCE (the retrieved/fetched
+// text + prompt the writer was given, plus the user's own message). Any reply email absent from evidence is
+// redacted to an honest marker rather than asserted. CONSERVATIVE against false positives: when NO evidence
+// was gathered this turn (evidence empty), nothing is redacted — a bare recall isn't proof of invention, and
+// wrongly scrubbing a real address is its own harm. Pure + testable.
+const _EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+function groundEmails(say, evidence = '') {
+  const text = String(say || '');
+  const ev = String(evidence || '');
+  if (ev.trim().length < 20) return { text, stripped: [] };   // no real evidence this turn → don't scrub (avoid false positives)
+  const evLower = ev.toLowerCase();
+  const emails = Array.from(new Set(text.match(_EMAIL_RE) || []));
+  const stripped = [];
+  let out = text;
+  for (const e of emails) {
+    if (/(example|noreply|no-reply|domain\.com|email\.com)/i.test(e)) continue;   // obvious placeholders aren't real claims
+    if (!evLower.includes(e.toLowerCase())) { stripped.push(e); out = out.split(e).join('(email not verified)'); }
+  }
+  return { text: out, stripped };
+}
+
+// The honest correction appended to a reply whose artifact claim didn't check out.
+function artifactCorrection(violations = []) {
+  const files = violations.filter((v) => v.kind === 'file').map((v) => v.claim);
+  const hasCanvas = violations.some((v) => v.kind === 'canvas');
+  const hasImage = violations.some((v) => v.kind === 'image');
+  const hasDb = violations.some((v) => v.kind === 'db');
+  const parts = [];
+  if (files.length) parts.push(`the file${files.length > 1 ? 's' : ''} I named (${files.join(', ')}) ${files.length > 1 ? "aren't" : "isn't"} actually there`);
+  if (hasCanvas) parts.push(`nothing actually landed on the canvas`);
+  if (hasImage) parts.push(`I didn't actually generate an image this turn`);
+  if (hasDb) parts.push(`nothing actually saved to the contacts database`);
+  if (!parts.length) return '';
+  return `\n\n[Correction — ${parts.join('; ')}. I mis-stated that as done; it isn't yet. I won't claim a file, canvas item, image, or database record exists unless it really does.]`;
+}
+
+module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, mentionsMeeting, claimsMeetingAction, meetingActionHonestyDirective, verifyArtifactClaims, artifactCorrection, groundEmails, DATETIME_SELF_RE, ELECTION_RECENCY_RE };

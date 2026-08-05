@@ -88,6 +88,16 @@ const { fetchPage, search: webSearch } = require('./lib/web_search');
 const echoSuitLib = require('./lib/echo_suit');
 const { EngineSupervisor } = require('./lib/engine');   // Zoe OWNS the absorbed engine (adopt-or-spawn)
 const recallLib = require('./lib/recall');   // <recall ref="rID"/> — expand a memory marker on demand
+// Absolute ceiling on any single reply stream (2026-08-04). The inactivity watchdog resets per token, so a
+// reasoning replier (kimi-k2.6) trickling a long `thinking` stream is never killed — a live reply wedged
+// ~10min blocking chat. Generous (well above a normal reply, far below the runaway). Module-scoped so every
+// reply stream (cloud + local + recovery) references one value with no block-scope hazard.
+const REPLY_MAX_MS = 240000;
+// ANTI-FAB IMAGE PROBE: the wall-clock of the last SUCCESSFUL image generation (any path: draw-intercept or
+// operator <draw>). The reply anti-fab gate compares it to turnStartTs to catch a "generating now / it's on
+// your canvas / I made it" claim when NO image actually rendered this turn (live #10872). Monotonic, mirrors
+// canvas_docs.lastWriteTs(); no per-turn reset needed. Module-scoped so both gen sites + the gate share it.
+let lastImageGenTs = 0;
 let echoSuit = null;   // Echo "suit" — the MCP tool surface Zoe wears; bound to the engine she owns
 let echoHttp = null;   // {base,token} for the engine's HTTP custom routes (e.g. GET /canvas live snapshot)
 let echoVenv = null;   // {python,cwd} — Echo's venv interpreter + repo root, for the Google-token bridge (lib/gcal)
@@ -480,6 +490,11 @@ async function speakThroughCompanion(text) {
 app.whenReady().then(() => {
   config.loadEnv();
   db.init();
+  // M1.1a DURABLE USAGE LEDGER: restore the metered-spend ring so the quota gate's spentSince survives a
+  // reboot (the meter was in-memory → reset to 0 every boot → the gate silently under-counted). Persist on
+  // a light 60s tick (self-throttled) + a forced flush on shutdown (window-all-closed).
+  try { const n = require('./lib/usage_meter').restore(); if (n) console.log(`[usage] restored ${n} metered calls from durable ledger`); } catch {}
+  try { const _um = require('./lib/usage_meter'); const _t = setInterval(() => { try { _um.persist(); } catch {} }, 60000); if (_t.unref) _t.unref(); } catch {}
   // SELF-WATCH (Lucas 2026-07-30: "can she read her own watchdogs and suggest repairs?"):
   // the log stream gets an INTERNAL reader — every console line is classified onto the obs bus
   // (lib/obs_bus: signal lanes stored, noise counted, anomalies signature-capped), and a
@@ -499,7 +514,7 @@ app.whenReady().then(() => {
   // Curator: deterministic hygiene at session start — age long-stalled threads to
   // 'abandoned', and aggressively prune spiral/prude/junk thoughts + search-junk readings
   // so they can't re-seed the idle loop on boot.
-  try { curatorLib.curateThreads(); curatorLib.curateGaps(); curatorLib.curateMonologue(); } catch (e) { console.error('[main] curator failed:', e.message); }
+  try { curatorLib.curateThreads(); curatorLib.curateGaps(); curatorLib.curateNeeds(); curatorLib.curateMonologue(); } catch (e) { console.error('[main] curator failed:', e.message); }
   // Keep pruning spiral/junk during long sessions (write-time guard catches most; this
   // sweeps anything that slips through, e.g. junk readings from tool output).
   setInterval(() => { try { curatorLib.curateMonologue(); } catch (e) { console.error('[main] periodic curateMonologue failed:', e.message); } }, 20 * 60 * 1000).unref?.();
@@ -523,12 +538,17 @@ app.whenReady().then(() => {
   let auditRunning = false;
   // Timestamped backup before each pass, keeping only the most recent 5 (so an unattended bad
   // pass can't erase the good recovery point the way a single overwritten file would).
-  const curationBackup = () => {
+  const curationBackup = async () => {
     const fs = require('fs');
     db.getDb().pragma('wal_checkpoint(TRUNCATE)');                 // fold WAL → a single-file snapshot is complete
     const d = new Date(), p = (n) => String(n).padStart(2, '0');
     const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-    fs.copyFileSync(db.DB_PATH, `${db.DB_PATH}.precuration_${stamp}`);
+    // M1.3: was fs.copyFileSync of the whole ~2.25GB sq.db — a synchronous main-thread copy that STALLED the
+    // event loop (all idle loops + IPC) for its full duration. better-sqlite3's online .backup() is the
+    // off-thread fix: it is CONSISTENT under concurrent writes (unlike an async copyFile, which could capture
+    // a torn snapshot) AND steps through the DB in page-batches that YIELD to the event loop between them, so
+    // it never blocks. maybeRunCuration awaits it, so the pre-curation snapshot still completes before the pass.
+    await db.getDb().backup(`${db.DB_PATH}.precuration_${stamp}`);
     try {
       const dir = path.dirname(db.DB_PATH), pre = path.basename(db.DB_PATH) + '.precuration_';
       const baks = fs.readdirSync(dir).filter((f) => f.startsWith(pre)).sort();
@@ -558,8 +578,9 @@ app.whenReady().then(() => {
     if (curationRunning) return;
     if (Date.now() - parseInt(db.getMeta('last_curation_pass_at') || '0', 10) < CURATION_MIN_GAP_MS) return;
     if (Date.now() - lastUserTurnTs < CURATION_IDLE_MS) return;    // not while recently active
-    try { curationBackup(); } catch (e) { console.error('[curation] backup failed — skipping pass:', e.message); return; }
+    try { await curationBackup(); } catch (e) { console.error('[curation] backup failed — skipping pass:', e.message); return; }
     curationRunning = true;
+    markActivity('curation');   // stall-attrib (diagnostic)
     db.setMeta('last_curation_pass_at', String(Date.now()));       // claim the slot before running
     console.log('[curation] starting daily pass…');
     try {
@@ -673,6 +694,26 @@ app.whenReady().then(() => {
           if (rep) console.log(`[dedup] scanned=${rep.scanned || 0} clusters=${rep.clusters || 0} new-proposals=${rep.new != null ? rep.new : '?'} (operator review)`);
         }
       } catch (e) { console.error('[dedup] semantic scan failed:', e.message); }
+      // DEDUP ADJUDICATION (D1 CONSUMER — M1.5): the producer above only PROPOSES; without a consumer the
+      // pending resolution_proposals queue just grew (measured 32,226 pending — the "producer without
+      // consumer" disease). run_dedup_adjudication is the LLM merge-evaluator + AUDITED auto-apply: each pair
+      // needs an LLM 'yes' PLUS a structural anchor (strong-id / jurisdiction / shared live neighbor) to
+      // apply; an LLM veto always parks; merges land through the REVERSIBLE canonical_id + SAME_AS path in
+      // audited sub-batches with an in-line regression check that REVERSES the batch + HALTS on any failure
+      // (278 prior reversals prove the net fires). Bounded + SAFEST TIERS FIRST (strong-id + name-exact =
+      // exact core-name; the weak/semantic tiers are left for a deliberate operator pass). Kill-switch
+      // ZOE_DEDUP_ADJUDICATE=0 disables. Proof: pending falls day-over-day. See [[scaling-backbone-duckdb]].
+      if (!/^(0|false|no|off)$/i.test(String(process.env.ZOE_DEDUP_ADJUDICATE || '').trim())) {
+        try {
+          if (echoSuit && echoSuit.connected) {
+            const tiers = String(process.env.ZOE_DEDUP_ADJUDICATE_TIERS || 'strong-id,name-exact').trim();
+            const batch = parseInt(process.env.ZOE_DEDUP_ADJUDICATE_BATCH, 10) || 200;
+            const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { tiers, batch, apply_batch: 50 } });
+            let arep = null; try { arep = JSON.parse(ar && ar.text); } catch {}
+            if (arep) console.log(`[adjudicate] considered=${arep.considered != null ? arep.considered : '?'} applied=${arep.applied != null ? arep.applied : '?'} parked=${arep.parked != null ? arep.parked : '?'}${arep.halted ? ' HALTED(regression→reversed)' : ''} (${tiers}, reversible)`);
+          }
+        } catch (e) { console.error('[adjudicate] pass failed:', e.message); }
+      }
       // (The RECURSIVE AUDITOR auto-cleaner used to run here on the 20h curation cadence — it is now
       // DECOUPLED onto its own fast, write-triggered tick: maybeRunAudit / AUDIT_CHECK_MS below.)
       // PROMOTION (short-term → long-term): consolidate the day's new short-term documents into Echo
@@ -733,6 +774,22 @@ app.whenReady().then(() => {
         for (const id of p.archive) { try { archived += db.setKgObservationStatus(id, 'archived'); } catch {} }
         if (archived) console.log(`[fade] archived ${archived} unsubstantiated nodes past ${ttlDays}d TTL (${p.kept} still within window)`);
       } catch (e) { console.error('[fade] pass failed:', e.message); }
+      // GRAPH_ENTITIES FADE (Phase 3, 2026-08-04): the node-store twin of the kg_observations fade above. An
+      // unsubstantiated graph_entities node the prove/re-encounter path never lifted is soft-archived
+      // (archived_at set) past the same TTL — retained + restorable, dropped from vouching (substantiation_gate
+      // excludes archived). GATED default-OFF (ZOE_GE_FADE_ENABLED): built-but-off until the circuit is proven
+      // live + Lucas arms it, because the ~13k currently-static unsubstantiated set would archive on the first
+      // run — a deliberate switch, never a silent default. Reuses lib/fade.plan (pure decision core).
+      if (/^(1|true|yes|on)$/i.test(String(process.env.ZOE_GE_FADE_ENABLED || '').trim())) {
+        try {
+          const fade = require('./lib/fade');
+          const ttlDays = parseInt(process.env.SUBSTANTIATION_FADE_TTL_DAYS || '', 10) || 14;
+          const gp = fade.plan(db.graphListEntityFadeCandidates({ limit: 500 }), { ttlMs: ttlDays * fade.DAY, now: Date.now() });
+          let gArch = 0;
+          for (const id of gp.archive) { try { gArch += db.graphArchiveEntity(id, Date.now()); } catch {} }
+          if (gArch) console.log(`[ge-fade] archived ${gArch} unsubstantiated graph_entities past ${ttlDays}d TTL (${gp.kept} within window)`);
+        } catch (e) { console.error('[ge-fade] pass failed:', e.message); }
+      }
       // NEWS CAPTURES retention: drop broadcast screenshot PNGs (derived/regenerable) + rows past the window
       // so data/news_captures stays bounded. Window via NEWS_CAPTURES_RETAIN_DAYS (default 7). Raw RSS items
       // are NOT pruned here — that reservoir's retention policy is intentionally left to an explicit decision.
@@ -742,7 +799,7 @@ app.whenReady().then(() => {
         if (pc.files || pc.rows) console.log(`[news-captures] retention — ${pc.files} PNGs + ${pc.rows} rows older than ${retainDays}d dropped`);
       } catch (e) { console.error('[news-captures] retention failed:', e.message); }
     } catch (e) { console.error('[curation] pass failed:', e.message); }
-    finally { curationRunning = false; }
+    finally { markActivity('idle'); curationRunning = false; }
   };
   setInterval(() => { maybeRunCuration().catch(() => {}); }, CURATION_CHECK_MS).unref?.();
   // RECURSIVE AUDITOR (E1, AUTOPILOT) — its OWN fast, write-triggered tick, decoupled from the 20h
@@ -757,7 +814,7 @@ app.whenReady().then(() => {
     if (auditRunning) return;
     if (!echoSuit || !echoSuit.connected) return;
     if (Date.now() - parseInt(db.getMeta('last_audit_dispatch_at') || '0', 10) < AUDIT_MIN_GAP_MS) return;  // floor
-    auditRunning = true;
+    auditRunning = true; markActivity('audit');   // stall-attrib (diagnostic)
     db.setMeta('last_audit_dispatch_at', String(Date.now()));    // claim the slot before the round-trip
     try {
       const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_integrity_audit', args: {} });
@@ -773,7 +830,7 @@ app.whenReady().then(() => {
         }
       }
     } catch (e) { console.error('[audit] auto-cleaner failed:', e.message); }
-    finally { auditRunning = false; }
+    finally { markActivity('idle'); auditRunning = false; }
   };
   setInterval(() => { maybeRunAudit().catch(() => {}); }, AUDIT_CHECK_MS).unref?.();
   // PHASE A3 — EVENT AGING SWEEP (the state-flip, tied to the pulse). A 'scheduled' event whose WORLD-time
@@ -829,6 +886,7 @@ app.whenReady().then(() => {
         let rep = null; try { rep = JSON.parse(dr && dr.text); } catch {}
         return { promoted: (rep && rep.promoted) || 0, remaining: (rep && rep.remaining != null) ? rep.remaining : 0 };
       };
+      markActivity('ingest-drain');   // stall-attrib (diagnostic)
       const res = await ingestLane.drainUntilEmpty(runChunk, { maxIters: 40 });
       if (res.totalPromoted > 0) db.setMeta('last_ingest_run_id', runId);   // remember for a quick revert if needed
       if (res.totalPromoted > 0 || res.stopped === 'error') {
@@ -840,7 +898,7 @@ app.whenReady().then(() => {
         }
       }
     } catch (e) { console.error('[ingest] drain failed:', e.message); }
-    finally { ingestRunning = false; }
+    finally { markActivity('idle'); ingestRunning = false; }
   };
   setInterval(() => { maybeDrainIngest().catch(() => {}); }, INGEST_CHECK_MS).unref?.();
   // F3 RESEARCH-TO-CLOSE-THE-GAP — the third outcome, wired live. Pulls the RESEARCH band from tenant
@@ -1008,7 +1066,7 @@ app.whenReady().then(() => {
     if (kgDedupRunning) return;
     if (!echoSuit || !echoSuit.connected) return;
     if (Date.now() - parseInt(db.getMeta('last_kg_dedup_at') || '0', 10) < KGDEDUP_MIN_GAP_MS) return;  // floor
-    kgDedupRunning = true;
+    kgDedupRunning = true; markActivity('kg-dedup');   // stall-attrib (diagnostic)
     db.setMeta('last_kg_dedup_at', String(Date.now()));
     try {
       const nowSec = Math.floor(Date.now() / 1000);
@@ -1050,7 +1108,7 @@ app.whenReady().then(() => {
         }
       } catch (e) { /* FAISS index not built yet / ANN unavailable → skip silently */ }
     } catch (e) { console.error('[kg-dedup] paced pass failed:', e.message); }
-    finally { kgDedupRunning = false; }
+    finally { markActivity('idle'); kgDedupRunning = false; }
   };
   setInterval(() => { maybeRunKgDedup().catch(() => {}); }, KGDEDUP_CHECK_MS).unref?.();
   // KG DEDUP ADJUDICATION — the LLM evaluator + AUDITED AUTO-APPLY (Slice B, the merge-gate crosser). Judges
@@ -1377,6 +1435,7 @@ app.whenReady().then(() => {
   createWindow();
   try { createCompanionWindow(); } catch (e) { console.error('[companion] spawn failed:', e.message); }   // floating desktop presence (gated on her .vrm)
   try { ensureYtPlayerServer(); } catch {}   // warm the clean-player server so the Monitors videos load fast
+  try { ensureComfyUI(); } catch (e) { console.error('[comfyui] ensure failed:', e.message); }   // local image-gen server (SDXL/FLUX on the 7900 XT)
   // Zoe's Canvas auto-spawns AFTER the engine attaches (see the engine .finally above) so its first
   // load finds Echo connected — staggered behind the server, no "not connected" flash.
 
@@ -1387,10 +1446,19 @@ app.whenReady().then(() => {
   // Warm the single Dans-24B model at boot. One model now serves both chat and the between-turn
   // monologue. Mistral-3 arch unlocks KV-cache quantization (OLLAMA_FLASH_ATTENTION=1 +
   // OLLAMA_KV_CACHE_TYPE=q8_0), keeping 24B Q4 + 16K ctx inside the RX 7900 XT's ~18GB usable VRAM.
-  sweepLoaded({ keep: [MODEL], minVramBytes: 2e9 })
+  // FRONT DEMOTED TO COLD (2026-08-04): the cloud fleet (kimi replier, deepseek/kimi operator, gpt-oss
+  // curator, gemma-cloud editor/vision) now does every interactive + operator turn; the local front is
+  // only an idle-thought generator + cloud-DOWN fallback + a couple of cheap local gates. Warm-holding it
+  // squatted 8.4GB of the RX 7900 XT — VRAM we want free for local image generation (SDXL/FLUX via
+  // ComfyUI). So we NO LONGER pin it at boot: sweep any resident copy (keep nothing big → frees gemma too)
+  // and let it load on demand with Ollama's default ~5min keep_alive (unloads when idle = cold fallback).
+  // Re-warm it with ZOE_WARM_FRONT=1 if a workload ever needs the local front hot again.
+  const _warmFront = /^(1|true|yes|on)$/i.test(String(process.env.ZOE_WARM_FRONT || '').trim());
+  sweepLoaded({ keep: _warmFront ? [MODEL] : [], minVramBytes: 2e9 })
     .then(swept => { if (swept.length) console.log('[boot] swept stale resident model(s):', swept.join(', ')); })
     .catch(() => {})
     .finally(() => {
+      if (!_warmFront) { console.log('[main] local front DEMOTED to cold (loads on demand); VRAM reserved for image-gen. Set ZOE_WARM_FRONT=1 to re-warm.'); return; }
       fetch('http://localhost:11434/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1446,7 +1514,34 @@ app.whenReady().then(() => {
   // when the app last closed, pick it back up so the work continues through the night uninterrupted.
   try {
     const focusLib = require('./lib/focus');
-    const f = focusLib.getCurrent();
+    let f = focusLib.getCurrent();
+    // RESUME A LOST POINTER (2026-08-04): a Lucas-assigned task can be left `active` in open_threads while
+    // current_focus_id/focus_state were cleared (displacement, a sibling run closing, an unclean shutdown).
+    // The directed driver then idles and the assignment silently dies — this is the parish-list failure:
+    // thread #3685 ("finding the missing emails for this list") sat active+unpointed, so the list-completion
+    // lane never dispatched. If no directed focus is current but Lucas has a recent still-open assigned
+    // thread, re-point to the freshest one so his work resumes instead of stalling forever unpointed.
+    if (!f || !focusLib.isDirected(f)) {
+      try {
+        // A user-directed thread carries `focus.<id>.origin === 'user'` (setCurrent stamps it); crucially it
+        // does NOT reliably carry a source_turn_id (a canvas-drop / directive path can leave that null — #3685
+        // did), so getUserAssignedThreads (which INNER-JOINs a user turn) would MISS it. Select on the origin
+        // stamp instead: the freshest still-open (active/pending — never stalled, which would just re-stall)
+        // thread Lucas assigned. Beat-origin threads are left to the autonomic scheduler, not resumed here.
+        const RESUME_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+        // NB: getActiveOpenThreads orders last_touched_ts ASC (OLDEST first), so a small LIMIT would TRUNCATE
+        // the newest threads — exactly the bug that made this silently no-op (65 open threads, #3685 the
+        // freshest sat past a LIMIT 40 of the oldest). Pull them all (the open set is small + bounded) and let
+        // the DESC sort below choose the freshest; the accessor's own ordering is irrelevant once we re-sort.
+        const cand = (db.getActiveOpenThreads(1000, { includeStalled: false }) || [])
+          .filter(t => t && (Date.now() - (t.last_touched_ts || 0)) < RESUME_MAX_AGE_MS && focusLib.originOf(t.id) === 'user')
+          .sort((a, b) => (b.last_touched_ts || 0) - (a.last_touched_ts || 0))[0];
+        if (cand) {
+          const rf = focusLib.setCurrent(cand.id, { directed: true, origin: 'user' });
+          if (rf) { f = rf; console.log(`[directed] re-pointed to lost user focus #${cand.id}: ${String(cand.content).slice(0, 70)}`); }
+        }
+      } catch (e) { console.error('[directed] lost-pointer resume failed:', e.message); }
+    }
     if (f && focusLib.isDirected(f)) { startDirectedFocusDriver(); console.log(`[directed] resumed standing focus #${f.id} after restart`); }
   } catch (e) { console.error('[main] directed-focus resume failed:', e.message); }
 
@@ -1770,7 +1865,7 @@ app.whenReady().then(() => {
       if (_sweepInFlight) return;
       if (_bootGraceActive()) { _logBootDefer('decomp-sweep'); return; }              // cold-boot stutter: heaviest LOCAL-sync lane — hold while the app warms
       if (_conversationActive()) { _logLoadDeferral('decomp-sweep'); return; }        // heavy synchronous doc decomposition — yield the main thread while he types
-      _sweepInFlight = true;
+      _sweepInFlight = true; markActivity('decompose-sweep');   // stall-attrib (diagnostic)
       try {
         if (String(process.env.ZOE_AUTO_INGEST || '1').trim() === '0') return;
         if (!echoSuit || !echoSuit.connected) return;              // no resolver → every entity would skip
@@ -1791,7 +1886,7 @@ app.whenReady().then(() => {
         const b = sweepLib.budgetState(db);
         console.log(`[decomp-sweep] read ${done.length} backlog doc(s) — budget ${b.spent}/${b.limit} chunks today`);
       } catch (e) { console.error('[decomp-sweep]', e.message); }
-      finally { _sweepInFlight = false; }
+      finally { markActivity('idle'); _sweepInFlight = false; }
     };
     setTimeout(() => { runDecomposeSweep().catch(() => {}); }, 90000);   // after boot settles
     setInterval(() => { runDecomposeSweep().catch(() => {}); }, SWEEP_MS).unref?.();
@@ -1811,7 +1906,7 @@ app.whenReady().then(() => {
       if (_inFlight) return;
       if (_bootGraceActive()) { _logBootDefer('doc-contact-sweep'); return; }
       if (_conversationActive()) { _logLoadDeferral('doc-contact-sweep'); return; }
-      _inFlight = true;
+      _inFlight = true; markActivity('doc-contact-sweep');   // stall-attrib (diagnostic)
       try {
         if (String(process.env.ZOE_AUTO_INGEST || '1').trim() === '0') return;
         const src = (() => { try { return (require('./lib/models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch { return null; } })();
@@ -1830,7 +1925,7 @@ app.whenReady().then(() => {
           console.log(`[doc-contact-sweep] scanned ${r.scanned} doc(s) → +${r.found} contact(s) — budget ${r.budget.spent + r.chunksSpent}/${r.budget.limit} chunks today`);
         }
       } catch (e) { console.error('[doc-contact-sweep]', e.message); }
-      finally { _inFlight = false; }
+      finally { markActivity('idle'); _inFlight = false; }
     };
     setTimeout(() => { runDocContactSweep().catch(() => {}); }, 150000);   // after boot settles, offset from decomp
     setInterval(() => { runDocContactSweep().catch(() => {}); }, SWEEP_MS).unref?.();
@@ -2233,6 +2328,8 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', async () => {
+  // M1.1a: flush the metered-spend ring so the last <60s of usage survives the reboot (force past throttle).
+  try { require('./lib/usage_meter').persist(Date.now(), { force: true }); } catch {}
   if (inboxPollTimer) { clearInterval(inboxPollTimer); inboxPollTimer = null; }
   if (inboxPollTimeout) { clearTimeout(inboxPollTimeout); inboxPollTimeout = null; }
   if (apiStreamTimer) { clearInterval(apiStreamTimer); apiStreamTimer = null; }
@@ -2248,6 +2345,7 @@ app.on('window-all-closed', async () => {
   if (forecastLoopTimer) { clearInterval(forecastLoopTimer); forecastLoopTimer = null; }
   if (forecastLoopTimeout) { clearTimeout(forecastLoopTimeout); forecastLoopTimeout = null; }
   try { require('./lib/news_poll').stop(); } catch {}
+  try { stopComfyUI(); } catch {}
   try { newsVideoLane && newsVideoLane.stop(); } catch {}
   try { stopScribeHeartbeat(); } catch {}
   try { actionLoop.abort(); } catch {}
@@ -2485,6 +2583,36 @@ function ensureYtPlayerServer() {
   return ytReady;
 }
 ipcMain.handle('feeds:player-base', async () => { const p = await ensureYtPlayerServer(); return { ok: !!p, base: p ? `http://127.0.0.1:${p}/yt` : '' }; });
+
+// COMFYUI SUPERVISOR (2026-08-04) — local image generation (SDXL/FLUX) on the RX 7900 XT via native
+// Windows ROCm. Spawns ComfyUI bound to 127.0.0.1:8188 (never the network), on HIP device 1 (the discrete
+// 7900 XT, not the iGPU), with --use-split-cross-attention (avoids a ROCm attention-kernel access-violation
+// that crashed the default path) and --disable-smart-memory. Model loads LAZILY on the first generation, so
+// idle VRAM cost is ~0. Restarts on crash. App-owned → killed on quit. Disable with ZOE_COMFYUI_ENABLED=0.
+let comfyProc = null, comfyStopping = false;
+function ensureComfyUI() {
+  if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_COMFYUI_ENABLED || '1').trim())) { console.log('[comfyui] disabled (ZOE_COMFYUI_ENABLED=0)'); return; }
+  if (comfyProc) return;
+  const fs = require('fs');   // fs is not module-level in main.js (required inline per-callsite)
+  const dir = process.env.COMFYUI_DIR || 'C:/Users/azrae/Desktop/ComfyUI-Zluda';
+  const py = process.env.COMFYUI_PYTHON || path.join(dir, '.venv-rocm', 'Scripts', 'python.exe');
+  if (!fs.existsSync(py)) { console.warn(`[comfyui] python not found at ${py} — local image-gen unavailable (set COMFYUI_DIR/COMFYUI_PYTHON or install ComfyUI)`); return; }
+  const args = ['main.py', '--listen', '127.0.0.1', '--port', '8188', '--use-split-cross-attention', '--disable-smart-memory'];
+  const env = { ...process.env, HIP_VISIBLE_DEVICES: process.env.HIP_VISIBLE_DEVICES || '1', MIOPEN_FIND_MODE: process.env.MIOPEN_FIND_MODE || 'NORMAL' };
+  try {
+    const { spawn } = require('child_process');
+    const out = fs.openSync(path.join(__dirname, 'data', 'comfyui.log'), 'a');
+    comfyProc = spawn(py, args, { cwd: dir, env, stdio: ['ignore', out, out], windowsHide: true });
+    console.log(`[comfyui] spawned (pid ${comfyProc.pid}) → 127.0.0.1:8188 on HIP device ${env.HIP_VISIBLE_DEVICES} (RX 7900 XT); model loads on first gen. log → data/comfyui.log`);
+    comfyProc.on('exit', (code) => {
+      comfyProc = null;
+      if (comfyStopping) return;
+      console.warn(`[comfyui] exited (code ${code}) — restarting in 5s`);
+      setTimeout(() => { try { ensureComfyUI(); } catch (e) { console.error('[comfyui] restart failed:', e.message); } }, 5000);
+    });
+  } catch (e) { console.error('[comfyui] spawn failed:', e.message); comfyProc = null; }
+}
+function stopComfyUI() { comfyStopping = true; try { if (comfyProc && comfyProc.pid) { require('child_process').spawn('taskkill', ['/PID', String(comfyProc.pid), '/T', '/F'], { windowsHide: true }); } } catch {} comfyProc = null; }
 
 // FULL-INGESTION gate: launch a YouTube video in its OWN dedicated canvas pane with AUDIO ON, so the
 // soundtrack can be transcribed (for videos/lives without CCs). Opens/focuses the Canvas + tells the
@@ -3245,7 +3373,7 @@ function buildExportDocHtml(title, inner) {
 // Export a canvas document to a real file the operator can keep: Markdown is done in the renderer (Blob);
 // PDF (Electron printToPDF, no dep) and Word (.docx via html-to-docx) render the doc's HTML here, write to
 // data/exports/, and open it. Renderer passes the already-sanitized display HTML + the title + a format.
-ipcMain.handle('canvas:export-doc', async (_e, { title = 'Document', html = '', markdown = '', csv = '', format = 'pdf' } = {}) => {
+ipcMain.handle('canvas:export-doc', async (_e, { title = 'Document', html = '', markdown = '', csv = '', tables = null, format = 'pdf' } = {}) => {
   try {
     const fs = require('fs');
     const exportsDir = path.join(__dirname, 'data', 'exports');
@@ -3269,6 +3397,24 @@ ipcMain.handle('canvas:export-doc', async (_e, { title = 'Document', html = '', 
       // in the right encoding; shell.openPath then hands it to the OS default (Excel/Sheets).
       outPath = path.join(exportsDir, `${safe}-${stamp}.csv`);
       fs.writeFileSync(outPath, '﻿' + String(csv || ''), 'utf8');
+    } else if (format === 'xlsx') {
+      // Excel ← every table/chart in the doc as its own sheet (exceljs — already a dependency). Tabular
+      // create was CSV-only (one table); this exports the WHOLE doc's data as a real workbook.
+      const tbls = Array.isArray(tables) ? tables.filter(t => t && (t.headers?.length || t.rows?.length)) : [];
+      if (!tbls.length) return { ok: false, error: 'no tables or charts in this document to export to Excel' };
+      const ExcelJS = require('exceljs');
+      const wb = new ExcelJS.Workbook();
+      const used = new Set();
+      tbls.forEach((t, i) => {
+        let nm = String(t.name || `Sheet${i + 1}`).replace(/[\\/?*[\]:]/g, ' ').trim().slice(0, 28) || `Sheet${i + 1}`;
+        let base = nm, n = 1; while (used.has(nm.toLowerCase())) nm = `${base.slice(0, 25)}_${++n}`;
+        used.add(nm.toLowerCase());
+        const ws = wb.addWorksheet(nm);
+        if (Array.isArray(t.headers) && t.headers.length) { ws.addRow(t.headers.map(h => String(h == null ? '' : h))); ws.getRow(1).font = { bold: true }; }
+        (t.rows || []).forEach(r => ws.addRow((Array.isArray(r) ? r : [r]).map(c => (c == null ? '' : c))));
+      });
+      outPath = path.join(exportsDir, `${safe}-${stamp}.xlsx`);
+      await wb.xlsx.writeFile(outPath);
     } else return { ok: false, error: `unsupported format: ${format}` };
     try { await shell.openPath(outPath); } catch (e) { console.error('[canvas] open export failed:', e.message); }
     console.log(`[canvas] exported "${title}" → ${outPath}`);
@@ -3946,14 +4092,42 @@ try {
   _loopLag = monitorEventLoopDelay({ resolution: 20 });
   _loopLag.enable();
 } catch (e) { _loopLag = null; }
+// STALL ATTRIBUTOR (2026-08-04, diagnostic — REMOVE once the culprit is fixed + confirmed). The lag
+// monitor above says a stall HAPPENED but not WHICH lane blocked the loop. markActivity() stamps the
+// currently-running heavy lane; a self-timing 1s probe (its OWN clock — it must NOT touch _loopLag, which
+// _lagNote resets per-window) writes the active lane to a durable log the moment the loop is blocked, so
+// the NEXT stall names its own cause without a reboot to catch it in the act.
+let _mainThreadActivity = { label: 'idle', at: Date.now() };
+function markActivity(label) { _mainThreadActivity = { label: label || 'idle', at: Date.now() }; }
+function _activeNote() {
+  const a = _mainThreadActivity;
+  if (!a || a.label === 'idle') return '';
+  return ` [active: "${a.label}" for ${Date.now() - a.at}ms]`;
+}
 function _lagNote() {
   if (!_loopLag) return '';
   const maxMs = Math.round(_loopLag.max / 1e6);
   const meanMs = Math.round(_loopLag.mean / 1e6);
   _loopLag.reset();                                  // per-window, so the number describes THIS failure
   if (!Number.isFinite(maxMs) || maxMs < 1000) return ` [main thread ok: lag max ${maxMs}ms]`;
-  return ` [MAIN THREAD STALLED: lag max ${maxMs}ms, mean ${meanMs}ms — the network is not the problem]`;
+  return ` [MAIN THREAD STALLED: lag max ${maxMs}ms, mean ${meanMs}ms — the network is not the problem]${_activeNote()}`;
 }
+try {
+  const _attribPath = path.join(__dirname, 'data', 'stall_attrib.log');
+  let _lastTick = Date.now(), _attribLast = 0;
+  setInterval(() => {
+    const now = Date.now();
+    const drift = now - _lastTick - 1000;            // how far past the expected 1s the loop came back
+    _lastTick = now;
+    if (drift >= 1500 && now - _attribLast > 2000) {  // loop was blocked ~1.5s+ beyond schedule
+      _attribLast = now;
+      const a = _mainThreadActivity;
+      const line = `${new Date(now).toISOString()}\tblocked~${drift}ms\tactive="${a.label}"\tran=${now - a.at}ms\n`;
+      try { require('fs').appendFile(_attribPath, line, () => {}); } catch {}
+      try { console.warn(`[stall-attrib] main thread blocked ~${drift}ms — active: "${a.label}" (${now - a.at}ms)`); } catch {}
+    }
+  }, 1000).unref?.();
+} catch {}
 
 // MAIN-THREAD LOAD GOVERNOR (Lucas 2026-07-24 — "the freezes are getting to where its hard to type in
 // the chat ... we need to better balance the load"). The cloud-slot board (lib/board) reserves a CLOUD
@@ -4134,6 +4308,11 @@ ipcMain.handle('canvas:reset-layout', async (_e, { tabKey } = {}) => {
 // first use, rather than beside the writers.
 const _canvasTabsOpened = new Set();
 const IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml' };
+// Media MIME maps (2026-08-04) — a dropped audio/video file becomes a playable canvas card. src is the
+// on-disk file:// URL (NOT a base64 data URI — a video inlined as base64 would be enormous); Electron
+// streams it from disk in the <audio>/<video> element.
+const AUDIO_MIME = { mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', flac: 'audio/flac', opus: 'audio/opus' };
+const VIDEO_MIME = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg', mov: 'video/quicktime', mkv: 'video/x-matroska' };
 // A dropped file's path → a REAL file:// URL (lib/file_ingest.pathToSrc, the exact inverse of the srcToPath
 // the re-ingest poller uses). This used to be string concatenation, which silently produced a BROKEN url for
 // any filename holding a URL-significant character — "July Poll #3 - Crosstab Report.pdf" rendered as a blank
@@ -4154,6 +4333,12 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       // re-reads it via file_ingest → VISION OCR → surfaceDocCards → cards (a data URI can't be re-read).
       data = { src: `data:${IMG_MIME[ext]};base64,${b64}`, alt: baseName, file: fileUrl(filePath) };
       blockType = 'image'; mode = 'ILLUSTRATIVE';
+    } else if (AUDIO_MIME[ext]) {                          // AUDIO → a playable audio card (streamed from disk)
+      data = { src: fileUrl(filePath), mime: AUDIO_MIME[ext], title: baseName };
+      blockType = 'audio'; mode = 'ILLUSTRATIVE';
+    } else if (VIDEO_MIME[ext]) {                          // VIDEO → a playable video card (streamed from disk)
+      data = { src: fileUrl(filePath), mime: VIDEO_MIME[ext], title: baseName };
+      blockType = 'video'; mode = 'ILLUSTRATIVE';
     } else if (ext === 'pdf') {                            // PDF → embed the REAL document (Chromium PDF viewer)
       data = { src: fileUrl(filePath), alt: baseName };
       blockType = 'document_file';                          // 'pdf' is not a valid engine block type
@@ -4173,6 +4358,12 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       const tbl = require('./studio/sheet_view').toTable(rows);
       data = { headers: tbl.headers, rows: tbl.rows, caption: ws ? `${ws.name}${tbl.truncated ? ` · +${tbl.truncated} more rows` : ''}` : null, src: fileUrl(filePath) };
       blockType = 'table';
+    } else if (ext === 'html' || ext === 'htm') {          // HTML → rich HTML block (renderer sanitizes before paint)
+      let raw = ''; try { raw = fs.readFileSync(filePath, 'utf8'); } catch {}
+      if (!raw.trim()) return { ok: false, error: 'empty / unreadable .html' };
+      // keep the <body> if present (drop <head>/scripts noise); the renderer's sanitizeHtml strips the rest
+      const bodyM = raw.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+      data = { html: bodyM ? bodyM[1] : raw }; blockType = 'document_file';
     } else if (ext === 'docx') {                           // WORD → rich HTML (tables, emphasis, inline images)
       try { const r = await require('./lib/doc_extract').extractDocxHtml(filePath); if (r && r.html && r.html.trim()) { data = { html: r.html }; blockType = 'document_file'; } } catch {}
       if (!data) {                                         // fallback: flattened markdown as a paragraph
@@ -5089,7 +5280,13 @@ function _mirrorCanvasWrite(t, r) {
 }
 
 function _identityWithoutSuit(messages, suit) {
-  const text = (messages || []).map((m) => m.content).join('\n\n');
+  // M2.1: the SYSTEM message ONLY (messages[0] holds the full identity blob — persona/protocols/
+  // permissions/self-model/suit/grounding). This used to `join` the ENTIRE messages array, flattening
+  // every conversation turn into the package's `identity` section — while the cloud assembly (cloudMessages
+  // = [_pkgSys, ..._convoTurns]) ALSO appends those same turns as real roles. History rode TWICE (the
+  // 32-44k identity blob), wasting budget + blurring recency. Identity is fully preserved (messages[0]);
+  // history now rides once, as role turns.
+  const text = String((((messages || [])[0]) || {}).content || '');
   if (!suit) return text;
   const i = text.indexOf(suit);
   return i < 0 ? text : (text.slice(0, i) + text.slice(i + suit.length)).replace(/\n{3,}/g, '\n\n');
@@ -6153,7 +6350,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // serves the actual words. Don't derail it into "which Trump?" (that pre-empted the transcript feature live,
   // 2026-07-17 — Lucas asked for the transcript and got a family-tree disambiguation instead).
   const _isSpeechQ = (() => { try { return !!require('./lib/intent').detectSpeechQuery(userMessage); } catch { return false; } })();
-  if (recallResult && recallResult.ambiguous && recallResult.ambiguous.candidates && recallResult.ambiguous.candidates.length >= 2 && !followupFired && !socialTurn && !_isSpeechQ) {
+  // ROSTER GUARD (2026-08-05): a NAMED-LIST contacts ask ("find emails for the following people: <list>") must
+  // take the roster lane below — it must NEVER be derailed into a single-entity "which one?". recall() collapses
+  // the multiline list and can pull an ambiguous span out of it: live #10879, the two adjacent lines "…Devante
+  // Lewis" / "Tom Arceneaux" became one mention "Devante Lewis Tom Arceneaux", which matched several namesakes,
+  // fired a spurious disambiguation FIRST (followupFired=true), and starved the roster handler → the ask fell
+  // through to a category dump. Computed once here; the ambiguity gate and the roster handler both consult it.
+  const _rosterAsk = (() => { try { return require('./lib/roster_intake').parseRosterAsk(userMessage); } catch { return { ok: false }; } })();
+  if (recallResult && recallResult.ambiguous && recallResult.ambiguous.candidates && recallResult.ambiguous.candidates.length >= 2 && !followupFired && !socialTurn && !_isSpeechQ && !_rosterAsk.ok) {
     const amb = recallResult.ambiguous;
     const cg = require('./lib/concept_ground');
     // ASK only when it's a genuine collision of 2+ distinct PEOPLE (a lookup can't tell which he means).
@@ -6284,7 +6488,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   if (_contactish) {
     const _rx = () => { try { return require('./lib/contacts_query').detect(userMessage); } catch { return { isQuery: false }; } };
     let _llmC = null;
-    try { _llmC = await require('./lib/contacts_intent').classify(userMessage, { recent: '' }); }
+    // Give the classifier the last few turns so it can tell a FRESH list ask from a follow-up that merely
+    // REFERS to a list she already delivered ("I need those contacts by this afternoon"). Without this the
+    // call was `recent:''` — blind to context — so anaphora re-triggered a full 100k contact-dump every
+    // couple of rounds. [[detectors-vs-comprehension]] — cap the behavior with comprehension, not phrasings.
+    const _contactsRecent = (recentTurns || []).slice(-4)
+      .map((t) => `${t.speaker === 'user' ? userName : 'You'}: ${String(t.content || '').replace(/\s+/g, ' ').slice(0, 200)}`)
+      .join('\n');
+    try { _llmC = await require('./lib/contacts_intent').classify(userMessage, { recent: _contactsRecent }); }
     catch (e) { console.error('[contacts-intent] call failed:', e.message); _llmC = null; }
     if (_llmC == null) _contactsQ = _rx();                                   // cloud DOWN → regex is the only fallback
     else _contactsQ = _llmC.isQuery ? _llmC : { isQuery: false };            // LLM CONSULTED → TRUST it both ways.
@@ -6305,6 +6516,140 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   if (routerOn) console.log(`[turn-router] route=${turnRoute.route} (${turnRoute.reason}, conf ${turnRoute.confidence})`);
   const routeAllows = (r) => !routerOn || turnRoute.route === r;
   const routeAllowsAny = (...rs) => !routerOn || rs.includes(turnRoute.route);
+
+  // IMAGE-GENERATION INTERCEPT (2026-08-04) — "draw / make a picture of X" must GENERATE locally, not fall
+  // to a web-search for stock photos (live: she googled Getty/iStock instead of drawing, because image-gen
+  // was only PROSE in the manifest while web_search is a first-class tool she reaches for). This is a
+  // deterministic early intercept (same shape as the roster + contacts handlers): recognize the create-an-
+  // image intent, extract the description, and run local SDXL → canvas + chat, BEFORE any tool-router/web
+  // path. Fires only on a clear image-CREATION ask, never on "draw a conclusion / make a list / a plan".
+  const _MAX_IMG = 4;   // bound per turn (VRAM + ~30s each; 4 ≈ 2min, under the reply cap)
+  const _drawReq = (() => {
+    const s = String(userMessage || '').trim();
+    if (!s) return null;
+    const NONIMG = /\b(conclusion|decision|plan|list|table|chart|graph|report|document|doc|memo|brief|outline|summary|distinction|point|case|comparison|budget|schedule|roadmap|deal|choice|note|call|contacts?|emails?|people|persons?)\b/i;
+    const _subj = (raw) => { const t = String(raw || '').trim().replace(/^(?:of|showing|depicting|with|for)\s+/i, '').replace(/[.?!]+$/, ''); return /[a-z]{3}/i.test(t) ? t : null; };
+    // COUNT — a number ADJACENT to an image-noun ("3 pictures" → 3, not "picture of 3 puppies"). Literal
+    // regexes: new RegExp(`\\d`) via template interpolation silently strips the backslashes.
+    const _count = (txt) => {
+      if (!/\b(?:images?|pictures?|poses?|versions?|variations?|shots?|renders?|renderings?|photos?|portraits?|drawings?)\b/i.test(txt)) return null;
+      let mm = txt.match(/\b(\d+)\s+(?:more\s+)?(?:images?|pictures?|poses?|versions?|variations?|shots?|renders?|renderings?|photos?|portraits?|drawings?)/i);
+      if (mm) return Math.max(1, Math.min(_MAX_IMG, parseInt(mm[1], 10)));
+      const W = { one: 1, two: 2, three: 3, four: 4, couple: 2, few: 3, several: 3, some: 3 };
+      mm = txt.match(/\b(one|two|three|four|couple|few|several|some)\s+(?:of\s+)?(?:more\s+)?(?:images?|pictures?|poses?|versions?|variations?|shots?|renders?|renderings?|photos?|portraits?|drawings?)/i);
+      if (mm && W[mm[1].toLowerCase()]) return Math.min(_MAX_IMG, W[mm[1].toLowerCase()]);
+      return null;
+    };
+    // FRESH ask: verb + image-noun + subject, OR bare draw/sketch/paint + subject
+    let m = s.match(/\b(?:draw|paint|sketch|render|generate|create|make|design|imagine|produce|whip up|cook up|give me)\s+(?:me\s+)?(?:\d+|a|an|some|the|a couple of|a few|several)?\s*(?:more\s+)?(?:pictures?|images?|drawings?|illustrations?|artworks?|art|photos?|photographs?|paintings?|portraits?|renders?|renderings?|graphics?|wallpapers?|scenes?|visuals?|poses?)\s*(?:of|showing|depicting|with|for|:|,)?\s*(.+)$/i);
+    if (m) { const v = _subj(m[1]); if (v) return { prompt: v, count: _count(s) || 1 }; }
+    m = s.match(/\b(?:draw|sketch|paint|illustrate)\s+(?:me\s+)?(.+)$/i);
+    if (m && !NONIMG.test(m[1])) { const v = _subj(m[1]); if (v) return { prompt: v, count: _count(s) || 1 }; }
+    // CONTINUATION: "more poses / another / lets see those / variations" → reuse the last drawn subject
+    // (only when a draw happened recently, so it doesn't hijack an unrelated "more/those").
+    const isCont = /\b(more poses?|other poses?|different poses?|a few more|some more|more (?:images?|pictures?|variations?|renders?)|another (?:one|image|picture|pose|version)|more of (?:those|them|that|it)|keep (?:going|iterating)|let'?s see (?:those|them|more)|show me (?:those|them|more)|variations?)\b/i.test(s);
+    if (isCont && !NONIMG.test(s)) {
+      let last = null, lastTs = 0;
+      try { last = db.getMeta('image.last_prompt') || null; lastTs = parseInt(db.getMeta('image.last_ts') || '0', 10) || 0; } catch {}
+      if (last && (Date.now() - lastTs) < 30 * 60 * 1000) return { prompt: last, count: _count(s) || 3, continuation: true };
+    }
+    // REFINEMENT / CORRECTION of the last image (only if one was drawn recently). Distinct from a
+    // continuation (same prompt, MORE of them): a correction ADJUSTS the last prompt — "more realistic",
+    // "make it darker", "different angle", "try again", "closer" — and regenerates ONE. This is the gap
+    // that let "lets go more realistic" fall through to the operator and produce a confabulated
+    // "generating now" with nothing behind it (live 2026-08-04, turn #10872). Gated on a recent draw +
+    // a short, subject-less message so it can't hijack an unrelated line.
+    const REFINE = /\b(?:more|less)\s+(?:realistic|photoreal\w*|detailed|dramatic|colou?rful|vibrant|saturated|muted|abstract|cartoon\w*|styli[sz]ed|cinematic|moody|epic|gritty)\b|\bphoto-?realistic\b|\brealistic\b|\b(?:sharper|crisper|brighter|darker|lighter|warmer|cooler|softer|grittier|cleaner|rougher|blurrier)\b|\b(?:different|another)\s+(?:angle|pose|lighting|background|colou?r|style|version|look)\b|\b(?:zoom(?:ed)?\s*(?:in|out)|closer|further|wider|tighter)\b|\b(?:redo|re-?do|try\s+(?:it\s+)?again|do\s+it\s+again|once\s+more)\b|\bmake\s+it\b|\bsame\s+but\b|\b(?:add|remove|without|change|adjust|tweak|refine|polish)\b|\bhigher\s+(?:res\w*|quality|detail)\b|\bmore\s+detail\b/i;
+    if (!NONIMG.test(s) && s.length <= 140 && REFINE.test(s)) {
+      let rlast = null, rlastTs = 0;
+      try { rlast = db.getMeta('image.last_prompt') || null; rlastTs = parseInt(db.getMeta('image.last_ts') || '0', 10) || 0; } catch {}
+      if (rlast && (Date.now() - rlastTs) < 30 * 60 * 1000) {
+        // Augment the last prompt with the user's adjustment so the change actually lands, stripping the
+        // leading filler ("lets go", "make it", "can you") so only the descriptive modifier is appended.
+        const adj = s.replace(/^\s*(?:(?:let'?s|lets|can\s+you|could\s+you|please|now|ok(?:ay)?|yeah?|yep|sure|and|but|go|i\s+want|i'?d\s+like|make\s+it)\b[\s,]*)+/ig, '').replace(/[.?!]+$/, '').trim();
+        const merged = adj && adj.length >= 3 ? `${rlast}, ${adj}` : rlast;
+        return { prompt: merged, count: _count(s) || 1, refine: true };
+      }
+    }
+    return null;
+  })();
+  if (!followupFired && !socialTurn && _drawReq && _drawReq.prompt) {
+    followupFired = true;
+    const _dp = _drawReq.prompt, _dn = _drawReq.count;
+    console.log(`[draw] intercept → generating ${_dn} image(s) of "${_dp.slice(0, 80)}"${_drawReq.continuation ? ' (continuation)' : ''}${_drawReq.refine ? ' (refine)' : ''}`);
+    try {
+      const vision = require('./lib/vision');
+      try { db.setMeta('image.last_prompt', _dp); db.setMeta('image.last_ts', String(Date.now())); } catch {}
+      let made = 0, failReason = null;
+      for (let i = 0; i < _dn; i++) {
+        let r = null; try { r = await vision.generate({ prompt: _dp, nowTs: Date.now() + i }); } catch (e) { r = { ok: false, reason: e.message }; }
+        if (r && r.ok) {
+          made++;
+          lastImageGenTs = Date.now();   // anti-fab probe: a real image rendered this turn
+          try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:image', { path: r.path || null, dataUrl: r.base64 ? `data:image/png;base64,${r.base64}` : null, prompt: _dp }); } catch {}
+          try {
+            const src = r.path ? require('./lib/file_ingest').pathToSrc(r.path) : (r.base64 ? `data:image/png;base64,${r.base64}` : '');
+            if (src) { const tabKey = 'creations', blockId = `img-${(Date.now() + i).toString(36)}`, cTitle = 'Zoe’s creations', cdata = { src, alt: _dp.slice(0, 160) }; const callTool = pollCallTool(); await callTool('saga_canvas_open_tab', { mode: 'ILLUSTRATIVE', tab_key: tabKey, title: cTitle }); await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'image', block_id: blockId, data: cdata }); const cd = require('./lib/canvas_docs'); cd.recordTab({ tabKey, mode: 'ILLUSTRATIVE', title: cTitle }); cd.recordBlock({ tabKey, blockId, blockType: 'image', data: cdata }); }
+          } catch (e) { console.error('[draw] canvas emit failed:', e.message); }
+        } else { failReason = (r && r.reason) || 'unknown'; }
+      }
+      try { db.insertMonologue({ content: `I generated ${made} image(s) for "${_dp}"`, model: 'image-gen', type: 'reading' }); } catch {}
+      console.log(`[draw] made ${made}/${_dn}`);
+      // HONEST COUNT (anti-fab at the source): tell her EXACTLY how many rendered so she can't over-claim.
+      let rt;
+      if (made === 0) rt = `[You tried to generate ${_dn} image(s) of "${_dp}" but NONE completed: ${failReason || 'unknown'}. Tell ${userName} plainly it didn't work this time — do NOT pretend you made any, and do NOT web-search for images.]`;
+      else rt = `[You just CREATED exactly ${made} image${made === 1 ? '' : 's'} of "${_dp}" — you drew ${made === 1 ? 'it' : 'them'} yourself, locally; ${made === 1 ? 'it is' : 'they are'} shown in chat and on his canvas ("Zoe's creations"). CRITICAL HONESTY: say you made EXACTLY ${made} — never claim more than ${made}, and never describe an image you did not actually make${_dn > made ? ` (he asked for ${_dn} but only ${made} rendered — be honest about the shortfall)` : ''}. Own ${made === 1 ? 'it' : 'them'} in your own voice, briefly; never say you searched for ${made === 1 ? 'it' : 'them'}.]`;
+      try { await fireToolFollowup({ io, channel, sessionId, resultText: rt }); } catch {}
+    } catch (e) { console.error('[draw] intercept failed:', e.message); }
+  }
+
+  // ROSTER-TO-CANVAS (2026-08-04, [[list-completion-lane]]) — a plain-chat "find contact info / emails for
+  // THESE people: <list>" is NOT a CRM-category query and must NOT be answered by the cloud operator's
+  // verbatim web_search of the whole prose (which LOST the names — the "malformed search" Lucas saw twice),
+  // nor by a future-promise a placebo net turns into a hollow "promise-*" tab. Parse the named people HERE,
+  // open a REAL canvas TABLE (identity rows + a blank Email column), durably mirror it so the list-completion
+  // pass finds it, and seed a BACKGROUND directed focus that fills each email GROUNDED (cite-or-leave-blank,
+  // one row per pass) — then ACK honestly. Fires BEFORE contacts-routing + the operator so a named list can
+  // never be misread as a category dump or blob-searched. Non-blocking: the fill runs on the idle tick.
+  let rosterHandled = false;
+  if (!followupFired && !socialTurn) {
+    try {
+      const _ros = _rosterAsk;   // parsed once above (also guards the ambiguity gate from hijacking this)
+      if (_ros.ok && Array.isArray(_ros.people) && _ros.people.length >= 2) {
+        const focusLib = require('./lib/focus');
+        const canvasDocs = require('./lib/canvas_docs');
+        const title = _ros.title;
+        const headers = ['Name', 'Org / Title', 'Email', 'Confidence', 'Source'];
+        const rows = _ros.people.map((p) => [p.name, p.org || '', '', '', '']);
+        const caption = `${_ros.people.length} people — emails filled in the background with a confidence score + how each was found; a blank cell means it could not be verified (never guessed).`;
+        const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
+        const tabKey = `roster-${slug}-${Date.now().toString(36)}`;
+        const blockId = `roster-tbl-${tabKey}`;
+        // 1) DURABLE MIRROR FIRST — runListCompletionPass reads canvas_docs.all(), so the fill lane can find
+        // the table even if the live engine write is momentarily down.
+        try { canvasDocs.recordTab({ tabKey, mode: 'DOC', title }); canvasDocs.recordBlock({ tabKey, blockId, blockType: 'table', data: { headers, rows, caption } }); }
+        catch (e) { console.error('[roster-canvas] durable mirror failed:', e.message); }
+        // 2) LIVE ENGINE WRITE — the visible tab; same tab_key + block_id so the fill lane patches in place.
+        try { const callTool = pollCallTool(); await callTool('saga_canvas_open_tab', { mode: 'DOC', tab_key: tabKey, title }); await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'table', block_id: blockId, data: { headers, rows, caption } }); }
+        catch (e) { console.error('[roster-canvas] engine emit failed:', e.message); }
+        // 3) BACKGROUND FILL — a directed list-completion focus (goal matches isListCompletionGoal → the
+        // list gate in runDirectedResearchPass → runListCompletionPass). Explicit mode=list too. Kick the
+        // driver so it starts as soon as the conversation goes idle, not a cadence later.
+        let focusId = null;
+        try {
+          const r = await focusLib.setFromDirective(`fill in the missing emails for this contact list (${title})`, userTurnRow && userTurnRow.id);
+          focusId = r && r.focus && r.focus.id;
+          if (focusId) { try { db.setMeta(`focus.${focusId}.mode`, 'list'); } catch {} }
+        } catch (e) { console.error('[roster-canvas] focus seed failed:', e.message); }
+        try { kickDirectedFocusDriver(); } catch {}
+        console.log(`[roster-canvas] "${title}" → ${_ros.people.length} people on canvas (tab ${tabKey}); background fill focus #${focusId || '?'}`);
+        rosterHandled = true; followupFired = true;
+        const who = _ros.people.slice(0, 3).map((p) => p.name).join(', ');
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You just OPENED a real tab titled "${title}" on ${userName}'s canvas with the ${_ros.people.length} people he listed (${who}${_ros.people.length > 3 ? ', and the rest' : ''}) and a blank Email column, and you've STARTED a background task that fills each email as you verify it from a real source. Tell him plainly and briefly, in your OWN voice: it's on the canvas now, you're filling the emails in the background and he can watch it populate, and a cell stays BLANK when you can't confirm an address — you never guess one. One or two sentences. Do NOT claim any specific email is already found; the fill runs after this reply.]` }); }
+        catch (e) { console.error('[roster-canvas] ack voice line failed:', e.message); }
+      }
+    } catch (e) { console.error('[roster-canvas] handler failed:', e.message); }
+  }
 
   // CONTACTS — served LOCAL and EARLY, before ANY cloud call. A "list the contacts we hold" request is
   // pure Puller/CRM data; it must NOT depend on the cognition/grounding cloud path. (Regression: with the
@@ -7711,7 +8056,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
 // and is obviously not meant to be copied verbatim. The three required keys are now named outright.
 { key: 'canvas document (prose)', label: 'a real tab on Lucas\'s canvas — THIS is how you deliver a paper, brief or memo. Emit ONE tag per block, several in the same message; keep each tag SHORT — if a long one is cut off mid-write you lose that block, so never put the whole document in a single tag. add_block ALWAYS needs exactly three keys: tab_key, block_type, and data (an OBJECT — never "content", never a bare string). Invent your own tab_key and title from the subject; the values below are a worked example, not literals to copy', how: '<echo-do name="saga_canvas_open_tab">{"mode":"DOC","tab_key":"china_ai_brief","title":"China AI Announcements — Last 9 Months"}</echo-do> then one tag per block, in order: <echo-do name="saga_canvas_add_block">{"tab_key":"china_ai_brief","block_type":"heading","data":{"level":2,"text":"World AI Conference"}}</echo-do> <echo-do name="saga_canvas_add_block">{"tab_key":"china_ai_brief","block_type":"paragraph","data":{"markdown":"At WAIC, China announced **open-sourcing** frontier models to the Global South."}}</echo-do>' },
             { key: 'canvas table', label: 'rows and columns on that same tab — same three keys, data holds headers and rows', how: '<echo-do name="saga_canvas_add_block">{"tab_key":"china_ai_brief","block_type":"table","data":{"headers":["Nation","Material"],"rows":[["Brazil","Niobium"],["DR Congo","Cobalt"]],"caption":"optional"}}</echo-do>' },
-            { key: 'valid block_type values', label: 'ONLY these — anything else is rejected; heading/paragraph/table/chart are the ones that actually render', how: 'heading · paragraph · list · code · table · chart · metric_card · callout · image · diagram · knowledge_graph · document_file · browser_snapshot · map · three · draft_review · citation · source_card' },
+            // RICH BLOCKS (2026-08-04): the canvas is a VISUAL space, not a text dump — these render for real
+            // now. Reach for a chart when you have numbers, a diagram when you have a process/structure, cards
+            // for headline stats, a callout for a caveat. Composing visually is BETTER than another paragraph.
+            { key: 'canvas chart', label: 'a REAL graph (bar/line/area/pie) — use it whenever you have numbers over categories or time. kind bar|line|area|pie; x_key names the category field; y_keys the numeric series; series is the row data', how: '<echo-do name="saga_canvas_add_block">{"tab_key":"china_ai_brief","block_type":"chart","data":{"kind":"bar","title":"Models open-sourced by quarter","x_key":"q","y_keys":["models"],"series":[{"q":"Q1","models":3},{"q":"Q2","models":7},{"q":"Q3","models":5}]}}</echo-do>' },
+            { key: 'canvas diagram', label: 'a flow / org / sequence diagram, authored as MERMAID text (renders to a real SVG). Use it for a process, a decision tree, a relationship map — anything a picture explains better than prose', how: '<echo-do name="saga_canvas_add_block">{"tab_key":"china_ai_brief","block_type":"diagram","data":{"title":"Approval flow","source":"graph TD; A[Draft]-->B{Review}; B-->|ok|C[Publish]; B-->|no|A;"}}</echo-do>' },
+            { key: 'canvas metric cards', label: 'a row of headline stats — big number + label, optional delta/hint. Lead a brief with these', how: '<echo-do name="saga_canvas_add_block">{"tab_key":"china_ai_brief","block_type":"metric_card","data":{"title":"At a glance","metrics":[{"label":"Models","value":"42","delta":"+9"},{"label":"Nations","value":"7"}]}}</echo-do>' },
+            { key: 'canvas callout', label: 'a boxed aside for a caveat, tip, or key takeaway — variant info|warn|success|danger|tip|note', how: '<echo-do name="saga_canvas_add_block">{"tab_key":"china_ai_brief","block_type":"callout","data":{"variant":"warn","title":"Caveat","markdown":"Figures are **provisional** pending official release."}}</echo-do>' },
+            { key: 'canvas list / code', label: 'a real bulleted/numbered list (ordered true|false) or a labelled code block', how: '<echo-do name="saga_canvas_add_block">{"tab_key":"china_ai_brief","block_type":"list","data":{"ordered":true,"items":["First finding","Second finding"]}}</echo-do> or <echo-do name="saga_canvas_add_block">{"tab_key":"china_ai_brief","block_type":"code","data":{"language":"python","code":"print(\\"hi\\")"}}</echo-do>' },
+            { key: 'canvas image / media', label: 'an image (src = a data: URI, file URL, or http URL) or a playable audio/video card — use when you have a real source (a produced image, a downloaded clip). Do NOT invent a src', how: '<echo-do name="saga_canvas_add_block">{"tab_key":"china_ai_brief","block_type":"image","data":{"src":"https://example.gov/chart.png","alt":"caption"}}</echo-do> · audio/video take the same {"src","title"}' },
+            // IMAGE GENERATION (2026-08-04) — REAL now: local SDXL on the GPU (ComfyUI, on-device, private).
+            // She GENERATES the picture; it auto-lands in chat + a "creations" canvas tab. She does NOT add_block
+            // it herself. This is the answer to "can you make/draw an image" — yes, she genuinely can.
+            { key: 'generate an image (draw)', label: 'CREATE a brand-new picture from a text description — you actually draw it, locally on the GPU (private, on-device). Use for illustrations, concept art, visual mockups, "draw me X", risk/disinfo visualizations. Put ONLY the image description inside <draw>…</draw>; it is generated and placed on Lucas\'s canvas + shown in chat automatically — do NOT saga_canvas_add_block it yourself. Write a rich, specific prompt (subject, setting, lighting, style). This is a genuine capability now, so own it — never say you cannot make images', how: '<draw>a red origami crane on a weathered oak desk, soft morning light, shallow depth of field, photorealistic</draw>' },
+            { key: 'valid block_type values', label: 'these RENDER on the canvas — compose with them freely, not just paragraphs: heading, paragraph, list, code, table, chart, metric_card, callout, image, audio, video, diagram, document_file. (knowledge_graph/map/three/browser_snapshot are not drawn yet — avoid.) A tag with any other block_type is rejected', how: 'prefer chart over a table of numbers; diagram over a prose process; metric_card to open a brief; callout for a caveat' },
             // PACKAGING IS NOT HERS TO INVOKE. Lucas, 2026-07-21: she builds in plain markdown; when
             // the content is right HE asks for it to be packaged, and the house style is applied then
             // from the editor's certification path. Listing the render tools here as an option is how
@@ -7725,6 +8083,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // Guard rewritten to DISTINGUISH it from the dig below rather than duplicate its
             // prohibition — when two entries carry the same "not for what he's waiting on", neither
             // gets picked. The real difference is where the answer lands.
+            // VERIFICATION / OSINT CORROBORATION (2026-08-05, Lucas: these aren't just threat-intel — they
+            // CONFIRM the real footprint behind an org/person; use them that way). They were built + keyed but
+            // SQ never surfaced them, so the operator never reached for them.
+            { key: 'verify a host / domain / IP (corroboration)', label: 'a SECOND source to ground an org, person, or email — not just security. What a domain actually hosts + the org behind it (shodan_host_search / shodan_host_lookup), whether an IP is a known scanner vs targeted (greynoise_ip_lookup), and its abuse reputation (abuseipdb_check_ip). Reach for it when a contact/org/address needs independent confirmation of its real-world footprint', how: '<echo-do name="shodan_host_search">{"query":"hostname:swepco.com"}</echo-do> · <echo-do name="greynoise_ip_lookup">{"ip":"8.8.8.8"}</echo-do> · <echo-do name="abuseipdb_check_ip">{"ip":"8.8.8.8"}</echo-do>' },
             { key: 'background agent', label: 'ASYNC — results land in YOUR OWN stream within ~5 minutes, not in this conversation; use it for bulk gathering you will look at later. If the answer should come back to Lucas in this chat, fork a dig instead (below)', how: '<echo-delegate name="AGENT">the full task spec</echo-delegate>' },
             // MID-CONVERSATION DIG (slice 4b): the talk itself can fork research. Distinct from the
             // delegate above — a dig is HER line of inquiry (persists, accretes evidence across
@@ -7868,6 +8230,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         model: (() => { try { return db.getMeta('model.replier') || null; } catch { return null; } })(),
         onToken: (chunk) => { _cloudChunks++; parser.feed(chunk); },
         inactivityMs: 180000,
+        maxMs: REPLY_MAX_MS,
         think: false,       // same tag-contract reason as the local call below
         // num_predict deliberately unset — lib/cloud_window sizes it to the model, so a complete
         // thought isn't clipped at the local model's old 900-token budget.
@@ -8000,6 +8363,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       messages: _localMessages,
       onToken: (chunk) => parser.feed(chunk),
       inactivityMs: 180000,   // generous: a cold model load under GPU pressure can delay the first token
+      maxMs: REPLY_MAX_MS,     // absolute ceiling — a stream can't wedge chat indefinitely (see _cloudOpts)
       // think:false — the front model is a VOICE-RENDERER bound to the <think>/<say> tag contract. A
       // native reasoning model (gemma4) otherwise silos its reasoning to message.thinking (which our
       // stream reader drops) and answers in bare content with NO tags → the parser flags truncated=1
@@ -8023,7 +8387,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       console.warn('[main] reply stalled before first token (model cold-load?) — retrying once');
       parser = new TagStreamParser({ onSayToken: (token) => { try { _streamFilter.feed(token); } catch {} } });
       try {
-        await streamChat({ model: MODEL, messages: _localMessages, onToken: (chunk) => parser.feed(chunk), inactivityMs: 180000, think: false, options: { num_ctx: 8192, num_predict: LOCAL_NUM_PREDICT } });
+        await streamChat({ model: MODEL, messages: _localMessages, onToken: (chunk) => parser.feed(chunk), inactivityMs: 180000, maxMs: REPLY_MAX_MS, think: false, options: { num_ctx: 8192, num_predict: LOCAL_NUM_PREDICT } });
       } catch (err2) {
         console.error('[main] reply retry failed:', err2.message);
         try { sendError('Sorry — that hung on me for a second. Mind saying that again?'); } catch {}
@@ -8119,6 +8483,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         model: MODEL,
         messages: messages.concat([{ role: 'user', content: nudge }]),
         think: false,   // same tag-contract reason as the main call — the nudge asks for a literal <say>
+        maxMs: REPLY_MAX_MS,
         options: { num_predict: 240 },
         onToken: (c) => retryParser.feed(c)
       });
@@ -8374,6 +8739,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       } catch (e) { console.error('[main] conduct recovery failed:', e.message); trimmedSay = ''; }
     }
   }
+  // ANTI-FABRICATION (foundational, shared gate — see _antifabCorrect): redact ungrounded emails + correct
+  // false file/canvas claims. Evidence = everything the writer was given this turn (cloudMessages) + the
+  // user's own message, so a legitimately-retrieved or user-supplied address is never scrubbed. It streamed
+  // live, so like the disclaimer/conduct guards above the corrected text rides the complete payload + swap.
+  const _replyEvidence = (() => { try { return (Array.isArray(cloudMessages) ? cloudMessages.map((m) => (m && m.content) || '').join('\n') : '') + '\n' + String(userMessage || ''); } catch { return ''; } })();
+  trimmedSay = _antifabCorrect(trimmedSay, (userTurnRow && userTurnRow.ts) || 0, _replyEvidence);
   const isPlaceholder = /^[\s.()]*(empty|silence|nothing|none|n\/a|null|undefined)[\s.()]*$/i.test(trimmedSay);
   const finalSaid = (trimmedSay && !isPlaceholder) ? trimmedSay : '…';
   const saidRow = db.insertTurn({
@@ -8406,9 +8777,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // regeneration path a few hundred lines up; send its verdict so the screen says what the backend
     // actually believes rather than re-deciding it from a weaker signal.
     const _cutOff = (() => { try { return require('./lib/ollama').sayLooksCutOff(finalSaid || say, truncated); } catch { return !!truncated; } })();
-    sendComplete(wasDisclaimer
-      ? { saidId: saidRow.id, truncated, cutOff: _cutOff, say: finalSaid }
-      : { saidId: saidRow.id, truncated, cutOff: _cutOff });
+    // M2.4 reply-path integrity: ALWAYS carry `say: finalSaid` — not only on a de-disclaim rewrite. The
+    // renderer replaces the bubble's textContent with `say` when present (chat.js:405), so the SCREEN always
+    // reconciles to the STORED reply. Previously any post-stream transform other than de-disclaim (a
+    // truncation repair, a non-streaming cloud rewrite) never reached the screen — the bubble kept the raw
+    // streamed tokens while the DB held finalSaid. When finalSaid == the streamed text this is an identical
+    // no-op replace; when it differs, the screen now matches the DB (and TTS, which speaks the same value).
+    sendComplete({ saidId: saidRow.id, truncated, cutOff: _cutOff, say: finalSaid });
   } catch {}
 
   db.setMeta('last_ai_utterance_at', String(Date.now()));
@@ -8869,17 +9244,33 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     })().catch(err => console.error('[skills] async error:', err.message));
   }
 
-  // Background: VISION OUT — dispatch <image-gen> prompts → create an image (gated OFF until a
-  // provider key is set). On success: save it, show it in chat, and have her comment via a
-  // tool-followup. On disabled/failure: tell Lucas honestly (never pretend she made one).
+  // Background: VISION OUT — dispatch <image-gen>/<draw>/<imagine> prompts → create an image. LIVE
+  // (2026-08-04): image generation is ENABLED and runs on the LOCAL ComfyUI (SDXL on the GPU, no key).
+  // On success: save it, show it in chat + on the "creations" canvas tab, and have her comment via a
+  // tool-followup. On failure: tell Lucas honestly (never pretend she made one).
   if (imageGenToRun.length > 0) {
     (async () => {
       const vision = require('./lib/vision');
-      for (const prompt of imageGenToRun.slice(0, 2)) {
+      for (const prompt of imageGenToRun.slice(0, 4)) {   // cap matches the draw-intercept _MAX_IMG
         try {
           const r = await vision.generate({ prompt });
           if (r.ok) {
+            lastImageGenTs = Date.now();   // anti-fab probe: a real image rendered this turn
             try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:image', { path: r.path || null, dataUrl: r.base64 ? `data:image/png;base64,${r.base64}` : null, prompt }); } catch {}
+            // ALSO place it on the CANVAS (Lucas 2026-08-04: custom-created images belong on her canvas, not
+            // just the chat bubble). Append to a persistent "creations" tab; src is the on-disk file URL when
+            // saved (compact + re-readable), else the base64 data URI. Durably mirrored so it survives reload.
+            try {
+              const src = r.path ? require('./lib/file_ingest').pathToSrc(r.path) : (r.base64 ? `data:image/png;base64,${r.base64}` : '');
+              if (src) {
+                const tabKey = 'creations', blockId = `img-${Date.now().toString(36)}`, cTitle = 'Zoe’s creations';
+                const cdata = { src, alt: String(prompt).slice(0, 160) };
+                const callTool = pollCallTool();
+                await callTool('saga_canvas_open_tab', { mode: 'ILLUSTRATIVE', tab_key: tabKey, title: cTitle });
+                await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'image', block_id: blockId, data: cdata });
+                try { const cd = require('./lib/canvas_docs'); cd.recordTab({ tabKey, mode: 'ILLUSTRATIVE', title: cTitle }); cd.recordBlock({ tabKey, blockId, blockType: 'image', data: cdata }); } catch {}
+              }
+            } catch (e) { console.error('[main] image-gen canvas emit failed:', e.message); }
             try { db.insertMonologue({ content: `I generated an image for "${prompt}"${r.path ? ' → ' + r.path : ''}`, model: 'image-gen', type: 'reading', query: prompt }); } catch {}
             if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[You just CREATED an image from "${prompt}" and it's now shown to ${userName}. Tell him briefly what you made, in your own voice — you made it on purpose, so own it.]` }); }
             console.log(`[main] image-gen ok: ${r.path || '(no save)'}`);
@@ -8982,10 +9373,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             md = `${held.text}\n\n_Compiled from the roster you already hold (doc #${held.docId}); materialized here from your promise in conversation._`;
           }
         } catch (e) { console.error('[main] delivery-promise held-roster lookup failed:', e.message); }
-        if (!md) md = `_Materialized from her promise in conversation:_\n\n> ${String(finalSaid || '').replace(/\s+/g, ' ').slice(0, 400)}`;
-        promiseArtifactEmit({ slug, title, markdown: md })
-          .then((created) => { if (created) console.log(`[main] delivery-promise net → canvas "${title}" materialized (tab promise-${slug})${held && held.text ? ` — REAL roster from doc #${held.docId} (${held.groups} ${held.groupCol})` : ' — promise placeholder'}`); })
-          .catch(() => {});
+        // NO PLACEHOLDER (2026-08-04 audit — the "no canvas reaction" hallucination): the hollow-placeholder
+        // branch (a tab seeded with just the promise SENTENCE) manufactured the ILLUSION of a delivered
+        // artifact — junk tabs titled from mis-parsed promise fragments ("them straight onto your Canvas as
+        // I verify each one") with ZERO real content. It fooled the eye and delivered nothing. Emit ONLY when
+        // a REAL held roster was recognized; otherwise do nothing — a genuine "find/fill these" ask is now
+        // handled by the roster-to-canvas lane (real table + background grounded fill), not a placebo here.
+        if (md) {
+          promiseArtifactEmit({ slug, title, markdown: md })
+            .then((created) => { if (created) console.log(`[main] delivery-promise net → canvas "${title}" materialized (tab promise-${slug}) — REAL roster from doc #${held.docId} (${held.groups} ${held.groupCol})`); })
+            .catch(() => {});
+        }
       }
     } catch {}
 
@@ -9306,7 +9704,7 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
       // its stream — the renderer routes by FACT, not by the promptedReplyPending/latch heuristics
       // that misfiled real answers into the sheep rail when a suppressed autonomous stream leaked.
       emit: (t) => { sayBuf += t; try { event.sender.send('chat:say-token', { t, s: 'reply' }); } catch {} },
-      onComplete: (info) => { try { event.sender.send('chat:complete', { ...(info || {}), s: 'reply' }); } catch {} try { speakThroughCompanion(sayBuf); } catch {} sayBuf = ''; },
+      onComplete: (info) => { try { event.sender.send('chat:complete', { ...(info || {}), s: 'reply' }); } catch {} try { speakThroughCompanion((info && typeof info.say === 'string' && info.say.trim()) ? info.say : sayBuf); } catch {} sayBuf = ''; },
       onError: (e) => { try { event.sender.send('chat:error', e); } catch {} },
       busy: (text) => { try { event.sender.send('chat:busy', text); } catch {} }
     });
@@ -9794,7 +10192,7 @@ const operatorTools = {
   rehearsal_discard: async ({ slug } = {}) => { try { return require('./lib/rehearsal').discard({ slug }); } catch (e) { return 'ERROR: ' + e.message; } },
   // R3 (2026-07-23) — the ONE-OFF analysis lane: run throwaway python READ-ONLY over her own data
   // and get the RESULT. Ephemeral, no adoption; the DBs open mode=ro so writes are rejected.
-  analyze_data: async ({ code } = {}) => { try { return await require('./lib/analysis_lane').run({ code }); } catch (e) { return 'ERROR: ' + e.message; } },
+  analyze_data: async ({ code, workbench, timeoutMs } = {}) => { try { return await require('./lib/analysis_lane').run({ code, workbench, timeoutMs }); } catch (e) { return 'ERROR: ' + e.message; } },
   // THE SKILL SHELF (O1, slice 5) — the operator's pull. The briefs carry matched trigger lines;
   // the body dereferences here (lib/skills — flow recipes / proven procedures / stored shapes).
   skill_pull: async ({ name } = {}) => { try { const r = require('./lib/skills').resolveBody(String(name || '')); return r.text; } catch (e) { return 'ERROR: ' + e.message; } },
@@ -10293,6 +10691,9 @@ async function autonomyTick() {
       const topics = db.getDb().prepare("SELECT topic FROM interests WHERE status='active' ORDER BY weight DESC LIMIT 8").all().map((r) => r.topic);
       sf.autoFollowFromInterests(topics, { nowMs: now });
     } catch (e) { console.error('[autonomy] story-follow upkeep failed:', e.message); }
+    // Analysis-lane upkeep (M1.6): retire stale one-off analysis workbenches. tidy() had ZERO callers
+    // (the shell audit flagged it) — wire it here so the data/workbench dir doesn't accrete stragglers.
+    try { const n = require('./lib/analysis_lane').tidy({ nowMs: now }); if (n) console.log(`[analysis] tidied ${n} stale analysis straggler(s)`); } catch (e) { console.error('[analysis] tidy upkeep failed:', e.message); }
     // Maintenance visibility (2d): cache Echo's pass status ~6h so the manifest can show which
     // loops have gone stale — a stale loop is a maintain-move candidate.
     try {
@@ -11122,7 +11523,7 @@ function _researchStanding(now = Date.now()) {
 // Deliberately a containment match rather than a resolution: a false negative here reports honest
 // ignorance, while a false positive would claim evidence we do not hold. Cached per sweep — this runs
 // once per target across a 64-item beat.
-let _heldCache = null, _heldCacheTs = 0;
+let _heldCache = null, _heldCacheTs = 0, _heldIndex = null;
 function _heldForTarget(target) {
   try {
     const now = Date.now();
@@ -11131,10 +11532,28 @@ function _heldForTarget(target) {
         "SELECT LOWER(COALESCE(object_label,'') || ' ' || COALESCE(claim_value,'')) t FROM encounters WHERE object_type = 'person' OR claim_key = 'affiliated_with'"
       ).all().map((r) => r.t);
       _heldCacheTs = now;
+      // M1.3: INVERTED INDEX (token → row indices) so a per-target lookup narrows to the rows containing the
+      // place's rarest word instead of scanning ALL rows — the old reduce was O(N) per target × 64 targets/beat.
+      _heldIndex = new Map();
+      for (let i = 0; i < _heldCache.length; i++) {
+        const seen = new Set();
+        for (const w of _heldCache[i].match(/[a-z]{4,}/g) || []) {
+          if (seen.has(w)) continue; seen.add(w);
+          let arr = _heldIndex.get(w); if (!arr) { arr = []; _heldIndex.set(w, arr); } arr.push(i);
+        }
+      }
     }
     const place = String(target || '').replace(/^the governing body of\s+/i, '').split(',')[0].trim().toLowerCase();
     if (place.length < 4) return null;
-    const n = _heldCache.reduce((a, t) => a + (t.includes(place) ? 1 : 0), 0);
+    // Narrow to candidates via the RAREST word in the place phrase, then substring-verify the FULL phrase on
+    // just those rows (identical containment semantics to the old full scan, minus the O(N) cost). A phrase
+    // with no ≥4-char word (index-invisible) falls back to the full scan so correctness never depends on it.
+    const words = place.match(/[a-z]{4,}/g) || [];
+    let candidates = null;
+    for (const w of words) { const arr = _heldIndex && _heldIndex.get(w); if (!arr) { candidates = []; break; } if (!candidates || arr.length < candidates.length) candidates = arr; }
+    let n = 0;
+    if (candidates) { for (const i of candidates) if (_heldCache[i].includes(place)) n++; }
+    else { n = _heldCache.reduce((a, t) => a + (t.includes(place) ? 1 : 0), 0); }
     return n ? { sources: n } : null;
   } catch { return null; }
 }
@@ -11846,6 +12265,7 @@ async function _directedFocusTick() {
   if (!_researchGateOk('primary', focus.id)) return;                                  // operator throttle — skip this cycle entirely
   if (_conversationActive()) { _logLoadDeferral('directed'); return; }                // main-thread balance: don't START a directed pass (web grab → PDF decomp → package build) while he types
   directedStepInFlight = true;
+  markActivity('directed-tick');   // stall-attrib (diagnostic — a research pass embeds new findings on the main thread)
   if (_focusOrigin === 'beat') { try { db.setMeta('research.beat_last_pass_at', String(Date.now())); } catch {} }
   try {
     const outcome = await runDirectedResearchPass(focus);   // depth-first state machine; records the focus outcome
@@ -11864,7 +12284,7 @@ async function _directedFocusTick() {
       else { try { require('./lib/presence').notify('Zoe — task', `${outcome.action}: ${String(focus.content).slice(0, 60)}`); } catch {} }
     }
   } catch (e) { console.error('[directed] tick error:', e.message); }
-  finally { directedStepInFlight = false; }
+  finally { markActivity('idle'); directedStepInFlight = false; }
 }
 
 // INLINE DOC DECOMPOSITION (curation substrate Slice 2, Split 2 — stream 1: doc_store landings). After a
@@ -11901,6 +12321,7 @@ async function decomposeLandedDoc(doc) {
   if (doc && doc.id != null && _decompInFlight.has(doc.id)) { console.log(`[doc-decomp] SKIP doc #${doc.id} — already decomposing (in-flight guard)`); return; }
   if (doc && doc.id != null) _decompInFlight.add(doc.id);
   try {
+    markActivity(`decompose doc#${doc && doc.id}`);   // stall-attrib (diagnostic)
     if (String(process.env.ZOE_AUTO_INGEST || '1').trim() === '0') { return; }   // KILL SWITCH — see ingestFile
     if (!echoSuit || !echoSuit.connected) return;
     if (!doc || doc.id == null || !String(doc.body || '').trim()) return;
@@ -11984,7 +12405,7 @@ async function decomposeLandedDoc(doc) {
     }
     if (chunks.length) console.log(`[doc-decomp] landing #${doc.id} ${chunks.length} pass(es) → +${minted} mint / ${reused} reuse / +${connections} conn (${held} held)`);
   } catch (e) { console.error('[doc-decomp] landing decompose failed:', e.message); }
-  finally { try { if (doc && doc.id != null) _decompInFlight.delete(doc.id); } catch {} }
+  finally { markActivity('idle'); try { if (doc && doc.id != null) _decompInFlight.delete(doc.id); } catch {} }
 }
 
 // CONTACT INTELLIGENCE (Puller) — the sibling of decomposeLandedDoc for the OTHER facet: the same landed
@@ -12721,6 +13142,40 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
 // Surface an AUTONOMOUS research completion in the CHAT thread (not just the Canvas + a toast + the
 // subconscious 'reading') — AND engage Lucas on the SUBSTANCE. Fires once per self-completed directed run.
 // She reads the dossier she just produced and (via the cloud reasoner, grounded in it — no fabrication)
+// FOUNDATIONAL ANTI-FABRICATION (2026-08-04). The free-form reply/announce paths confabulated COMPLETED
+// deliverables the audit caught red-handed: "It's done — the dossier is saved at notes/directed-3686-
+// dossier.md" (no such file) and "I put 994 contacts on your canvas" (no such table). Those claims are
+// FALSIFIABLE, so verify them against reality (metacognition.verifyArtifactClaims): a named file must exist;
+// an "…on your canvas" claim must have an actual canvas write since turnStartTs. On a failed claim append an
+// honest correction — every user-facing say-emission runs through this. FAILS OPEN at every probe so a
+// hiccup never manufactures a false accusation. Returns the (possibly-corrected) text. See the audit
+// 2026-08-04 and [[relay-and-ground-the-db]] (assert only what's grounded).
+function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
+  try {
+    if (!say) return say;
+    const _mc = require('./lib/metacognition');
+    let out = String(say);
+    // (1) EMAIL GROUNDING — redact any address not present verbatim in this turn's evidence (the guessed
+    // "pattern-derived" emails). Runs first so a redacted email can't survive into a claim.
+    try {
+      const ge = _mc.groundEmails(out, evidence);
+      if (ge.stripped.length) { out = ge.text; console.warn(`[antifab] redacted ${ge.stripped.length} ungrounded email(s): ${ge.stripped.join(', ').slice(0, 160)}`); }
+    } catch {}
+    // (2) ARTIFACT CLAIMS — a saved file that isn't there, a canvas item that never landed.
+    const av = _mc.verifyArtifactClaims(out, {
+      fileExists: (p) => { try { const _p = require('path'); const abs = _p.isAbsolute(p) ? p : _p.join(__dirname, p); return require('fs').existsSync(abs); } catch { return true; } },
+      canvasWroteThisTurn: () => { try { return require('./lib/canvas_docs').lastWriteTs() >= (turnStartTs || 0); } catch { return true; } },
+      imageGenThisTurn: () => (lastImageGenTs || 0) >= (turnStartTs || 0),   // a real image rendered this turn?
+      dbWroteThisTurn: () => { try { return require('./lib/echo_suit').lastContactWriteTs() >= (turnStartTs || 0); } catch { return true; } },   // a contact write that LANDED this turn?
+    });
+    if (!av.ok) {
+      const corr = _mc.artifactCorrection(av.violations);
+      if (corr) { console.warn(`[antifab] claimed an artifact that isn't there → corrected: ${av.violations.map((v) => v.kind + ':' + v.claim).join(', ').slice(0, 180)}`); out += corr; }
+    }
+    return out;
+  } catch (e) { console.error('[antifab] verification failed:', e.message); return say; }
+}
+
 // surfaces the key finding + one concrete follow-up, so she doesn't just report "done" but actually opens
 // a conversation about what she found. Falls back to a DETERMINISTIC notice if the cloud is down — the
 // failure being fixed is her finishing work SILENTLY, so it must ALWAYS announce. Fully fail-soft.
@@ -12767,6 +13222,9 @@ async function announceResearchComplete(focus, done) {
       }
     } catch (e) { console.error('[directed] engagement gen failed:', e.message); }
 
+    // ANTI-FABRICATION: this announce is exactly where "the dossier is saved at notes/…" was confabulated
+    // (done.path can be absent when the run capped without writing). Verify before claiming it exists.
+    msg = _antifabCorrect(msg, 0);
     const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'research', unprompted: 1 });
     try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
     try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
@@ -12996,6 +13454,16 @@ async function runDirectedResearchPass(focus) {
   // so the two modes never entangle.
   const mode = (() => { try { return (db.getMeta(`focus.${focus.id}.mode`) || 'discover').trim(); } catch { return 'discover'; } })();
   if (mode === 'enrich') return runEnrichResearchPass(focus);
+  // LIST-COMPLETION GATE (2026-08-04, see [[list-completion-lane]]): "complete / fill the missing <column>
+  // in this list / sheet / table" is neither discovery nor enrich — the table's ROWS are the targets and
+  // each blank cell is one grounded lookup written back into the cell (NOT a new org dossier; this is what
+  // sent a parish roster off researching a Romanian university). Explicit meta wins; else a deterministic
+  // goal heuristic (a named fillable column + a complete/fill/missing verb + a list/table noun). Precedence
+  // ABOVE the kind gate so a list ask can never fall through to the org walk.
+  {
+    const _lc = require('./lib/list_complete');
+    if (mode === 'list' || _lc.isListCompletionGoal(String(focus.content || ''))) return runListCompletionPass(focus);
+  }
   // KIND GATE (research A3b): a topical brief or a forecast is NOT an org-and-contacts walk — research the
   // SUBJECT across its aspects. (forecast rides this same subject-research path for now; Part B adds the
   // actual forecast engine.) entity kind falls through to the discovery/deepen org walk below, unchanged.
@@ -13660,6 +14128,129 @@ async function runEnrichResearchPass(focus) {
     : focusLib.recordOutcome(focus, { progressed });
   console.log(`[enrich] #${focus.id} → ${done ? 'ALL-ENRICHED' : note} → ${outcome.action}`);
   return outcome;
+}
+
+// LIST-COMPLETION PASS (2026-08-04, [[list-completion-lane]]) — the twin of the org-walk for "complete THIS
+// list". A canvas TABLE with blank cells is not a discovery target: its ROWS are the targets, each blank
+// cell in the requested column is ONE bounded grounded lookup written straight back into the cell. Bounded
+// like the org walk (one row per pass). CITE-OR-LEAVE-BLANK: a cell is filled only from a real source — a
+// wrong email planted as fact is the failure to avoid, so uncertainty leaves the cell blank + logs a gap.
+// lib/list_complete is the pure decomposer; deps are injectable for offline tests.
+async function _defaultWriteCell(tabKey, blockId, updated, prevData) {
+  const patch = { headers: updated.headers, rows: updated.rows };
+  try { await echoSuit.dispatch({ kind: 'do', name: 'saga_canvas_update_block', args: { tab_key: tabKey, block_id: blockId, patch } }); } catch (e) { console.error('[list-complete] engine update failed:', e.message); }
+  try { require('./lib/canvas_docs').recordBlock({ tabKey, blockId, blockType: 'table', data: { ...(prevData || {}), ...patch } }); } catch (e) { console.error('[list-complete] durable mirror failed:', e.message); }
+}
+// Per-person contact lookup for the list-completion fill. WAS a lone Echo web_search (keyless on this box →
+// 0 fills); now an ALL-TOOLS CASCADE (lib/contact_cascade): puller-db bridge → learned pattern → working web,
+// and a total miss ESCALATES the person to the model-driven Puller so the background lane pursues them (Lucas
+// 2026-08-05: "use all available tools … if web fails, full weight of the puller, driven by the model").
+// CITE-OR-LEAVE-BLANK preserved throughout: pickGroundedEmail requires the email to co-occur with the person's
+// own name (or be an official role/office .gov), else the cell stays BLANK — never a guess. [[list-completion-lane]]
+async function _defaultListLookup(identity, colName, goal) {
+  if (!/mail/i.test(colName)) return null;   // v1 handles email; other columns fall through to no-op (blank)
+  const { runContactCascade } = require('./lib/contact_cascade');
+  // SINGLE SOURCE OF TRUTH for the finder set + order + grounding rules (lib/contact_finders) — the same organs
+  // the Puller uses (domain_resolve, patternFillCandidate, hunter_find_email, puller_db bridge), wired once.
+  const { buildPerson, buildContactFinders } = require('./lib/contact_finders');
+  const log = (m) => console.log(m);
+  const person = await buildPerson(identity, { webSearch, log });
+  const { finders, escalate } = buildContactFinders({ webSearch, echoSuit, fetchPage, log });
+  const r = await runContactCascade(person, { finders, escalate, log });
+  if (r && r.retry) return { retry: true };   // transient tool error — tell the fill to defer, not blank
+  return r ? { value: r.value, source: r.source, confidence: r.confidence, via: r.via } : null;
+}
+async function runListCompletionPass(focus, deps = {}) {
+  const focusLib = require('./lib/focus');
+  const lc = require('./lib/list_complete');
+  const goal = String(focus.content || '');
+  const targetCol = lc.targetColumnFromGoal(goal);
+  const lookup = deps.lookup || _defaultListLookup;
+  const writeCell = deps.writeCell || _defaultWriteCell;
+  const canvasAll = deps.canvasAll || (() => { try { return require('./lib/canvas_docs').all(); } catch { return []; } });
+  try {
+    // find the candidate list: a durable canvas TABLE with blanks in the target column (last opened wins).
+    let cand = null;
+    for (const tab of (canvasAll() || [])) {
+      for (const b of (tab.blocks || [])) {
+        if (b.blockType !== 'table') continue;
+        const parsed = lc.parseTable(b, { targetColumn: targetCol });
+        if (parsed.ok && lc.blankRows(parsed).length) cand = { tabKey: tab.tabKey, block: b, parsed };
+      }
+    }
+    if (!cand) return focusLib.recordOutcome(focus, { progressed: false, note: 'list-complete: no canvas table with blanks in the target column' });
+    const { tabKey, block, parsed } = cand;
+    const blanks = lc.blankRows(parsed);
+    if (!blanks.length) return focusLib.recordOutcome(focus, { control: { type: 'done', note: 'list complete — no blank cells left' } });
+    // Walk every blank row ONCE. A left-blank (ungroundable) row stays blank, so picking blanks[0] each tick
+    // would re-try the same row forever and head-of-line block the other 44 (then stall on strikes with
+    // NOTHING filled). Track attempted-and-missed rows in focus meta and advance to the next un-attempted
+    // blank; a grounded attempt on a NEW row IS progress (hit → fill; miss → mark attempted, leave blank).
+    // DONE when every blank has been either filled or attempted.
+    const attKey = `focus.${focus.id}.lc_attempted_v2`;   // v2: the fetch+extract lookup upgrade re-walks rows the snippet-only pass had marked blank
+    // DEFERRED = rows whose lookup hit a TRANSIENT tool error (Echo unreachable). A transient is NOT a
+    // grounded miss, so we must NOT permanently blank a findable contact over a blip (live 2026-08-05: a
+    // boot-warmup "Echo suit isn't connected" cost Melissa Gage her real swepco.com address). Deferred rows
+    // are skipped THIS walk (no head-of-line), then RE-WALKED after the genuine rows for a bounded number of
+    // rounds — long enough for Echo to recover, capped so a real outage can't loop forever.
+    const defKey = `focus.${focus.id}.lc_deferred`;
+    const roundKey = `focus.${focus.id}.lc_defer_rounds`;
+    let attempted = []; try { attempted = JSON.parse(db.getMeta(attKey) || '[]'); } catch {}
+    let deferred = []; try { deferred = JSON.parse(db.getMeta(defKey) || '[]'); } catch {}
+    // Stable row-key for attempted/deferred tracking — EXCLUDE the provenance columns (Confidence/Source), which
+    // start blank and get filled, so they must never shift a row's identity mid-walk.
+    const _PROV = new Set(['confidence', 'source', 'how found']);
+    const keyOf = (ix) => Object.entries(lc.rowIdentity(parsed, ix)).filter(([h]) => !_PROV.has(String(h).trim().toLowerCase())).map(([, v]) => v).join('|');
+    let rowIndex = blanks.find((ix) => !attempted.includes(keyOf(ix)) && !deferred.includes(keyOf(ix)));
+    if (rowIndex == null) {
+      // No fresh blank left. Re-walk the transient-deferred rows (Echo may be back now), bounded to 3 rounds.
+      let rounds = parseInt(db.getMeta(roundKey) || '0', 10) || 0;
+      if (deferred.length && rounds < 3) {
+        db.setMeta(roundKey, String(rounds + 1)); try { db.setMeta(defKey, '[]'); } catch {}
+        console.log(`[list-complete] #${focus.id} re-walking ${deferred.length} deferred row(s) after a transient (round ${rounds + 1})`);
+        return focusLib.recordOutcome(focus, { progressed: true });
+      }
+      if (deferred.length) { attempted.push(...deferred); try { db.setMeta(attKey, JSON.stringify(attempted.slice(-2000))); db.setMeta(defKey, '[]'); } catch {} }
+      return focusLib.recordOutcome(focus, { control: { type: 'done', note: `list complete — ${blanks.length} cell(s) had no grounded source, left blank` } });
+    }
+    const id = lc.rowIdentity(parsed, rowIndex);
+    const colName = parsed.headers[parsed.targetIdx];
+    const who = Object.values(id).slice(0, 3).join(' ');
+    let hit = null;
+    try { hit = await lookup(id, colName, goal); } catch (e) { console.error('[list-complete] lookup failed:', e.message); }
+    let note;
+    if (hit && hit.retry) {
+      // transient tool error — DEFER (retry a later pass), never blank a findable row over a blip.
+      deferred.push(keyOf(rowIndex)); try { db.setMeta(defKey, JSON.stringify(deferred.slice(-2000))); } catch {}
+      note = `list-complete: ${who} — tool unreachable this pass, deferred for retry`;
+    } else if (hit && hit.value && hit.source) {
+      const updated = lc.applyValue(parsed, rowIndex, hit.value);
+      // BRING PROVENANCE ONTO THE CANVAS: fill the Confidence + Source columns for this row (when present),
+      // so each address shows its score + HOW it was found (Hunter/prior record/domain pattern/web).
+      const confIdx = parsed.headers.findIndex((h) => /^confidence$/i.test(String(h).trim()));
+      const srcIdx = parsed.headers.findIndex((h) => /^(source|how found)$/i.test(String(h).trim()));
+      if (updated.rows[rowIndex]) {
+        if (confIdx >= 0) updated.rows[rowIndex][confIdx] = (hit.confidence != null ? `${hit.confidence}%` : '—');
+        if (srcIdx >= 0) updated.rows[rowIndex][srcIdx] = String(hit.source || '');
+      }
+      await writeCell(tabKey, block.blockId, updated, block.data);
+      note = `list-complete: ${who} → ${colName} = ${hit.value} (${hit.confidence != null ? hit.confidence + '%, ' : ''}${hit.source}) — ${blanks.length - 1} blank left`;
+    } else {
+      try { require('./lib/absence').recordMiss(who || 'row', colName); } catch {}
+      attempted.push(keyOf(rowIndex)); try { db.setMeta(attKey, JSON.stringify(attempted.slice(-2000))); } catch {}
+      note = `list-complete: no grounded ${colName} for ${who} — left blank (${attempted.length}/${blanks.length} attempted)`;
+    }
+    const progressed = true;   // advancing (fill / grounded-miss / transient-defer) is progress — never a false strike
+    try {
+      const rr = db.insertMonologue({ content: note, model: 'operator', type: 'reading' });
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: rr.id, ts: rr.ts, content: `(list-complete) ${note.slice(0, 80)}`, type: 'reading' });
+    } catch {}
+    console.log(`[list-complete] #${focus.id} ${note}`);
+    return focusLib.recordOutcome(focus, { progressed });
+  } catch (e) {
+    console.error('[list-complete] pass failed:', e.message);
+    return focusLib.recordOutcome(focus, { progressed: false, note: 'list-complete: pass error' });
+  }
 }
 
 // TOPICAL / FORECAST pass (research A3b) — research a SUBJECT across the plan's aspects into a briefing,

@@ -135,7 +135,13 @@ function costOf({ model = '', tokens = 0 } = {}) {
 function state({ limit = 0, markPct = 0, markAt = 0, spentSince = 0, resetAt = 0, now = Date.now() } = {}) {
   const lim = num(limit);
   if (lim <= 0) return { known: false, usedPct: 0, remaining: Infinity, msLeft: Math.max(0, num(resetAt) - now), pacePerHour: Infinity };
-  const usedAtMark = clamp01(num(markPct)) * lim;
+  // A mark taken BEFORE the pool's last reset is STALE: the pool has since refilled, so the operator's
+  // pre-reset "90% used" no longer describes it. Honor the stated reset — once resetAt has passed, VOID the
+  // mark (usedAtMark = 0) and measure usage purely from metered spend since. Without this the gate suppresses
+  // every autonomous lane FOREVER on a stale mark (observed live: idle deferred at 91% days after the pool
+  // reset, because the FLOOR check reads the frozen mark). A fresh mark (markAt after the reset) re-anchors it.
+  const resetPassed = num(resetAt) > 0 && now > num(resetAt);
+  const usedAtMark = resetPassed ? 0 : clamp01(num(markPct)) * lim;
   const used = Math.min(lim, usedAtMark + Math.max(0, num(spentSince)));
   const remaining = Math.max(0, lim - used);
   const msLeft = Math.max(0, num(resetAt) - now);
@@ -152,6 +158,7 @@ function state({ limit = 0, markPct = 0, markAt = 0, spentSince = 0, resetAt = 0
     hoursLeft: msLeft / HOUR,
     pacePerHour,
     markAt: num(markAt),
+    resetPassed,
   };
 }
 
@@ -198,6 +205,7 @@ function check({ lane = 'idle', st = null, spentLastHour = 0, estimate = 0 } = {
 /** One line for the log / status surface. Honest when nothing is configured. */
 function describe(st) {
   if (!st || !st.known) return 'quota: not configured (no ceiling enforced)';
+  if (st.resetPassed) return `quota: reset passed — pool treated as refilled (${Math.round(st.usedPct * 100)}% metered since); re-mark to re-anchor`;
   return `quota: ${Math.round(st.usedPct * 100)}% used · ${Math.round(st.remaining).toLocaleString()} compute left · `
     + `${st.hoursLeft.toFixed(1)}h to reset · sustainable ${Math.round(st.pacePerHour).toLocaleString()}/h`;
 }

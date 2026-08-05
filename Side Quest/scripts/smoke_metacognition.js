@@ -129,5 +129,40 @@ const mdir = m.meetingActionHonestyDirective('Lucas');
 ok(/NOT in a meeting|not (in|joining)/i.test(mdir) && /Lucas/.test(mdir), 'directive: states she is not in/joining, addressed to Lucas');
 ok(/Teams meeting isn'?t something you can join yet|link/i.test(mdir), 'directive: honest alternative (needs a link; Teams not joinable yet)');
 
+// --- ARTIFACT-CLAIM VERIFICATION (file / canvas) ---
+const FE_NO = () => false, FE_YES = () => true, CW_NO = () => false, CW_YES = () => true, IG_NO = () => false, IG_YES = () => true;
+ok(m.verifyArtifactClaims('The dossier is saved at notes/x.md', { fileExists: FE_NO }).violations.some(v => v.kind === 'file'),
+  'file: "saved at notes/x.md" + file missing → violation');
+ok(m.verifyArtifactClaims('The dossier is saved at notes/x.md', { fileExists: FE_YES }).ok,
+  'file: same claim but file EXISTS → ok');
+ok(m.verifyArtifactClaims("I'll save it to notes/x.md", { fileExists: FE_NO }).ok,
+  'file: FUTURE intent ("I\'ll save it") → not a falsifiable claim, no violation');
+ok(m.verifyArtifactClaims('I put 994 contacts on your canvas', { canvasWroteThisTurn: CW_NO }).violations.some(v => v.kind === 'canvas'),
+  'canvas: "put ... on your canvas" + no write → violation');
+ok(m.verifyArtifactClaims('I put 994 contacts on your canvas', { canvasWroteThisTurn: CW_YES }).ok,
+  'canvas: same claim WITH a write this turn → ok');
+
+// --- IMAGE anti-fab (the #10872 "…Generating now." confab; no generation ran) ---
+const SOCCER = "Got it — more realistic. I'll push the soccer image toward photorealism. Generating now.";
+ok(m.verifyArtifactClaims(SOCCER, { imageGenThisTurn: IG_NO }).violations.some(v => v.kind === 'image'),
+  'image: the exact #10872 "Generating now" (image ctx, no gen) → violation');
+ok(m.verifyArtifactClaims(SOCCER, { imageGenThisTurn: IG_YES }).ok,
+  'image: same reply but a real image DID render this turn → ok');
+ok(m.verifyArtifactClaims('I generated that image for you.', { imageGenThisTurn: IG_NO }).violations.some(v => v.kind === 'image'),
+  'image: create-verb + noun, no gen → violation (tier 1)');
+ok(m.verifyArtifactClaims('I generated that image for you.', { imageGenThisTurn: IG_YES }).ok,
+  'image: create-verb + noun WITH a gen → ok');
+ok(m.verifyArtifactClaims("Here they come — three portraits. Putting them on your canvas now.", { imageGenThisTurn: IG_NO }).violations.some(v => v.kind === 'image'),
+  'image: "here they come / on your canvas" (portrait ctx), no gen → violation (tier 2)');
+ok(m.verifyArtifactClaims('I can generate that image once it\'s enabled.', { imageGenThisTurn: IG_NO }).ok,
+  'image: FUTURE/capability ("I can generate") → not falsifiable, no violation');
+ok(m.verifyArtifactClaims('There are over 14,000 stock photos of puppies you can browse.', { imageGenThisTurn: IG_NO }).ok,
+  'image: honest search result ("stock photos", no create/progress verb) → no false positive');
+ok(m.verifyArtifactClaims('I updated the chart on your canvas.', { imageGenThisTurn: IG_NO, canvasWroteThisTurn: CW_YES }).ok,
+  'image: chart on canvas (no image noun) → NOT an image violation');
+// correction copy mentions image
+ok(/image/i.test(m.artifactCorrection([{ kind: 'image', claim: 'x' }])), 'artifactCorrection: image violation → correction names the image');
+ok(m.artifactCorrection([]) === '', 'artifactCorrection: no violations → empty string');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

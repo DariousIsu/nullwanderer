@@ -6,7 +6,7 @@ const OLLAMA_BASE = process.env.OLLAMA_BASE || 'http://localhost:11434';
 // simply had no way to point this at it or to attach the bearer token. That mattered once the cloud
 // started writing the user-facing reply — a long generation with no token flow is indistinguishable
 // from a hang, and the stall watchdog below only works if tokens are actually arriving to reset it.
-async function streamChat({ model, messages, options = {}, onToken, onThinking, signal, inactivityMs = 90000, think, base = OLLAMA_BASE, headers = {} }) {
+async function streamChat({ model, messages, options = {}, onToken, onThinking, signal, inactivityMs = 90000, maxMs = 0, think, base = OLLAMA_BASE, headers = {}, lane = 'interactive' }) {
   const body = {
     model,
     messages,
@@ -38,6 +38,23 @@ async function streamChat({ model, messages, options = {}, onToken, onThinking, 
     }
   } catch { /* estimation must never block a call */ }
 
+  // ⭐M1.1b SPEND GATE AT THE CHOKE POINT. Every cloud generation passes through here, so this is the one
+  // place a pool ceiling can actually bind (Disease A: the reply path + curator + research all bypassed the
+  // idle-only gate). MUTE-SAFETY INVARIANT: only CLOUD calls on an OPT-IN deferrable lane are ever gated —
+  // lane defaults to 'interactive', which is NEVER deferred, so the reply path and every legacy caller are
+  // untouched. A deferral throws a typed {deferred:true} error that only the opt-in caller catches (it then
+  // falls back to local / skips). The gate itself FAILS OPEN: any gate-infra error proceeds with the call.
+  const _cloudCall = !!(base && base !== OLLAMA_BASE);
+  if (_cloudCall && lane && lane !== 'interactive') {
+    try {
+      const _chars = (messages || []).reduce((n, m) => n + String((m && m.content) || '').length, 0);
+      const _estTokens = Math.round(_chars / 3.2) + 500;   // prompt + a nominal completion
+      const _est = require('./quota').costOf({ model, tokens: _estTokens });
+      const _r = require('./quota_gate').allow(lane, { estimate: _est });
+      if (!_r.allow) { const e = new Error(`quota: ${lane} deferred — ${_r.reason}`); e.deferred = true; e.lane = lane; throw e; }
+    } catch (e) { if (e && e.deferred) throw e; /* gate infra failure → FAIL OPEN, make the call */ }
+  }
+
   // WATCHDOG: abort if the stream STALLS (no token for inactivityMs). Without this a hung
   // generation blocks the awaiting caller forever — and since there's one local model
   // instance, that freezes BOTH the idle loop AND chat (observed: a 15-min wedge). The timer
@@ -49,6 +66,11 @@ async function streamChat({ model, messages, options = {}, onToken, onThinking, 
   if (signal) { if (signal.aborted) ctrl.abort(); else signal.addEventListener('abort', onExternalAbort, { once: true }); }
   let watchdog = null;
   const kick = () => { if (inactivityMs > 0) { clearTimeout(watchdog); watchdog = setTimeout(() => ctrl.abort(), inactivityMs); } };
+  // ABSOLUTE cap (2026-08-04): the inactivity watchdog RESETS on every token, so a reasoning model trickling
+  // a long `thinking` stream is never killed — the interactive reply wedged ~10min on exactly that (kimi-k2.6).
+  // maxMs is a HARD ceiling on total stream duration (set ONCE, never reset) that aborts regardless of token
+  // activity. Default 0 = off (existing callers unchanged); reply-path callers pass it.
+  const maxTimer = (maxMs > 0) ? setTimeout(() => { try { ctrl.abort(); } catch {} }, maxMs) : null;
 
   try {
     kick();
@@ -124,6 +146,7 @@ async function streamChat({ model, messages, options = {}, onToken, onThinking, 
     }
   } finally {
     clearTimeout(watchdog);
+    clearTimeout(maxTimer);
     if (signal) { try { signal.removeEventListener('abort', onExternalAbort); } catch {} }
   }
 }
@@ -433,4 +456,41 @@ async function sweepLoaded({ keep = [], minVramBytes = 2e9, base = OLLAMA_BASE }
   } catch { return []; }
 }
 
-module.exports = { streamChat, complete, completeDetailed, pickText, isReasoningModel, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded, sayLooksCutOff };
+// BETWEEN-TURN COGNITION router. The idle loops (heartbeat surfacing, self-dialogue, boredom
+// query-pick) were built when the LOCAL front was hot and drove them directly. After the front was
+// demoted to a cold fallback (VRAM reserved for image-gen), those loops still called the local model
+// on their own schedule — each call re-loaded gemma AND re-pinned it 24h via the keep_alive default,
+// so the "demoted" model was resident and continuously fed. This routes that cognition to the CLOUD
+// subconscious model (already warm, zero local VRAM) when one is configured, mirroring
+// monologue.generateThought's cloud-first policy — while preserving token streaming (parser.feed /
+// sheep). Falls back to the local front model ONLY if no cloud subconscious is set or no cloud source
+// is reachable, so the local model stays genuinely COLD unless the cloud is truly unavailable.
+async function streamCognition({ messages, options = {}, onToken, onThinking, signal, inactivityMs, maxMs, think, lane = 'idle' } = {}) {
+  let subModel = '';
+  try { subModel = require('./config').subconsciousModel(); } catch {}
+  if (subModel) {
+    let cloud = null;
+    try { cloud = (require('./models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch {}
+    if (cloud) {
+      // Idle cognition is a DEFERRABLE cloud lane — pass the lane so the choke-point gate can defer it when
+      // the compute pool is low (protecting the interactive reply's headroom). A deferral is benign here:
+      // swallow it into an empty cognition ("nothing this tick") rather than throwing into the idle loops.
+      try {
+        return await streamChat({
+          model: subModel, messages, options, onToken, onThinking, signal, inactivityMs, maxMs, think,
+          base: cloud.base, headers: cloud.token ? { Authorization: `Bearer ${cloud.token}` } : {}, lane
+        });
+      } catch (e) {
+        if (e && e.deferred) { try { console.log(`[quota] cognition (${lane}) deferred — ${e.message}`); } catch {} return ''; }
+        throw e;
+      }
+    }
+  }
+  // Local fallback — the demoted front model, loaded on demand (cloud unset or unreachable). Local is free,
+  // so it is never gated (the choke-point gate only fires on cloud calls).
+  let front;
+  try { front = require('./config').frontModel(); } catch { front = options.model; }
+  return streamChat({ model: front, messages, options, onToken, onThinking, signal, inactivityMs, maxMs, think });
+}
+
+module.exports = { streamChat, streamCognition, complete, completeDetailed, pickText, isReasoningModel, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded, sayLooksCutOff };

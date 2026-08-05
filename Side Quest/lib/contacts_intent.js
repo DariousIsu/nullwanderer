@@ -48,7 +48,7 @@ async function classify(message, { recent = '', deps = {} } = {}) {
       // Louisiana parish leadership?". Its own trace shows it understood the turn completely
       // (state:'LA', company:'Louisiana Perish') and answered isList:false because it was instructed
       // to. The bump also retires every cached v1 verdict.
-      task: 'contacts_intent', v: 2, model: fastModel, numPredict: 320,
+      task: 'contacts_intent', v: 4, model: fastModel, numPredict: 320,
       input: { user: s.slice(0, 700), recent: String(recent).slice(0, 400) },
       want: 'You decide if the user is asking to LIST / compile / build a sheet of CONTACTS (people, companies, '
         + 'officials) we ALREADY HOLD — a pull of records we have on hand, NOT researching or finding NEW ones — '
@@ -61,8 +61,21 @@ async function classify(message, { recent = '', deps = {} } = {}) {
         + 'what we hold ("how many contacts do we have for X", "do we have emails for Y", "what contacts do we '
         + 'have in Z", "have we got anyone at W", "any contacts for V"). A QUESTION about our records is still a '
         + 'request to go look at our records — answering it requires the same pull. '
-        + 'isList=FALSE only for researching NEW contacts ("find new", "research", "from scratch", "go '
+        + 'isList=FALSE for researching NEW contacts ("find new", "research", "from scratch", "go '
         + 'discover"), a status check about HER OWN operation ("what are you working on"), or ordinary chat. '
+        + '⭐isList=FALSE for a lookup about ONE SPECIFIC NAMED person or entity — "the Shreveport Mayor", '
+        + '"do we have contact info for the Mayor of Shreveport", "John Kennedy\'s email", "the number for '
+        + 'Jane Doe", "did we find the contact for <one named individual/office-holder>". That is a '
+        + 'SINGLE-ENTITY question, answered about that one record (or answered "no, want me to find it?") — '
+        + 'NOT a list/sheet/canvas pull. isList=true is ONLY for a SET defined by a FILTER (type / state / '
+        + 'sector / grade / company) that yields MANY records ("LA government contacts", "A-grade energy '
+        + 'companies", "everyone at Duke Energy"). ONE named subject → false; a category/filter over many → true. '
+        + 'ALSO isList=FALSE when `recent` shows you ALREADY delivered a contact list and this turn merely '
+        + 'ACKNOWLEDGES, thanks for, asks WHEN, or refers back to THAT list ("perfect, thank you", "I need '
+        + 'those by this afternoon", "are those ready", "that\'s still the priority") — a follow-up about a '
+        + 'list already on the canvas is CONVERSATION, not a new pull; re-dumping it every turn is the bug to '
+        + 'avoid. isList=true ONLY when the turn requests a list NOT already just delivered, or CHANGES the '
+        + 'filters (a narrower/different set, e.g. "now just Louisiana", "only the A-grade ones"). '
         + 'type: "corporate" = private companies/businesses; "elected" = elected officials/legislators; "gov" = '
         + 'government/agencies; null if unspecified OR if they want BOTH ("government and private", "public and '
         + 'private", "all types" → null = no type filter, include everyone). '

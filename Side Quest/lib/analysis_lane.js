@@ -148,6 +148,9 @@ function run({ code, timeoutMs = null, workbench = null } = {}) {
       if (!persistent) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }
       const out = `${stdout || ''}${stderr ? '\n' + stderr : ''}`.trim();
       const tail = out.length > OUTPUT_CAP ? out.slice(0, OUTPUT_CAP) + '\n…(output truncated)' : out;
+      // 2026-08-03 (build plan M1.6): a run left NO trace, so no audit could tell if the lane ever
+      // fired. One line per run makes a fire one grep away.
+      try { console.log(`[analysis] run ${id} ${persistent ? 'workbench=' + id : 'ephemeral'} exit=${err ? (err.killed ? 'timeout' : (err.code != null ? err.code : 'err')) : 0} out=${out.length}b`); } catch {}
       if (err && err.killed) return resolve(`[analysis timed out after ${Math.round(ms / 1000)}s]\n${tail}`);
       if (err) return resolve(`[analysis exited non-zero — a bug in the script or the query]\n${tail || '(no output)'}`);
       return resolve(tail || '(the analysis produced no output — did it print its result?)');

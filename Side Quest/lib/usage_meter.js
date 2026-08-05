@@ -7,25 +7,68 @@
  * model + timestamp), and summary() rolls it up over a window. The window is configurable so it can be set
  * to track ALONGSIDE the Ollama plan's reset cadence (Pro resets daily → a 24h window mirrors it).
  *
- * In-memory rolling ring (reboot resets it — acceptable for a live activity pill; persistence can come later).
- * PURE given explicit timestamps → the aggregation is gate-testable.
+ * DURABLE rolling ring (M1.1a): the ring is persisted to db meta (throttled) and RESTORED on boot, so
+ * `spentSince` in the quota gate survives a reboot — otherwise every reboot reset the meter to 0 and the
+ * gate silently under-counted (Disease A: "usage_meter in-memory (resets per boot)"). Still PURE given
+ * explicit timestamps → the aggregation is gate-testable; persistence is fail-soft + injectable for tests.
  */
 'use strict';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const RETAIN_MS = 26 * HOUR_MS;        // keep a bit more than a day so a 24h window is always complete
+const PERSIST_THROTTLE_MS = 30 * 1000; // at most one meta write per 30s (record() is hot)
+const META_KEY = 'usage.meter.ring';
 
 const _log = [];   // [{ model, tokens, ts }] — append-only ring, pruned to RETAIN_MS
+let _dirty = false;
+let _lastPersist = 0;
+
+function _prune(now) {
+  const cutoff = now - RETAIN_MS;
+  if (_log.length && _log[0].ts < cutoff) { let i = 0; while (i < _log.length && _log[i].ts < cutoff) i++; _log.splice(0, i); }
+}
 
 // Record one model call's token cost. `tokens` is the total (prompt + generated). Fail-soft: bad input is
-// ignored, never throws. Prunes anything older than the retention horizon so memory stays bounded.
+// ignored, never throws. Prunes anything older than the retention horizon so memory stays bounded, then
+// throttled-persists so the durable ledger tracks live spend without a meta write on every hot call.
 function record(model, tokens, ts = Date.now()) {
   const t = Number(tokens);
   if (!Number.isFinite(t) || t <= 0) return;
-  _log.push({ model: String(model || 'unknown'), tokens: Math.round(t), ts: Number(ts) || Date.now() });
-  const cutoff = (Number(ts) || Date.now()) - RETAIN_MS;
-  if (_log.length && _log[0].ts < cutoff) { let i = 0; while (i < _log.length && _log[i].ts < cutoff) i++; _log.splice(0, i); }
+  const now = Number(ts) || Date.now();
+  _log.push({ model: String(model || 'unknown'), tokens: Math.round(t), ts: now });
+  _prune(now);
+  _dirty = true;   // main.js drives persist() on its periodic tick + on shutdown (keeps this hot path pure)
+}
+
+// Persist the pruned ring to db meta (fail-soft; injectable setMeta for tests). main.js calls this every
+// periodic tick — self-throttled to one write per PERSIST_THROTTLE_MS so a hot tick is cheap. Pass
+// force:true on graceful shutdown so the last window of spend is flushed regardless of the throttle.
+function persist(now = Date.now(), { setMeta, force = false } = {}) {
+  if (!_dirty) return false;
+  if (!force && now - _lastPersist < PERSIST_THROTTLE_MS) return false;
+  _prune(now);
+  const put = setMeta || ((k, v) => require('./db').setMeta(k, v));
+  try { put(META_KEY, JSON.stringify(_log)); _lastPersist = now; _dirty = false; return true; }
+  catch { return false; }
+}
+
+// Restore the ring from db meta on boot (fail-soft; injectable getMeta for tests). Drops anything past the
+// retention horizon. Returns the count restored. Safe to call once at startup before any record().
+function restore(now = Date.now(), { getMeta } = {}) {
+  try {
+    const get = getMeta || ((k) => require('./db').getMeta(k));
+    const raw = get(META_KEY);
+    if (!raw) return 0;
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return 0;
+    const cutoff = now - RETAIN_MS;
+    const kept = arr.filter((e) => e && Number.isFinite(Number(e.ts)) && Number(e.ts) >= cutoff && Number(e.tokens) > 0)
+      .map((e) => ({ model: String(e.model || 'unknown'), tokens: Math.round(Number(e.tokens)), ts: Number(e.ts) }))
+      .sort((a, b) => a.ts - b.ts);
+    _log.splice(0, _log.length, ...kept);
+    return kept.length;
+  } catch { return 0; }
 }
 
 // Roll up usage over a window: { total, byModel:{model:tokens}, rate (tokens in the last rateMs), calls,
@@ -67,4 +110,4 @@ function lastSeen(model, before = Date.now()) {
 function reset() { _log.length = 0; }
 function _size() { return _log.length; }
 
-module.exports = { record, summary, tokensOf, lastSeen, reset, _size, DAY_MS, HOUR_MS, RETAIN_MS };
+module.exports = { record, summary, tokensOf, lastSeen, reset, persist, restore, _size, DAY_MS, HOUR_MS, RETAIN_MS };
