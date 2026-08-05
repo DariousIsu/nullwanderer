@@ -10402,7 +10402,14 @@ function _capLog(which, cap) {
   return false;
 }
 
-function _researchGateOk(streamKey, focusId) {
+// M3.2 — PREDICATE / SIDE-EFFECT SPLIT. The old _researchGateOk mixed a read-only "may this lane run?"
+// test with two WRITES (stamp the cadence clock + bump the usage meter). Two of its three call sites
+// early-return AFTER the gate (no free cloud slot; Lucas started typing), so merely ASKING consumed a
+// usage slot and advanced the cadence clock for a pass that never ran — inflating the cap counters and
+// throttling the next real attempt. Now: _researchGateCheck is pure; _researchGateCommit is called the
+// moment a pass TRULY commits to running (past every other early-return). The _researchGateOk wrapper
+// preserves the exact old behavior for the one site (backgroundWorkerPass) with no post-gate return.
+function _researchGateCheck(streamKey, focusId) {
   try {
     const now = Date.now();
     const gapKey = `research.last_pass.${streamKey}`;
@@ -10410,13 +10417,23 @@ function _researchGateOk(streamKey, focusId) {
     const maxCc = Math.max(1, _intMeta('research.max_concurrent', RESEARCH_MAX_CONCURRENT_DEFAULT));
     if (_autonomousInFlight() >= maxCc) return false;                       // leave a cloud slot free for chat
     const u = _usageRead();
-    const sCap = _intMeta('research.session_cap', 0), wCap = _intMeta('research.weekly_cap', 0);
+    // M3.2 — a COUNT-based runaway net (not the primary spend control; that's the M1 compute gate).
+    // meta wins if the operator set it explicitly; else the .env safety-net default; else 0 = unlimited.
+    const sCap = _intMeta('research.session_cap', parseInt(process.env.ZOE_RESEARCH_SESSION_CAP || '0', 10) || 0),
+          wCap = _intMeta('research.weekly_cap',  parseInt(process.env.ZOE_RESEARCH_WEEKLY_CAP  || '0', 10) || 0);
     if (sCap > 0 && _usageSum(u, SESSION_WINDOW_MS) >= sCap) return _capLog('session (5h)', sCap);
     if (wCap > 0 && _usageSum(u, WEEKLY_WINDOW_MS) >= wCap) return _capLog('weekly (7d)', wCap);
-    try { db.setMeta(gapKey, String(now)); } catch {}
-    _usageBump(_laneModelFor(focusId));
     return true;
   } catch { return true; }
+}
+function _researchGateCommit(streamKey, focusId) {
+  try { db.setMeta(`research.last_pass.${streamKey}`, String(Date.now())); } catch {}
+  try { _usageBump(_laneModelFor(focusId)); } catch {}
+}
+function _researchGateOk(streamKey, focusId) {   // check + (if ok) commit atomically — for sites with no post-gate early-return
+  if (!_researchGateCheck(streamKey, focusId)) return false;
+  _researchGateCommit(streamKey, focusId);
+  return true;
 }
 
 // Route-cache readout (inspector): global.__routeCache() — what the memo + coalescer saved this
@@ -10446,7 +10463,7 @@ try {
       inFlight: _autonomousInFlight(),
       maxConcurrent: _intMeta('research.max_concurrent', RESEARCH_MAX_CONCURRENT_DEFAULT),
       cadence_ms: _researchCadenceMs(),
-      session_cap: _intMeta('research.session_cap', 0), weekly_cap: _intMeta('research.weekly_cap', 0),
+      session_cap: _intMeta('research.session_cap', parseInt(process.env.ZOE_RESEARCH_SESSION_CAP || '0', 10) || 0), weekly_cap: _intMeta('research.weekly_cap', parseInt(process.env.ZOE_RESEARCH_WEEKLY_CAP || '0', 10) || 0),
     };
   };
 } catch {}
@@ -10627,12 +10644,13 @@ async function autonomyTick() {
     if (directedStepInFlight) alongsideDirected = true;
     try { if (db.getMeta('scribe_active') === '1') { _logAutonomyDeferral('live-meeting'); return; } } catch {}
     // THROTTLE — the same rolling session/weekly/concurrency brakes as every autonomous pass.
-    if (!_researchGateOk('autonomy', 'autonomy')) { _logAutonomyDeferral('research-throttle'); return; }
+    if (!_researchGateCheck('autonomy', 'autonomy')) { _logAutonomyDeferral('research-throttle'); return; }
     // CONDUCTOR (2b): the tick runs on an ALLOCATABLE cloud slot — by construction never the chat's.
     // Pool exhausted → skip this tick; idle work never queues, contention resolves by cadence.
     _autonomySlot = null;
     try { _autonomySlot = require('./lib/board').acquireCloudSlot({ lane: 'autonomy', nowMs: now }); } catch {}
     if (!_autonomySlot) { _logAutonomyDeferral('no-free-slot'); return; }
+    _researchGateCommit('autonomy', 'autonomy');   // committed: we hold a cloud slot → count the pass + advance cadence (past the no-slot early-return above)
     if (alongsideDirected) {
       const k = 'alongside-directed'; const t = Date.now();
       if (t - (_autonomyDeferLogAt[k] || 0) > 15 * 60 * 1000) { _autonomyDeferLogAt[k] = t; console.log('[autonomy] running ALONGSIDE the directed focus (slot coexistence, ruling 2026-07-23)'); }
@@ -11158,8 +11176,8 @@ async function autonomyTick() {
       }
       return;
     }
-    // WORK MOVES (research / fill-gap / corroborate / clean / build) → one bounded operator run.
-    // autonomous:true keeps Echo writes tier-gated; build gets the task budget (it produces a file).
+    // WORK MOVES (research / explore / fill-gap / corroborate / clean / build) → one bounded operator run.
+    // autonomous:true keeps Echo writes tier-gated; build+explore get the task budget (they produce a file).
     let brief = autonomy.buildOperatorBrief(decision, { now });
     // PROCEDURAL MEMORY (2c): a proven procedure / learned constraints matching this run's shape
     // ride the brief — the model executes a known recipe with its track record shown, instead of
@@ -11195,7 +11213,7 @@ async function autonomyTick() {
       }
       boardId = reg.id;
     } catch {}
-    const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: decision.move === 'build' || decision.move === 'maintain', autonomous: true, maintain: decision.move === 'maintain', budgetMult: _idleDepth ? _idleDepth.budgetMult : 1 });
+    const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: decision.move === 'build' || decision.move === 'maintain' || decision.move === 'explore', autonomous: true, maintain: decision.move === 'maintain', budgetMult: _idleDepth ? _idleDepth.budgetMult : 1 });
     try { require('./lib/board').beat(boardId); } catch {}
     // S3 VERIFY — the run is judged against the plan's own `expect` before it is recorded. An
     // unmet expectation is written into history, where the next decision reads it as "this
@@ -12262,9 +12280,10 @@ async function _directedFocusTick() {
     });
     if (!bg.ok) { _logBeatIdleDefer(bg.reason); return; }
   }
-  if (!_researchGateOk('primary', focus.id)) return;                                  // operator throttle — skip this cycle entirely
+  if (!_researchGateCheck('primary', focus.id)) return;                               // operator throttle — skip this cycle entirely
   if (_conversationActive()) { _logLoadDeferral('directed'); return; }                // main-thread balance: don't START a directed pass (web grab → PDF decomp → package build) while he types
   directedStepInFlight = true;
+  _researchGateCommit('primary', focus.id);   // committed: a directed pass is now running (past the conversation-active early-return above)
   markActivity('directed-tick');   // stall-attrib (diagnostic — a research pass embeds new findings on the main thread)
   if (_focusOrigin === 'beat') { try { db.setMeta('research.beat_last_pass_at', String(Date.now())); } catch {} }
   try {

@@ -135,6 +135,14 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const bMaint = auto.buildOperatorBrief({ move: 'maintain', target: 'integrity audit — civic graph', why: 'stale', steps: [], expect: 'a violation report with counts' });
   ok(/AUTONOMOUS MAINTENANCE/.test(bMaint) && /run_integrity_audit/.test(bMaint) && /run_blocking_dedup/.test(bMaint), 'maintain brief names the allowlisted loops');
   ok(/report-only or proposal-only/i.test(bMaint) && /worth Lucas applying/i.test(bMaint), 'maintain brief states the unattended contract + the report product');
+  // explore (M3.1): a first-class move that walks the KG multi-hop and files a synthesis note
+  ok(auto.MOVES.includes('explore') && auto.validateDecision('{"move":"explore","target":"Acme PAC","why":"single-source cluster worth graph-testing","expect":"one contradiction or gap between graph and held docs, cited"}').valid, 'explore is a first-class, validatable move');
+  ok(!auto.validateDecision('{"move":"explore","target":"Acme PAC","why":"x"}').valid, 'explore WITHOUT expect is rejected (a run move — verify must have an increment to judge)');
+  const bExpl = auto.buildOperatorBrief({ move: 'explore', target: 'Acme PAC', why: 'single-source cluster', steps: [], expect: 'one cited contradiction or gap' }, { now: NOW });
+  ok(/notes\/autonomy\/\d{4}-\d{2}-\d{2}-explore-acme-pac\.md/.test(bExpl), 'explore brief names a dated notes/autonomy/ explore path');
+  ok(/kg_neighborhood/.test(bExpl) && /"op":"write"/.test(bExpl), 'explore brief instructs the KG walk (kg_neighborhood) + the file-save contract');
+  ok(/CONTRADICTION/.test(bExpl) && /GAP/.test(bExpl) && /HELD DOCUMENTS/.test(bExpl), 'explore brief frames internal-coherence: graph vs held docs → the one contradiction/gap');
+  ok(/do NOT use the open web/i.test(bExpl), 'explore brief forbids the open web (this is internal-coherence work, not research)');
 
   // --- outcome: record what HAPPENED ---
   const opRes = { answer: 'Saved the report.', steps: [

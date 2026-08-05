@@ -28,7 +28,7 @@
  */
 'use strict';
 
-const MOVES = ['advance-inquiry', 'open-inquiry', 'close-inquiry', 'research', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain', 'rehearse', 'scenario', 'engage', 'nothing'];
+const MOVES = ['advance-inquiry', 'open-inquiry', 'close-inquiry', 'research', 'explore', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain', 'rehearse', 'scenario', 'engage', 'nothing'];
 const HISTORY_KEY = 'autonomy.history';
 const HISTORY_MAX = 12;
 // SCENARIO work-move (F3's other half): keep the illustrative what-if OCCASIONAL — only offered once the
@@ -344,7 +344,7 @@ function historyBlock(history, now = Date.now()) {
 const DECISION_WANT = `You are the autonomous work-chooser for Zoe — a dedicated research assistant with her own databases, ~100 public data sources, the open web, and her own interests. Nobody is prompting her right now; YOU decide what this idle tick does.
 
 Pick the SINGLE highest-value move and reply with ONLY strict JSON (no prose outside it):
-{"move":"advance-inquiry|open-inquiry|close-inquiry|research|fill-gap|corroborate|clean|build|maintain|rehearse|scenario|engage|nothing",
+{"move":"advance-inquiry|open-inquiry|close-inquiry|research|explore|fill-gap|corroborate|clean|build|maintain|rehearse|scenario|engage|nothing",
  "target":"<a key/name taken from the STATE — the gap, universe, cluster, interest, or thread>",
  "why":"<one honest line>",
  "steps":["<plain-language intent, e.g. 'search our own records for X', 'read the org's own site'>", "..."],
@@ -362,6 +362,7 @@ Pick the SINGLE highest-value move and reply with ONLY strict JSON (no prose out
 
 One-shot moves (work that is genuinely single-step):
 - research: EXPLORE AN IDEA — one of her interests, an open thread, or a question the state raises. Depth over breadth; the point is understanding, not contact lookup. If it would take more than one run, open an inquiry instead.
+- explore: WALK YOUR OWN KNOWLEDGE GRAPH from a touchpoint (an entity, a single-source cluster, an interest that names a real entity) — multi-hop outward — and test whether what the GRAPH asserts agrees with what your HELD DOCUMENTS say. This is INTERNAL-COHERENCE work (no open web): the product is a short synthesis note naming the ONE most significant CONTRADICTION (the graph says X, a document says Y) or GAP (a graph relation nothing documents, or a documented fact the graph is missing). Pick it over research when the highest value is testing whether your OWN knowledge hangs together rather than learning something new from outside. target is the entity/cluster to start the walk from.
 - fill-gap: go get a NAMED absence gap or missing members of a countable universe.
 - corroborate: take a single-source cluster and find an INDEPENDENT second source for its claims.
 - clean: inspect and report on duplicates/conflicts (writes are gated — your product is a precise report).
@@ -395,7 +396,7 @@ function validateDecision(raw) {
     if (out.move === 'open-inquiry' && out.target.length < 15) return { valid: false, error: 'open-inquiry target must be the full question itself' };
     // A RUN move without an expect silently skips verify → no verdict, no trail, no crystallization
     // (the MET circuit starves invisibly — seen live, boot51 touch 1). The refusal teaches the shape.
-    if (['advance-inquiry', 'research', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain'].includes(out.move) && !out.expect) {
+    if (['advance-inquiry', 'research', 'explore', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain'].includes(out.move) && !out.expect) {
       return { valid: false, error: 'a run move requires "expect" — the ONE bounded increment this run will be judged against' };
     }
     return { valid: true, value: out };
@@ -463,6 +464,16 @@ function buildOperatorBrief(decision, { now = Date.now() } = {}) {
       let allow = '';
       try { allow = require('./echo_tier').maintainSpec(); } catch {}
       return `AUTONOMOUS MAINTENANCE — run this curated loop on our own stores: ${d.target}. ${d.why}${steps}${expect}\nThe ONLY loops allowed on this move (each is report-only or proposal-only unattended; safety args are forced mechanically, so run them plainly):\n${allow}\nUse the echo tool to run the loop, READ its result, and finish with a precise report: what it found, the counts (violations / proposals / oversized blocks), and what — if anything — is worth Lucas applying. ${_HONESTY}`;
+    }
+    case 'explore': {
+      const path = `notes/autonomy/${new Date(now).toISOString().slice(0, 10)}-explore-${slugify(d.target)}.md`;
+      return `AUTONOMOUS EXPLORATION — walk your OWN knowledge graph outward from: ${d.target}. ${d.why}${steps}${expect}\n`
+        + `This is INTERNAL-COHERENCE work over what you already hold — do NOT use the open web. Do this:\n`
+        + `1. Resolve the touchpoint to a graph entity — use search_entities if you were handed a name/label rather than an id.\n`
+        + `2. Walk outward 2-3 hops with kg_neighborhood (entity_id + top_k); note the entities, relations, and claims along the path.\n`
+        + `3. Take the most load-bearing of those claims and check each against your HELD DOCUMENTS (search / search_knowledge / localdb over your own corpus): does a document confirm it, contradict it, or simply not mention it?\n`
+        + `4. Isolate the ONE most significant CONTRADICTION (the graph asserts X, a document says Y — cite both) or GAP (a graph relation no document supports, or a documented fact the graph is missing).\n`
+        + `Then SAVE a short synthesis note with the file tool: {"op":"write","path":"${path}","content":"<the note>"}. The note states the touchpoint, the path you walked, and the single contradiction/gap with BOTH sides cited to their sources. Plain markdown, no styling. End your answer with one line naming the saved path and the finding in a sentence. If the graph and your documents AGREE everywhere you looked, that is itself a valid finding — say so and record the strongest corroboration you saw. ${_HONESTY}`;
     }
     default:
       return `AUTONOMOUS PASS — ${d.target || 'the chosen work'}. ${d.why}${steps}${expect}\n${_HONESTY}`;
