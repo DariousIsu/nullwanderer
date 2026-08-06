@@ -10774,8 +10774,13 @@ async function autonomyTick() {
       // signature) blocks outright, prose tolerates paraphrase at the helper's floor.
       try {
         const g = require('./lib/learning').groundedInSource(decision.say, (manifest && manifest.text) || '');
-        const numMissing = (g.missing || []).filter((a) => /^\d/.test(a));
-        if (g.checked && (!g.grounded || numMissing.length)) {
+        // A conversational say is judged in two classes (live 2026-08-05: 4/4 engages junk-blocked):
+        // PROSE anchors (names, orgs) on the 70% floor — invented specifics still block; NUMBERS only
+        // hard-block at ≥3 digits (years, statute/HTS codes — the actual confabulation signature, the
+        // June-2025-CSET fiction). A 1-2 digit number ("next 48 hours") is arithmetic, not a fact.
+        const numMissing = (g.missingNum || g.missing || []).filter((a) => /^\d{3,}/.test(a));
+        const proseOk = (typeof g.proseGrounded === 'boolean') ? g.proseGrounded : g.grounded;
+        if (g.checked && (!proseOk || numMissing.length)) {
           autonomy.historyPush(H, { ts: now, move: 'engage', target: decision.target, outcome: `blocked — say not grounded in the state (missing: ${g.missing.slice(0, 5).join(', ')}); speak only what the state actually shows` });
           console.log(`[autonomy] chose=engage → BLOCKED ungrounded say (missing: ${g.missing.slice(0, 5).join(', ')})`);
           return;

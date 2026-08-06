@@ -75,19 +75,27 @@ const _ANCHOR_STOP = new Set([
   'has', 'have', 'had', 'was', 'were', 'are', 'and', 'but', 'for', 'not', 'all', 'any',
   'what', 'when', 'where', 'which', 'who', 'why', 'how', 'his', 'her', 'our', 'your',
   'with', 'from', 'into', 'over', 'under', 'after', 'before', 'during', 'since', 'until',
-  'while', 'however', 'although', 'though', 'because', 'according', 'also', 'currently'
+  'while', 'however', 'although', 'though', 'because', 'according', 'also', 'currently',
+  // Conversational sentence-openers (live 2026-08-05: 4/4 autonomy engages junk-blocked on "Hey"/
+  // "Let"/"Want" — a first-person say capitalizes these at sentence start; none is ever a fact).
+  'hey', 'let', 'lets', 'want', 'thanks', 'sure', 'okay', 'yeah', 'sounds', 'happy', 'just', 'heads'
 ]);
 // Anchor extraction: digit runs of ≥2 (commas stripped so "1,202" ≡ "1202"; zero-padded
 // 2-digit runs excluded so an ISO date's "-07-" never demands a literal "07" of prose) +
-// capitalized words of ≥3 chars that aren't common sentence-starters.
+// capitalized words of ≥3 chars that aren't common sentence-starters. Contraction/possessive
+// suffixes are STRIPPED before judging ("I've"/"That'll" are never facts; "Zoe's brief" anchors
+// on "Zoe") — a capital after the apostrophe (O'Brien, D'Angelo) is a real name and kept whole.
 function _anchorsOf(text) {
   const out = new Set();
   const s = String(text || '');
   for (const m of s.replace(/,/g, '').match(/\d+/g) || []) {
     if (m.length >= 2 && !/^0\d$/.test(m)) out.add(m);
   }
-  for (const m of s.match(/\b[A-Z][A-Za-z'’-]{2,}\b/g) || []) {
-    if (!_ANCHOR_STOP.has(m.toLowerCase())) out.add(m);
+  for (let m of s.match(/\b[A-Z][A-Za-z'’-]{2,}\b/g) || []) {
+    const c = /^(.+?)['’](?:ve|ll|re|d|s|t|m)$/i.exec(m);          // I've, That'll, Don't, Zoe's — not O'Brien
+    if (c) m = c[1];
+    if (m.length < 3 || _ANCHOR_STOP.has(m.toLowerCase())) continue;
+    out.add(m);
   }
   return [...out];
 }
@@ -97,16 +105,24 @@ function groundedInSource(claim, sourceText) {
   const anchors = _anchorsOf(claim);
   if (!anchors.length) return { checked: true, grounded: true, missing: [], total: 0 };
   const numSrc = src.replace(/,/g, '');
-  const missing = [];
+  const missing = [], missingNum = [], missingProse = [];
+  let numTotal = 0, proseTotal = 0;
   for (const a of anchors) {
+    const isNum = /^\d/.test(a);
+    if (isNum) numTotal++; else proseTotal++;
     const esc = a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const hit = /^\d/.test(a)
+    const hit = isNum
       ? new RegExp('(?<!\\d)' + esc + '(?!\\d)').test(numSrc)
       : new RegExp('\\b' + esc + '\\b', 'i').test(src);
-    if (!hit) missing.push(a);
+    if (!hit) { missing.push(a); (isNum ? missingNum : missingProse).push(a); }
   }
   const found = anchors.length - missing.length;
-  return { checked: true, grounded: found / anchors.length >= GROUNDING_FLOOR, missing, total: anchors.length };
+  // grounded/missing/total keep their exact shape (every existing caller unchanged); the per-class
+  // split lets a caller judge prose on the floor and numbers by its own rule (the engage gate: a
+  // 2-digit duration is arithmetic, not a fact — only year/code-shaped numbers hard-block).
+  const proseGrounded = proseTotal === 0 || (proseTotal - missingProse.length) / proseTotal >= GROUNDING_FLOOR;
+  return { checked: true, grounded: found / anchors.length >= GROUNDING_FLOOR, missing, total: anchors.length,
+    numTotal, proseTotal, missingNum, missingProse, proseGrounded };
 }
 
 function buildPrompt({ query, content }) {

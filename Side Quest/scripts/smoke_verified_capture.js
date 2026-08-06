@@ -88,6 +88,21 @@ const LONG = 'Florida Top Dog is a cheer team based in Tampa Bay; the squad hold
     const gIso = learning.groundedInSource('The rule took effect on 2026-07-21.', SRCDATE);
     ok(gIso.grounded === true, 'grounding: ISO date vs prose date tolerated (zero-padded month fragment never demanded)');
 
+    // CONVERSATIONAL SAY (2026-08-05: 4/4 autonomy engages junk-blocked on sentence-openers + a duration).
+    const SRCMEET = ('HIS CALENDAR THIS WEEK: meeting Thursday 2pm with the Rainey Center team. Prep brief built and filed. ').repeat(4);
+    const gSay = learning.groundedInSource("Hey — I've put together a prep brief for your meeting in the next 48 hours. Let me know if you want more on the Rainey Center. That'll take me a few minutes.", SRCMEET);
+    ok(!(gSay.missing || []).some((x) => /^(Hey|Let|Want|I['’]ve|That['’]ll)$/i.test(x)), 'grounding: sentence-openers + contractions are never anchors (Hey/Let/I’ve/That’ll)');
+    ok(gSay.proseGrounded === true, 'grounding: per-class split — prose fully grounded even when a 2-digit duration is missing');
+    ok((gSay.missingNum || []).every((x) => !/^\d{3,}/.test(x)), 'grounding: "48" is arithmetic, not year/code-shaped hard-block material');
+    const gInv = learning.groundedInSource('Hey — the Meridian Institute confirmed Castellano and Werner are presenting Thursday.', SRCMEET);
+    ok(gInv.proseGrounded === false && (gInv.missingProse || []).includes('Meridian'), 'grounding: invented org/people still fail the prose floor');
+    const gYr = learning.groundedInSource('The Rainey Center brief from June 2025 covers the full meeting agenda for the Center team.', SRCMEET);
+    ok((gYr.missingNum || []).includes('2025'), 'grounding: an invented YEAR still surfaces as ≥3-digit hard-block material');
+    const gPoss = learning.groundedInSource("Zoe's summary names Overby and Shreveport twice, per Overby's own filing.", ('the summary from Zoe names Overby of Shreveport in the filing record. ').repeat(4));
+    ok(gPoss.grounded === true && (gPoss.missing || []).length === 0, 'grounding: possessives ground against the bare name (Zoe’s → Zoe)');
+    const gObr = learning.groundedInSource("O'Brien chaired the Portland session on Wednesday.", ('the Portland session ran Wednesday with a full chamber present for the vote. ').repeat(4));
+    ok((gObr.missing || []).some((x) => /Brien/.test(x)), 'grounding: O’Brien kept whole (a capital after the apostrophe is a name, not a contraction)');
+
     // captureRecovered: an ungrounded fused answer is BLOCKED — nothing banked, no supersede fired
     const recB = [];
     const wbBlocked = await learning.captureRecovered({ query: 'latest tariff action', answer: 'Trump imposed the tariffs under Section 301 covering HTS code 1202.', url: 'https://x/tariffs', content: SRC338, source: 'excavation', now: Date.parse('2026-07-02T12:00:00-04:00'), storeFn: async (r) => { recB.push(r); return { id: 9 }; } });
