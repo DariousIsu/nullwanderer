@@ -118,6 +118,10 @@ TOOLS (call exactly ONE per step):
 - source_read {"path":"lib/board.js","offset":0}   read one of her own source files (read-only; code + docs only — data, logs, and secrets are unreachable). A long file returns ONE PAGE plus a note naming the exact next call — repeat with the offset it gives (or an @char from source_outline) until you have what you need; page 2 is never a guess
 - source_search {"pattern":"…"}         search ALL her source for a string/regex ("where is X implemented", "who calls Y") — the whole repo is scanned, results come back file:line
 - source_outline {"path":"main.js"}     the symbol map of ONE file: functions/classes/exports with line + @char addresses — navigate a huge file first, then source_read {"offset":<@char>} to start exactly at the symbol you want
+- log_read {"file":"boot_postcrash_20260806.log","grep":"stall|error"}   read HER OWN boot logs (boot*.log / *.err.log only) — tail (default 200 lines) or grep. Use for "what happened in my logs / did X error"
+- git_log {"limit":20,"since":"3 days ago","path":"lib/board.js"}   her own commit history, read-only — what changed in her code and when
+- git_show {"ref":"HEAD~1","offset":0}   one commit's stat+diff, cursor-paged like source_read — follow the note's offset for the next page
+- obs_query {"lane":"heartbeat","since_min":240,"grep":"suppressed"}   her self-watch event stream (obs_events): anomalies + lane events, newest first. Use when investigating her own recent behavior
 - self_test {"suite":"smoke_board.js"}  run her own offline verification gate — ONE named suite in seconds, or omit suite for the FULL gate (minutes; use sparingly). The honest answer to "am I healthy?"
 - rehearsal_create {"slug":"my-idea"}   REHEARSE a change to her own code: a full working COPY of her source (the live program is never touched). Then rehearsal_edit {"slug","path","find","replace"} (find must match EXACTLY ONCE — read the file first), rehearsal_test {"slug","suite":"smoke_x.js"} to judge it with her own gate, rehearsal_diff {"slug"} for the honest change report, rehearsal_discard {"slug"} when done. NOTHING here can change the live program — a good rehearsal ends as a diff+verdict report for Lucas
 - rehearsal_write {"slug","path":"tools/x.py","content":"…"}   BUILD A NEW python tool (tools/<name>.py) you don't have yet, or its harness (scripts/smoke_<name>.js). The harness shells your python via process.env.ZOE_PY and prints PASS/FAIL; judge it with rehearsal_test {"slug","suite":"smoke_x.js"}. NEW files only (change existing source with rehearsal_edit). This is how she writes and runs her own scripts — still sandboxed, still ends as a proposal for Lucas
@@ -220,6 +224,7 @@ function actionsOf(parsed) {
 const READ_SAFE = new Set([
   'web_search', 'web_fetch', 'web_extract', 'news_search', 'browser_read', 'see_page',
   'recall', 'localdb', 'localdb_map', 'source_map', 'source_read', 'source_search', 'source_outline',
+  'log_read', 'git_log', 'git_show', 'obs_query',
   'kg_search', 'kg_neighborhood', 'knowledge_search', 'gov_funding', 'fec_lookup',
   'bill_lookup', 'nonprofit_lookup', 'forecast_query', 'skill_pull',
   'rehearsal_diff', 'rehearsal_drive_status',

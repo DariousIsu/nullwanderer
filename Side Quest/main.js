@@ -10202,6 +10202,12 @@ const operatorTools = {
   source_read: async ({ path: p, offset } = {}) => { try { return require('./lib/self_source').readSource(String(p || ''), { offset: Number(offset) || 0 }); } catch (e) { return 'ERROR: ' + e.message; } },
   source_search: async ({ pattern } = {}) => { try { return await require('./lib/self_source').searchSource(String(pattern || '')); } catch (e) { return 'ERROR: ' + e.message; } },
   source_outline: async ({ path: p } = {}) => { try { return require('./lib/self_source').sourceOutline(String(p || '')); } catch (e) { return 'ERROR: ' + e.message; } },
+  // OPERATIONAL EXHAUST (M2.5.2, lib/self_ops — its own read-only lane; the source jail above keeps
+  // denying logs/git by name). Boot logs, her own git history, the obs_events stream.
+  log_read: async ({ file, tail, grep } = {}) => { try { return require('./lib/self_ops').logRead(String(file || ''), { tail: Number(tail) || undefined, grep: grep ? String(grep) : null }); } catch (e) { return 'ERROR: ' + e.message; } },
+  git_log: async ({ limit, since, path: p } = {}) => { try { return await require('./lib/self_ops').gitLog({ limit, since: since || null, path: p || null }); } catch (e) { return 'ERROR: ' + e.message; } },
+  git_show: async ({ ref, offset } = {}) => { try { return await require('./lib/self_ops').gitShow({ ref: ref || 'HEAD', offset: Number(offset) || 0 }); } catch (e) { return 'ERROR: ' + e.message; } },
+  obs_query: async ({ lane, kind, since_min, grep, limit } = {}) => { try { return require('./lib/self_ops').obsQuery({ lane: lane || null, kind: kind || null, since_min, grep: grep || null, limit }); } catch (e) { return 'ERROR: ' + e.message; } },
   self_test: async ({ suite } = {}) => { try { return await require('./lib/self_source').selfTest({ suite: suite || null }); } catch (e) { return 'ERROR: ' + e.message; } },
   // REHEARSAL (R1, docs/REHEARSAL_SANDBOX_DESIGN.md) — try a change to her own code in a COPY,
   // judged by her own gate. NO adoption surface exists; a finished rehearsal exits as a report.

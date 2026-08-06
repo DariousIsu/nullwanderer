@@ -165,10 +165,14 @@ const CURATED = [
   ['reflections', 'her notes-to-self between turns'],
   ['known_incorrect', 'claims she has learned are WRONG — check here before asserting'],
   ['news.news_items', 'the news she has collected — current-events lookups'],
+  // M2.5.2 un-blacklist: obs_events IS answer-bearing when the question is about HERSELF —
+  // "why did I go quiet / what did self-watch flag" is answered from this stream and nowhere else.
+  ['obs_events', 'her self-watch stream — lane events + anomalies about her OWN behavior (also reachable via obs_query)'],
 ];
 // Accumulating logs. Real data, but nothing a question is ever answered FROM — listing them spends
-// the manifest's scarcest bytes telling her about her own exhaust.
-const EXHAUST_RE = /^(?:route_obs|obs_events|cloud_traces|agent_events|recent_cards|encounters|kg_observations|puller\.observations|.*_log|.*_audit)$/i;
+// the manifest's scarcest bytes telling her about her own exhaust. (obs_events left this list
+// 2026-08-06 — self-investigation questions ARE answered from it; see CURATED.)
+const EXHAUST_RE = /^(?:route_obs|cloud_traces|agent_events|recent_cards|encounters|kg_observations|puller\.observations|.*_log|.*_audit)$/i;
 
 /**
  * The manifest's table list: pinned answer-bearing stores first (each with what it is FOR), then
