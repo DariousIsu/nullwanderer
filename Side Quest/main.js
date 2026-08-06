@@ -12390,6 +12390,10 @@ async function decomposeLandedDoc(doc) {
       // `government_body` competes with the LDA feed's `organization` on evidence instead of whichever
       // wrote first winning forever. Without this the type claim store only grows by backfill.
       try { const c = _encLib.toTypeClaim(o, _docProv); if (c) require('./lib/object_type').recordType(c); } catch {}
+      // M4.1 TOUCHPOINT: stamp the entity with the stream that touched it (meeting/canvas_drop/
+      // browser_download/news evidence — whatever landed this doc). Raw material for the interweave
+      // intersection pass; fail-open, kill-switch ZOE_TOUCHPOINTS.
+      try { require('./lib/touchpoint').recordObservation(o, { stream: { kind: doc.source || 'doc', key: `doc:${doc.id}`, label: doc.title || null }, ref: String(doc.id) }); } catch {}
     };
     // CITATION: cite the decompose to the doc's REAL source URL when we have one (a grabbed .gov/official
     // roster → official-document weight, so curation_gate grades it A and promotes single-source); else the
@@ -13117,6 +13121,12 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
     if (!sections.length) { console.log('[condense] no parseable org sections — leaving raw run file in place'); return null; }
     let covered = []; try { covered = JSON.parse(db.getMeta(`focus.${focus.id}.covered`) || '[]'); } catch {}
     const rec = as.reconcileIndex(covered, sections);
+    // M4.1 TOUCHPOINT: a condensed run stamps its covered index with the focus stream that touched it —
+    // the interweave join surface (this is where a research run's entities meet other projects' sets).
+    try {
+      const tp = require('./lib/touchpoint');
+      for (const name of covered.slice(0, 60)) tp.record({ name, type: 'organization', stream: { kind: 'focus', key: `focus:${focus.id}`, label: goal.slice(0, 160) }, ref: file || `focus:${focus.id}` });
+    } catch {}
     let wrapper = { summary: '', gaps: '' };
     try { const w = await condenseComplete(as.buildWrapperPrompt({ goal, sections }), { numPredict: 900 }); wrapper = as.parseWrapper(w); } catch {}
     // CLOUD-AUTHORED document (Pillar 3): page 1 plan → cloud-composed product → honest Gaps, with the
