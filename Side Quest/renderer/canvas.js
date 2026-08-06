@@ -66,6 +66,67 @@ function inline(s) {
 }
 function when(ts) { if (!ts) return ''; try { return new Date(ts * 1000).toLocaleString(); } catch { return ''; } }
 
+// Real inline-SVG chart from a normalized chart view {kind, xKey, yKeys, points:[{x, <yKey>:num}], title}.
+// bar / line / area share numeric axes + gridlines; pie is its own layout. No dependency — pure SVG so it
+// prints straight into the PDF export too. Colours come from a fixed palette (theme-neutral, legible on
+// both surfaces). Fails soft to a labelled note when there's nothing to plot.
+const CHART_PALETTE = ['#4f9cff', '#38c793', '#f5a623', '#e5657a', '#a06bff', '#33c3d6', '#8bc34a', '#ff8a65'];
+function svgChart(v) {
+  const pts = (v && v.points) || [], yKeys = (v && v.yKeys) || [];
+  const title = v && v.title ? `<div class="b-blocktitle">${esc(v.title)}</div>` : '';
+  if (!pts.length || (!yKeys.length && v.kind !== 'pie')) return `<div class="fallback"><div class="cnote">chart: no data to plot</div></div>`;
+
+  if (v.kind === 'pie') {
+    const key = yKeys[0];
+    const slices = pts.map(p => ({ label: String(p.x == null ? '' : p.x), val: Math.max(0, +p[key] || 0) })).filter(s => s.val > 0);
+    const tot = slices.reduce((a, s) => a + s.val, 0) || 1;
+    const R = 90, cx = 110, cy = 110; let ang = -Math.PI / 2, paths = '';
+    slices.forEach((s, i) => {
+      const frac = s.val / tot, a2 = ang + frac * 2 * Math.PI;
+      const x1 = cx + R * Math.cos(ang), y1 = cy + R * Math.sin(ang), x2 = cx + R * Math.cos(a2), y2 = cy + R * Math.sin(a2);
+      const large = frac > 0.5 ? 1 : 0;
+      // a single 100% slice can't be drawn as an arc (start==end) — draw a full circle instead
+      paths += (slices.length === 1)
+        ? `<circle cx="${cx}" cy="${cy}" r="${R}" fill="${CHART_PALETTE[0]}" opacity="0.85"></circle>`
+        : `<path d="M${cx},${cy} L${x1.toFixed(1)},${y1.toFixed(1)} A${R},${R} 0 ${large} 1 ${x2.toFixed(1)},${y2.toFixed(1)} Z" fill="${CHART_PALETTE[i % CHART_PALETTE.length]}" opacity="0.88"></path>`;
+      ang = a2;
+    });
+    const legend = slices.map((s, i) => `<span class="chart-leg"><i style="background:${CHART_PALETTE[i % CHART_PALETTE.length]}"></i>${esc(s.label)} · ${((s.val / tot) * 100).toFixed(0)}%</span>`).join('');
+    return `<div class="b-chart">${title}<svg viewBox="0 0 220 220" width="220" height="220" preserveAspectRatio="xMidYMid meet">${paths}</svg><div class="chart-legend">${legend}</div></div>`;
+  }
+
+  const W = 520, H = Math.max(120, Math.min(600, (v.height || 220))), padL = 44, padR = 14, padT = 14, padB = 34;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const allY = []; pts.forEach(p => yKeys.forEach(k => { const n = +p[k]; if (Number.isFinite(n)) allY.push(n); }));
+  if (!allY.length) return `<div class="fallback"><div class="cnote">chart: no numeric values</div></div>`;
+  const yMin = Math.min(0, ...allY), yMax = Math.max(...allY, 1), spanY = (yMax - yMin) || 1;
+  const xAt = i => padL + (pts.length <= 1 ? plotW / 2 : (i / (pts.length - 1)) * plotW);
+  const yAt = val => padT + plotH - ((val - yMin) / spanY) * plotH;
+  const y0 = yAt(0);
+  let grid = ''; const ticks = 4;
+  for (let t = 0; t <= ticks; t++) { const gv = yMin + spanY * t / ticks, gy = yAt(gv); grid += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W - padR}" y2="${gy.toFixed(1)}" class="chart-grid"></line><text x="${padL - 6}" y="${(gy + 3).toFixed(1)}" class="chart-axl" text-anchor="end">${Math.round(gv * 100) / 100}</text>`; }
+  let xlab = ''; const step = Math.ceil(pts.length / 6) || 1;
+  pts.forEach((p, i) => { if (i % step === 0) xlab += `<text x="${xAt(i).toFixed(1)}" y="${H - padB + 15}" class="chart-axl" text-anchor="middle">${esc(String(p.x == null ? '' : p.x)).slice(0, 12)}</text>`; });
+  let series = '';
+  yKeys.forEach((k, ki) => {
+    const col = CHART_PALETTE[ki % CHART_PALETTE.length];
+    const valid = pts.map((p, i) => ({ i, val: +p[k] })).filter(o => Number.isFinite(o.val));
+    if (!valid.length) return;
+    if (v.kind === 'bar') {
+      const groupW = plotW / pts.length, bw = Math.max(2, (groupW * 0.72) / yKeys.length);
+      valid.forEach(o => { const top = yAt(o.val), x = xAt(o.i) - (bw * yKeys.length) / 2 + ki * bw; series += `<rect x="${x.toFixed(1)}" y="${Math.min(top, y0).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.abs(top - y0).toFixed(1)}" fill="${col}" opacity="0.85"></rect>`; });
+    } else {
+      const d = valid.map((o, j) => `${j ? 'L' : 'M'}${xAt(o.i).toFixed(1)},${yAt(o.val).toFixed(1)}`).join(' ');
+      if (v.kind === 'area') series += `<path d="${d} L${xAt(valid[valid.length - 1].i).toFixed(1)},${y0.toFixed(1)} L${xAt(valid[0].i).toFixed(1)},${y0.toFixed(1)} Z" fill="${col}" opacity="0.14"></path>`;
+      series += `<path d="${d}" fill="none" stroke="${col}" stroke-width="2"></path>`;
+      valid.forEach(o => { series += `<circle cx="${xAt(o.i).toFixed(1)}" cy="${yAt(o.val).toFixed(1)}" r="2.6" fill="${col}"></circle>`; });
+    }
+  });
+  const axis = `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H - padB}" class="chart-axis"></line><line x1="${padL}" y1="${(H - padB).toFixed(1)}" x2="${W - padR}" y2="${(H - padB).toFixed(1)}" class="chart-axis"></line>`;
+  const legend = yKeys.length > 1 ? `<div class="chart-legend">${yKeys.map((k, i) => `<span class="chart-leg"><i style="background:${CHART_PALETTE[i % CHART_PALETTE.length]}"></i>${esc(k)}</span>`).join('')}</div>` : '';
+  return `<div class="b-chart">${title}<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet">${grid}${axis}${series}${xlab}</svg>${legend}</div>`;
+}
+
 function blockContent(b) {
   if (b.type === 'heading') { const lvl = b.view.level || 2; return `<h${lvl} class="b-heading">${esc(b.view.text)}</h${lvl}>`; }
   if (b.type === 'paragraph') return `<div class="b-paragraph">${md(b.view.markdown)}</div>`;
@@ -76,12 +137,41 @@ function blockContent(b) {
     const tools = `<div class="tbl-tools"><button class="tbl-dl" title="Download as CSV (opens in Excel/Sheets)">⬇ CSV</button></div>`;
     return `<div class="b-tablewrap">${tools}<table class="b-table">${head}${body}</table>${cap}</div>`;
   }
-  if (b.type === 'chart') {
+  if (b.type === 'chart') return svgChart(b.view);
+  if (b.type === 'metric_card') {
     const v = b.view;
-    const meta = `<div class="chart-meta">${esc(v.title || 'Chart')} · ${esc(v.kind)} · ${v.points.length} pt</div>`;
-    const head = `<thead><tr><th>${esc(v.xKey || 'x')}</th>${v.yKeys.map(k => `<th>${esc(k)}</th>`).join('')}</tr></thead>`;
-    const body = `<tbody>${v.points.map(pt => `<tr><td>${esc(pt.x)}</td>${v.yKeys.map(k => `<td>${esc(pt[k])}</td>`).join('')}</tr>`).join('')}</tbody>`;
-    return `${meta}<table class="b-table">${head}${body}</table>`;
+    const cards = (v.items || []).map(m => `<div class="mc-card">
+      <div class="mc-label">${esc(m.label)}</div>
+      <div class="mc-value">${esc(m.value)}${m.delta ? `<span class="mc-delta ${/^-|↓|▼/.test(m.delta) ? 'down' : 'up'}">${esc(m.delta)}</span>` : ''}</div>
+      ${m.hint ? `<div class="mc-hint">${esc(m.hint)}</div>` : ''}</div>`).join('');
+    return `<div class="b-metric">${v.title ? `<div class="b-blocktitle">${esc(v.title)}</div>` : ''}<div class="mc-row">${cards || '<div class="cnote">no metrics</div>'}</div></div>`;
+  }
+  if (b.type === 'callout') {
+    const v = b.view;
+    const icon = { info: 'ℹ', warn: '⚠', success: '✓', danger: '⛔', note: '✎', tip: '💡' }[v.variant] || 'ℹ';
+    return `<div class="b-callout cv-${esc(v.variant)}"><div class="co-icon">${icon}</div><div class="co-body">${v.title ? `<div class="co-title">${esc(v.title)}</div>` : ''}${md(v.markdown)}</div></div>`;
+  }
+  if (b.type === 'list') {
+    const tag = b.view.ordered ? 'ol' : 'ul';
+    return `<${tag} class="b-list">${(b.view.items || []).map(it => `<li>${inline(it)}</li>`).join('')}</${tag}>`;
+  }
+  if (b.type === 'code') {
+    const v = b.view;
+    return `<div class="b-codewrap">${v.language ? `<div class="code-lang">${esc(v.language)}</div>` : ''}<pre class="b-code"><code>${esc(v.code)}</code></pre></div>`;
+  }
+  if (b.type === 'audio') {
+    if (!b.view.src) return `<div class="fallback"><div class="cnote">audio (no source)</div></div>`;
+    return `<div class="b-media">${b.view.title ? `<div class="media-title">🔊 ${esc(b.view.title)}</div>` : ''}<audio class="b-audio" controls preload="metadata" src="${esc(b.view.src)}"></audio></div>`;
+  }
+  if (b.type === 'video') {
+    if (!b.view.src) return `<div class="fallback"><div class="cnote">video (no source)</div></div>`;
+    return `<div class="b-media">${b.view.title ? `<div class="media-title">🎬 ${esc(b.view.title)}</div>` : ''}<video class="b-video" controls preload="metadata"${b.view.poster ? ` poster="${esc(b.view.poster)}"` : ''} src="${esc(b.view.src)}"></video></div>`;
+  }
+  if (b.type === 'diagram') {
+    if (!b.view.source) return `<div class="fallback"><div class="cnote">diagram (no source)</div></div>`;
+    // The mermaid vendor bundle (loaded in canvas.html) renders <pre class="mermaid"> on paint; renderMermaid()
+    // runs after each canvas render. Until it runs (or if the bundle is absent) the raw source shows — never blank.
+    return `<div class="b-diagram">${b.view.title ? `<div class="b-blocktitle">${esc(b.view.title)}</div>` : ''}<pre class="mermaid">${esc(b.view.source)}</pre></div>`;
   }
   if (b.type === 'image') {
     if (!b.view.src) return `<div class="fallback"><div class="cnote">image (no source)</div></div>`;
@@ -136,7 +226,20 @@ function blockToMd(b) {
       return [head, body].filter(Boolean).join('\n');
     }
     case 'image': return v.src ? `![${v.alt || ''}](${v.src})` : '';
-    case 'chart': return `_[chart: ${v.title || 'chart'} — ${(v.points || []).length} points]_`;
+    case 'chart': {
+      // markdown can't hold an SVG; emit the underlying data as a table so it survives (title + points).
+      const yk = v.yKeys || []; if (!(v.points || []).length) return `_[chart: ${v.title || 'chart'}]_`;
+      const head = `| ${v.xKey || 'x'} | ${yk.join(' | ')} |\n| ${['---', ...yk.map(() => '---')].join(' | ')} |`;
+      const body = v.points.map(p => `| ${p.x} | ${yk.map(k => p[k]).join(' | ')} |`).join('\n');
+      return `${v.title ? `**${v.title}**\n\n` : ''}${head}\n${body}`;
+    }
+    case 'list': return (v.items || []).map((it, i) => `${v.ordered ? `${i + 1}.` : '-'} ${it}`).join('\n');
+    case 'code': return '```' + (v.language || '') + '\n' + (v.code || '') + '\n```';
+    case 'callout': return `> ${v.title ? `**${v.title}** — ` : ''}${(v.markdown || '').replace(/\n/g, '\n> ')}`;
+    case 'metric_card': return (v.items || []).map(m => `**${m.label}:** ${m.value}${m.delta ? ` (${m.delta})` : ''}`).join('  \n');
+    case 'diagram': return '```mermaid\n' + (v.source || '') + '\n```';
+    case 'audio': return v.src ? `[🔊 ${v.title || 'audio'}](${v.src})` : '';
+    case 'video': return v.src ? `[🎬 ${v.title || 'video'}](${v.src})` : '';
     default: return v.preview ? v.preview : '';
   }
 }
@@ -157,9 +260,32 @@ function downloadBlob(name, mime, data) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+// Every table + chart in the doc as {name, headers, rows} — the data an Excel export needs (one sheet each).
+function docTables(doc) {
+  const out = [];
+  (doc.stream.blocks || []).forEach((b) => {
+    if (b.type === 'table' && b.view) {
+      out.push({ name: (b.view.caption || `Table ${out.length + 1}`).slice(0, 28), headers: b.view.headers || [], rows: b.view.rows || [] });
+    } else if (b.type === 'chart' && b.view && (b.view.points || []).length) {
+      const yk = b.view.yKeys || [];
+      out.push({ name: (b.view.title || `Chart ${out.length + 1}`).slice(0, 28), headers: [b.view.xKey || 'x', ...yk], rows: b.view.points.map(p => [p.x, ...yk.map(k => p[k])]) });
+    }
+  });
+  return out;
+}
 async function exportDoc(doc, fmt) {
   if (!doc) return;
   if (fmt === 'md') { downloadBlob(safeName(doc.tab && doc.tab.title) + '.md', 'text/markdown', docToMarkdown(doc)); return; }
+  // Excel → send the doc's tables/charts as structured data (main writes a real .xlsx via exceljs).
+  if (fmt === 'xlsx') {
+    const tables = docTables(doc);
+    if (!tables.length) { msgEl.innerHTML = `<span class="err">⚠ no tables or charts to export to Excel</span>`; msgEl.style.display = 'block'; return; }
+    try {
+      const r = await window.sq.canvas.exportDoc({ title: (doc.tab && doc.tab.title) || 'Document', tables, format: 'xlsx' });
+      if (!r || !r.ok) msgEl.innerHTML = `<span class="err">⚠ export failed: ${esc((r && r.error) || 'unknown')}</span>`, msgEl.style.display = 'block';
+    } catch (e) { console.error('[canvas] xlsx export error:', e.message); }
+    return;
+  }
   // PDF / Word → main renders the doc's HTML into a real file (Electron printToPDF / html-to-docx) + opens it.
   try {
     const r = await window.sq.canvas.exportDoc({ title: (doc.tab && doc.tab.title) || 'Document', html: docToExportHtml(doc), markdown: docToMarkdown(doc), format: fmt });
@@ -171,7 +297,7 @@ function closeDownloadMenu() { if (_dlMenu) { _dlMenu.remove(); _dlMenu = null; 
 function openDownloadMenu(btn, doc) {
   closeDownloadMenu();
   const m = document.createElement('div'); m.className = 'dl-menu';
-  m.innerHTML = `<button data-fmt="md">Markdown (.md)</button><button data-fmt="pdf">PDF</button><button data-fmt="docx">Word (.docx)</button>`;
+  m.innerHTML = `<button data-fmt="md">Markdown (.md)</button><button data-fmt="pdf">PDF</button><button data-fmt="docx">Word (.docx)</button><button data-fmt="xlsx">Excel (.xlsx)</button>`;
   const r = btn.getBoundingClientRect();
   m.style.left = `${Math.round(r.right - 150)}px`; m.style.top = `${Math.round(r.bottom + 4)}px`;
   m.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { exportDoc(doc, b.dataset.fmt); closeDownloadMenu(); } });
@@ -224,6 +350,19 @@ function patchBodies(docs) {
   renderTray(docs);
 }
 
+// Render mermaid `diagram` blocks to SVG after a canvas paint. window.mermaid comes from
+// renderer/vendor/mermaid.bundle.js (loaded in canvas.html). Each .mermaid <pre> holds raw source until
+// this runs; mermaid.run() marks processed nodes (data-processed) so re-paints only render new/changed
+// ones. Fully fail-soft: no bundle, no nodes, or a bad diagram never breaks the canvas render.
+async function renderMermaid() {
+  try {
+    if (!window.mermaid || typeof window.mermaid.run !== 'function') return;
+    const nodes = Array.from(document.querySelectorAll('pre.mermaid')).filter(n => n.getAttribute('data-processed') !== 'true');
+    if (!nodes.length) return;
+    await window.mermaid.run({ nodes });
+  } catch (e) { console.warn('[canvas] mermaid render:', e && e.message); }
+}
+
 let _canvasSig = '', _structSig = '';
 async function loadCanvas(retries = 6, force = false) {
   try {
@@ -251,6 +390,7 @@ async function loadCanvas(retries = 6, force = false) {
     } else {                                 // content-only growth → patch bodies IN PLACE (keep pos/size/scroll)
       patchBodies(docs);
     }
+    renderMermaid();   // render any diagram blocks to SVG (no-op if the vendor bundle is absent or none present)
   } catch (e) {
     if (retries > 0) { setTimeout(() => loadCanvas(retries - 1, force), 1500); return; }
     msgEl.innerHTML = `<span class="err">⚠ ${esc(e.message || String(e))}</span>`; msgEl.style.display = 'block';

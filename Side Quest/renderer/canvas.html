@@ -111,6 +111,61 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
 .fallback .cnote{font-size:11px;color:var(--tx-fainter);margin-bottom:4px;}
 .fallback pre{font-size:11px;color:var(--tx-dim);white-space:pre-wrap;word-break:break-word;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;}
 
+/* === rich blocks (2026-08-04 rich-canvas build) ============================================= */
+.b-blocktitle{font-size:12px;font-weight:600;color:var(--tx-soft);margin:10px 0 4px;}
+/* chart — real inline SVG */
+.b-chart{margin:10px 0;}
+.b-chart svg{max-width:100%;height:auto;display:block;background:var(--bg-raised);border:1px solid var(--line);border-radius:var(--r);}
+.chart-grid{stroke:var(--line);stroke-width:1;}
+.chart-axis{stroke:var(--line-strong);stroke-width:1;}
+.chart-axl{fill:var(--tx-dim);font-size:9px;font-family:-apple-system,system-ui,sans-serif;}
+.chart-legend{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:6px;}
+.chart-leg{font-size:11px;color:var(--tx-muted);display:inline-flex;align-items:center;gap:5px;}
+.chart-leg i{width:10px;height:10px;border-radius:2px;display:inline-block;}
+/* metric_card — a KPI row */
+.b-metric{margin:10px 0;}
+.mc-row{display:flex;flex-wrap:wrap;gap:10px;}
+.mc-card{flex:1 1 120px;min-width:110px;background:var(--bg-raised);border:1px solid var(--line);border-radius:var(--r-lg);padding:10px 12px;}
+.mc-label{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--tx-dim);}
+.mc-value{font-size:22px;font-weight:700;color:var(--tx);margin-top:3px;line-height:1.1;}
+.mc-delta{font-size:12px;font-weight:600;margin-left:6px;}
+.mc-delta.up{color:var(--ok-fg);}.mc-delta.down{color:#e5657a;}
+.mc-hint{font-size:11px;color:var(--tx-muted);margin-top:3px;}
+/* callout — a boxed aside */
+.b-callout{display:flex;gap:9px;margin:10px 0;padding:9px 12px;border:1px solid var(--line-strong);border-left-width:3px;border-radius:var(--r);background:var(--bg-raised);}
+.b-callout .co-icon{font-size:14px;line-height:1.4;flex:0 0 auto;}
+.b-callout .co-title{font-weight:600;color:var(--tx);margin-bottom:2px;font-size:13px;}
+.b-callout .co-body{font-size:13px;color:var(--tx-soft);}.b-callout .co-body p{margin:4px 0;}
+.b-callout.cv-info{border-left-color:#4f9cff;}.b-callout.cv-tip{border-left-color:#a06bff;}
+.b-callout.cv-success{border-left-color:#38c793;}.b-callout.cv-warn{border-left-color:#f5a623;}
+.b-callout.cv-danger{border-left-color:#e5657a;}.b-callout.cv-note{border-left-color:var(--line-hover);}
+/* list / code */
+ul.b-list,ol.b-list{margin:8px 0 8px 22px;padding:0;font-size:13.5px;color:var(--tx-soft);}
+ul.b-list li,ol.b-list li{margin:3px 0;}
+.b-codewrap{margin:8px 0;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;}
+.code-lang{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--tx-dim);background:var(--bg-raised);padding:3px 10px;border-bottom:1px solid var(--line);}
+pre.b-code{background:var(--bg-deep);color:var(--tx-soft);padding:10px 12px;overflow-x:auto;font-size:12px;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;line-height:1.5;}
+/* media */
+.b-media{margin:10px 0;}
+.media-title{font-size:12px;color:var(--tx-muted);margin-bottom:5px;}
+.b-audio{width:100%;}
+.b-video{max-width:100%;width:100%;border-radius:var(--r);border:1px solid var(--line);background:#000;}
+/* diagram (mermaid renders into .mermaid; raw source shows until then) */
+.b-diagram{margin:10px 0;}
+.b-diagram .mermaid{background:var(--bg-raised);border:1px solid var(--line);border-radius:var(--r);padding:10px;font-size:12px;color:var(--tx-soft);overflow-x:auto;text-align:center;}
+.b-diagram .mermaid svg{max-width:100%;height:auto;}
+/* Mermaid injects its own SVG <style> that wins over themeVariables here, leaving white-on-white nodes.
+   Override the rendered shapes directly (!important beats the injected rules): dark node fill, blue border,
+   light label + edge text. Targets flowchart/sequence/class node shapes + all diagram text. */
+.b-diagram .mermaid svg .node rect,.b-diagram .mermaid svg .node polygon,.b-diagram .mermaid svg .node circle,
+.b-diagram .mermaid svg .node ellipse,.b-diagram .mermaid svg .node path{fill:#26263a !important;stroke:#4f9cff !important;}
+.b-diagram .mermaid svg .cluster rect{fill:#17171d !important;stroke:#2a2a30 !important;}
+.b-diagram .mermaid svg .nodeLabel,.b-diagram .mermaid svg .edgeLabel,.b-diagram .mermaid svg .label,
+.b-diagram .mermaid svg text,.b-diagram .mermaid svg span{fill:#e8e8eb !important;color:#e8e8eb !important;}
+.b-diagram .mermaid svg .edgeLabel rect,.b-diagram .mermaid svg .edgeLabel .label-container{fill:#1a1a20 !important;background:#1a1a20 !important;}
+.b-diagram .mermaid svg .edgePath path,.b-diagram .mermaid svg .flowchart-link{stroke:#8aa6c9 !important;}
+.b-diagram .mermaid svg marker path{fill:#8aa6c9 !important;stroke:#8aa6c9 !important;}
+
 /* tray — overlay drawer (the old side list, now collapsible) */
 .tray{position:absolute;top:40px;left:0;bottom:0;width:280px;z-index:25;background:var(--bg-deep);border-right:1px solid var(--line);
   transform:translateX(-100%);transition:transform 160ms ease;display:flex;flex-direction:column;}
@@ -387,6 +442,7 @@ body.ppl-open .surface{left:340px;}
   <script src="../studio/feeds_view.js"></script>
   <script src="../lib/news_topics.js"></script>
   <script src="../lib/news_rank.js"></script>
+  <script src="vendor/mermaid.bundle.js"></script>
   <script src="canvas.js"></script>
 </body>
 </html>
