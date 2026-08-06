@@ -132,4 +132,9 @@ function clear() {
   return _db().prepare(`DELETE FROM docs`).run().changes;
 }
 
-module.exports = { init, _db, close, recordTab, recordBlock, all, forget, prune, clear, MAX_BLOCK_BYTES, KEEP_DOCS };
+// Most-recent canvas write timestamp (ms). recordBlock bumps docs.updated_at, so MAX reflects any block
+// write. Cheap single-row query — used by the anti-fabrication reply gate to check "did a canvas write
+// actually happen this turn?" before trusting a reply's "…on your canvas" claim. 0 if none / on error.
+function lastWriteTs() { try { const r = _db().prepare('SELECT MAX(updated_at) AS m FROM docs').get(); return (r && r.m) || 0; } catch { return 0; } }
+
+module.exports = { init, _db, close, recordTab, recordBlock, all, forget, prune, clear, lastWriteTs, MAX_BLOCK_BYTES, KEEP_DOCS };
