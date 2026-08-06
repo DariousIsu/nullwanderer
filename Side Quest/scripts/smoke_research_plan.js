@@ -19,6 +19,10 @@ ok(Array.isArray(inp.databasesAvailable) && inp.databasesAvailable.length > 0, '
 const want = rp.planWant();
 ok(/objective/.test(want) && /approach/.test(want) && /targets/.test(want) && /databases/.test(want) && /facets/.test(want) && /estimate/.test(want), 'planWant names all six plan fields');
 ok(/known→unknown/i.test(want), 'planWant tells the model to ground known→unknown');
+// P3 (ADAPTIVE_RESEARCH_DESIGN): every plan contract demands at least one COMPUTED sub-question —
+// "research that never computes is a summary, not an analysis."
+ok(/QUANTITATIVE/.test(want) && /computed number or probability/i.test(want), 'planWant demands a quantitative sub-question');
+ok(/QUANTITATIVE/.test(rp.planWant('topical')) && /QUANTITATIVE/.test(rp.planWant('forecast')) && /QUANTITATIVE/.test(rp.planWant('argument')), 'the quant clause rides the COMMON contract — every kind gets it');
 
 // --- planValidator: accepts a real plan, rejects junk/empty ---
 ok(rp.planValidator('{"objective":"x","approach":"y","targets":["A"]}').valid === true, 'validator accepts a real plan object');

@@ -82,7 +82,8 @@ function planWant(kind = 'entity') {
 {"objective": string, "approach": string, "targets": [string], "databases": [string], "facets": [string], "estimate": string}
 - objective: one clear paragraph restating what this research will deliver.
 - databases: which of databasesAvailable you'll check first (subset or all).
-- estimate: copy the provided estimate string (or your own brief estimate if none).`;
+- estimate: copy the provided estimate string (or your own brief estimate if none).
+- In approach or facets, name at least ONE QUANTITATIVE sub-question this research should answer with a COMPUTED number or probability (a cross-tab, a flow total, a base rate, an explicit likelihood) — research that never computes is a summary, not an analysis.`;
   if (k === 'topical') {
     return `${common}
 - approach: 2-3 sentences on HOW you'll research the SUBJECT — ground first in what we already hold (known→unknown), then web + reputable sources; synthesize into a briefing.

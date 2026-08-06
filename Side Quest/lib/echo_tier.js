@@ -255,7 +255,11 @@ function laneOf(name) {
 // generic `echo` escape hatch (read-gated). Neither writes files — the driver merges + writes.
 function laneToolNames(lane) {
   if (lane === 'web') return ['web_search', 'open_page', 'see_page', 'browser_read'].concat(WEB_TOOLS.map(t => t.op)).concat(['recall', 'echo']);
-  return READ_TOOLS.map(t => t.op).concat(['recall', 'echo']);
+  // P3 (ADAPTIVE_RESEARCH_DESIGN §G1): the deep lane carries the QUANT tools — python over what
+  // we've banked (analyze_data), SQL over her own stores (localdb), and her probability models
+  // (forecast_query). Measured before this line: ZERO python/probability calls in any research run,
+  // because no research menu ever offered them — a menu failure, not a model failure.
+  return READ_TOOLS.map(t => t.op).concat(['analyze_data', 'localdb', 'forecast_query', 'recall', 'echo']);
 }
 
 // The curated-tool spec lines for one lane (the Echo tools only; main.js prepends the browser lines

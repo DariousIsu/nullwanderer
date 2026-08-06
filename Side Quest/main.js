@@ -14195,6 +14195,10 @@ async function runDeepResearchTarget({ org, goal = '', facet = '', guidance = ''
     '- recall {"query":"…"}          her own memory', '', tail].join('\n');
   const deepSpec = ['TOOLS (call exactly ONE per step):',
     tier.laneSpec('deep'),
+    // P3 quant moves (ADAPTIVE_RESEARCH_DESIGN): computed numbers with shown work beat eyeballed ones.
+    '- localdb {"sql":"SELECT …"}    what WE have already banked (contacts, documents, knowledge, news) — check our own stores before hunting the web; run localdb_map-style discovery via small SELECTs, never guess table names',
+    '- analyze_data {"code":"import zoe_data\\n…"}   run PYTHON over our own data, READ-ONLY (pandas available) — cross-tabulate, aggregate, rank: grant flows by recipient, donor overlap between orgs, counts over what this run has banked. REACH FOR THIS whenever the question is quantitative',
+    '- forecast_query {"query":"…"}  her own probability models — for any who-wins / odds / likelihood question, read THIS before reasoning from memory',
     '- echo {"need":"…"}             OUR private data + the 500+ structured research tools — say the need in plain words',
     '- recall {"query":"…"}          her own memory', '', tail].join('\n');
 

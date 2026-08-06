@@ -68,6 +68,10 @@ ok(webNames.includes('web_search') && webNames.includes('web_fetch') && webNames
 ok(!webNames.includes('nonprofit_lookup') && !webNames.includes('gov_funding'), 'web lane EXCLUDES the structured tools');
 ok(deepNames.includes('nonprofit_lookup') && deepNames.includes('kg_search') && deepNames.includes('echo'), 'deep lane tools = structured + echo');
 ok(!deepNames.includes('web_search') && !deepNames.includes('open_page') && !deepNames.includes('web_fetch'), 'deep lane EXCLUDES all browsing tools (web folds into the web lane)');
+// P3 (ADAPTIVE_RESEARCH_DESIGN §G1): the quant arsenal is IN the deep research menu — measured
+// before: zero python/probability calls in any research run because no menu ever offered them.
+ok(deepNames.includes('analyze_data') && deepNames.includes('localdb') && deepNames.includes('forecast_query'), 'deep lane carries the QUANT tools (python analysis, her stores, her probability models)');
+ok(!webNames.includes('analyze_data') && !webNames.includes('forecast_query'), 'the browser lane stays a browser lane — quant lives in deep');
 ok(/web_fetch/.test(tier.laneSpec('web')) && /nonprofit_lookup/.test(tier.laneSpec('deep')), 'laneSpec lists the right tools per lane');
 ok(tier.ALL_CURATED.length === tier.READ_TOOLS.length + tier.WEB_TOOLS.length, 'ALL_CURATED = read + web tools');
 ok(/web_fetch/.test(tier.operatorReadSpec()), 'single-lane operator menu now also lists the web tools');
