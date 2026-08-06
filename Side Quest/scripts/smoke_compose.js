@@ -66,5 +66,41 @@ ok(doc.indexOf('# Research plan') < doc.indexOf('## Heritage Foundation'), 'page
 ok(/\*\*Gaps\*\*/.test(doc) && /Completed: done · 3 organizations/.test(doc), 'final doc has Gaps + the completed/count footer');
 ok(/Gaps\*\*\n- none recorded/.test(cp.assembleFinal({ goal: 'g', planPage: 'p', composedBody: 'b', gaps: '', count: 1 })), 'empty gaps → "none recorded"');
 
+// --- P4 PAPER MODE: front-matter prompt, deterministic citation coverage, paper assembly ---
+const pm = cp.buildPaperPrompt({
+  goal: 'anti-data-center foundations in NC', method: 'Preflight method: follow the money through 990s',
+  body: full, quantQuestions: ['total grant flow by recipient'], openQuestions: ['who funds the funders'], gaps: '- state filings unavailable',
+});
+ok(Array.isArray(pm) && pm.length === 2 && /FRONT MATTER/i.test(pm[0].content), 'paper prompt is a system+user pair for FRONT MATTER only');
+ok(/## Abstract/.test(pm[0].content) && /## Key findings/.test(pm[0].content) && /## Quantitative results/.test(pm[0].content) && /## Open questions/.test(pm[0].content), 'paper system fixes the five headings');
+ok(/never add a fact/i.test(pm[0].content) && /NEVER mint a URL/i.test(pm[0].content) && /not computed this run/i.test(pm[0].content), 'paper system cages grounding, citations, and quant honesty');
+ok(/follow the money through 990s/.test(pm[1].content) && /total grant flow by recipient/.test(pm[1].content) && /who funds the funders/.test(pm[1].content) && /state filings unavailable/.test(pm[1].content), 'paper user carries method + quant questions + open questions + gaps');
+ok(pm[1].content.indexOf('## Heritage Foundation') > -1, 'paper user carries the finished evidence body');
+
+const covMd = [
+  '## Abstract', 'no citation needed here',
+  '## Key findings', '- finding one (source: https://example.org/990)',
+  '## Methodology', 'structural, exempt',
+  '## Alpha Org', 'evidence with a source https://example.org/a',
+  '## Beta Org', 'evidence with a footnote marker [2]',
+  '## Gamma Org', 'evidence with no source at all',
+  '## Open questions', 'exempt', '## Gaps', 'exempt', '## Sources', 'https://example.org (the trail itself is exempt)',
+].join('\n');
+const cov = cp.citationCoverage(covMd);
+ok(cov.total === 4 && cov.cited === 3, 'coverage counts content sections only (key findings + 3 orgs), URL or [n] = cited');
+ok(cov.uncited.length === 1 && cov.uncited[0] === 'Gamma Org', 'the uncited section is named');
+ok(cp.citationCoverage('no headings at all').total === 0, 'no sections → zero coverage, no throw');
+ok(/3\/4 content sections carry a source/.test(cp.renderCoverageFooter(cov)) && /Uncited: Gamma Org/.test(cp.renderCoverageFooter(cov)), 'coverage footer states the count + names the uncited');
+ok(cp.renderCoverageFooter({ total: 2, cited: 2, uncited: [] }).indexOf('Uncited') === -1, 'full coverage footer omits the uncited clause');
+ok(cp.renderCoverageFooter(null) === '' && cp.renderCoverageFooter({ total: 0, cited: 0, uncited: [] }) === '', 'no countable sections → no footer');
+
+const frontMd = '## Abstract\nA study.\n\n## Key findings\n- x (source: https://e.org)\n\n## Methodology\nm\n\n## Quantitative results\nnot computed this run\n\n## Open questions\n- q';
+const paper = cp.assemblePaper({ goal: 'anti-data-center foundations', front: frontMd, planPage: '# Research plan\n\np', composedBody: full, gaps: '- one gap', completed: 'done', count: 3 });
+ok(/^# anti-data-center foundations/m.test(paper), 'paper title is the goal');
+ok(paper.indexOf('## Abstract') < paper.indexOf('## Heritage Foundation'), 'front matter precedes the evidence body');
+ok(paper.indexOf('## Heritage Foundation') < paper.indexOf('## Appendix — research plan'), 'plan is demoted to an appendix AFTER the body');
+ok(/\*\*Gaps\*\*\n- one gap/.test(paper) && /Completed: done · 3 sections/.test(paper), 'paper keeps the honest Gaps + completed footer');
+ok(cp.assemblePaper({ goal: 'g', front: 'f', planPage: '', composedBody: 'b', count: 1 }).indexOf('Appendix') === -1, 'no plan page → no empty appendix');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

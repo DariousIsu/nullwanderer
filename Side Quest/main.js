@@ -11511,7 +11511,33 @@ async function seedBeatRun(beat, { background = false, targetsOverride = null } 
     if (Array.isArray(beat.facets) && beat.facets.length) {
       try { db.setMeta(`focus.${fid}.plan`, JSON.stringify({ facets: beat.facets, targets: [] })); } catch {}
     } else {
-      try { await generateResearchPlan(focusRow, { goal: beat.goal, targets: targets.slice(0, 12), facet: '', deep: false, kind: beat.kind || 'entity' }); } catch (e) { console.error('[beat] plan gen failed:', e.message); }
+      // GATED adaptive preflight for background beats (ADAPTIVE_RESEARCH_DESIGN P0, bg lane):
+      // ask-only — NO search dep, so a beat can never spin the browser on a study pass (the absent
+      // dep makes the study loop structurally unreachable, not just discouraged). OFF by default
+      // until the staged live test (_adaptiveBgOn).
+      let _bgPf = '';
+      if (_adaptiveBgOn()) {
+        try {
+          const pf = require('./lib/research_preflight');
+          const tier = require('./lib/echo_tier');
+          const r = await pf.run({
+            goal: beat.goal, kind: beat.kind || 'entity',
+            deps: {
+              ask: (o) => require('./lib/cloud_logic').ask(o),
+              operatorToolNames: Object.keys(operatorTools),
+              deepLane: tier.laneToolNames('deep'), webLane: tier.laneToolNames('web'),
+              skills: (() => { try { return require('./lib/skills').listNames(); } catch { return []; } })(),
+              recordNeed: (n) => { try { require('./lib/capability_need').record(n, { bornFrom: `preflight:beat:${beat.id}` }); } catch {} },
+            },
+          });
+          if (r && r.guidance) {
+            _bgPf = r.guidance;
+            try { db.setMeta(`focus.${fid}.preflight`, JSON.stringify(r.verdict)); } catch {}
+            console.log(`[beat] ${beat.id}: adaptive preflight (bg, ask-only) — ${(r.verdict.tool_picks || []).length} tool pick(s), ${(r.verdict.missing_capabilities || []).length} gap(s)`);
+          }
+        } catch (e) { console.error('[beat] preflight failed (plan proceeds without):', e.message); }
+      }
+      try { await generateResearchPlan(focusRow, { goal: beat.goal, targets: targets.slice(0, 12), facet: '', deep: false, kind: beat.kind || 'entity', preflight: _bgPf }); } catch (e) { console.error('[beat] plan gen failed:', e.message); }
     }
     if (background) kickBackgroundWorkers(); else kickDirectedFocusDriver();
     console.log(`[beat] seeded ${background ? 'worker' : 'primary'}:${beat.id} → focus #${fid}, BOUNDED to ${targets.length} targets`);
@@ -13275,6 +13301,37 @@ async function composeDocument(focus, { goal = '', sections = [], completed = 'd
     for (const s of gate.missing) gapLines.push(`- ${s.heading} — recovered from the research notes (composer omitted it)`);
   }
 
+  // P4 PAPER MODE (ADAPTIVE_RESEARCH_DESIGN §P4): a run that ran the adaptive contract (a preflight
+  // verdict or a re-entry audit on file) delivers a PAPER — cloud-authored front matter (abstract /
+  // key findings with inline citations / methodology from preflight+plan / quantitative results /
+  // open questions) wrapped around the SAME completeness-gated body, plus a DETERMINISTIC citation-
+  // coverage footer (counted from the document, never asserted — a thin paper says so itself).
+  // Fail-soft at every step: front matter empty → today's dossier shape, coverage footer still true.
+  let _pfRaw = '', _auditRaw = '';
+  try { _pfRaw = db.getMeta(`focus.${focus.id}.preflight`) || ''; _auditRaw = db.getMeta(`focus.${focus.id}.reentry_audit`) || ''; } catch {}
+  if (_pfRaw || _auditRaw) {
+    let front = '';
+    let quantQs = [];
+    try {
+      const methodParts = [];
+      try { const v = JSON.parse(_pfRaw); if (v && v.method) methodParts.push(`Preflight method: ${v.method}`); if (v && Array.isArray(v.quant_questions)) quantQs = v.quant_questions; if (v && (v.missing_capabilities || []).length) methodParts.push(`Known capability gaps: ${v.missing_capabilities.join('; ')}`); } catch {}
+      try { const v = JSON.parse(_auditRaw); if (v && v.assessment) methodParts.push(`Re-entry audit of the base document: ${v.assessment}`); } catch {}
+      const openQs = (() => { try { return JSON.parse(db.getMeta(`focus.${focus.id}.last_open_qs`) || '[]'); } catch { return []; } })();
+      front = await condenseComplete(
+        cp.buildPaperPrompt({ goal, method: methodParts.join('\n'), body: composedBody, quantQuestions: quantQs, openQuestions: openQs, gaps: gapLines.join('\n') }),
+        { numPredict: 1800 }
+      );
+    } catch (e) { console.error('[compose] paper front matter failed (dossier shape stands):', e.message); }
+    let finalMd = (front && front.trim().length > 80)
+      ? cp.assemblePaper({ goal, front, planPage, composedBody, gaps: gapLines.join('\n'), completed, count: secs.length })
+      : cp.assembleFinal({ goal, planPage, composedBody, gaps: gapLines.join('\n'), completed, count: secs.length });
+    const cov = cp.citationCoverage(finalMd);
+    const foot = cp.renderCoverageFooter(cov);
+    if (foot) finalMd = `${finalMd.trim()}\n\n${foot}\n`;
+    console.log(`[compose] PAPER mode${front && front.trim().length > 80 ? '' : ' (front matter fell back to dossier shape)'} — citation coverage ${cov.cited}/${cov.total}${cov.uncited.length ? ` (uncited: ${cov.uncited.slice(0, 5).join(', ')}${cov.uncited.length > 5 ? '…' : ''})` : ''}`);
+    return finalMd;
+  }
+
   return cp.assembleFinal({ goal, planPage, composedBody, gaps: gapLines.join('\n'), completed, count: secs.length });
 }
 
@@ -13321,6 +13378,20 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
     const dossierPath = `notes/directed-${focus.id}-dossier.md`;
     try { await filesLib.dispatch({ tag: 'file-write', attrs: { path: dossierPath }, body: condensed }); }
     catch (e) { console.error('[condense] dossier write failed:', e.message); }
+    // P4: an adaptive-contract run (paper mode) also renders the paper as a .docx — the handoff
+    // artifact Lucas actually forwards (the Hartfield lesson: the deliverable's final form is a Word
+    // document, not a markdown file). Rendered AFTER the Sources trail is in, so the docx is the
+    // full cited paper. Fail-soft: a render miss never touches the markdown deliverable.
+    let docxPath = null;
+    try {
+      const _paperish = !!(db.getMeta(`focus.${focus.id}.preflight`) || db.getMeta(`focus.${focus.id}.reentry_audit`));
+      if (_paperish) {
+        const _docxRel = `notes/directed-${focus.id}-dossier.docx`;
+        const _buf = await require('./lib/md_to_docx').buildDocxBuffer({ title: goal.replace(/\s+/g, ' ').trim().slice(0, 120), markdown: condensed });
+        const _abs = filesLib.resolvePath(_docxRel);
+        if (_abs && _buf) { require('fs').writeFileSync(_abs, _buf); docxPath = _docxRel; console.log(`[condense] rendered paper .docx → ${_docxRel}`); }
+      }
+    } catch (e) { console.error('[condense] docx render failed (markdown deliverable stands):', e.message); }
     try { await memoryLib.store({ kind: 'note', content: `Research dossier — ${goal.slice(0, 90)} (${sections.length} orgs):\n${condensed.slice(0, 4000)}`, source: 'research_dossier', importance: 0.85, embedText: goal }); } catch {}
     // LONG-TERM DURABILITY — land the dossier in doc_store so the nightly promote carries it INTO Echo (vault
     // document + entity extraction). Without this the report lived ONLY as a local file + a recall note and
@@ -13329,7 +13400,7 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
     // re-condense. Fail-safe: a land miss never blocks the dossier.
     try { const dl = require('./lib/doc_store').land({ title: `Research — ${goal.slice(0, 100)}`, body: condensed, source: 'research', ref: `directed-${focus.id}`, understanding: goal.slice(0, 300) }); if (dl && dl.landed) console.log(`[condense] landed dossier in doc_store (#${dl.id}) → promotes into Echo long-term`); }
     catch (e) { console.error('[condense] doc_store land failed:', e.message); }
-    try { db.setMeta('research.last_dossier', JSON.stringify({ focusId: focus.id, path: dossierPath, goal, reason, count: sections.length })); } catch {}
+    try { db.setMeta('research.last_dossier', JSON.stringify({ focusId: focus.id, path: dossierPath, docxPath, goal, reason, count: sections.length })); } catch {}
     try { db.setMeta('research.last_focus_id', String(focus.id)); } catch {}
     // DRIVE → Zoe's canvas: emit the count headline (from the artifact) + the stitched dossier as DOC blocks.
     try {
@@ -13343,9 +13414,9 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
       const rr = db.insertMonologue({ content: `Assembled the research run into a dossier (${dossierPath}, ${sections.length} orgs). ${condensed.slice(0, 240)}`, model: 'condense', type: 'reading' });
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: rr.id, ts: rr.ts, content: `(dossier ready) ${dossierPath}`, type: 'reading' });
     } catch {}
-    try { require('./lib/presence').notify('Zoe — dossier ready', `${goal.slice(0, 50)} → ${dossierPath} (${sections.length} orgs)`); } catch {}
-    console.log(`[condense] LOSSLESS dossier → ${dossierPath} (${sections.length} sections stitched, ${rec.indexedMissing.length} indexed-missing)`);
-    return { path: dossierPath, count: sections.length };
+    try { require('./lib/presence').notify('Zoe — dossier ready', `${goal.slice(0, 50)} → ${docxPath || dossierPath} (${sections.length} orgs)`); } catch {}
+    console.log(`[condense] LOSSLESS dossier → ${dossierPath}${docxPath ? ` + ${docxPath}` : ''} (${sections.length} sections stitched, ${rec.indexedMissing.length} indexed-missing)`);
+    return { path: dossierPath, docxPath, count: sections.length };
   } catch (e) { console.error('[condense] run failed:', e.message); return null; }
 }
 
@@ -13396,12 +13467,26 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
 // learned, what she'll do, how to object. Throttled per focus so a productive run never floods;
 // same delivery shape as announceResearchComplete; swarm-suppression respected.
 const PIVOT_SURFACE_GAP_MS = 10 * 60 * 1000;
+// ADAPTIVE BACKGROUND GATE (Lucas 2026-08-06: "I dont want that running blind in the background
+// until everything is confirmed done and ready for live test"). The adaptive-research logic tree
+// (preflight / plan revalidation) reaches BEAT-origin background runs only when this is ON — env
+// ZOE_ADAPTIVE_BG=1 or meta adaptive.bg=1. DEFAULT OFF: user-directed lanes always run the full
+// tree; background lanes keep prior behaviour until the staged live test proves it, then Lucas
+// flips the switch (no reboot needed for the meta path).
+function _adaptiveBgOn() {
+  try { if (String(process.env.ZOE_ADAPTIVE_BG || '').trim() === '1') return true; } catch {}
+  try { return db.getMeta('adaptive.bg') === '1'; } catch { return false; }
+}
 // The shared delivery core: throttle per focus, then the announce-shaped insert+send. Both the
 // novel-question surfacer and the plan-revalidation tactics note ride this one wire.
 function _surfaceSteeringNote(focus, msg, label, { force = false } = {}) {
   try {
     const sid = currentSessionId;
     if (!sid || !focus || focus.id == null || !msg) return false;
+    // BACKGROUND SILENCE: a beat-origin run may run the adaptive tree (gated above), but its
+    // steering notes NEVER reach chat — the surfacing contract (unprompted = fully-formed thought
+    // or expected deliverable, never background churn). Logged so the live test can still see them.
+    try { if (require('./lib/focus').originOf(focus) === 'beat') { console.log(`[user-work] steering note (beat-origin → log only) — ${label}: ${String(msg).replace(/\s+/g, ' ').slice(0, 160)}`); return false; } } catch {}
     if (!_surfaceAllowed(focus.id)) return false;
     const k = `focus.${focus.id}.pivot_surfaced_at`;
     // force: a re-entry audit verdict must never be swallowed by an earlier note's throttle — it is
@@ -13445,7 +13530,7 @@ async function announceResearchComplete(focus, done) {
 
     // BASE notice — accurate for a full OR stalled run, and the guaranteed fallback.
     let msg = `I've wrapped up the research you had me on: ${title}. I pulled together what I found into a `
-      + `dossier (${parts})${done.path ? `, saved at ${done.path}` : ''}, and it's on your Canvas. Want me to `
+      + `dossier (${parts})${done.path ? `, saved at ${done.path}` : ''}${done.docxPath ? ` with a Word copy at ${done.docxPath}` : ''}, and it's on your Canvas. Want me to `
       + `walk you through it, or leave it there until you need it?`;
 
     // CONTENT-AWARE engagement (cloud, grounded in the dossier she produced → no fabrication). Cloud model,
@@ -13456,7 +13541,7 @@ async function announceResearchComplete(focus, done) {
       if (dossier.trim().length > 200) {
         let persona = ''; try { persona = String(require('./lib/context').BASE_PERSONA || '').replaceAll('[user]', uname); } catch {}
         const sys = `${persona}\n\nYou just finished a research run for ${uname} and assembled it into a dossier `
-          + `(on ${uname}'s Canvas${done.path ? `, saved at ${done.path}` : ''}). Speak to ${uname} now, IN YOUR OWN `
+          + `(on ${uname}'s Canvas${done.path ? `, saved at ${done.path}` : ''}${done.docxPath ? ` with a Word copy at ${done.docxPath}` : ''}). Speak to ${uname} now, IN YOUR OWN `
           + `VOICE: (1) say briefly that it's done and where it is; (2) then ENGAGE on the SUBSTANCE — surface the `
           + `single most important or striking thing you actually found, in a sentence or two; (3) end with ONE `
           + `specific, concrete follow-up that flows from the findings — a question worth his take, or an offer to `
@@ -14042,7 +14127,10 @@ async function runDirectedResearchPass(focus) {
           ? await condenseComplete(rs.buildOrganizeTargetPrompt({ target: target.name, raw: target.raw }), { numPredict: config.sectionNumPredict() })
           : await condenseComplete(rs.buildUnderstandTargetPrompt({ goal, target: target.name, raw: target.raw, known: target.known || '', priorDoc: _baseDoc, sources: visited.filter((u) => /^https?:/i.test(String(u))).slice(-20) }), { numPredict: Math.max(1200, config.sectionNumPredict()) });
       } catch {}
-      if (!_isBeatRun && section) {
+      // Gate widened for the adaptive tree: beat-origin (background) runs join the question ledger
+      // + living-plan loop ONLY behind _adaptiveBgOn() (default OFF — Lucas's "not running blind"
+      // rule). Their steering notes stay out of chat regardless (_surfaceSteeringNote beat silence).
+      if (section && (!_isBeatRun || _adaptiveBgOn())) {
         try {
           // QUESTION LEDGER (run closure, Lucas 2026-07-30): every OPEN question is recorded;
           // only NOVEL ones steer the facet plan. When syntheses stop raising novel questions,
@@ -14690,8 +14778,36 @@ async function establishEnrichRun({ sourceFocusId = null, facet = '', sourceTurn
   } catch (e) { console.error('[enrich] establish meta failed:', e.message); }
   // PAGE-1 PLAN (Pillar 0) — author + store it now, so it's reviewable at the start (the readback can
   // surface it) and ready as page 1 at finalize. Best-effort; never blocks the run.
+  // P0 PREFLIGHT (ADAPTIVE_RESEARCH_DESIGN, the universal step-0) on the enrich lane too — this is
+  // a user-directed path, so it gets the FULL wiring including the study-pass search dep (same shape
+  // as the user seed site). Fail-open: null → the plan generates exactly as before.
+  let _pfGuidance = '';
+  try {
+    const pf = require('./lib/research_preflight');
+    const tier = require('./lib/echo_tier');
+    const _pfRes = await pf.run({
+      goal, kind: 'entity',
+      deps: {
+        ask: (o) => require('./lib/cloud_logic').ask(o),
+        search: async (q) => { try { const sr = await webSearch(q); return ((sr && sr.results) || []).slice(0, 5).map((x) => `${x.title} — ${x.snippet || ''}`).join('\n'); } catch { return ''; } },
+        operatorToolNames: Object.keys(operatorTools),
+        deepLane: tier.laneToolNames('deep'), webLane: tier.laneToolNames('web'),
+        skills: (() => { try { return require('./lib/skills').listNames(); } catch { return []; } })(),
+        recordNeed: (n) => { try { require('./lib/capability_need').record(n, { bornFrom: `preflight:${fid}` }); } catch {} },
+      },
+    });
+    if (_pfRes && _pfRes.guidance) {
+      _pfGuidance = _pfRes.guidance;
+      try { db.setMeta(`focus.${fid}.preflight`, JSON.stringify(_pfRes.verdict)); } catch {}
+      console.log(`[preflight] enrich #${fid} ${_pfRes.verdict.knows_class ? 'knows the craft' : 'STUDIED the craft'}${_pfRes.studied ? ' (study pass ran)' : ''} — ${(_pfRes.verdict.tool_picks || []).length} tool pick(s), ${(_pfRes.verdict.missing_capabilities || []).length} gap(s)`);
+      const _miss = (_pfRes.verdict.missing_capabilities || []).slice(0, 3);
+      if (_miss.length) {
+        try { _surfaceSteeringNote(r.focus, `Preflight on the enrich run ("${facet.slice(0, 70)}"): I'm missing ${_miss.length === 1 ? 'a capability' : 'capabilities'} — ${_miss.join('; ')}. Filed as build need(s); I'll work around it honestly with the closest tools I have.`, 'preflight gap'); } catch {}
+      }
+    }
+  } catch (e) { console.error('[preflight] enrich failed (plan proceeds without):', e.message); }
   let plan = null;
-  try { plan = await generateResearchPlan(r.focus, { goal, targets: orgs, facet, deep }); } catch {}
+  try { plan = await generateResearchPlan(r.focus, { goal, targets: orgs, facet, deep, preflight: _pfGuidance }); } catch {}
   console.log(`[enrich] established #${fid} over #${sourceFocusId} — ${orgs.length} orgs, facet: ${facet.slice(0, 60)}${deep ? ' [DEEP]' : ''}${priority ? ' [' + priority + ']' : ''}${plan ? ' [+plan]' : ''}`);
   return { focus: r.focus, orgs, plan };
 }

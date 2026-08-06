@@ -133,8 +133,112 @@ function assembleFinal({ goal = '', planPage = '', composedBody = '', gaps = '',
   return parts.join('\n');
 }
 
+// --- P4 PAPER MODE (ADAPTIVE_RESEARCH_DESIGN §P4) ---------------------------------------------------
+// A run that ran the adaptive contract (a preflight verdict or a re-entry audit on file) deserves a
+// RESEARCH PAPER, not a dossier stitch: cloud-authored FRONT MATTER (abstract / key findings with
+// inline citations / methodology from plan+preflight / quantitative results / open questions) wrapped
+// around the SAME completeness-gated evidence body — the gate and the oracle stay untouched. The
+// coverage check below is DETERMINISTIC (counted, never asserted), so a thin paper says so itself.
+
+const PAPER_SYS = `You are writing the FRONT MATTER of a submission-grade research paper. The evidence body (the researched sections) is FINISHED and provided — you are framing it, not re-researching it.
+RULES — these are absolute:
+• Ground EVERY sentence in the provided evidence body, method notes, and open questions — never add a fact, name, number, or source that is not already there.
+• Citations: where the evidence body carries a URL or named source for a fact you use, carry it inline next to the claim (e.g. "(source: <url>)"). NEVER mint a URL, a document title, or an author that is not in the evidence.
+• Quantitative results: report ONLY numbers actually computed in the evidence body. If a listed quantitative question was never computed, say exactly that — "not computed this run" — never estimate one into existence.
+• Output Markdown only, using EXACTLY these five second-level headings in this order:
+## Abstract
+## Key findings
+## Methodology
+## Quantitative results
+## Open questions
+- Abstract: one paragraph — what was researched, how, and the headline of what was found.
+- Key findings: 4-8 bullet points, each a specific finding WITH its inline citation where the evidence carries one.
+- Methodology: how this run actually worked — fold in the method notes (preflight/plan) honestly, including any stated capability gaps.
+- Quantitative results: the computed numbers/probabilities, each tied to its question; honest "not computed this run" entries for the rest.
+- Open questions: the genuinely unresolved questions (seed list provided; keep only real ones, add any the evidence clearly raises).
+No preamble, no "here is", nothing after Open questions.`;
+
+// Build the front-matter messages. `method` = preflight/audit method notes; `quantQuestions` = the
+// questions the run promised to compute; `openQuestions` = the run's live open-question ledger.
+function buildPaperPrompt({ goal = '', method = '', body = '', quantQuestions = [], openQuestions = [], gaps = '' } = {}) {
+  const qq = (Array.isArray(quantQuestions) ? quantQuestions : []).map((q) => str(q).trim()).filter(Boolean).slice(0, 4);
+  const oq = (Array.isArray(openQuestions) ? openQuestions : []).map((q) => str(q).trim()).filter(Boolean).slice(0, 5);
+  const parts = [
+    `RESEARCH GOAL:\n${str(goal).slice(0, 600)}`,
+    str(method).trim() ? `METHOD NOTES (from preflight/plan — fold into Methodology honestly):\n${str(method).slice(0, 2000)}` : '',
+    qq.length ? `QUANTITATIVE QUESTIONS THIS RUN PROMISED TO COMPUTE:\n${qq.map((q) => `- ${q}`).join('\n')}` : '',
+    oq.length ? `OPEN QUESTIONS STILL LIVE AT RUN END (seed for the Open questions section):\n${oq.map((q) => `- ${q}`).join('\n')}` : '',
+    str(gaps).trim() ? `KNOWN GAPS (state honestly in Methodology, never paper over):\n${str(gaps).slice(0, 1200)}` : '',
+    `THE FINISHED EVIDENCE BODY (frame this — every claim you write must trace to it):\n"""\n${str(body).slice(0, 16000)}\n"""`,
+    `Write the front matter now.`,
+  ].filter(Boolean);
+  return [
+    { role: 'system', content: PAPER_SYS },
+    { role: 'user', content: parts.join('\n\n') },
+  ];
+}
+
+// DETERMINISTIC citation coverage: of the content-bearing "## " sections, how many carry a real
+// source (a URL or a [n] citation marker)? Structural front matter (abstract, methodology, quant
+// results — whose numbers trace to the evidence sections that carry the citations — open questions,
+// gaps, sources, appendix) is exempt: it frames, it doesn't evidence. Key findings STAYS countable —
+// its contract demands inline citations. Counted from the document itself, so never flattery.
+const _STRUCTURAL_HEAD = /^(abstract|methodology|quantitative results|open questions|gaps|sources|appendix\b.*|research plan\b.*)$/i;
+function citationCoverage(md) {
+  const sections = [];
+  let cur = null;
+  for (const ln of str(md).split(/\r?\n/)) {
+    const m = ln.match(/^##\s+([^#].*?)\s*$/);
+    if (m) { cur = { heading: m[1].trim(), body: '' }; sections.push(cur); continue; }
+    if (cur) cur.body += ln + '\n';
+  }
+  const countable = sections.filter((s) => !_STRUCTURAL_HEAD.test(s.heading));
+  const uncited = [];
+  let cited = 0;
+  for (const s of countable) {
+    if (/https?:\/\//i.test(s.body) || /\[\d+\]/.test(s.body)) cited++;
+    else uncited.push(s.heading);
+  }
+  return { total: countable.length, cited, uncited };
+}
+
+function renderCoverageFooter(cov) {
+  if (!cov || !cov.total) return '';
+  const head = `**Citation coverage:** ${cov.cited}/${cov.total} content sections carry a source.`;
+  return cov.uncited.length ? `${head} Uncited: ${cov.uncited.slice(0, 12).join('; ')}.` : head;
+}
+
+// Stitch the PAPER: title → front matter → evidence body → plan appendix → honest Gaps → completed
+// line. Pure string assembly, mirror of assembleFinal (which stays the non-paper shape).
+function assemblePaper({ goal = '', front = '', planPage = '', composedBody = '', gaps = '', completed = 'done', count = 0 } = {}) {
+  const title = str(goal).replace(/\s+/g, ' ').trim().slice(0, 100) || 'Research paper';
+  const gapsBlock = str(gaps).trim() || '- none recorded';
+  const parts = [
+    `# ${title}`,
+    ``,
+    str(front).trim(),
+    ``,
+    `---`,
+    ``,
+    str(composedBody).trim(),
+    ``,
+    `---`,
+    ``,
+  ];
+  if (str(planPage).trim()) parts.push(`## Appendix — research plan`, ``, str(planPage).trim(), ``);
+  parts.push(
+    `**Gaps**`,
+    gapsBlock,
+    ``,
+    `_Completed: ${str(completed)} · ${Math.max(0, Number(count) || 0)} section${(Number(count) || 0) === 1 ? '' : 's'}._`,
+    ``,
+  );
+  return parts.join('\n');
+}
+
 module.exports = {
-  COMPOSE_SYS,
+  COMPOSE_SYS, PAPER_SYS,
   buildComposePrompt, chunkSections, composeBudget,
   composedHeadings, verifyComposition, patchMissing, assembleFinal,
+  buildPaperPrompt, citationCoverage, renderCoverageFooter, assemblePaper,
 };
