@@ -110,3 +110,35 @@ Recommended: **P3 → P2 → P1 → P0 → P4**, each with its smoke + live circ
 
 Method rules from BUILD_PLAN_2026-08-03 bind throughout (circuit-proving, no naked constants,
 donor-grounded, measure first, named files only).
+
+## P0b — the needs get consumed (specced + built 2026-08-06 night, Lucas: "spec it out and build now")
+
+**The measured gap.** The build machinery already existed end-to-end: rehearsal_driver (O2) opens
+a run FROM a filed capability need — with a study-first web pass, test-first harness birth for new
+python tools, slot discipline, retry-with-failure-context — and exits green to an R2 proposal card
+(Lucas + gate + commit remain the only path into the live program). What never happened was the
+work getting CHOSEN: the rehearse move competed in the idle-move lottery and rarely won (30 needs
+piled up), and non-buildable needs (paid subscriptions, credentials, data gaps, harvested junk)
+sat 'open' forever, clogging the queue any pressure would drain.
+
+**The organ = pressure + triage, grafted onto the existing circuit (lib/need_triage, pure):**
+- **duePressure** — a deterministic rule evaluated at the TOP of every autonomy tick, before the
+  cloud lottery: a live (active|parked) rehearsal run → FORCE iterate; else the oldest untriaged
+  open need → FORCE triage; else the oldest triaged-buildable need → FORCE open. Paced by a 30-min
+  calm gap; one-at-a-time run discipline. A forced decision rides the EXISTING rehearse handler —
+  no second build path.
+- **Triage** — one cloud verdict per need: `buildable` (she authors it herself: python tool,
+  parser, public scraper, self-code fix — the sketch seeds the study block) · `external` (only
+  Lucas can unlock: subscription/credentials/billing → status blocked_external + a consolidated
+  once-a-day chat ask, never a per-need nag) · `research` (a data gap, not a tool → inquiry queue,
+  status routed_research) · `junk` (harvest artifact → parked). Strict-buildable calibration is in
+  the contract ("access to <paid db>" is external; "parse XLS" is buildable; "who funds X" is
+  research).
+- **Gates**: never during Lucas's directed work (_userDirectedActive — preemption extends to
+  self-R&D), never against the idle quota gate. Fail-open everywhere: cloud down → untriaged next
+  tick, no status burn.
+
+*Proof gates: a filed need observed traversing triage → rehearsal open → iterations → an R2
+proposal card in doc_store; a blocked-external ask appearing ONCE in chat; a research-class need
+appearing in the inquiry queue. Smoke: scripts/smoke_need_triage.js (contract, pressure ordering,
+ask rendering, wiring source-asserts).*

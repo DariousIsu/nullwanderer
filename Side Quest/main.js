@@ -10857,7 +10857,17 @@ async function autonomyTick() {
       _idleDepth = _il.tier(now - lastTurnTs, _il.optsFromMeta((k) => { try { return db.getMeta(k); } catch { return null; } }));
       console.log(_il.describe(_idleDepth));
     } catch (e) { console.error('[idle-depth] compute failed:', e.message); }
-    const decision = await autonomy.decide({ manifestText: manifest.text, history: autonomy.historyRead(H.getMeta), now, depth: _idleDepth });
+    // P0b NEEDS PRESSURE (ADAPTIVE_RESEARCH_DESIGN §P0b, Lucas 2026-08-06 "spec it out and build"):
+    // tool-building stops competing in the idle-move lottery. When needs-work is DUE (a live
+    // rehearsal to advance, or an open need to triage/open), the tick's decision is FORCED onto
+    // the rehearse move — which already owns study-first opens, slot discipline, iteration, and
+    // the R2 proposal-card exit. Untriaged needs get ONE cloud verdict and route: buildable → the
+    // build loop; external → a consolidated once-a-day ask to Lucas; research → the inquiry queue;
+    // junk → parked. Gated inside: never during Lucas's directed work, never against idle quota.
+    let _forced = null;
+    try { _forced = await _needsPressure(now); } catch (e) { console.error('[needs] pressure failed (lottery proceeds):', e.message); }
+    if (_forced) console.log(`[autonomy] needs-pressure FORCED rehearse → ${_forced.target} (${_forced.why})`);
+    const decision = _forced || await autonomy.decide({ manifestText: manifest.text, history: autonomy.historyRead(H.getMeta), now, depth: _idleDepth });
     if (!decision) {
       autonomy.historyPush(H, { ts: now, move: 'nothing', outcome: 'no decision (cloud unavailable or invalid)' });
       console.log('[autonomy] no decision (cloud unavailable/invalid) — tick ends');
@@ -13590,6 +13600,81 @@ function _surfaceSteeringNote(focus, msg, label, { force = false } = {}) {
     return true;
   } catch (e) { console.error('[user-work] steering surfacing failed:', e.message); return false; }
 }
+// ── P0b: the needs-consumption pressure + external surfacing (pure rules in lib/need_triage) ────
+const NEEDS_REHEARSE_GAP_MS = 30 * 60 * 1000;   // needs-work paces itself — at most one forced move per gap
+async function _needsPressure(now = Date.now()) {
+  if (_userDirectedActive()) return null;                                              // his work owns the bandwidth
+  try { if (!require('./lib/quota_gate').allow('idle', { quiet: true }).allow) return null; } catch {}
+  const nt = require('./lib/need_triage');
+  const capn = require('./lib/capability_need');
+  let run = null; try { run = require('./lib/rehearsal_driver').load(); } catch {}
+  const lastTs = parseInt(db.getMeta('needs.last_rehearse_at') || '0', 10) || 0;
+  const needs = (capn.listOpen() || []).map((n) => ({ ...n, triage: (() => { try { return db.getMeta(`need.${n.id}.triage`) || null; } catch { return null; } })() }));
+  const due = nt.duePressure({ run, needs, lastRehearseTs: lastTs, nowMs: now, gapMs: NEEDS_REHEARSE_GAP_MS });
+  if (!due) return null;
+  if (due.kind === 'iterate') {
+    db.setMeta('needs.last_rehearse_at', String(now));
+    return { move: 'rehearse', target: `run ${run.slug}`, why: 'advance the live rehearsal' };
+  }
+  if (due.kind === 'open') {
+    db.setMeta('needs.last_rehearse_at', String(now));
+    return { move: 'rehearse', target: `need #${due.needId}`, why: 'open the oldest buildable need' };
+  }
+  // due.kind === 'triage' — classify NOW (one bounded ask) and route; buildable opens THIS tick.
+  const need = needs.find((n) => n.id === due.needId);
+  if (!need) return null;
+  let v = null;
+  try {
+    v = await require('./lib/cloud_logic').ask({
+      task: 'need_triage', v: 1, numPredict: 500,
+      input: nt.triageInput(need), want: nt.triageWant(), validate: nt.triageValidator,
+    });
+  } catch (e) { console.error('[needs] triage ask failed:', e.message); }
+  if (!v) return null;   // cloud down → untriaged again next tick, no status burn
+  try { db.setMeta(`need.${need.id}.triage`, v.class); db.setMeta(`need.${need.id}.triage_reason`, String(v.reason || '').slice(0, 300)); } catch {}
+  console.log(`[needs] triage #${need.id} → ${v.class}${v.reason ? ` — ${String(v.reason).slice(0, 100)}` : ''}`);
+  if (v.class === 'buildable') {
+    // The triage sketch seeds the study block (the driver's study-first pass may still deepen it).
+    try { if (String(v.build_sketch || '').trim() && !db.getMeta(`need.${need.id}.study`)) db.setMeta(`need.${need.id}.study`, `TRIAGE SKETCH: ${String(v.build_sketch).slice(0, 800)}${v.study_query ? `\nSTUDY QUERY: ${String(v.study_query).slice(0, 200)}` : ''}`); } catch {}
+    db.setMeta('needs.last_rehearse_at', String(now));
+    return { move: 'rehearse', target: `need #${need.id}`, why: 'triaged buildable → open' };
+  }
+  if (v.class === 'external') {
+    try { capn.setStatus(need.id, 'blocked_external', { nowMs: now }); } catch {}
+    try { db.setMeta(`need.${need.id}.ask`, String(v.ask || need.need).slice(0, 240)); } catch {}
+    try { _surfaceExternalNeeds(now); } catch {}
+    return null;
+  }
+  if (v.class === 'research') {
+    try {
+      const iq = require('./lib/inquiry').open({ question: String(need.need).slice(0, 300), bornFrom: `need-${need.id}`, nowMs: now });
+      capn.setStatus(need.id, 'routed_research', { nowMs: now });
+      console.log(`[needs] #${need.id} routed to the inquiry queue${iq && iq.id ? ` (#${iq.id})` : ''} — a data gap, not a tool`);
+    } catch (e) { console.error('[needs] research route failed:', e.message); }
+    return null;
+  }
+  try { capn.setStatus(need.id, 'parked', { nowMs: now }); console.log(`[needs] #${need.id} parked as junk — ${String(v.reason || '').slice(0, 80)}`); } catch {}
+  return null;
+}
+// Consolidated blocked-external ask — once per day at most, only what Lucas can actually unlock.
+function _surfaceExternalNeeds(now = Date.now()) {
+  try {
+    if (now - (parseInt(db.getMeta('needs.external_surfaced_at') || '0', 10) || 0) < 24 * 3600e3) return;
+    const rows = db.getDb().prepare("SELECT id, need FROM capability_needs WHERE status = 'blocked_external' ORDER BY updated_ts DESC LIMIT 6").all()
+      .map((r) => ({ ...r, ask: (() => { try { return db.getMeta(`need.${r.id}.ask`) || ''; } catch { return ''; } })() }));
+    if (!rows.length) return;
+    const msg = require('./lib/need_triage').renderExternalAsk(rows);
+    const sid = currentSessionId;
+    if (!msg || !sid) return;
+    db.setMeta('needs.external_surfaced_at', String(now));
+    const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'research', unprompted: 1 });
+    try { db.setMeta('last_ai_utterance_at', String(now)); } catch {}
+    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+    try { require('./lib/blackboard').append({ source: 'research', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
+    console.log(`[needs] external-needs ask surfaced to chat (${rows.length} blocked)`);
+  } catch (e) { console.error('[needs] external surfacing failed:', e.message); }
+}
+
 function surfaceResearchPivot(focus, novel) {
   const qs = (Array.isArray(novel) ? novel : []).slice(0, 2)
     .map((q) => String(q).replace(/\s+/g, ' ').trim().replace(/[.?]+$/, '')).filter((q) => q.length > 8);
