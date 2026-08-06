@@ -78,6 +78,34 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const lines2 = iw.manifestLines({ db: dbm, deps: { inquiry: fakeInquiry, openThreads: { isAutonomousMapping: () => false } }, now: NOW + 60e3 });
   ok(lines2.length === 0, 'manifest: immediately re-asking surfaces nothing (brake holds)');
 
+  // ---- M4.3: parseReceiver + fileLeverageNote ----
+  ok(iw.parseReceiver('Cleco leverage for [inquiry:12] on utilities').key === 'inquiry:12', 'parseReceiver: inquiry token recovered from a build target');
+  ok(iw.parseReceiver('note for [thread:7]').kind === 'thread' && iw.parseReceiver('x [focus:31] y').kind === 'focus', 'parseReceiver: thread + focus tokens recovered');
+  ok(iw.parseReceiver('no token here') === null, 'parseReceiver: no token → null');
+
+  // thread receiver: progress note lands on the thread
+  const f1 = iw.fileLeverageNote({ receiver: { kind: 'thread', id: 7, key: 'thread:7' }, artifactPath: 'notes/autonomy/x.md', gist: 'Rainey board overlaps his Louisiana partners list', deps: { db: dbm }, now: NOW });
+  ok(f1.filed && f1.how === 'thread-progress-note' && f1.surfaced, `file: thread receiver filed + surfaced (${f1.how})`);
+  const tnotes = JSON.parse(d.prepare('SELECT progress_notes FROM open_threads WHERE id = 7').get().progress_notes || '[]');
+  ok(tnotes.some((n) => /leverage note.*x\.md/i.test(n.progress)), 'file: the thread carries the leverage progress note');
+
+  // inquiry receiver: evidence appends, the line's own state untouched
+  const inq = require('../lib/inquiry');
+  const opened = inq.open({ question: 'which parishes contract with Cleco for generation across Louisiana?', deps: { db: dbm }, nowMs: NOW });
+  d.prepare("UPDATE inquiries SET next_step = 'check the PSC filings', gist = 'two parishes confirmed' WHERE id = ?").run(opened.id);
+  const f2 = iw.fileLeverageNote({ receiver: { kind: 'inquiry', id: opened.id, key: `inquiry:${opened.id}` }, artifactPath: 'notes/autonomy/cleco.md', gist: 'the utility roster names the Cleco generation contacts', deps: { db: dbm }, now: NOW });
+  ok(f2.filed && f2.how === 'inquiry-evidence', `file: inquiry receiver filed (${f2.how})`);
+  const irow = d.prepare('SELECT evidence, next_step, gist FROM inquiries WHERE id = ?').get(opened.id);
+  ok(JSON.parse(irow.evidence || '[]').some((e) => e.cite === 'notes/autonomy/cleco.md'), 'file: inquiry evidence carries the cited note');
+  ok(irow.next_step === 'check the PSC filings' && irow.gist === 'two parishes confirmed', 'file: the inquiry\'s OWN state (next_step/gist) is untouched');
+
+  // interest receiver: honest unsupported, still surfaced; junk input refused
+  const f3 = iw.fileLeverageNote({ receiver: { kind: 'interest', id: 1, key: 'interest:1' }, artifactPath: 'n.md', deps: { db: dbm }, now: NOW });
+  ok(!f3.filed && /unsupported/.test(f3.how) && f3.surfaced, 'file: interest receiver is honestly unsupported but still surfaced');
+  ok(!iw.fileLeverageNote({ receiver: null, artifactPath: 'n.md', deps: { db: dbm } }).filed, 'file: no receiver → refused');
+  const inb = d.prepare("SELECT COUNT(*) n FROM inbound_messages WHERE source = 'interweave'").get().n;
+  ok(inb >= 3, `file: inbound door carries the surfacings (${inb})`);
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   try { dbm.getDb().close(); } catch {}
   try { fs.unlinkSync(TMP); } catch {}

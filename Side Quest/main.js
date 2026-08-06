@@ -11256,6 +11256,20 @@ async function autonomyTick() {
       } catch {}
     }
     for (const p of sum.artifacts) { try { require('./lib/presence').notify('Zoe — autonomous artifact', `${String(decision.target).slice(0, 50)} → ${p}`); } catch {} }
+    // M4.3 — a build that acted on a CROSS-PROJECT INTERSECTION files its note to the RECEIVING
+    // stream's own trail (thread/focus progress note; inquiry evidence) + surfaces through the
+    // inbound door (the heartbeat delivers it when Lucas is next present). The receiver token
+    // rides decision.target from the manifest line. Fail-open — the note is already landed.
+    try {
+      if (decision.move === 'build' && sum.artifacts.length) {
+        const iw = require('./lib/interweave');
+        const recv = iw.parseReceiver(String(decision.target || ''));
+        if (recv) {
+          const r = iw.fileLeverageNote({ receiver: recv, artifactPath: sum.artifacts[0], gist: String((res && res.answer) || '').replace(/\s+/g, ' ').slice(0, 200) });
+          console.log(`[interweave] leverage note → ${recv.key}: filed=${r.filed ? r.how : 'NO (' + r.how + ')'} surfaced=${r.surfaced ? 1 : 0}`);
+        }
+      }
+    } catch (e) { console.error('[interweave] leverage filing failed:', e.message); }
     // THINGS SHE BUILDS get a long-term home (Lucas 2026-07-22: memory has places for conversations,
     // who she is, what she learns AND what she builds). Each artifact lands in doc_store, so the
     // nightly promote carries it into Echo — the same arc research dossiers ride. Without this the

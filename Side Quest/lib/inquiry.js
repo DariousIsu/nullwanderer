@@ -311,6 +311,22 @@ function writeBack(id, env, { deps = {}, nowMs = Date.now() } = {}) {
   } catch (e) { console.error('[inquiry] writeBack failed:', e.message); return false; }
 }
 
+// M4.3 — append ONE cited evidence entry WITHOUT touching the line's own state (gist/leads/
+// next_step/touches are the inquiry's self-model; a leverage note arriving from ANOTHER stream
+// must never overwrite them — writeBack replaces those fields and is therefore the wrong door).
+function addEvidence(id, { gist, cite = null } = {}, { deps = {}, nowMs = Date.now() } = {}) {
+  const row = get(id, { deps });
+  const g = str(gist).replace(/\s+/g, ' ').trim().slice(0, 240);
+  if (!row || !g) return false;
+  try {
+    let ev = jarr(row.evidence).concat([{ ts: nowMs, gist: g, cite: cite ? str(cite).slice(0, 160) : null }]);
+    if (ev.length > EVIDENCE_MAX) ev = ev.slice(-EVIDENCE_MAX);
+    _db(deps).getDb().prepare('UPDATE inquiries SET evidence = ?, last_touched_ts = ? WHERE id = ?')
+      .run(JSON.stringify(ev), nowMs, id);
+    return true;
+  } catch (e) { console.error('[inquiry] addEvidence failed:', e.message); return false; }
+}
+
 function expectTrailPush(id, verdict, { deps = {} } = {}) {
   const row = get(id, { deps });
   if (!row || !verdict || typeof verdict.met !== 'boolean') return;
@@ -376,6 +392,6 @@ function manifestLines({ deps = {}, nowMs = Date.now() } = {}) {
 
 module.exports = {
   MAX_ACTIVE, EVIDENCE_MAX, WRITEBACK_WANT, DUP_THRESHOLD,
-  open, get, listActive, touchBrief, accessHint, validateWriteback, writeBack, expectTrailPush, close, manifestLines,
+  open, get, listActive, touchBrief, accessHint, validateWriteback, writeBack, addEvidence, expectTrailPush, close, manifestLines,
   questionOverlap, heldSourceHint, heldAnswerExhausted, heldAnswerText, FORCE_CLOSE_TOUCHES,
 };

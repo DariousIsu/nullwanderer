@@ -125,4 +125,45 @@ function manifestLines({ db = null, deps = {}, now = Date.now(), sinceMs = 24 * 
   } catch { return []; }
 }
 
-module.exports = { conceptSets, intersect, manifestLines, HUB_CAP, BRAKE_KEY, BRAKE_MS, MAX_CANDIDATES };
+// ---- M4.3: the leverage note reaches its RECEIVER ---------------------------
+// A build acting on an intersection carries the receiving stream token in its target (the manifest
+// line embeds it, DECISION_WANT instructs it forward). parseReceiver recovers it; fileLeverageNote
+// routes the finished note to the receiving stream's OWN trail + surfaces it through the inbound
+// door (the same unprompted channel email arrivals ride — the heartbeat delivers it when Lucas is
+// next present). Fail-open: a filing failure never un-lands the note (it already lives on disk +
+// doc_store); it just doesn't reach the receiver's trail.
+const RECEIVER_RE = /\[(thread|inquiry|focus|interest):(\d+)\]/i;
+
+function parseReceiver(text) {
+  const m = RECEIVER_RE.exec(String(text || ''));
+  if (!m) return null;
+  return { kind: m[1].toLowerCase(), id: parseInt(m[2], 10), key: `${m[1].toLowerCase()}:${m[2]}` };
+}
+
+function fileLeverageNote({ receiver, artifactPath, gist = '', deps = {}, now = Date.now() } = {}) {
+  if (!receiver || !artifactPath) return { filed: false, how: 'no-receiver-or-artifact' };
+  const dbm = deps.db || require('./db');
+  const g = String(gist || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  const note = `Cross-project leverage note (interweave): ${artifactPath}${g ? ` — ${g}` : ''}`;
+  let filed = false, how = 'unsupported';
+  try {
+    if (receiver.kind === 'thread' || receiver.kind === 'focus') {          // a focus IS an open_threads row
+      filed = !!dbm.touchOpenThread(receiver.id, note);
+      how = 'thread-progress-note';
+    } else if (receiver.kind === 'inquiry') {
+      filed = !!(deps.inquiry || require('./inquiry')).addEvidence(receiver.id, { gist: g || `leverage note: ${artifactPath}`, cite: artifactPath }, { deps: { db: dbm }, nowMs: now });
+      how = 'inquiry-evidence';
+    } else {
+      how = `unsupported-receiver:${receiver.kind}`;                        // interest: no trail to file to (v1, honest)
+    }
+  } catch (e) { try { console.error('[interweave] filing failed:', e.message); } catch {} }
+  // Surface to Lucas through the inbound door regardless of trail-filing (the note EXISTS either way).
+  let surfaced = false;
+  try {
+    dbm.insertInbound({ tabUrl: 'interweave', speaker: 'zoe', text: `I built a cross-project leverage note for your ${receiver.kind} — ${artifactPath}${g ? `: ${g}` : ''}`, source: 'interweave' });
+    surfaced = true;
+  } catch {}
+  return { filed, how, surfaced };
+}
+
+module.exports = { conceptSets, intersect, manifestLines, parseReceiver, fileLeverageNote, HUB_CAP, BRAKE_KEY, BRAKE_MS, MAX_CANDIDATES };
