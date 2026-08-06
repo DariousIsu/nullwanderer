@@ -204,6 +204,57 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
       'narrated-done with no gathered work → null answer (local-reply fallback), never a raw {"thought":…}');
   }
 
+  // --- 2.5.4 HISTORY COMPACTION (O1): whole-step units, tool-results-first, marked, verified ---
+  console.log('\nhistory compaction (2.5.4 → O1):');
+  {
+    const big = (label) => `\n• step: read(${label}) → ${'x'.repeat(5000)}`;
+    const parts = [big('a'), big('b'), big('c'), big('d'), big('e')];
+    const r = op.compactHistory(parts, { budgetChars: 16000, keepTail: 3 });
+    ok(r.compacted === 2 && /RESULT COMPACTED/.test(r.parts[0]) && /RESULT COMPACTED/.test(r.parts[1]),
+      'older results stub down until the budget holds');
+    ok(!/RESULT COMPACTED/.test(r.parts[2]) && r.parts[4] === parts[4],
+      'the newest keepTail steps stay verbatim');
+    ok(r.parts.reduce((n, p) => n + p.length, 0) < 16000, 'the drop is real (verified by length)');
+    const r2 = op.compactHistory(parts.slice(0, 2), { budgetChars: 999999 });
+    ok(r2.compacted === 0 && r2.parts[0] === parts[0], 'under budget → untouched');
+    // integration: a loop whose tool floods history sees the compaction note in a later prompt
+    const bigTool = async () => 'y'.repeat(30000);
+    let sawNote = false, si2 = 0;
+    const script3 = [
+      '{"thought":"1","action":{"tool":"source_read","args":{"path":"a"}}}',
+      '{"thought":"2","action":{"tool":"source_read","args":{"path":"b"}}}',
+      '{"thought":"3","action":{"tool":"source_read","args":{"path":"c"}}}',
+      '{"thought":"4","action":{"tool":"source_read","args":{"path":"d"}}}',
+      '{"final":"done"}',
+    ];
+    const complete3 = async (msgs) => {
+      const last = String(msgs[msgs.length - 1].content || '');
+      if (/compacted to stubs to fit the window/.test(last)) sawNote = true;
+      return { text: script3[si2++] };
+    };
+    const rr3 = await op.runOperator({ userMessage: 'x', deps: { complete: complete3, tools: { source_read: bigTool } }, maxSteps: 6 });
+    ok(rr3 && rr3.answer === 'done' && sawNote,
+      'an over-budget history compacts mid-loop and the prompt carries the visible note');
+  }
+
+  // --- 2.5.4 self_test OUT-OF-BAND: the gate run refunds the wall-clock ---
+  {
+    let fakeNow = 0;
+    const nowFn = () => fakeNow;
+    const script4 = [
+      '{"thought":"verify","action":{"tool":"self_test","args":{"suite":"smoke_recall.js"}}}',
+      '{"final":"healthy"}',
+    ];
+    let si4 = 0;
+    const complete4 = async () => ({ text: script4[si4++] });
+    // the gate takes 50s of fake time against a 10s budget — without the refund, step 2 never runs
+    const tools4 = { self_test: async () => { fakeNow += 50000; return 'ALL PASS'; } };
+    const rr4 = await op.runOperator({ userMessage: 'are you healthy', deps: { complete: complete4, tools: tools4, now: nowFn }, maxSteps: 4, maxMs: 10000 });
+    ok(rr4 && rr4.answer === 'healthy' && rr4.steps.length === 1,
+      'a minutes-long self_test does not eat the wall-clock (out-of-band) — the loop still reaches its final');
+    ok(op.FREE_CLOCK.has('self_test'), 'self_test is the declared free-clock tool');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

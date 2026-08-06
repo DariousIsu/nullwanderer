@@ -293,6 +293,30 @@ function parseSliceResult(answer, covered = []) {
   return { org, orgKey, isNew, done, body };
 }
 
+// ── HISTORY COMPACTION (2.5.4 → O1 circulation spec) ─────────────────────────────────────────
+// A 24-step review at full-size tool results is ~½MB of raw history — past the model window, the
+// daemon silently keeps the TAIL, so the EARLIEST reads (the map, the first files) are exactly
+// what dies. Compact instead: threshold derived from the ACTUAL resolved window (never a
+// literal), boundary-safe (whole steps only), tool-results-first (an old step's RESULT trims to
+// a stub; its step line survives), marked (a visible note names what was trimmed), verified (the
+// caller re-measures). The newest keepTail steps stay verbatim — recency is where the work is.
+function compactHistory(parts, { budgetChars, keepTail = 3, stubChars = 240 } = {}) {
+  const size = (arr) => arr.reduce((n, p) => n + p.length, 0);
+  if (size(parts) <= budgetChars) return { parts, compacted: 0 };
+  const out = parts.slice();
+  let compacted = 0;
+  for (let i = 0; i < out.length - keepTail && size(out) > budgetChars; i++) {
+    if (out[i].length <= stubChars + 160) continue;          // already small — not worth a stub
+    out[i] = out[i].slice(0, stubChars) + ' … [RESULT COMPACTED to fit the window — the step line is intact; re-run the tool if you still need the rest]';
+    compacted++;
+  }
+  return { parts: out, compacted };
+}
+
+// Verification runs OFF the wall-clock (2.5.4: self_test out-of-band) — a minutes-long gate run
+// must not eat the review's thinking budget. Its elapsed time is refunded to the loop's clock.
+const FREE_CLOCK = new Set(['self_test']);
+
 /**
  * Run the agent loop. deps.complete(messages)->{text}|string ; deps.tools = { web_search, echo,
  * browser_read, recall, file } each (args)->string. Returns { answer, steps, toolsUsed } or null.
@@ -302,19 +326,31 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
   const tools = deps.tools || {};
   const nowFn = deps.now || Date.now;
   if (!userMessage || typeof complete !== 'function') return null;
-  const t0 = nowFn();
+  let t0 = nowFn();                 // let: FREE_CLOCK tools refund their elapsed time
   const steps = [];
-  let history = '';
+  // History is an ARRAY of per-step entries (the compaction unit — boundary-safe by construction);
+  // a running note tells the model when older results have been stubbed.
+  const histParts = [];
+  let _compactedTotal = 0;
+  const _renderHistory = () => (_compactedTotal ? `\n[NOTE: ${_compactedTotal} earlier tool result(s) were compacted to stubs to fit the window — re-run a tool if you need its full output]` : '') + histParts.join('');
   // numPredict governs how big the model's response (incl. the {final:…} deliverable) can be — large
   // for directed tasks so a long list/write-up isn't truncated at generation. model = optional cloud
   // model override (per-lane); toolSpec = optional lane-scoped tool menu.
   const cOpts = { num_predict: numPredict, ...(model ? { model } : {}) };
   const capChars = _contextCap();
+  // The history budget is a FRACTION OF THE RESOLVED WINDOW (O1 — never a constant): ~45% of
+  // num_ctx at ~3.2 chars/token leaves the rest for identity/context/user message/generation.
+  // Resolution failure holds the cloud_window FLOOR's share — still window-derived, just the floor.
+  let histBudget = Math.floor(require('./cloud_window').FLOOR * 3.2 * 0.45);
+  try {
+    const w = await require('./cloud_logic').resolveWindow(cOpts.model || null);
+    if (w && w.num_ctx) histBudget = Math.floor(w.num_ctx * 3.2 * 0.45);
+  } catch { /* floor share stands */ }
   let repaired = false;
   // FORCE A FINAL from the work already gathered — the same compile the out-of-steps path uses.
   const _forceFinalFromWork = async () => {
     try {
-      const res = await complete([{ role: 'user', content: `You are out of tool steps. Using ONLY the work below, give Zoe the complete grounded answer to: "${String(userMessage).slice(0, capChars)}".${history}\n\nReply with the answer text only.` }], cOpts);
+      const res = await complete([{ role: 'user', content: `You are out of tool steps. Using ONLY the work below, give Zoe the complete grounded answer to: "${String(userMessage).slice(0, capChars)}".${_renderHistory()}\n\nReply with the answer text only.` }], cOpts);
       const ft = (typeof res === 'string') ? res : ((res && res.text) || '');
       return ft.trim() || null;
     } catch { return null; }
@@ -335,6 +371,14 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
   };
   for (let i = 0; i < maxSteps; i++) {
     if (nowFn() - t0 > maxMs) break;   // over the wall-clock budget → stop looping, force a final below
+    // Compact BEFORE building the prompt, and verify the drop actually happened (O1: eviction is
+    // measured, never assumed) — an over-budget history that stubs down still reads coherently.
+    if (histParts.reduce((n, p) => n + p.length, 0) > histBudget) {
+      const r = compactHistory(histParts, { budgetChars: histBudget });
+      histParts.length = 0; histParts.push(...r.parts);
+      if (r.compacted) { _compactedTotal += r.compacted; console.log(`[operator] history compacted — ${r.compacted} older result(s) stubbed (budget ${histBudget}ch)`); }
+    }
+    const history = _renderHistory();
     let res;
     try { res = await complete(_buildPrompt({ userMessage, context, history, stepsLeft: maxSteps - i, toolSpec }), cOpts); }
     catch (e) { return steps.length ? _finalize(steps, null) : null; }
@@ -371,8 +415,10 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
     const runOne = async ({ tool, args }) => {
       const fn = tools[tool];
       let result;
+      const _tStart = nowFn();
       if (typeof fn !== 'function') result = `ERROR: no tool named "${tool}".`;
       else { try { result = await fn(args); } catch (e) { result = 'ERROR: ' + (e && e.message || e); } }
+      if (FREE_CLOCK.has(tool)) t0 += nowFn() - _tStart;   // out-of-band: the gate run refunds the wall-clock
       // Sized to the same knob the chat-tag lane got in the cap purge (was 3000, then re-sliced to
       // 1200 in history — the agent "read" every tool result through a 1,200-char keyhole while the
       // chat lane read 24k). One cap, applied once; history carries the same text the step stored.
@@ -399,19 +445,22 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
 
     // History labels a batch as ONE step with lettered parts, so the model reads its own request
     // back in the shape it sent — and a result it never got is NAMED rather than silently missing.
+    // Built as ONE entry per step (the compaction unit).
+    let entry;
     if (done.length === 1) {
-      history += `\n• step ${i + 1}: ${done[0].tool}(${JSON.stringify(done[0].args).slice(0, 300)}) → ${done[0].result}`;
+      entry = `\n• step ${i + 1}: ${done[0].tool}(${JSON.stringify(done[0].args).slice(0, 300)}) → ${done[0].result}`;
     } else {
-      history += `\n• step ${i + 1} (${done.length} together):`;
-      done.forEach((d, k) => { history += `\n  ${String.fromCharCode(97 + k)}. ${d.tool}(${JSON.stringify(d.args).slice(0, 300)}) → ${d.result}`; });
+      entry = `\n• step ${i + 1} (${done.length} together):`;
+      done.forEach((d, k) => { entry += `\n  ${String.fromCharCode(97 + k)}. ${d.tool}(${JSON.stringify(d.args).slice(0, 300)}) → ${d.result}`; });
     }
     if (deferred.length) {
-      history += `\n  [NOT RUN: ${deferred.map((d) => d.tool).join(', ')} — "${batch[batch.length - 1].tool}" changes what is on the page, so decide those again now that you can see its result.]`;
+      entry += `\n  [NOT RUN: ${deferred.map((d) => d.tool).join(', ')} — "${batch[batch.length - 1].tool}" changes what is on the page, so decide those again now that you can see its result.]`;
     }
-    if (dropped) history += `\n  [NOT RUN: ${dropped} action(s) over the ${MAX_BATCH}-per-step limit — ask again for the ones you still need.]`;
+    if (dropped) entry += `\n  [NOT RUN: ${dropped} action(s) over the ${MAX_BATCH}-per-step limit — ask again for the ones you still need.]`;
+    histParts.push(entry);
   }
   // out of steps → force a final answer from what we gathered (same compile as the narrated-done path)
   return _finalize(steps, await _forceFinalFromWork());
 }
 
-module.exports = { runOperator, parseAction, looksLikeJsonStep, isDirectedTask, parseSliceResult, operatorModel, _operatorComplete, TOOL_SPEC, TOOL_SPEC_CORE, TOOL_SPEC_TAIL, DEFAULT_MAX_STEPS, actionsOf, batchIsReadOnly, cutAtObservePoint, MAX_BATCH, READ_SAFE, OBSERVE_AFTER };
+module.exports = { runOperator, parseAction, looksLikeJsonStep, isDirectedTask, parseSliceResult, operatorModel, _operatorComplete, TOOL_SPEC, TOOL_SPEC_CORE, TOOL_SPEC_TAIL, DEFAULT_MAX_STEPS, actionsOf, batchIsReadOnly, cutAtObservePoint, compactHistory, FREE_CLOCK, MAX_BATCH, READ_SAFE, OBSERVE_AFTER };

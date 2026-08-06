@@ -7632,6 +7632,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Reversible: db meta operator.mode = full (default) | off.
   let operatorAnswer = null;
   let operatorDirected = false;   // the operator produced a DIRECTED deliverable (verbatim-delivery contract, not a voiced chat answer)
+  let operatorReviewDirect = false;   // 2.5.4: a finished SELF-REVIEW skips BOTH voices — delivered verbatim (re-voicing truncates/paraphrases a long review)
   try {
     const opMode = (() => { try { return (db.getMeta('operator.mode') || 'full').trim(); } catch { return 'full'; } })();
     // (intakeRoute / isAssignment were computed BEFORE the deliverable poll above — reused here.)
@@ -7685,17 +7686,23 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // line, which reads as brushing Lucas off the instant he hands her a task.
       try { sendBusy(require('./lib/snapback').pickWorkingLine(Date.now(), { task: directed })); } catch {}
       const _codeReviewSteer = selfCodeReview
-        ? 'THIS IS A REQUEST TO REVIEW YOUR OWN CODE — and you HAVE the tools for it: source_map {} (the file map of the program you run on), source_read {"path":"lib/x.js"} (read a whole file), source_search {"pattern":"…"} (find where something lives / who calls it), self_test {"suite":"smoke_x.js"} (run your own offline gate — the honest "am I healthy?"). BUDGET YOUR STEPS — this is the failure to avoid: reading EVERYTHING and running out before you write. So: source_map ONCE, self_test if health is in question, then source_read AT MOST ~4 files that actually matter — then STOP gathering and WRITE the review. A focused review of a few files you actually analyzed beats mapping the whole tree and having no steps left to compile it. Your FINAL message MUST BE the review itself — concrete findings with file:line — NOT "let me compile", NOT "I\'ll report shortly", NOT "starting on that now". Produce the report THIS turn from what the tools returned; if you have only partial coverage, report THAT (what you read, what you found, what you did not get to) — a partial real review beats a promise.\n\n'
+        ? 'THIS IS A REQUEST TO REVIEW YOUR OWN CODE — and you HAVE the tools for it: source_map {} (the file map of the program you run on), source_read {"path":"lib/x.js"} (read a whole file), source_search {"pattern":"…"} (find where something lives / who calls it), self_test {"suite":"smoke_x.js"} (run your own offline gate — the honest "am I healthy?"). BUDGET YOUR STEPS — this is the failure to avoid: reading EVERYTHING and running out before you write. So: source_map ONCE, self_test if health is in question, then source_outline / source_read the files that actually matter (~8 at most — you have the review-lane budget, not unlimited steps) — then STOP gathering and WRITE the review. A focused review of a few files you actually analyzed beats mapping the whole tree and having no steps left to compile it. Your FINAL message MUST BE the review itself — concrete findings with file:line — NOT "let me compile", NOT "I\'ll report shortly", NOT "starting on that now". Produce the report THIS turn from what the tools returned; if you have only partial coverage, report THAT (what you read, what you found, what you did not get to) — a partial real review beats a promise.\n\n'
         : '';
-      const opRes = await runCloudOperator({ userMessage, context: _codeReviewSteer + (docSetBlock ? `${docSetBlock}\n\n` : '') + (distilledBrief || retrievedKnowledgeBlock || ''), task: directed });
-      if (directed) console.log('[operator] directed TASK → in-turn completion mode (8 steps / 90s)');
+      const opRes = await runCloudOperator({ userMessage, context: _codeReviewSteer + (docSetBlock ? `${docSetBlock}\n\n` : '') + (distilledBrief || retrievedKnowledgeBlock || ''), task: directed, review: selfCodeReview });
       if (opRes && opRes.answer) {
         operatorAnswer = opRes.answer;
         if (directed) operatorDirected = true;   // verbatim-delivery contract → survives a cloud-voice outage (direct-deliver below)
+        if (selfCodeReview) {
+          // 2.5.4 DIRECT-DELIVER BY DEFAULT for reviews: the review IS the deliverable — re-voicing it
+          // (cloud or local) paraphrases and truncates (measured 2026-08-02). No DELIVER block is
+          // appended; the delivery branch below feeds the finished review to the say pipeline verbatim.
+          operatorReviewDirect = true;
+        } else {
         const block = directed
           ? `[DELIVER THIS TO ${userName} — the complete result of the task you just ran. Present the FULL thing in your own voice: keep EVERY item, do NOT summarize, shorten, or drop any of it. A brief one-line intro is fine, then the complete result. If you also saved it to a file, mention where, but still include it all here:\n${operatorAnswer}]`
           : require('./lib/answer_draft').buildVoiceBlock(operatorAnswer, userName);
         composedUserMessage = `${composedUserMessage}\n\n${block}`;
+        }
         try { db.insertMonologue({ content: `operator drove the turn [${(opRes.toolsUsed || []).join('+') || 'no tools'}]: ${operatorAnswer.slice(0, 200)}`, model: 'operator', type: 'reading' }); } catch {}
         console.log(`[operator] drove turn (${(opRes.toolsUsed || []).join('+') || 'no tools'}) → "${operatorAnswer.slice(0, 80)}"`);
       }
@@ -8043,7 +8050,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // the cloud tool-followup loop below, which already has the full 549-tool surface — and the manifest
   // it reasons over rides in the package's `references` slot (see the manifest wiring above), with the
   // owner-world/self coordinates dereferenceable via <recall coord="…"/>. Local packages, the cloud runs.
-  if (cloudWritesReply) {
+  // 2.5.4: a finished self-review never runs the cloud voice — the deliverable exists verbatim and
+  // the direct branch below ships it; a cloud re-voice could only paraphrase or truncate it.
+  if (cloudWritesReply && !operatorReviewDirect) {
     try {
       // GIVE THE CLOUD THE TOOL SURFACE. The suit is stripped from `messages` above on cloud-owned
       // turns — correct while the local 12b wrote, because it fumbled tool JSON and the hard-coded
@@ -8399,14 +8408,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   } catch (e) { console.error('[fit] local fit failed — sending unfitted:', e.message); }
   try {
     if (replyWriter !== MODEL) { /* the cloud already wrote it — skip the local generation entirely */ }
-    else if (operatorDirected && operatorAnswer && operatorAnswer.trim()) {
-      // CLOUD VOICE DOWN + a DIRECTED DELIVERABLE: the operator already wrote the complete review/result.
-      // Re-voicing it through the local 8192-ctx model silently truncates a large deliverable — the mid-
-      // stream cut-off (2026-08-02, self-code-review under a cloud 503 storm). The deliverable is finished
-      // prose under a verbatim contract, so deliver it DIRECTLY through the same say pipeline — the whole
-      // thing, no window truncation, no lossy paraphrase. Defensive: neutralize any literal closing tag in
-      // the content (a ZW space after "<") so it can't end the say early.
-      console.warn(`[main] cloud voice unavailable + directed deliverable → delivering operator answer directly (${operatorAnswer.length}ch, no local re-voice)`);
+    else if ((operatorDirected || operatorReviewDirect) && operatorAnswer && operatorAnswer.trim()) {
+      // A DIRECTED DELIVERABLE with no cloud voice in the way — either the cloud voice is DOWN
+      // (the 2026-08-02 503-storm case) or this is a SELF-REVIEW, which skips the voices BY DEFAULT
+      // (2.5.4: re-voicing a long review truncates/paraphrases it). The deliverable is finished
+      // prose under a verbatim contract, so deliver it DIRECTLY through the same say pipeline — the
+      // whole thing, no window truncation, no lossy paraphrase. Defensive: neutralize any literal
+      // closing tag in the content (a ZW space after "<") so it can't end the say early.
+      console.warn(`[main] ${operatorReviewDirect ? 'self-review deliverable → DIRECT delivery (default for reviews)' : 'cloud voice unavailable + directed deliverable → delivering operator answer directly'} (${operatorAnswer.length}ch, no re-voice)`);
       const _safe = String(operatorAnswer).replace(/<\/(say|think)>/gi, '<​/$1>');
       parser.feed(`<say>${_safe}</say>`);
       replyWriter = 'operator-direct';
@@ -10310,7 +10319,7 @@ async function runCloudOperator(opts) {
   return require('./lib/lane').run({ autonomous: !!(opts && opts.autonomous) }, () => _runCloudOperator(opts || {}));
 }
 
-async function _runCloudOperator({ userMessage, context, task = false, autonomous = false, maintain = false, toolNames = null, model = null, toolSpec = null, budgetMult = 1 }) {
+async function _runCloudOperator({ userMessage, context, task = false, autonomous = false, maintain = false, toolNames = null, model = null, toolSpec = null, budgetMult = 1, review = false }) {
   try {
     const operator = require('./lib/operator');
     // Per-tool timeout: a slow/hung capability (Echo down, a stalled page) can't block the turn —
@@ -10335,18 +10344,24 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
     const taskNote = task
       ? '\n\nThis is an ASSIGNED TASK — drive it to a COMPLETE deliverable in THIS turn: gather everything needed across multiple tool steps, do NOT stop after one step or hand back a partial teaser, and produce the FULL result (the entire list / the complete write-up). If the deliverable is long, save it with the file tool (op:"write", a notes/… path) and tell Lucas where it is. Only give a final answer once the deliverable is actually complete.'
       : '';
+    // 12/180s (was 8/90s): parity with the chat lane's MAX_ECHO_HOPS=12, and each step now carries
+    // full-size tool results (operator.js reads them at toolResultChars, not a 1,200-char keyhole),
+    // so later steps are worth their wall-clock. Chat turns keep the snappy 4/45s defaults.
+    // IDLE-DEPTH BUDGET (Slice 1): the anticipatory ladder scales the AUTONOMOUS task budget by how deep
+    // the idle tick has earned to go (lib/idle_depth). Deeper idle → more steps/time to reach further;
+    // bounded so a deep tier can't run away (steps ≤2×, time ≤300s) and floored so a shallow tier still
+    // completes (≥6 steps). Other brakes (research throttle, slot pool) still bind. NOT a data gate.
+    // 2.5.4 REVIEW LANE: a source review pages through files at full size — 12 steps/180s starved
+    // it into promise-narration. 24 steps / 300s, still bounded; self_test runs off the wall-clock
+    // (operator.js FREE_CLOCK) and history compacts instead of overflowing (compactHistory).
+    const _maxSteps = task ? (review ? 24 : Math.max(6, Math.round(12 * Math.min(Math.max(Number(budgetMult) || 1, 0.5), 2)))) : undefined;
+    const _maxMs = task ? (review ? 300000 : Math.min(300000, Math.round(180000 * Math.max(Number(budgetMult) || 1, 0.75)))) : undefined;
+    if (task) console.log(`[operator] ${review ? 'SELF-REVIEW' : 'directed TASK'} → in-turn completion mode (${_maxSteps} steps / ${Math.round(_maxMs / 1000)}s)`);
     const res = await operator.runOperator({
       userMessage, context: (context || '') + taskNote,
       deps: { complete: operator._operatorComplete, tools },
-      // 12/180s (was 8/90s): parity with the chat lane's MAX_ECHO_HOPS=12, and each step now carries
-      // full-size tool results (operator.js reads them at toolResultChars, not a 1,200-char keyhole),
-      // so later steps are worth their wall-clock. Chat turns keep the snappy 4/45s defaults.
-      // IDLE-DEPTH BUDGET (Slice 1): the anticipatory ladder scales the AUTONOMOUS task budget by how deep
-      // the idle tick has earned to go (lib/idle_depth). Deeper idle → more steps/time to reach further;
-      // bounded so a deep tier can't run away (steps ≤2×, time ≤300s) and floored so a shallow tier still
-      // completes (≥6 steps). Other brakes (research throttle, slot pool) still bind. NOT a data gate.
-      maxSteps: task ? Math.max(6, Math.round(12 * Math.min(Math.max(Number(budgetMult) || 1, 0.5), 2))) : undefined,
-      maxMs: task ? Math.min(300000, Math.round(180000 * Math.max(Number(budgetMult) || 1, 0.75))) : undefined,
+      maxSteps: _maxSteps,
+      maxMs: _maxMs,
       numPredict: task ? config.sectionNumPredict() : undefined,   // a list/write-up can be long — don't truncate it at generation (cloud-leverage: deeper write-ups)
       model, toolSpec                         // per-lane model + tool menu (null = single-lane defaults)
     });
