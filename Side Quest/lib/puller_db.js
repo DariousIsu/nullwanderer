@@ -190,9 +190,27 @@ const pj = (s, dflt) => { if (s == null) return dflt; try { return JSON.parse(s)
 
 // ---- targets -------------------------------------------------------------------------------------
 
+// M4.4 — THE ORG DOOR. Measured 2026-08-02: 271,334 targets, 100% kind='person', zero orgs — yet
+// "The Joseph Rainey Center for Public Policy" was enrolled AS A PERSON and researched for an email.
+// The lane an object arrived through became its type (the Fulton County disease). The schema always
+// allowed kind='org'; nothing ever set it. This detector is deliberately CONSERVATIVE — every token
+// is a whole word no real person's name contains; a false positive would park a real person out of
+// enrichment, a false negative is just the status quo.
+// ('church' deliberately absent — Frank Church-class surnames are certain in a civic CRM, and an org
+// named for a church nearly always carries another token here.)
+const _ORG_NAME_RE = /\b(?:center|centre|institute|institution|foundation|university|college|committee|association|council|coalition|federation|alliance|society|bureau|agency|department|ministry|corporation|corp|incorporated|inc|llc|llp|ltd|company|holdings|fund|pac|project|caucus|commission|authority|league|union|academy|museum|library|laboratory|labs|senate|legislature|assembly|office|board|county|parish|campaign|partners|group)\b/i;
+function orgShapedName(name) { return _ORG_NAME_RE.test(String(name || '')); }
+
 function createTarget({ kind = 'person', name, company = null, domain = null, function: fn = null,
                         priority = null, status = 'adhoc', crmId = null, notes = null } = {}) {
   if (!name) throw new Error('createTarget: name required');
+  // The person lane REFUSES an org-shaped name at the door — it enrolls as kind='org' instead
+  // (finally using the schema's org kind), excluded from the person worklists below. Refusal
+  // names the door (circuit discipline): the log line is the audit trail.
+  if (kind === 'person' && orgShapedName(name)) {
+    kind = 'org';
+    try { console.log(`[puller] org-shaped name — person lane REFUSED at door=createTarget, enrolled kind=org: "${String(name).slice(0, 80)}"`); } catch {}
+  }
   const ts = now();
   const info = _db().prepare(
     `INSERT INTO targets (kind, name, company, domain, function, priority, status, crm_id, notes, created_at, last_accessed_at)
@@ -238,7 +256,7 @@ function listValueScopedTargets({ limit = 500, crmShare = 300, bulkMin = BULK_CO
   // Tier A — CRM-linked / promoted. Disjoint from the tail query below by construction (the tail
   // requires crm_id IS NULL AND status='adhoc'), so no dedup pass is needed.
   const a = _db().prepare(
-    `SELECT * FROM targets WHERE merged_into IS NULL AND (crm_id IS NOT NULL OR status = 'promoted')
+    `SELECT * FROM targets WHERE merged_into IS NULL AND kind = 'person' AND (crm_id IS NOT NULL OR status = 'promoted')
      ORDER BY last_accessed_at DESC LIMIT ?`
   ).all(Math.max(0, Math.min(crmShare, limit)));
   const rest = Math.max(0, limit - a.length);
@@ -249,7 +267,7 @@ function listValueScopedTargets({ limit = 500, crmShare = 300, bulkMin = BULK_CO
   const bulk = [...bulkCompanies({ min: bulkMin })];
   const notBulk = bulk.length ? `AND (company IS NULL OR company NOT IN (${bulk.map(() => '?').join(',')}))` : '';
   const c = _db().prepare(
-    `SELECT * FROM targets WHERE merged_into IS NULL AND crm_id IS NULL AND status = 'adhoc' ${notBulk}
+    `SELECT * FROM targets WHERE merged_into IS NULL AND kind = 'person' AND crm_id IS NULL AND status = 'adhoc' ${notBulk}
      ORDER BY last_accessed_at DESC LIMIT ?`
   ).all(...bulk, rest);
   return a.concat(c);
@@ -599,7 +617,7 @@ function splitTarget(fromId, { obsIds = [], name, company = null, domain = null,
 
 module.exports = {
   init, close,
-  createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, bulkCompanies, eachTargetKey, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName,
+  createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, bulkCompanies, eachTargetKey, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName,
   addObservation, listObservations, observationCounts, failedAddresses,
   upsertBelief, getBelief, beliefValuesByType, listBeliefs, markSendState, listBeliefsBySendState,
   getPatternState, savePatternState,
