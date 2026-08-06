@@ -6,9 +6,10 @@
  *                  run llava / llama3.2-vision / qwen2.5-vl on the GPU). Same Ollama image API both
  *                  ways — only base+model differ. Model + tier are db-meta configurable so the right
  *                  name can be set once we confirm what the cloud account exposes.
- *  OUT (create):   generate(prompt) → an image. Ollama CANNOT generate images, so this uses a paid
- *                  image API (OpenAI gpt-image-1 by default). KILL-SWITCHED OFF by default (like the
- *                  email send-gate) — enabled only with ZOE_IMAGE_GEN_ENABLED=1 + a provider key.
+ *  OUT (create):   generate(prompt) → an image. LIVE (2026-08-04): default provider is LOCAL ComfyUI
+ *                  (SDXL on the GPU, on-device, no key, no cost) — ZOE_IMAGE_GEN_ENABLED=1 is set and the
+ *                  ComfyUI server is app-supervised. Ollama can't generate images; the cloud OpenAI path
+ *                  (gpt-image-1) is a fallback only. Supports text-to-image AND image-to-image (initImage).
  *
  * Every external call is dep-injectable and fail-safe (returns {ok:false,reason}, never throws into
  * a turn), so the deterministic logic is fully smoke-testable offline.
@@ -95,6 +96,96 @@ async function _openaiGenerate(prompt, { apiKey, size }) {
   return b64;
 }
 
+// ---- LOCAL provider: ComfyUI (SDXL/FLUX on the GPU, 100% on-device) --------------------------------
+// Talks to a local ComfyUI server (default 127.0.0.1:8188). Builds a standard SDXL API graph, submits it,
+// polls /history for the result, and fetches the PNG via /view → base64. Supports text-to-image AND
+// image-to-image ("take this image and do X" — initImage is uploaded, denoise < 1 preserves structure).
+// Nothing leaves the machine: prompt, source image, and output all stay local.
+function comfyBase() { return String(process.env.COMFYUI_URL || 'http://127.0.0.1:8188').replace(/\/+$/, ''); }
+function comfyCheckpoint() {
+  try { const m = db.getMeta('image.checkpoint'); if (m) return m; } catch {}
+  return process.env.COMFYUI_CKPT || 'sd_xl_base_1.0.safetensors';
+}
+// provider: db meta image.provider → env ZOE_IMAGE_PROVIDER → default 'comfyui' (local). 'openai' forces cloud.
+function imageProvider() {
+  let p = null; try { p = db.getMeta('image.provider'); } catch {}
+  return String(p || process.env.ZOE_IMAGE_PROVIDER || 'comfyui').toLowerCase();
+}
+function _parseSize(size) {
+  const m = String(size || '1024x1024').match(/(\d+)\s*[x×]\s*(\d+)/);
+  let w = m ? parseInt(m[1], 10) : 1024, h = m ? parseInt(m[2], 10) : 1024;
+  // clamp to sane SDXL bounds (multiples of 8)
+  w = Math.max(512, Math.min(1536, Math.round(w / 8) * 8));
+  h = Math.max(512, Math.min(1536, Math.round(h / 8) * 8));
+  return [w, h];
+}
+// Standard SDXL ComfyUI API graph. initImageName set → image-to-image (LoadImage→VAEEncode, denoise<1).
+function _sdxlWorkflow({ prompt, negative, width, height, steps, cfg, seed, ckpt, initImageName, denoise }) {
+  const g = {
+    '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: ckpt } },
+    '6': { class_type: 'CLIPTextEncode', inputs: { text: prompt, clip: ['4', 1] } },
+    '7': { class_type: 'CLIPTextEncode', inputs: { text: negative || 'lowres, blurry, watermark, text, deformed', clip: ['4', 1] } },
+    '3': { class_type: 'KSampler', inputs: { seed, steps, cfg, sampler_name: 'dpmpp_2m', scheduler: 'karras', denoise: initImageName ? (denoise == null ? 0.6 : denoise) : 1.0, model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] } },
+    '8': { class_type: 'VAEDecode', inputs: { samples: ['3', 0], vae: ['4', 2] } },
+    '9': { class_type: 'SaveImage', inputs: { filename_prefix: 'zoe', images: ['8', 0] } },
+  };
+  if (initImageName) {
+    g['10'] = { class_type: 'LoadImage', inputs: { image: initImageName } };
+    g['5'] = { class_type: 'VAEEncode', inputs: { pixels: ['10', 0], vae: ['4', 2] } };
+  } else {
+    g['5'] = { class_type: 'EmptyLatentImage', inputs: { width, height, batch_size: 1 } };
+  }
+  return g;
+}
+// Upload a base64/dataURI image to ComfyUI's input dir (for image-to-image). Returns the stored filename.
+async function _comfyUpload(base64, name) {
+  const base = comfyBase();
+  const buf = Buffer.from(_stripDataUrl(base64), 'base64');
+  const fd = new FormData();
+  fd.append('image', new Blob([buf], { type: 'image/png' }), name);
+  fd.append('overwrite', 'true');
+  const r = await fetch(`${base}/upload/image`, { method: 'POST', body: fd });
+  if (!r.ok) throw new Error(`comfy /upload HTTP ${r.status}`);
+  const j = await r.json();
+  return j.name || name;
+}
+async function _comfyGenerate(prompt, { negative = null, size = '1024x1024', initImage = null, denoise = null, steps = 28, cfg = 7.0, seed = null, nowTs = null, timeoutMs = 240000 } = {}) {
+  const base = comfyBase();
+  const [width, height] = _parseSize(size);
+  let initImageName = null;
+  if (initImage) initImageName = await _comfyUpload(initImage, `zoe_init_${nowTs || Date.now()}.png`);
+  const useSeed = (seed == null) ? Math.floor(Math.random() * 1e15) : seed;
+  const workflow = _sdxlWorkflow({ prompt, negative, width, height, steps, cfg, seed: useSeed, ckpt: comfyCheckpoint(), initImageName, denoise });
+  const client_id = `zoe_${nowTs || Date.now()}`;
+  const sub = await fetch(`${base}/prompt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: workflow, client_id }) });
+  if (!sub.ok) throw new Error(`comfy /prompt HTTP ${sub.status}: ${(await sub.text().catch(() => '')).slice(0, 200)}`);
+  const { prompt_id } = await sub.json();
+  if (!prompt_id) throw new Error('comfy returned no prompt_id');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((s) => setTimeout(s, 1500));
+    let entry = null;
+    try { const h = await (await fetch(`${base}/history/${prompt_id}`)).json(); entry = h && h[prompt_id]; } catch {}
+    if (!entry) continue;
+    if (entry.status && entry.status.status_str === 'error') throw new Error('comfy execution error (check the workflow / VRAM)');
+    const outs = entry.outputs || {};
+    for (const nid of Object.keys(outs)) {
+      const imgs = outs[nid].images;
+      if (imgs && imgs.length) {
+        const im = imgs[0];
+        const q = `filename=${encodeURIComponent(im.filename)}&subfolder=${encodeURIComponent(im.subfolder || '')}&type=${encodeURIComponent(im.type || 'output')}`;
+        const buf = await (await fetch(`${base}/view?${q}`)).arrayBuffer();
+        return Buffer.from(buf).toString('base64');
+      }
+    }
+  }
+  throw new Error(`comfy generation timed out after ${Math.round(timeoutMs / 1000)}s`);
+}
+// Is a local ComfyUI reachable right now? (used to fail-fast with a clear message)
+async function comfyReachable() {
+  try { const r = await fetch(`${comfyBase()}/system_stats`, { signal: AbortSignal.timeout(2500) }); return r.ok; } catch { return false; }
+}
+
 function _saveToWorkspace(b64, nowTs) {
   const fs = require('fs'), path = require('path');
   const dir = path.join(process.cwd(), 'data', 'zoe_workspace', 'images');
@@ -105,17 +196,27 @@ function _saveToWorkspace(b64, nowTs) {
 }
 
 // generate → { ok, path, base64 } | { ok:false, disabled?, reason }. genFn/saveFn injectable.
-async function generate({ prompt, genFn = null, saveFn = null, size = '1024x1024', nowTs = null } = {}) {
+// Provider: LOCAL ComfyUI (default, on-device SDXL/FLUX) or cloud OpenAI. Supports image-to-image via
+// `initImage` (base64/dataURI) + `denoise` (<1 keeps structure) — the "take this image and do X" path.
+async function generate({ prompt, genFn = null, saveFn = null, size = '1024x1024', negative = null, initImage = null, denoise = null, nowTs = null } = {}) {
   const p = String(prompt || '').trim();
   if (!p) return { ok: false, reason: 'empty prompt' };
-  const apiKey = process.env.OPENAI_API_KEY || process.env.IMAGE_API_KEY;
-  if (!genFn) {
-    if (!generationEnabled()) return { ok: false, disabled: true, reason: 'image generation is OFF by design — set ZOE_IMAGE_GEN_ENABLED=1 and an image-provider API key to enable it' };
-    if (!apiKey) return { ok: false, disabled: true, reason: 'image generation enabled but no provider key (set OPENAI_API_KEY or IMAGE_API_KEY)' };
-  }
   let b64;
-  try { b64 = genFn ? await genFn(p) : await _openaiGenerate(p, { apiKey, size }); }
-  catch (e) { return { ok: false, reason: `image generation failed: ${e.message}` }; }
+  if (genFn) {
+    try { b64 = await genFn(p); } catch (e) { return { ok: false, reason: `image generation failed: ${e.message}` }; }
+  } else {
+    if (!generationEnabled()) return { ok: false, disabled: true, reason: 'image generation is OFF by design — set ZOE_IMAGE_GEN_ENABLED=1 to enable it' };
+    const provider = imageProvider();
+    if (provider === 'comfyui') {
+      if (!(await comfyReachable())) return { ok: false, disabled: true, reason: `local image server (ComfyUI) isn't reachable at ${comfyBase()} — it may still be starting` };
+      try { b64 = await _comfyGenerate(p, { negative, size, initImage, denoise, nowTs }); }
+      catch (e) { return { ok: false, reason: `local image gen (ComfyUI) failed: ${e.message}` }; }
+    } else {
+      const apiKey = process.env.OPENAI_API_KEY || process.env.IMAGE_API_KEY;
+      if (!apiKey) return { ok: false, disabled: true, reason: 'cloud image provider selected but no key (set OPENAI_API_KEY/IMAGE_API_KEY, or set image.provider=comfyui for local)' };
+      try { b64 = await _openaiGenerate(p, { apiKey, size }); } catch (e) { return { ok: false, reason: `image generation failed: ${e.message}` }; }
+    }
+  }
   if (!b64) return { ok: false, reason: 'no image produced' };
   const save = saveFn || _saveToWorkspace;
   try { const filePath = await save(b64, nowTs); return { ok: true, path: filePath, base64: b64 }; }
@@ -125,5 +226,6 @@ async function generate({ prompt, genFn = null, saveFn = null, size = '1024x1024
 module.exports = {
   describe, generate, parseGenTags, stripGenTags,
   visionModel, visionTier, visionModelFor, generationEnabled,
+  imageProvider, comfyBase, comfyReachable, comfyCheckpoint,
   GEN_TAG_RE, DEFAULT_VISION_PROMPT, _stripDataUrl, _pickSource
 };
