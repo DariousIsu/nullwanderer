@@ -118,6 +118,10 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     ok(/REFINEMENT folded into current focus[\s\S]{0,3500}?auditDocument\(/.test(m), 'the refinement branch runs the re-entry audit on the live thread');
     ok(/mid-flight re-entry audit/.test(m) && m.indexOf('reentry_audit`, JSON.stringify(_audit.verdict)') > -1, 'the mid-flight verdict is stored (arms paper mode at condense)');
     ok(/paper mode armed/.test(m), 'the log says paper mode is armed for the run');
+    // Topical → condense contract (measured #3717): the organize prompt must demand a "## " markdown
+    // heading — a bold heading is invisible to assemble.parseSections, so the brief never composes.
+    ok(/under the exact markdown heading "## \$\{nextFacet\}"/.test(m), 'topical sections use "## " headings — the condense oracle can see them (paper reaches briefings)');
+    ok(!/under a bold heading "\$\{nextFacet\}"/.test(m), 'REGRESSION: the bold-heading organize prompt is gone');
   }
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

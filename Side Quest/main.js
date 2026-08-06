@@ -14747,7 +14747,12 @@ async function runTopicalResearchPass(focus) {
     let section = '';
     try {
       if (body && !/^COVERED$/i.test(body)) {
-        section = await condenseComplete(`Rewrite the following research notes into 1-3 clean, sourced paragraphs under a bold heading "${nextFacet}". Keep every fact and its source; drop any tool/JSON/control noise; never add anything not present in the notes.\n\n${body.slice(0, 6000)}`, { numPredict: config.sectionNumPredict() });
+        // "## " heading, NOT bold (measured 2026-08-06, #3717): the organize prompt said "a bold
+        // heading", so the finished brief held **Aspect** headings that assemble.parseSections
+        // cannot see — condenseRun bailed "no parseable org sections" and the topical lane NEVER
+        // reached the composer (no paper, no docx, no announce). The heading format IS the
+        // condense contract; the fallback below already used "## ".
+        section = await condenseComplete(`Rewrite the following research notes into 1-3 clean, sourced paragraphs under the exact markdown heading "## ${nextFacet}". Keep every fact and its source; drop any tool/JSON/control noise; never add anything not present in the notes.\n\n${body.slice(0, 6000)}`, { numPredict: config.sectionNumPredict() });
       }
     } catch (e) { console.error('[topical] section organize failed:', e.message); }
     // Falling back to raw notes is fine; falling back SILENTLY is how the string-vs-array bug above
