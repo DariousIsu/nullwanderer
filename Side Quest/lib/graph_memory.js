@@ -52,6 +52,26 @@ function normalizeName(name) {
   return out.join(' ');
 }
 
+const SUB = require('./substantiation');
+let _isJunkSrc; try { ({ isJunkSource: _isJunkSrc } = require('./curation_gate')); } catch { _isJunkSrc = () => false; }
+
+// graph_entities substantiation STATE (measured rule 2026-08-04, see memory substantiation-grading-vision).
+// The entity store has no feed/url column, so classifySubstantiation can't be called directly; this is its
+// entity-store twin over the signals graph_entities actually carries: confirmed → identity-confirmed;
+// witnessed (a live-observed node self-vouches, like news) OR a non-junk citation (graph_citations ref)
+// → source-vouched; else unsubstantiated (prove-or-fade). The junk-host veto reuses the ONE shared list.
+function entitySubstState({ epistemic = null, confirmed = null, hasNonJunkCitation = false } = {}) {
+  if (confirmed) return SUB.IDENTITY_CONFIRMED;
+  if (String(epistemic || '').toLowerCase() === 'witnessed' || hasNonJunkCitation) return SUB.SOURCE_VOUCHED;
+  return SUB.UNSUBSTANTIATED;
+}
+const _SUB_RANK = { [SUB.IDENTITY_CONFIRMED]: 3, [SUB.SOURCE_VOUCHED]: 2, [SUB.UNSUBSTANTIATED]: 1 };
+function _subRank(s) { return _SUB_RANK[String(s || '').toLowerCase()] || 0; }   // null/unstated = 0
+function _srcHasNonJunkCite(source) {
+  const ref = source && source.ref;
+  return !!(ref && String(ref).trim() && !_isJunkSrc(ref));
+}
+
 // Attach a grounding source + citation to a fact. source: {kind, ref?, excerpt?}
 // kind ∈ user | meeting | reading | web | conversation | own_thought
 function attachSource(factKind, factId, source) {
@@ -104,6 +124,12 @@ function recordEntity({ name, type = null, subtype = null, summary = null, epist
     // dishonest one it replaced, which would be a strictly worse outcome.
     if (type && !_mt.isPlaceholder(type) && _mt.isPlaceholder(existing.entity_type)) fields.entity_type = type;
     if (conf > (existing.confidence || 0)) fields.confidence = conf;
+    // Substantiation upgrades only (strongest-across-encounters, like epistemic above): a new witnessing
+    // or citation can raise unsubstantiated → source-vouched, but a later bare sighting never downgrades a
+    // vouched node. Backfills a NULL state on any re-encounter of a pre-substrate node.
+    const _newSub = entitySubstState({ epistemic, confirmed: existing.confirmed, hasNonJunkCitation: _srcHasNonJunkCite(source) });
+    if (_subRank(_newSub) > _subRank(existing.substantiation_state)) fields.substantiation_state = _newSub;
+    if (!existing.frame) fields.frame = SUB.FRAME_REAL;
     if (Object.keys(fields).length) {
       db.graphUpdateEntity(existing.id, fields);
       kga.emit({ db: 'sidequest', kind: 'node.enrich', anchor: name, epistemic, count: 1 });   // learned more about a known node
@@ -112,7 +138,9 @@ function recordEntity({ name, type = null, subtype = null, summary = null, epist
   } else {
     const r = db.graphInsertEntity({
       name, nameKey, entityType: type, entitySubtype: subtype, summary, confidence: conf,
-      epistemic, confirmed: null, proposedBy
+      epistemic, confirmed: null, proposedBy,
+      substantiationState: entitySubstState({ epistemic, confirmed: null, hasNonJunkCitation: _srcHasNonJunkCite(source) }),
+      frame: SUB.FRAME_REAL
     });
     entityId = r.id;
     created = true;
@@ -270,4 +298,5 @@ module.exports = {
   promoteEntityProposal, promoteRelationProposal, rejectEntityProposal, rejectRelationProposal,
   reconcileRelation, reconcileEntity, reconcileAttendance,
   getEntity, neighbors, counts, topFacts, attachSource, factsForPrompt,
+  entitySubstState,
 };

@@ -220,6 +220,12 @@ async function resolveAll(objects, deps = {}) {
   const resolve = deps.resolve || ((mention, opts) => {
     try { return require('./echo_suit').resolveMention(mention, opts); } catch { return Promise.resolve({ status: 'error', mention }); }
   });
+  // Observation-grounded footing for a resolved name (substantiation-gate §1.4): pinned ⇔ some
+  // encounter identity-confirmed it; source-vouched ⇔ a source stands behind it; else unsubstantiated.
+  // Fail-soft to null (no local record) → render falls back to the reference-store verified flag.
+  const footingFor = deps.footing || ((name) => {
+    try { return require('./substantiation_gate').stateFor(require('./db'), name); } catch { return null; }
+  });
   const out = [];
   const seen = new Set();
   for (const o of (objects || [])) {
@@ -232,13 +238,13 @@ async function resolveAll(objects, deps = {}) {
 
     const v = _fromVocab(mention, vocab);
     if (v && v.name) {
-      out.push({ mention, status: 'resolved', name: v.name, type: v.type || o.type || null, note: v.note || null, verified: v.verified === true, via: 'vocabulary' });
+      out.push({ mention, status: 'resolved', name: v.name, type: v.type || o.type || null, note: v.note || null, verified: v.verified === true, via: 'vocabulary', footing: footingFor(v.name) });
       continue;
     }
     let r; try { r = await resolve(mention, { preferType: (o && o.type) || null }); } catch { r = null; }
     const st = (r && r.status) || 'error';
     if (st === 'resolved' && r.object) {
-      out.push({ mention, status: 'resolved', name: r.object.name || mention, type: r.object.entity_type || (o && o.type) || null, note: null, verified: true, via: 'graph' });
+      out.push({ mention, status: 'resolved', name: r.object.name || mention, type: r.object.entity_type || (o && o.type) || null, note: null, verified: true, via: 'graph', footing: footingFor(r.object.name || mention) });
     } else if (st === 'ambiguous') {
       out.push({ mention, status: 'ambiguous', type: (o && o.type) || null, candidates: (Array.isArray(r.candidates) ? r.candidates : []).slice(0, 3), via: 'graph' });
     } else {
@@ -246,6 +252,20 @@ async function resolveAll(objects, deps = {}) {
     }
   }
   return out;
+}
+
+// The footing marker for a resolved reference (substantiation-gate §1.4). Precedence mirrors the gate's
+// STRONGEST-ACROSS-ENCOUNTERS: identity-confirmed (pinned) is trustworthy → no mark; source-vouched says a
+// source stands behind it but the identity is not confirmed; unsubstantiated is prove-or-fade, not a fact.
+// When the observation/node stores have NO record of the name (footing null), fall back to the reference-
+// store's own verified flag — behavior is unchanged for names the substantiation substrate never saw.
+function _footingMark(r) {
+  const f = r && r.footing;
+  if (f && f.pinned) return '';                                                        // identity-confirmed
+  const state = f && f.state ? String(f.state).trim().toLowerCase() : null;
+  if (state === 'source-vouched') return ' [source-backed — identity not confirmed]';
+  if (state === 'unsubstantiated') return ' [unsubstantiated — no confirmation yet; don’t assert as fact]';
+  return (r && r.verified) ? '' : ' [unverified — his usage, no source yet]';
 }
 
 /**
@@ -263,8 +283,7 @@ function render(refs = [], series = [], { includeSeries = false, now = Date.now(
     lines.push('REFERENCES — what these names mean in this conversation. Use them as the subject; do not re-derive them:');
     for (const r of known) {
       const bits = [r.type, r.note].filter(Boolean).join(' — ');
-      // An UNVERIFIED reference is still the right subject — it is simply not yet a citable fact.
-      const mark = r.verified ? '' : ' [unverified — his usage, no source yet]';
+      const mark = _footingMark(r);
       lines.push(`• "${r.mention}" → ${r.name}${bits ? ` (${bits})` : ''}${mark}`);
     }
   }

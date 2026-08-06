@@ -998,6 +998,10 @@ const MIGRATIONS = [
   `ALTER TABLE kg_observations ADD COLUMN frame TEXT`,
   `ALTER TABLE graph_entities ADD COLUMN substantiation_state TEXT`,
   `ALTER TABLE graph_entities ADD COLUMN frame TEXT`,
+  // Phase 3 (prove-or-fade for the node store, 2026-08-04): soft-archive marker. NULL = live; a timestamp =
+  // faded (an unsubstantiated node the prove/re-encounter path never lifted, aged past TTL). Retained +
+  // restorable (never hard-deleted); substantiation_gate treats archived as non-vouching.
+  `ALTER TABLE graph_entities ADD COLUMN archived_at INTEGER`,
   // conversation_state watermark — the last turn folded into the running summary. The summary was
   // updated only from the main say path, but the chat handler has ~30 early returns (protocol
   // intercept, preference answer, contacts route, tool followups) that reply and return before
@@ -1099,6 +1103,7 @@ function _kgTap(kind, anchor, extra) {
   try { const f = global.__emitKgActivity; if (typeof f === 'function') f(Object.assign({ db: 'sidequest', kind, anchor: anchor == null ? '' : String(anchor).slice(0, 120), count: 1 }, extra || {})); } catch (e) {}
 }
 let _lastThinkEmit = 0;   // kg:activity think throttle — the monologue firehose becomes an ambient pulse, not a strobe
+let _lastObserveEmit = 0; // kg:activity 'observe' throttle — decomposeDoc records ~240 rows/doc; see recordKgObservation
 function insertMonologue({ content, model = null, feedContext = null, type = 'thought', query = null, urls = null, importance = null, docRef = null }) {
   const ts = Date.now();
   const info = getDb()
@@ -2297,22 +2302,36 @@ function setAgendaStatus(id, status, { answeredNoteId = null, now = Date.now() }
 // --- graph memory (anti-glob relational store; see docs/MEMORY_GROUNDING.md) ---
 // Raw table accessors only. The propose→promote gate + epistemic rules + name
 // normalization live in lib/graph_memory.js (semantic logic out of db.js, per house style).
-function graphInsertEntity({ name, nameKey, entityType, entitySubtype = null, summary = null, confidence = 0.8, epistemic = 'told', confirmed = null, proposedBy = null }) {
+function graphInsertEntity({ name, nameKey, entityType, entitySubtype = null, summary = null, confidence = 0.8, epistemic = 'told', confirmed = null, proposedBy = null, substantiationState = null, frame = null }) {
   const now = Date.now();
   const info = getDb().prepare(
-    `INSERT INTO graph_entities (name, name_key, entity_type, entity_subtype, summary, confidence, epistemic, confirmed, proposed_by, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
-  ).run(name, nameKey, entityType, entitySubtype, summary, confidence, epistemic, confirmed, proposedBy, now, now);
+    `INSERT INTO graph_entities (name, name_key, entity_type, entity_subtype, summary, confidence, epistemic, confirmed, proposed_by, substantiation_state, frame, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).run(name, nameKey, entityType, entitySubtype, summary, confidence, epistemic, confirmed, proposedBy, substantiationState, frame, now, now);
   return { id: info.lastInsertRowid, created_at: now };
 }
 function graphGetEntityByKey(nameKey) {
   return getDb().prepare('SELECT * FROM graph_entities WHERE name_key = ?').get(nameKey) || null;
 }
+// Phase 3 fade (2026-08-04): unsubstantiated, not-yet-archived nodes as fade candidates (oldest first),
+// shaped {id, captured_at} for lib/fade.plan. The node-store twin of listFadeCandidates over kg_observations.
+function graphListEntityFadeCandidates({ limit = 500 } = {}) {
+  return getDb().prepare(
+    `SELECT id, created_at AS captured_at FROM graph_entities
+      WHERE substantiation_state = 'unsubstantiated' AND archived_at IS NULL
+      ORDER BY created_at ASC LIMIT ?`
+  ).all(limit);
+}
+// Soft-archive a graph_entity (fade). Idempotent via the archived_at IS NULL guard. Returns rows changed.
+function graphArchiveEntity(id, at = Date.now()) {
+  const info = getDb().prepare('UPDATE graph_entities SET archived_at = ? WHERE id = ? AND archived_at IS NULL').run(at, id);
+  return info.changes;
+}
 function graphGetEntity(id) {
   return getDb().prepare('SELECT * FROM graph_entities WHERE id = ?').get(id) || null;
 }
 function graphUpdateEntity(id, fields = {}) {
-  const allowed = ['name', 'entity_type', 'entity_subtype', 'summary', 'confidence', 'epistemic', 'confirmed', 'proposed_by'];
+  const allowed = ['name', 'entity_type', 'entity_subtype', 'summary', 'confidence', 'epistemic', 'confirmed', 'proposed_by', 'substantiation_state', 'frame'];
   const sets = [], vals = [];
   for (const k of allowed) if (k in fields) { sets.push(`${k} = ?`); vals.push(fields[k]); }
   if (!sets.length) return;
@@ -2435,7 +2454,18 @@ function recordKgObservation({ feed, sourceEntity, relation = null, target = nul
   // into one string, which no node id could ever equal — so the graph panel logged every observation and drew
   // none of them. Subject and target ride their own fields now (the relation is carried alongside, for the
   // log row), which lets the surface draw the LINK an observation actually asserts.
-  if (info.changes > 0) _kgTap('observe', sourceEntity, { anchor2: target || null, rel: relation || null });
+  // 2026-08-03 (build plan M1.3): THROTTLE this ambient pulse. decomposeDoc records up to ~240
+  // entities+relations per doc; an emit-per-row iterated ALL webContents SYNCHRONOUSLY on the main
+  // thread — the boot168 storm (239 "Render frame was disposed", event-loop stall + renderer crash).
+  // A background pulse is the intended UX (same as the 'think' tap). Gate on wall-clock, not `ts`,
+  // so a historical capturedAt on a backfill can't skew the throttle. A varying anchor still roams.
+  if (info.changes > 0) {
+    const _now = Date.now();
+    if (_now - _lastObserveEmit >= 1500) {
+      _lastObserveEmit = _now;
+      _kgTap('observe', sourceEntity, { anchor2: target || null, rel: relation || null });
+    }
+  }
   return { id: info.lastInsertRowid, inserted: info.changes > 0 };
 }
 function listKgObservations({ sourceEntity = null, feed = null, status = null, limit = 200 } = {}) {
@@ -2721,6 +2751,8 @@ module.exports = {
   graphGetEntity,
   graphUpdateEntity,
   graphListEntities,
+  graphListEntityFadeCandidates,
+  graphArchiveEntity,
   graphInsertRelation,
   graphGetRelation,
   graphNeighbors,

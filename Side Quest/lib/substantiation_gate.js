@@ -52,6 +52,16 @@ function stateFor(db, name) {
     const d = db.getDb();
     rows = d.prepare(_SQL.replace('{WHERE}', 'source_entity = ?')).all(nm);
     if (!rows.length) rows = d.prepare(_SQL.replace('{WHERE}', 'LOWER(source_entity) = LOWER(?)')).all(nm);
+    // Fold in the NODE store's own footing (graph_entities.substantiation_state, Phase 1 2026-08-04):
+    // a node confirmed/vouched in the graph counts as one more encounter at strongest-across-sources,
+    // even when the observation log never recorded this name. Fail-soft — a missing column/table degrades
+    // to observation-only rather than dropping the whole read.
+    try {
+      // Phase 3: an ARCHIVED (faded) node never vouches — exclude archived_at IS NOT NULL. Fail-soft: on a
+      // pre-migration schema the column is absent and the outer catch degrades to observation-only.
+      const ge = d.prepare('SELECT substantiation_state s FROM graph_entities WHERE (name = ? OR LOWER(name) = LOWER(?)) AND archived_at IS NULL LIMIT 1').get(nm, nm);
+      if (ge && ge.s) rows = rows.concat([{ s: ge.s, n: 1, latest: null }]);
+    } catch { /* graph_entities unavailable → observation-only */ }
   } catch { return null; }
   if (!rows.length) return null;
   const counts = {};
