@@ -12,12 +12,18 @@
  * Model call + db reads are dep-injectable so compose/refresh are smoke-testable offline.
  */
 
-const { streamChat } = require('./ollama');
-const MODEL = require('./config').frontModel();
+const { streamCognition } = require('./ollama');
 
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;   // recompose at most every ~6h
 const NARR_KEY = 'self_narrative';
 const NARR_AT_KEY = 'self_narrative_at';
+const NARR_TRY_KEY = 'self_narrative_try_at';
+// A FAILED compose must not retry on every chat turn. Measured (2026-08-06, the VRAM-pin hunt):
+// the local front (gemma4:12b) answered this prompt on its reasoning channel, so the content came
+// back empty → compose returned null → the AT stamp never advanced → the narrative sat 13 days
+// stale and EVERY turn past the TTL re-ran the call — each one loading + 24h-pinning 8.4GB of
+// VRAM for a compose that always failed. The floor bounds the damage of any future failure shape.
+const RETRY_FLOOR_MS = 30 * 60 * 1000;
 
 function _clean(s) {
   return String(s || '')
@@ -74,10 +80,24 @@ ${devList}
 
 Write the account now:`;
 
-  let raw = '';
+  let raw = '', thought = '';
   try {
     if (genFn) raw = await genFn(prompt);
-    else await streamChat({ model: MODEL, messages: [{ role: 'user', content: prompt }], options: { temperature: 0.7, top_p: 0.95, num_ctx: 8192, num_predict: 220 }, onToken: (t) => { raw += t; } });
+    else {
+      // CLOUD-FIRST (M2.5.3, the c22f4e0 tier): streamCognition routes to the warm cloud
+      // subconscious model and only falls back to the local front if no cloud is reachable — so
+      // an identity recompose never loads (and 24h-pins) the demoted local model. think:false +
+      // the reasoning-channel salvage below cover the models that answer on the thinking channel
+      // anyway (that silent-empty was why the narrative stopped refreshing).
+      await streamCognition({
+        messages: [{ role: 'user', content: prompt }],
+        options: { temperature: 0.7, top_p: 0.95, num_ctx: 8192, num_predict: 220 },
+        think: false, lane: 'idle',
+        onToken: (t) => { raw += t; },
+        onThinking: (t) => { thought += t; },
+      });
+      if (_clean(raw).length < 20 && _clean(thought).length >= 20) raw = thought;
+    }
   } catch (e) { console.error('[self_narrative] compose failed:', e.message); return null; }
 
   const text = _clean(raw);
@@ -88,11 +108,18 @@ Write the account now:`;
   return text;
 }
 
-// Recompose only if missing or stale. Non-blocking caller expected. Deps injectable for tests.
-async function maybeRefresh({ ttlMs = DEFAULT_TTL_MS, nowTs = null, getFn = null, composeFn = null, ...composeOpts } = {}) {
+// Recompose only if missing or stale — and never retry a FAILING compose more than once per
+// RETRY_FLOOR_MS (the try-stamp advances on every attempt; the AT stamp only on success).
+// Non-blocking caller expected. Deps injectable for tests.
+async function maybeRefresh({ ttlMs = DEFAULT_TTL_MS, nowTs = null, getFn = null, composeFn = null, setFn = null, ...composeOpts } = {}) {
   if (!isStale({ ttlMs, nowTs, getFn })) return null;
+  const get = getFn || ((k) => { try { return require('./db').getMeta(k); } catch { return null; } });
+  const now = nowTs || Date.now();
+  if (now - (parseInt(get(NARR_TRY_KEY) || '0', 10) || 0) < RETRY_FLOOR_MS) return null;
+  const set = setFn || ((k, v) => { try { require('./db').setMeta(k, v); } catch {} });
+  set(NARR_TRY_KEY, String(now));
   const doCompose = composeFn || compose;
-  return doCompose({ nowTs, ...composeOpts });
+  return doCompose({ nowTs, setFn, ...composeOpts });
 }
 
-module.exports = { compose, maybeRefresh, current, composedAt, isStale, buildBlock, DEFAULT_TTL_MS, NARR_KEY, NARR_AT_KEY };
+module.exports = { compose, maybeRefresh, current, composedAt, isStale, buildBlock, DEFAULT_TTL_MS, RETRY_FLOOR_MS, NARR_KEY, NARR_AT_KEY, NARR_TRY_KEY };

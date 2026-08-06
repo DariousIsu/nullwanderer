@@ -35,13 +35,24 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(sn.isStale({ getFn, nowTs: 1000 + 1000 }) === false, 'within TTL → fresh');
   ok(sn.isStale({ getFn: () => null, nowTs: 9999 }) === true, 'never composed → stale');
 
-  // --- maybeRefresh: composes only when stale ---
+  // --- maybeRefresh: composes only when stale; a failed compose retries on a floor, not per turn ---
   let composed = 0;
+  const tryStore = {};
+  const trySet = (k, v) => { tryStore[k] = v; };
+  const tryGet = (k) => (k === sn.NARR_TRY_KEY ? tryStore[k] : getFn(k));
   const composeFn = async () => { composed++; return 'fresh narrative'; };
-  await sn.maybeRefresh({ getFn, nowTs: 1000 + 1000, composeFn });          // fresh → skip
+  await sn.maybeRefresh({ getFn: tryGet, setFn: trySet, nowTs: 1000 + 1000, composeFn });          // fresh → skip
   ok(composed === 0, 'maybeRefresh skips when fresh');
-  await sn.maybeRefresh({ getFn, nowTs: 1000 + sn.DEFAULT_TTL_MS + 1, composeFn }); // stale → compose
+  await sn.maybeRefresh({ getFn: tryGet, setFn: trySet, nowTs: 1000 + sn.DEFAULT_TTL_MS + 1, composeFn }); // stale → compose
   ok(composed === 1, 'maybeRefresh composes when stale');
+  ok(tryStore[sn.NARR_TRY_KEY] === String(1000 + sn.DEFAULT_TTL_MS + 1), 'every attempt stamps the try-time');
+  // still stale (compose "failed" to advance AT) but inside the retry floor → no second attempt.
+  // This is the 2026-08-06 bug: a compose that always failed re-ran on every chat turn, and each
+  // run loaded + 24h-pinned the 8.4GB local model. The floor caps that to one attempt per window.
+  await sn.maybeRefresh({ getFn: tryGet, setFn: trySet, nowTs: 1000 + sn.DEFAULT_TTL_MS + 2, composeFn });
+  ok(composed === 1, 'a failed compose does NOT retry inside the floor (the VRAM-pin guard)');
+  await sn.maybeRefresh({ getFn: tryGet, setFn: trySet, nowTs: 1000 + sn.DEFAULT_TTL_MS + 1 + sn.RETRY_FLOOR_MS + 1, composeFn });
+  ok(composed === 2, 'past the floor, a stale narrative is retried');
 
   // --- buildBlock: identity-anchor framing; null on empty ---
   const block = sn.buildBlock('I am Zoe — curious and honest.', 'Lucas');

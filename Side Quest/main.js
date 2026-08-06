@@ -9379,6 +9379,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       && !/\bi['']?ll\b/i.test(s.slice(0, 40));
     if (!followupFired && noRetrievalTag && _inProgressPromise(finalSaid || '')) {
       const q = String(finalSaid || '')
+        // Greeting first (live 08-06): "Morning. Pulling current 10-year Treasury yields now" kept
+        // "Morning." in the query and the search engine answered with dictionary definitions of the
+        // word MORNING. Strip a leading greeting when punctuation ends it (a greeting, not a topic).
+        .replace(/^[^a-zA-Z0-9]*(?:good\s+)?(?:morning|afternoon|evening|hey|hi|hello|yo)\b[.,!…:;\-]+\s*/i, '')
         .replace(/^[^a-zA-Z0-9]*(?:i'?m|i am|i'?ll|i will|let me|just|now|okay|alright)\b\s*/i, '')
         .replace(/\b(?:pulling|fetching|gathering|grabbing|retrieving|checking|looking(?:\s+(?:up|into|at))?)\b\s*/gi, '')
         .replace(/\s+/g, ' ').trim().replace(/[.…]+$/, '').slice(0, 160);
