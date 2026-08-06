@@ -181,6 +181,16 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
       }).join('\n');
   });
 
+  grab('interweave', () => {
+    // M4.2 — the intersection pass: fresh touchpoints (what completed products just touched) joined
+    // against OTHER active streams' concept sets. A surviving candidate is prime leverage-note
+    // material through the build door. Self-braked to one surfacing per pair per day (lib/interweave).
+    const lines = (deps.interweave || require('./interweave')).manifestLines({ db: dbm, deps, now });
+    if (!lines || !lines.length) return '';
+    counts.interweaveCandidates = lines.length;
+    return `• CROSS-PROJECT INTERSECTIONS (fresh work in one stream touched something ANOTHER active stream cares about — building the receiving stream a SMALL cited leverage note is among the highest-value moves):\n${lines.join('\n')}`;
+  });
+
   grab('inquiries', () => {
     // Lines of inquiry (lib/inquiry, O0) — the continuity surface: what is open, where each
     // stands, what its own last touch said to do next. The decider's DEFAULT is advancing one.
@@ -302,6 +312,7 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
 // order and drops the standing inventory, so "what is happening" survives any budget.
 const LIVE_SECTIONS = [
   'YOUR OPEN THREADS', 'OPEN LINES OF INQUIRY', 'HIS CALENDAR THIS WEEK', 'AWAITING',
+  'CROSS-PROJECT INTERSECTIONS',
   'WHAT IS RUNNING IN YOU NOW', 'RECENT FAILURES', 'ACTIVE REHEARSAL RUN',
   'CAPABILITY GAPS SHE HAS NAMED', 'FINISHED DELEGATED WORK', 'DEVELOPING STORIES YOU FOLLOW',
   'CONVERSATION HARVEST', 'LEARNED CONSTRAINTS',
@@ -366,7 +377,7 @@ One-shot moves (work that is genuinely single-step):
 - fill-gap: go get a NAMED absence gap or missing members of a countable universe.
 - corroborate: take a single-source cluster and find an INDEPENDENT second source for its claims.
 - clean: inspect and report on duplicates/conflicts (writes are gated — your product is a precise report).
-- build: turn material she ALREADY HOLDS into a real markdown document (a brief, a gap report, a synthesis).
+- build: turn material she ALREADY HOLDS into a real markdown document (a brief, a gap report, a synthesis). A CROSS-PROJECT INTERSECTIONS line is prime build material: a SMALL leverage note ADDRESSED TO the receiving stream — state what the fresh touch adds to it, cite BOTH sides (the product that touched the entity and the receiving stream's own material), and keep it to what the sources actually show. target = the intersection's entity plus the receiving stream token from the line.
 - scenario: run ONE hypothetical what-if against your live forecast (offered under YOUR 2026 FORECAST when available). target is EITHER an exact catalog id OR your own one-line what-if description (which is estimated into race effects on the fly). ILLUSTRATIVE ONLY — a labeled hypothetical that never changes the baseline and is never memorialized as fact; a genuinely ambiguous shock is shown as a RANGE, not a point. Pick it when a chamber is TIGHT and a named what-if would sharpen what could move it — never as filler.
 - maintain: run ONE curated maintenance loop on her own stores (the brief names the allowlist — an integrity-audit report, a full-corpus dedup proposal sweep). Products are REPORTS and PROPOSALS; nothing applies unattended. Prefer it when MAINTENANCE & ANALYSIS LOOPS shows a loop gone stale.
 - rehearse: the sandbox. With an ACTIVE REHEARSAL RUN in the state: advance it one bounded iteration (a parked run resumes); target is its slug. With NO run active and a CAPABILITY GAP named in the state: target that exact "need #N" token to OPEN a sandboxed run built from the need (the judging suite is matched automatically; if nothing fits, the need parks honestly). The run edits a sandboxed COPY of her own code, judged by her own gate; green ends as a proposal-card document — nothing self-adopts, ever. Only a need a RUN named may open one — never an idle inference.

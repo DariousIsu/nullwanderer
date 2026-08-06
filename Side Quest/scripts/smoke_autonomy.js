@@ -143,6 +143,10 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(/kg_neighborhood/.test(bExpl) && /"op":"write"/.test(bExpl), 'explore brief instructs the KG walk (kg_neighborhood) + the file-save contract');
   ok(/CONTRADICTION/.test(bExpl) && /GAP/.test(bExpl) && /HELD DOCUMENTS/.test(bExpl), 'explore brief frames internal-coherence: graph vs held docs → the one contradiction/gap');
   ok(/do NOT use the open web/i.test(bExpl), 'explore brief forbids the open web (this is internal-coherence work, not research)');
+  // M4.2: the decision prompt licenses the interweave build (leverage note addressed to the receiving stream)
+  ok(/CROSS-PROJECT INTERSECTIONS line is prime build material/.test(auto.DECISION_WANT) && /cite BOTH sides/.test(auto.DECISION_WANT),
+    'the decision prompt teaches the leverage-note build (addressed to the receiving stream, both sides cited)');
+  ok(auto.LIVE_SECTIONS.includes('CROSS-PROJECT INTERSECTIONS'), 'the live digest carries the intersections section');
 
   // --- outcome: record what HAPPENED ---
   const opRes = { answer: 'Saved the report.', steps: [
