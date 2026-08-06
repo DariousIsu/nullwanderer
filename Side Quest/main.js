@@ -13336,6 +13336,34 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
 // surfaces the key finding + one concrete follow-up, so she doesn't just report "done" but actually opens
 // a conversation about what she found. Falls back to a DETERMINISTIC notice if the cloud is down — the
 // failure being fixed is her finishing work SILENTLY, so it must ALWAYS announce. Fully fail-soft.
+// P2 STEERING SURFACES (ADAPTIVE_RESEARCH_DESIGN §G4): a novel question the synthesis mints on a
+// USER thread is steering fuel and belongs in CHAT, not only in the plan — measured counterexample:
+// the Roy-Richards cross-control hypothesis (2026-08-06) steered passes silently and Lucas never
+// heard it. Deterministic one-liner (no model call — the question text IS the content): what she
+// learned, what she'll do, how to object. Throttled per focus so a productive run never floods;
+// same delivery shape as announceResearchComplete; swarm-suppression respected.
+const PIVOT_SURFACE_GAP_MS = 10 * 60 * 1000;
+function surfaceResearchPivot(focus, novel) {
+  try {
+    const sid = currentSessionId;
+    if (!sid || !focus || focus.id == null || !Array.isArray(novel) || !novel.length) return;
+    if (!_surfaceAllowed(focus.id)) return;
+    const k = `focus.${focus.id}.pivot_surfaced_at`;
+    if (Date.now() - (parseInt(db.getMeta(k) || '0', 10) || 0) < PIVOT_SURFACE_GAP_MS) return;
+    db.setMeta(k, String(Date.now()));
+    const qs = novel.slice(0, 2).map((q) => String(q).replace(/\s+/g, ' ').trim().replace(/[.?]+$/, '')).filter((q) => q.length > 8);
+    if (!qs.length) return;
+    const msg = qs.length === 1
+      ? `Steering note on the research: what I just learned raises a new question — ${qs[0]}? I'm folding it into the run and chasing it; redirect me if that's the wrong thread to pull.`
+      : `Steering note on the research: what I just learned raises new questions — ${qs[0]}? And: ${qs[1]}? Both are now steering the run; redirect me if either is the wrong thread to pull.`;
+    const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'research', unprompted: 1 });
+    try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+    try { require('./lib/blackboard').append({ source: 'research', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
+    console.log(`[user-work] pivot surfaced to chat — ${qs.length} novel question(s)`);
+  } catch (e) { console.error('[user-work] pivot surfacing failed:', e.message); }
+}
+
 async function announceResearchComplete(focus, done) {
   try {
     const sid = currentSessionId;
@@ -13970,6 +13998,7 @@ async function runDirectedResearchPass(focus) {
             plan.facets = [...new Set([...(Array.isArray(plan.facets) ? plan.facets : []), ...novel])].slice(-14);
             db.setMeta(`focus.${focus.id}.plan`, JSON.stringify(plan));
             console.log(`[user-work] ${novel.length} novel open question(s) from the synthesis now steer the run${oq.length > novel.length ? ` (${oq.length - novel.length} already asked)` : ''}`);
+            try { surfaceResearchPivot(focus, novel); } catch { /* surfacing is additive — steering already applied */ }
           } else if (oq.length) {
             console.log(`[closure] synthesis raised ${oq.length} question(s), all already asked — frontier narrowing (streak ${parseInt(db.getMeta(_nnKey) || '0', 10)})`);
           }
