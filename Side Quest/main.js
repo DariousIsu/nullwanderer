@@ -14809,6 +14809,56 @@ Reply ONLY: {"verdict": "survives"|"refuted", "attack": "<the strongest single a
     // Mirror the section onto the Canvas as a live-growing block, and check the aspect off the TODO.
     try { const blk = require('./studio/canvas_emit').orgSectionBlock(section); await canvasEmit({ focusId: focus.id, title: goal, tabMode: 'RESEARCH', blockType: blk.blockType, data: blk.data }); } catch {}
     covered.push(nextFacet); try { db.setMeta(`focus.${focus.id}.topical_covered`, JSON.stringify(covered.slice(-40))); } catch {}
+    // ⭐ TOPICAL ADAPTATION (the missing organ, 2026-08-06): the living-plan loop lived ONLY in the
+    // entity lane — a briefing covered its planned aspects and never chased what it learned. Now a
+    // pass's OPEN: questions become NEW ASPECTS (the run covers them before it may complete — the
+    // brief literally grows to chase its own threads), and every 2nd aspect re-validates the plan.
+    // Same gates as the entity site: user lanes always; beat-origin only behind _adaptiveBgOn();
+    // beat steering notes stay log-only via _surfaceSteeringNote's silence rule.
+    const _isBeatTopical = !!(() => { try { return (db.getMeta(`focus.${focus.id}.beat`) || '').trim(); } catch { return ''; } })();
+    if (section && (!_isBeatTopical || _adaptiveBgOn())) {
+      try {
+        const rc = require('./lib/run_closure');
+        const oq = rs.parseOpenQuestions(section);
+        let _led = []; try { _led = JSON.parse(db.getMeta(`focus.${focus.id}.q_ledger`) || '[]'); } catch {}
+        const { novel, ledger } = rc.filterNovel(oq, _led);
+        try { db.setMeta(`focus.${focus.id}.q_ledger`, JSON.stringify(ledger)); } catch {}
+        try { db.setMeta(`focus.${focus.id}.last_open_qs`, JSON.stringify(oq.slice(0, 3))); } catch {}
+        if (novel.length) {
+          const _pl = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || '{}');
+          _pl.facets = [...new Set([...(Array.isArray(_pl.facets) ? _pl.facets : planFacets), ...novel])].slice(-14);
+          db.setMeta(`focus.${focus.id}.plan`, JSON.stringify(_pl));
+          console.log(`[topical] ${novel.length} novel open question(s) become NEW aspects — the brief grows to chase them`);
+          try { surfaceResearchPivot(focus, novel); } catch { /* surfacing is additive */ }
+        }
+        const _scKey = `focus.${focus.id}.synth_count`;
+        const _sc = (parseInt(db.getMeta(_scKey) || '0', 10) || 0) + 1;
+        db.setMeta(_scKey, String(_sc));
+        if (_sc % 2 === 0) {
+          (async () => {
+            const plan0 = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || '{}');
+            const rpm = require('./lib/research_plan');
+            const verdict = await require('./lib/cloud_logic').ask({
+              task: 'plan_revalidate', v: 1, numPredict: 700,
+              input: rpm.revalidateInput({ plan: plan0, synthesis: section, covered, goal }),
+              want: rpm.revalidateWant(), validate: rpm.revalidateValidator,
+            });
+            if (!verdict) return;
+            const { plan: plan1, changed, notes } = rpm.applyPlanDelta(plan0, verdict);
+            for (const need of (Array.isArray(verdict.tool_needs) ? verdict.tool_needs : []).slice(0, 3)) {
+              try { require('./lib/capability_need').record(String(need).slice(0, 300), { bornFrom: `plan-revalidate:${focus.id}` }); } catch {}
+            }
+            if (!changed) return;
+            const rev = (parseInt(db.getMeta(`focus.${focus.id}.plan_rev`) || '1', 10) || 1) + 1;
+            try { db.setMeta(`focus.${focus.id}.plan_v${rev - 1}`, JSON.stringify(plan0)); } catch {}
+            db.setMeta(`focus.${focus.id}.plan_rev`, String(rev));
+            db.setMeta(`focus.${focus.id}.plan`, JSON.stringify(plan1));
+            console.log(`[topical] plan REVALIDATED → rev ${rev}: ${notes.join('; ').slice(0, 220)}`);
+            try { _surfaceSteeringNote(focus, `Tactics update on the briefing (plan rev ${rev}): ${notes.join('; ')}${verdict.reason ? ` — ${String(verdict.reason).trim()}` : ''}. Object if this is the wrong turn.`, `plan rev ${rev}`); } catch {}
+          })().catch((e) => console.error('[topical] plan revalidation failed:', e.message));
+        }
+      } catch { /* adaptation is additive — the brief lands regardless */ }
+    }
     try { const ce = require('./studio/canvas_emit'); await canvasUpsertBlock({ focusId: focus.id, blockId: ce.todoBlockId(focus.id), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: ce.facetTodoMarkdown({ facets: planFacets }, covered) } }); } catch {}
     progressed = !!(section && section.length > 40);
     // An argument run is covering VULNERABILITIES, so say so — "brief: covered X" would hide that the

@@ -129,7 +129,8 @@ ok(/do NOT repeat/i.test(tp) && /Current state/.test(tp), 'topical prompt lists 
 ok(/never invent|Ground EVERY claim/i.test(tp), 'topical prompt is grounded (no invention)');
 // Quant directive (measured 2026-08-06: ZERO analyze_data/forecast_query calls in any research run —
 // the tools sat in the MENU but no pass prompt ever ORDERED a computation).
-ok(/COMPUTE it, never estimate it in prose/.test(tp) && /analyze_data/.test(tp) && /forecast_query/.test(tp), 'topical pass ORDERS computation for number/probability aspects (P3 reaches the pass, not just the menu)');
+ok(/COMPUTE it, never estimate it in prose/.test(tp) && /analyze_data/.test(tp) && /forecast_query answers ELECTORAL odds only/.test(tp), 'topical pass ORDERS computation + routes probabilities correctly (forecast_query is electoral-only)');
+ok(/"OPEN: <question>"/.test(tp), 'topical pass asks for OPEN: lines — briefs chase their own threads (the entity-only gap closed)');
 ok(/analyze_data/.test(r.buildDeepLanePrompt({ org: 'X', facet: 'total grant flow' })) && /never estimate a figure in prose/.test(r.buildDeepLanePrompt({ org: 'X', facet: 'f' })), 'deep lane names its own quant tools with the same compute order');
 ok(/## Cato/.test(op[0].content) && /Key people|Contact/i.test(op[0].content), 'organize prompt enforces the per-org schema');
 
