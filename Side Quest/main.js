@@ -11406,15 +11406,20 @@ async function seedBeatRun(beat, { background = false, targetsOverride = null } 
     // so it re-researched targets the beat had already finished. Measured: Louisiana parishes had been
     // worked up to four times each across five threads (tangipahoa x4, east baton rouge x4, caddo x4).
     // ff337eb made the ACCOUNTING see that work; this stops us paying for it twice.
-    // Only ever seeds coverage for the SAME beat, and only when this thread has none of its own — an
-    // adopted or resumed thread keeps exactly what it had.
+    // M4.5 — carry forward ALWAYS, as a UNION (was: only when this thread had NO covered of its own —
+    // the "virgin-only" precondition left a resumed thread blind to every OTHER thread's finished work,
+    // and the .slice(-300) cap silently dropped the oldest covered targets on big beats → both paths
+    // re-researched paid-for work). Union preserves the thread's own entries; dedupe is case-insensitive
+    // (the same key the news un-cover filter at the maintenance sweep compares on).
     try {
       const own = JSON.parse(db.getMeta(`focus.${fid}.covered`) || '[]') || [];
-      if (!own.length) {
-        const prior = db.coveredForBeat(beat.id);
-        if (prior.length) {
-          db.setMeta(`focus.${fid}.covered`, JSON.stringify(prior.slice(-300)));
-          console.log(`[beat] ${beat.id}: carried forward ${prior.length} already-covered target(s) into focus #${fid} — not re-researching them`);
+      const prior = db.coveredForBeat(beat.id);
+      if (prior.length) {
+        const seen = new Set(own.map((c) => String(c).toLowerCase()));
+        const add = prior.filter((c) => !seen.has(String(c).toLowerCase()));
+        if (add.length) {
+          db.setMeta(`focus.${fid}.covered`, JSON.stringify(own.concat(add)));
+          console.log(`[beat] ${beat.id}: carried forward ${add.length} already-covered target(s) into focus #${fid}${own.length ? ` (union with ${own.length} own)` : ''} — not re-researching them`);
         }
       }
     } catch (e) { console.error('[beat] carry-forward failed:', e.message); }
@@ -11903,6 +11908,13 @@ async function _autonomicSchedulerTick() {
     // fall through to pick the next beat this same tick
   }
 
+  // M4.5 — mapping.paused pauses the WHOLE sweep, not just virgin seeds. Measured: the flag only
+  // guarded seedBeatRun, so a "paused" sweep kept RESUMING old threads and FILLING workers ("finish
+  // X then pause" never actually paused). The in-flight slice still finishes (the directed driver
+  // owns it); the scheduler just stops picking/resuming/filling. Throttled log — a paused day must
+  // be visible in one grep, never a flood.
+  if (_mappingPaused()) { _logMappingPaused('scheduler tick'); return; }
+
   // Idle (or just paused) → pick the next beat by LANE (elected officials vs topic/concept) and run a slice.
   const lane = sched.pickLane({
     sliceIndex: state.sliceIndex || 0,
@@ -11949,8 +11961,19 @@ async function _autonomicSchedulerTick() {
 // then the slot frees and picks the next never-run beat. Workers never touch CURRENT_KEY, so chat/leash/
 // surfacing only ever see the primary. Shared beat registry (state.beats[id].thread) + the per-focus
 // `background` flag route each pass's outcome to the right run-state. Kill switch: ZOE_RESEARCH_WORKERS=1.
+// M4.5 — the pause reaches the worker-fill too: no NEW worker assignments while paused; a worker
+// already driving a beat finishes its thread and the slot then stays empty (drains naturally).
+let _mapPausedLogAt = 0;
+function _mappingPaused() { try { return (db.getMeta('mapping.paused') || '') === '1'; } catch { return false; } }
+function _logMappingPaused(where) {
+  const now = Date.now();
+  if (now - _mapPausedLogAt < 15 * 60 * 1000) return;
+  _mapPausedLogAt = now;
+  console.log(`[autonomic] sweep PAUSED (mapping.paused=1) — ${where} not resuming/seeding/filling; set to 0 to resume`);
+}
 function _fillBackgroundWorkers(state, electedPool, topicPool, primaryBeatId) {
   try {
+    if (_mappingPaused()) { _logMappingPaused('worker-fill'); return; }
     if (!state.workers) state.workers = {};
     const swarmK = _maintainSwarm(state);                     // advance/release a live swarm; it consumes swarmK bg workers
     const swarmBeatId = state.swarm && state.swarm.beatId;    // keep the swarm's beat out of normal rotation while surging
@@ -13874,7 +13897,7 @@ async function runDirectedResearchPass(focus) {
       catch (e) { console.error('[directed] append failed:', e.message); }
       // FINALIZE the live block in place with the organized draft (same block_id → replaces the raw draft).
       try { await canvasUpsertBlock({ focusId: focus.id, blockId: secBlockId, title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: section } }); } catch {}
-      covered.push(target.name); try { db.setMeta(coveredKey, JSON.stringify(covered.slice(-300))); } catch {}
+      covered.push(target.name); try { db.setMeta(coveredKey, JSON.stringify(covered)); } catch {}   // M4.5: uncapped — the -300 window silently dropped the oldest covered on big runs → re-research; consumers filter in code, never in a prompt
       // FACT GAPS (P3 absence model, wired here). We researched this target and are moving on, but
       // some facets never materialised. That is a real observation — we LOOKED and did not find —
       // so it lands as `somevalue`: a gap that feeds research, NEVER `novalue`. This holds whether
@@ -14157,7 +14180,7 @@ async function runEnrichResearchPass(focus) {
     catch (e) { console.error('[enrich] append failed:', e.message); }
     // DRIVE → Canvas: mirror the organized section as a live per-org block as the run advances.
     try { const blk = require('./studio/canvas_emit').orgSectionBlock(section); await canvasEmit({ focusId: focus.id, title: goal, tabMode: 'RESEARCH', blockType: blk.blockType, data: blk.data }); } catch {}
-    enriched.push(org); try { db.setMeta(coveredKey, JSON.stringify(enriched.slice(-300))); } catch {}
+    enriched.push(org); try { db.setMeta(coveredKey, JSON.stringify(enriched)); } catch {}   // M4.5: uncapped (same as the directed lane)
     // Advancing one org per pass with a distinct signature = never looks "stuck"; progressed reflects real
     // content (so a run of empty "not found" passes still moves forward but is honestly logged).
     progressed = !!(section && section.length > 40);
