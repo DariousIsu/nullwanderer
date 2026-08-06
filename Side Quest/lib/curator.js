@@ -15,6 +15,7 @@ const db = require('./db');
 const STALE_THREAD_DAYS = 14;
 const ACTIVE_STALE_DAYS = 10; // an active/pending thread untouched this long → stalled (decay)
 const STALE_GAP_DAYS = 21; // an un-acted capability gap this old → dismissed
+const STALE_NEED_DAYS = 7;  // a capability_need open+not-recurring this long → parked (rehearse never picked it; stop clogging the loop)
 const MAX_THREAD_ACTIONS = 60; // a goal worked this many times without resolving = not converging → retire (over-pursuit backstop)
 
 // SPIRAL/JUNK classifier — the aggressive-curation core. A free-association thought (or
@@ -104,4 +105,23 @@ function curateGaps({ staleDays = STALE_GAP_DAYS } = {}) {
   return aged;
 }
 
-module.exports = { curateThreads, curateGaps, curateMonologue, isJunk, STALE_THREAD_DAYS, STALE_GAP_DAYS };
+// Park capability_needs that have sat OPEN without recurring for staleDays. The rehearse move rarely gets
+// picked (it competes with every other idle move) and study-first defers on cloud-slot contention, so a
+// need can sit open forever — 30 piled up, most not even code-rehearsable (research/data gaps the detector's
+// regex caught). This is the anti-sprawl sibling of curateGaps: a dormant need → 'parked' (recorded, off the
+// active manifest). Keys off updated_ts, which capability_need.record BUMPS on every recurrence — so a gap
+// that keeps failing stays live and only a genuinely dormant one ages out. Deterministic. Returns the count.
+function curateNeeds({ staleDays = STALE_NEED_DAYS } = {}) {
+  const cutoff = Date.now() - staleDays * 24 * 60 * 60 * 1000;
+  let aged = 0;
+  try {
+    const cn = require('./capability_need');
+    for (const r of cn.listOpen({})) {
+      if ((r.updated_ts || r.created_ts || 0) < cutoff) { if (cn.setStatus(r.id, 'parked')) aged++; }
+    }
+  } catch (e) { console.error('[curator] curateNeeds failed:', e.message); }
+  if (aged > 0) console.log(`[curator] parked ${aged} stale capability need(s) — open+dormant > ${staleDays}d, never rehearsed`);
+  return aged;
+}
+
+module.exports = { curateThreads, curateGaps, curateNeeds, curateMonologue, isJunk, STALE_THREAD_DAYS, STALE_GAP_DAYS, STALE_NEED_DAYS };

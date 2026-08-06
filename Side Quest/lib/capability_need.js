@@ -74,7 +74,15 @@ function record(need, { bornFrom = null, deps = {}, nowMs = Date.now(), similarF
   if (n.length < 12) return { id: null, reason: 'too short to be a real need' };
   try {
     const d = _db(deps).getDb();
-    for (const row of d.prepare("SELECT id, need FROM capability_needs WHERE status IN ('open','rehearsing')").all()) {
+    const bf = str(bornFrom).slice(0, 160);
+    for (const row of d.prepare("SELECT id, need, born_from FROM capability_needs WHERE status IN ('open','rehearsing')").all()) {
+      // SAME SOURCE = same gap. born_from is always a specific run/task key here (fill-gap:… / maintain:… /
+      // inquiry-N-tM / research:Name — needs come only from RUNS, never a generic idle bucket), so an
+      // identical born_from means a REPEAT of the same failure even when the model paraphrased the need
+      // text. This is the actual dup bug: the "Oregon House committees" gap logged 3 open rows because each
+      // rehearsal reworded it (<0.55 token overlap → the _similar check alone missed them) while the rehearse
+      // loop never resolved any. Fold the repeat into the existing row (bump recurrence) instead of forking.
+      if (bf && str(row.born_from) === bf) { try { d.prepare('UPDATE capability_needs SET updated_ts = ? WHERE id = ?').run(nowMs, row.id); } catch {} return { id: row.id, deduped: true }; }
       if (_similar(row.need, n) >= similarFloor) return { id: row.id, deduped: true };
     }
     const info = d.prepare('INSERT INTO capability_needs (need, born_from, status, created_ts, updated_ts) VALUES (?, ?, ?, ?, ?)')
