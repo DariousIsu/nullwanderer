@@ -6,8 +6,10 @@ sidecar/maigret_venv/
 sidecar/tts_venv/
 sidecar/**/reports/
 
-# Credentials — email password, Discord bot token. NEVER commit.
+# Credentials — email password, Discord bot token, API keys. NEVER commit.
+# Pattern is .env* (not literal .env) so backups like .env.bak_* are also ignored.
 .env
+.env*
 
 # Runtime / personal state — Zoe's live memory, her file workspace, archives
 data/
@@ -20,3 +22,9 @@ data/
 .DS_Store
 Thumbs.db
 sidecar/face_venv/
+
+# Boot capture artifacts (Start-Process -RedirectStandardError leaves these at the app root)
+boot_*.err
+.last_boot_log
+# Claude Code worktrees (session-local)
+.claude/worktrees/
