@@ -11544,7 +11544,11 @@ async function seedBeatRun(beat, { background = false, targetsOverride = null } 
     // (deterministic, and its facets are known) and hand the deepen pass the full dossier checklist to drive
     // toward. Beats without a fixed plan still author one on the deep reasoner.
     if (Array.isArray(beat.facets) && beat.facets.length) {
-      try { db.setMeta(`focus.${fid}.plan`, JSON.stringify({ facets: beat.facets, targets: [] })); } catch {}
+      // Objective + approach included (2026-08-06): the bare {facets, targets:[]} shape read as
+      // "plan lacks a defined objective, targets, and approach" to the P1 revalidator on every
+      // look — structural emptiness masquerading as an evidence-driven verdict. State what the
+      // beat IS so revalidation judges the work, not the scaffolding.
+      try { db.setMeta(`focus.${fid}.plan`, JSON.stringify({ objective: String(beat.goal || '').slice(0, 400), approach: 'Roster walk over the beat worklist: cover each target with the fixed facet checklist below; deepen before moving on.', facets: beat.facets, targets: targets.slice(0, 40) })); } catch {}
     } else {
       // GATED adaptive preflight for background beats (ADAPTIVE_RESEARCH_DESIGN P0, bg lane):
       // ask-only — NO search dep, so a beat can never spin the browser on a study pass (the absent
