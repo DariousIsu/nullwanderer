@@ -27,13 +27,47 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(pf.preflightValidator('<think>{junk}</think>{"knows_class":false,"tool_picks":[{"tool":"x","for":"y"}]}').valid === true, 'validator strips think blocks first');
   ok(pf.preflightValidator('{"tool_picks":[]}').valid === false && pf.preflightValidator('prose').valid === false, 'a non-verdict is rejected');
 
-  // --- run: knows the craft → ONE ask, no study, guidance rendered ---
+  // --- run: BANKED craft → one ask, no study, banked method rides the input ---
+  // (Craft memory, Lucas 2026-08-06: a model asked to self-assess always claims competence, so
+  // "knows_class" alone no longer skips school — only a FRESH banked study note does.)
   const verdictKnown = { knows_class: true, method: 'follow the money through 990s', study_queries: [], tool_picks: [{ tool: 'nonprofit_lookup', for: '990 filings' }, { tool: 'analyze_data', for: 'grant cross-tabs' }], missing_capabilities: [], quant_questions: ['total grant flow by recipient'] };
   let asks = 0, searches = 0, needs = [];
-  let r = await pf.run({ goal: 'g', kind: 'entity', deps: { ask: async () => { asks++; return verdictKnown; }, search: async () => { searches++; return 'notes'; }, recordNeed: (n) => needs.push(n) } });
-  ok(asks === 1 && searches === 0 && r.studied === false, 'knows-the-craft → one ask, no study pass');
-  ok(/METHOD \(preflight\): follow the money/.test(r.guidance) && /TOOLKIT CHOSEN: nonprofit_lookup \(990 filings\); analyze_data/.test(r.guidance), 'guidance records method + toolkit');
+  let seenInput = null;
+  let r = await pf.run({ goal: 'g', kind: 'entity', deps: {
+    ask: async (o) => { asks++; seenInput = o.input; return verdictKnown; },
+    search: async () => { searches++; return 'notes'; },
+    recordNeed: (n) => needs.push(n),
+    craftGet: () => ({ method: 'banked: trace 990 Schedule I first', ts: Date.now() }),
+  } });
+  ok(asks === 1 && searches === 0 && r.studied === false, 'FRESH banked craft → one ask, no study pass');
+  ok(seenInput && /banked: trace 990 Schedule I/.test(seenInput.knownCraft || ''), 'the banked craft note rides the ask input (learning is APPLIED, not re-derived)');
+  ok(/applying an earlier study pass/.test(r.guidance), 'guidance says the method comes from an earlier study');
+  ok(/TOOLKIT CHOSEN: nonprofit_lookup \(990 filings\); analyze_data/.test(r.guidance), 'guidance records method + toolkit');
   ok(/QUANTITATIVE QUESTIONS THIS RUN MUST COMPUTE: total grant flow/.test(r.guidance) && !/CAPABILITY GAPS/.test(r.guidance), 'guidance carries quant questions, omits empty gaps');
+
+  // --- run: NO banked craft → study is FORCED even when the model claims competence ---
+  asks = 0; searches = 0;
+  let bankedPut = null, seenQuery = null;
+  r = await pf.run({ goal: 'g', kind: 'entity', deps: {
+    ask: async () => { asks++; return verdictKnown; },   // claims knows_class:true, no study queries
+    search: async (q) => { searches++; seenQuery = q; return 'craft notes from the web'; },
+    craftPut: (k, m) => { bankedPut = { k, m }; },
+  } });
+  ok(asks === 2 && searches === 1 && r.studied === true, 'no banked craft → study FORCED despite claimed competence (structural, not self-assessed)');
+  ok(/investigative research methodology best practices/.test(seenQuery || ''), 'the forced query studies the CRAFT, not the subject');
+  ok(bankedPut && bankedPut.k === 'entity' && /follow the money/.test(bankedPut.m), 'the studied method is BANKED for the class — later runs start from it');
+  // a STALE banked note behaves like no note (restudy after the TTL)
+  asks = 0; searches = 0;
+  r = await pf.run({ goal: 'g', kind: 'entity', deps: {
+    ask: async () => { asks++; return verdictKnown; },
+    search: async () => { searches++; return 'notes'; },
+    craftGet: () => ({ method: 'old', ts: Date.now() - pf.CRAFT_TTL_MS - 1000 }),
+  } });
+  ok(searches === 1 && r.studied === true, 'a stale banked note (past the TTL) triggers a restudy');
+  // no search dep → forced study structurally impossible, run still completes (the beat lane shape)
+  asks = 0;
+  r = await pf.run({ goal: 'g', kind: 'entity', deps: { ask: async () => { asks++; return verdictKnown; } } });
+  ok(asks === 1 && r && r.studied === false, 'no search dep (bg lane) → no forced study, preflight still completes');
 
   // --- run: unfamiliar craft → study pass → re-ask; gaps filed + rendered ---
   const verdictStudy1 = { knows_class: false, method: 'tbd', study_queries: ['how do investigative journalists trace nonprofit funding'], tool_picks: [], missing_capabilities: [], quant_questions: [] };

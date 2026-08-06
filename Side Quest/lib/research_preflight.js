@@ -35,9 +35,10 @@ function inventoryText({ operatorToolNames = [], deepLane = [], webLane = [], sk
   return parts.join('\n');
 }
 
-function preflightInput({ goal = '', kind = 'entity', inventory = '', studyNotes = '' } = {}) {
+function preflightInput({ goal = '', kind = 'entity', inventory = '', studyNotes = '', craftNotes = '' } = {}) {
   const o = { goal: _clean(goal, 600), kind: _clean(kind, 20), toolInventory: str(inventory).slice(0, 5000) };
   if (str(studyNotes).trim()) o.studyNotes = str(studyNotes).slice(0, 4000);
+  if (str(craftNotes).trim()) o.knownCraft = str(craftNotes).slice(0, 1200);
   return o;
 }
 
@@ -49,7 +50,8 @@ function preflightWant() {
 - study_queries: 0-2 web queries to learn the craft FIRST — only when knows_class is false or the class is unusual; [] when you already know the craft (do not study for the sake of it).
 - tool_picks: 3-8 tools FROM THE INVENTORY matched to this project's actual needs, each with what it's for. Include at least one quantitative pick (analyze_data / forecast_query / localdb) when any question is countable or probabilistic.
 - missing_capabilities: capabilities this project genuinely needs that the inventory CANNOT provide (name them concretely, e.g. "state-level campaign finance filings for NC"); [] when the inventory suffices.
-- quant_questions: 1-3 sub-questions this research should answer with a COMPUTED number or probability.`;
+- quant_questions: 1-3 sub-questions this research should answer with a COMPUTED number or probability.
+- If the input carries knownCraft, it is method learned from an EARLIER study pass on this class of work — build your method ON it (refine it, never ignore it).`;
 }
 
 function preflightValidator(raw) {
@@ -64,9 +66,9 @@ function preflightValidator(raw) {
 }
 
 // The verdict rendered as PLANNER GUIDANCE — what the origin plan must record.
-function renderGuidance(verdict = {}, { studied = false } = {}) {
+function renderGuidance(verdict = {}, { studied = false, banked = false } = {}) {
   const lines = [];
-  if (str(verdict.method).trim()) lines.push(`METHOD (preflight${studied ? ', informed by a study pass' : ''}): ${_clean(verdict.method, 700)}`);
+  if (str(verdict.method).trim()) lines.push(`METHOD (preflight${studied ? ', informed by a study pass' : banked ? ', applying an earlier study pass' : ''}): ${_clean(verdict.method, 700)}`);
   const picks = (Array.isArray(verdict.tool_picks) ? verdict.tool_picks : [])
     .map((p) => p && p.tool ? `${_clean(p.tool, 60)} (${_clean(p.for, 120)})` : null).filter(Boolean).slice(0, 10);
   if (picks.length) lines.push(`TOOLKIT CHOSEN: ${picks.join('; ')}`);
@@ -77,42 +79,72 @@ function renderGuidance(verdict = {}, { studied = false } = {}) {
   return lines.join('\n');
 }
 
+// CRAFT MEMORY (Lucas 2026-08-06: "at no point have I seen her do outside research to learn best
+// practices and implement new things she has learned"). Measured that same night: EVERY preflight
+// said knows_class=true — a model asked to self-assess competence always claims it, so the study
+// loop was unreachable in practice. The trigger is now STRUCTURAL, not self-assessed: a craft
+// class with no FRESH banked study note gets a study pass (one query on the CRAFT, not the
+// subject) even when the model claims competence. What the study yields is BANKED (deps.craftPut)
+// and every later run of the class consumes it (deps.craftGet → knownCraft in the input) — the
+// learning accumulates and is re-applied instead of evaporating with the run.
+const CRAFT_TTL_MS = 7 * 24 * 3600 * 1000;   // a banked craft note goes stale after a week → restudy
+function defaultStudyQuery(kind) {
+  return {
+    entity: 'investigative research methodology best practices for profiling organizations and people',
+    topical: 'how professional analysts research and structure a subject briefing methodology best practices',
+    forecast: 'forecasting best practices reference class base rates calibration superforecasting methodology',
+    argument: 'how investigative journalists build and stress-test an argument verification methodology',
+  }[str(kind)] || `research methodology best practices for ${str(kind) || 'general'} analysis`;
+}
+
 /**
  * Orchestrate the preflight. deps: ask (cloud_logic.ask-shaped), search (q → notes string, optional),
- * recordNeed (need → void, optional), inventory parts. Returns { verdict, guidance, studied } | null.
+ * recordNeed (need → void, optional), craftGet (kind → {method, ts}|null, optional),
+ * craftPut (kind, method — optional), inventory parts. Returns { verdict, guidance, studied } | null.
  * Fail-open: any throw/empty → null (the plan generates exactly as before).
  */
 async function run({ goal = '', kind = 'entity', deps = {} } = {}) {
   if (!goal || typeof deps.ask !== 'function') return null;
   try {
     const inv = inventoryText(deps);
+    // Banked craft (fresh) rides the FIRST ask, so the earned method is applied, not re-derived.
+    let banked = null;
+    if (typeof deps.craftGet === 'function') {
+      try { const b = deps.craftGet(kind); if (b && str(b.method).trim() && (Date.now() - (Number(b.ts) || 0)) < CRAFT_TTL_MS) banked = b; } catch { /* bank miss = no craft */ }
+    }
     const ask1 = await deps.ask({
       task: 'research_preflight', v: 1, numPredict: 700,
-      input: preflightInput({ goal, kind, inventory: inv }),
+      input: preflightInput({ goal, kind, inventory: inv, craftNotes: banked ? banked.method : '' }),
       want: preflightWant(), validate: preflightValidator,
     });
     if (!ask1) return null;
     let verdict = ask1, studied = false;
     const queries = _arr(ask1.study_queries, 2);
-    if (queries.length && typeof deps.search === 'function') {
+    // Structural trigger: the model's own queries when it admits unfamiliarity, OR a forced single
+    // craft query when nothing fresh is banked — self-declared competence no longer skips school.
+    const mustStudy = !banked && !queries.length;
+    if ((queries.length || mustStudy) && typeof deps.search === 'function') {
+      const qs = queries.length ? queries : [defaultStudyQuery(kind)];
       let notes = '';
-      for (const q of queries) {
+      for (const q of qs) {
         try { const r = await deps.search(q); if (str(r).trim()) notes += `\n## ${q}\n${str(r).slice(0, 1800)}`; } catch { /* one dry query never sinks the study */ }
       }
       if (notes.trim()) {
         studied = true;
         const ask2 = await deps.ask({
           task: 'research_preflight', v: 1, numPredict: 700,
-          input: preflightInput({ goal, kind, inventory: inv, studyNotes: notes }),
+          input: preflightInput({ goal, kind, inventory: inv, studyNotes: notes, craftNotes: banked ? banked.method : '' }),
           want: preflightWant(), validate: preflightValidator,
         });
         if (ask2) verdict = ask2;
+        // BANK what the study earned — the next run of this class starts from it.
+        if (typeof deps.craftPut === 'function' && str(verdict.method).trim()) { try { deps.craftPut(kind, verdict.method); } catch { /* banking is additive */ } }
       }
     }
     if (typeof deps.recordNeed === 'function') {
       for (const need of _arr(verdict.missing_capabilities, 3)) { try { deps.recordNeed(need); } catch { /* filing is additive */ } }
     }
-    return { verdict, guidance: renderGuidance(verdict, { studied }), studied };
+    return { verdict, guidance: renderGuidance(verdict, { studied, banked: !!banked }), studied };
   } catch (e) { try { console.error('[preflight] failed (fail-open):', e.message); } catch {} return null; }
 }
 
@@ -176,4 +208,4 @@ async function auditDocument({ goal = '', title = '', body = '', deps = {} } = {
   } catch (e) { try { console.error('[preflight] doc audit failed (fail-open):', e.message); } catch {} return null; }
 }
 
-module.exports = { inventoryText, preflightInput, preflightWant, preflightValidator, renderGuidance, run, auditInput, auditWant, auditValidator, renderAuditGuidance, auditDocument };
+module.exports = { inventoryText, preflightInput, preflightWant, preflightValidator, renderGuidance, run, defaultStudyQuery, CRAFT_TTL_MS, auditInput, auditWant, auditValidator, renderAuditGuidance, auditDocument };

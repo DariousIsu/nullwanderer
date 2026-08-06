@@ -11563,6 +11563,9 @@ async function seedBeatRun(beat, { background = false, targetsOverride = null } 
               deepLane: tier.laneToolNames('deep'), webLane: tier.laneToolNames('web'),
               skills: (() => { try { return require('./lib/skills').listNames(); } catch { return []; } })(),
               recordNeed: (n) => { try { require('./lib/capability_need').record(n, { bornFrom: `preflight:beat:${beat.id}` }); } catch {} },
+              // Beats CONSUME the craft bank (no search dep → no forced study on the bg lane; the
+              // user lanes fill the bank and background work inherits the earned method for free).
+              craftGet: (k) => { try { const v = JSON.parse(db.getMeta(`craft.study.${k}`) || 'null'); return v && v.method ? v : null; } catch { return null; } },
             },
           });
           if (r && r.guidance) {
@@ -12024,12 +12027,20 @@ async function _autonomicSchedulerTick() {
                   deepLane: tier.laneToolNames('deep'), webLane: tier.laneToolNames('web'),
                   skills: (() => { try { return require('./lib/skills').listNames(); } catch { return []; } })(),
                   recordNeed: (n) => { try { require('./lib/capability_need').record(n, { bornFrom: `preflight:${cand.id}` }); } catch {} },
+                  // CRAFT MEMORY: banked study notes per craft class — consumed on later runs,
+                  // refreshed by a forced study when stale (self-declared competence no longer skips school).
+                  craftGet: (k) => { try { const v = JSON.parse(db.getMeta(`craft.study.${k}`) || 'null'); return v && v.method ? v : null; } catch { return null; } },
+                  craftPut: (k, method) => { try { db.setMeta(`craft.study.${k}`, JSON.stringify({ method: String(method).slice(0, 900), ts: Date.now() })); console.log(`[preflight] craft note BANKED for class "${k}" — future runs start from it`); } catch {} },
                 },
               });
               if (_pfRes && _pfRes.guidance) {
                 _pfGuidance = _pfRes.guidance;
                 try { db.setMeta(`focus.${cand.id}.preflight`, JSON.stringify(_pfRes.verdict)); } catch {}
-                console.log(`[preflight] #${cand.id} ${_pfRes.verdict.knows_class ? 'knows the craft' : 'STUDIED the craft'}${_pfRes.studied ? ' (study pass ran)' : ''} — ${(_pfRes.verdict.tool_picks || []).length} tool pick(s), ${(_pfRes.verdict.missing_capabilities || []).length} gap(s)`);
+                console.log(`[preflight] #${cand.id} ${_pfRes.studied ? 'STUDIED the craft (study pass ran)' : _pfRes.verdict.knows_class ? 'knows the craft' : 'knows-gap admitted'} — ${(_pfRes.verdict.tool_picks || []).length} tool pick(s), ${(_pfRes.verdict.missing_capabilities || []).length} gap(s)`);
+                // Lucas sees the learning happen: a study pass is worth a line in chat, not just a log.
+                if (_pfRes.studied) {
+                  try { _surfaceSteeringNote(f || cand, `Before starting "${String(cand.content).slice(0, 60)}" I looked up how this class of work is done well and I'm folding it in: ${String(_pfRes.verdict.method || '').replace(/\s+/g, ' ').slice(0, 220)}`, 'craft study'); } catch {}
+                }
                 const _miss = (_pfRes.verdict.missing_capabilities || []).slice(0, 3);
                 if (_miss.length) {
                   try { _surfaceSteeringNote(f || cand, `Preflight on "${String(cand.content).slice(0, 70)}": I'm missing ${_miss.length === 1 ? 'a capability' : 'capabilities'} — ${_miss.join('; ')}. Filed as build need(s); I'll work around it honestly with the closest tools I have. Tell me to hold if you'd rather the tool get built first.`, 'preflight gap'); } catch {}
@@ -14873,12 +14884,14 @@ async function establishEnrichRun({ sourceFocusId = null, facet = '', sourceTurn
         deepLane: tier.laneToolNames('deep'), webLane: tier.laneToolNames('web'),
         skills: (() => { try { return require('./lib/skills').listNames(); } catch { return []; } })(),
         recordNeed: (n) => { try { require('./lib/capability_need').record(n, { bornFrom: `preflight:${fid}` }); } catch {} },
+        craftGet: (k) => { try { const v = JSON.parse(db.getMeta(`craft.study.${k}`) || 'null'); return v && v.method ? v : null; } catch { return null; } },
+        craftPut: (k, method) => { try { db.setMeta(`craft.study.${k}`, JSON.stringify({ method: String(method).slice(0, 900), ts: Date.now() })); console.log(`[preflight] craft note BANKED for class "${k}"`); } catch {} },
       },
     });
     if (_pfRes && _pfRes.guidance) {
       _pfGuidance = _pfRes.guidance;
       try { db.setMeta(`focus.${fid}.preflight`, JSON.stringify(_pfRes.verdict)); } catch {}
-      console.log(`[preflight] enrich #${fid} ${_pfRes.verdict.knows_class ? 'knows the craft' : 'STUDIED the craft'}${_pfRes.studied ? ' (study pass ran)' : ''} — ${(_pfRes.verdict.tool_picks || []).length} tool pick(s), ${(_pfRes.verdict.missing_capabilities || []).length} gap(s)`);
+      console.log(`[preflight] enrich #${fid} ${_pfRes.studied ? 'STUDIED the craft (study pass ran)' : 'applying known craft'} — ${(_pfRes.verdict.tool_picks || []).length} tool pick(s), ${(_pfRes.verdict.missing_capabilities || []).length} gap(s)`);
       const _miss = (_pfRes.verdict.missing_capabilities || []).slice(0, 3);
       if (_miss.length) {
         try { _surfaceSteeringNote(r.focus, `Preflight on the enrich run ("${facet.slice(0, 70)}"): I'm missing ${_miss.length === 1 ? 'a capability' : 'capabilities'} — ${_miss.join('; ')}. Filed as build need(s); I'll work around it honestly with the closest tools I have.`, 'preflight gap'); } catch {}
