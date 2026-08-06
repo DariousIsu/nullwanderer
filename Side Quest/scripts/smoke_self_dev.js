@@ -52,6 +52,44 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(/calibrated honesty/.test(block) && /verified facts/.test(block), 'block lists the actual entries');
   ok(sd.buildBlock([], 'Lucas') === null, 'empty ledger → null block');
 
+  // --- syncFromGit: the M2.5.3 feeder (all deps injected — no git, no db) ---
+  const gitLines = [
+    'cccc333\t2026-08-06\tfeat(self-ops): M2.5.2 exhaust access',
+    'bbbb222\t2026-08-06\tfix(turn+identity): the bond-yield morning',
+    'aaaa111\t2026-08-05\tdocs(plan): tidy the milestone notes',
+  ].join('\n');
+  const meta = {};
+  const recd = [], cladd = [];
+  const deps = {
+    getMetaFn: (k) => meta[k], setMetaFn: (k, v) => { meta[k] = v; },
+    recordFn: async (s, o) => { recd.push(`${(o && o.date) || ''} ${s}`); },
+    changelogAddFn: (s) => { cladd.push(s); return true; },
+  };
+  let seenArgs = null;
+  // first run: no last-seen → bounded backfill, ledger only, newest hash stamped
+  let r = await sd.syncFromGit({ ...deps, execFileFn: async (args) => { seenArgs = args; return gitLines; } });
+  ok(r.filed === 3 && meta['selfdev.git_last_seen'] === 'cccc333', 'first run files the backfill and stamps the newest hash');
+  ok(seenArgs.includes('-n') && !seenArgs.some((a) => /\.\.HEAD$/.test(a)), 'first run uses a bounded window, not a range');
+  ok(recd[0].startsWith('2026-08-05') && recd[2].startsWith('2026-08-06'), 'entries file oldest-first (a chronological ledger)');
+  ok(cladd.length === 0, 'a backfill never floods the capability log');
+  // second run: range from the stamp; feat/fix reach the capability log, docs does not
+  recd.length = 0;
+  r = await sd.syncFromGit({ ...deps, execFileFn: async (args) => { seenArgs = args; return gitLines; } });
+  ok(seenArgs.some((a) => a === 'cccc333..HEAD'), 'second run ranges from the stamped hash');
+  ok(cladd.length === 2 && cladd.every((s) => /^(feat|fix)/.test(s)), 'only feat/fix subjects reach the capability log');
+  // a broken stamp (git rejects the range) falls back to the bounded window instead of filing nothing forever
+  cladd.length = 0; recd.length = 0;
+  let gitCalls = 0;
+  r = await sd.syncFromGit({ ...deps, execFileFn: async (args) => { gitCalls++; if (args.some((a) => /\.\.HEAD$/.test(a))) throw new Error('bad revision'); return gitLines; } });
+  ok(gitCalls === 2 && r.filed === 3 && cladd.length === 0, 'an unresolvable stamp falls back to backfill (ledger only)');
+  // total git failure files nothing and stamps nothing
+  const meta2 = {};
+  r = await sd.syncFromGit({ ...deps, getMetaFn: (k) => meta2[k], setMetaFn: (k, v) => { meta2[k] = v; }, execFileFn: async () => { throw new Error('git gone'); } });
+  ok(r.filed === 0 && !meta2['selfdev.git_last_seen'], 'git failure → nothing filed, nothing stamped');
+  // empty range (no new commits) files nothing
+  r = await sd.syncFromGit({ ...deps, execFileFn: async () => '' });
+  ok(r.filed === 0, 'no new commits → nothing filed');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

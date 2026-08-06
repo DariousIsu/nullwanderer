@@ -1429,6 +1429,14 @@ app.whenReady().then(() => {
     catch (e) { console.error('[main] reawaken init failed:', e.message); }
     downtimeLib.startHeartbeat();
   } catch (e) { console.error('[main] downtime init failed:', e.message); }
+  // M2.5.3 — the git→ledger feeder: commits since the last boot become dated self_dev entries
+  // (feat/fix subjects also reach the capability log), so "what have you been working on" cites
+  // this week's REAL commits instead of stale fragments. Delayed off the boot surge; fail-soft.
+  setTimeout(() => {
+    require('./lib/self_dev').syncFromGit()
+      .then((r) => { if (r && r.filed) console.log(`[self-dev] git → ledger: filed ${r.filed} commit(s) (through ${String(r.newest || '').slice(0, 7)})`); })
+      .catch((e) => console.error('[self-dev] git sync failed:', e.message));
+  }, 45 * 1000).unref?.();
   // Capability self-check at boot — a cheap model-free sweep so there's always a fresh
   // ledger grounding her self-knowledge (and a RED surfaces immediately if a pathway
   // drifted across the restart). Throttled thereafter by the idle loop (~6h).

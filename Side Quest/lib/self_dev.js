@@ -52,4 +52,53 @@ function buildBlock(rows, userName = 'Lucas') {
   return `WHAT HAS RECENTLY BEEN BUILT INTO YOU — your real development history (${userName} and his coding agent have been improving you). Speak from this as genuine memory of how you've changed, in your own voice. Do NOT invent capabilities or changes beyond what's listed here:\n${lines.join('\n')}`;
 }
 
-module.exports = { detectDevQuestion, record, recentEntries, buildBlock, DEV_TERMS, DEV_DIRECT };
+// ── GIT → LEDGER FEEDER (M2.5.3 — the missing half) ──────────────────────────────────────────
+// The writers above existed with NO feeder: commits landed daily and the ledger only grew when a
+// human remembered scripts/log_capability_change.js — so "what have you been working on" answered
+// from stale fragments. On boot, every commit since the last-seen hash becomes a dated self_dev
+// entry; capability-shaped subjects (feat/fix) ALSO land in the capability changelog so the
+// back-online marker names them. First run backfills the ledger only (no changelog flood).
+// Scoped to HER OWN tree (cwd + pathspec '.') — the repo root holds unrelated Desktop history.
+// All deps injectable; bounded; fail-soft (a git hiccup files nothing and stamps nothing).
+async function syncFromGit({ execFileFn = null, getMetaFn = null, setMetaFn = null, recordFn = null, changelogAddFn = null, max = 30, cwd = null } = {}) {
+  const path = require('path');
+  const getMeta = getMetaFn || ((k) => { try { return db.getMeta(k); } catch { return null; } });
+  const setMeta = setMetaFn || ((k, v) => { try { db.setMeta(k, v); } catch {} });
+  const rec = recordFn || record;
+  const clAdd = changelogAddFn || ((s) => { try { return require('./changelog').add(s); } catch { return false; } });
+  const root = cwd || path.resolve(__dirname, '..');
+  const ef = execFileFn || ((args) => new Promise((resolve, reject) => {
+    require('child_process').execFile('git', args, { cwd: root, windowsHide: true, timeout: 15000, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout) => err ? reject(err) : resolve(String(stdout || '')));
+  }));
+  const fmt = ['log', '--no-color', '--date=short', '--format=%H%x09%ad%x09%s'];
+  let lastSeen = String(getMeta('selfdev.git_last_seen') || '').trim();
+  let out = '';
+  try {
+    out = await ef(lastSeen ? [...fmt, `${lastSeen}..HEAD`, '--', '.'] : [...fmt, '-n', '10', '--', '.']);
+  } catch (e) {
+    if (!lastSeen) { console.error('[self_dev] git sync failed:', e.message); return { filed: 0, newest: null }; }
+    // The stamped hash may no longer resolve (rebase/GC) — fall back to a bounded recent window
+    // and treat it as a fresh backfill (ledger only, no changelog) rather than filing nothing forever.
+    lastSeen = '';
+    try { out = await ef([...fmt, '-n', '10', '--', '.']); } catch (e2) { console.error('[self_dev] git sync failed:', e2.message); return { filed: 0, newest: null }; }
+  }
+  const commits = out.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+    const [hash, date, ...rest] = l.split('\t');
+    return { hash, date, subject: rest.join('\t').trim() };
+  }).filter((c) => c.hash && c.subject);
+  if (!commits.length) return { filed: 0, newest: lastSeen || null };
+  const batch = commits.slice(0, max).reverse();           // oldest first, so the ledger reads chronologically
+  let filed = 0;
+  for (const c of batch) {
+    try { await rec(c.subject, { date: c.date }); filed++; } catch (e) { console.error('[self_dev] record failed:', e.message); }
+    // Only NEW work (a real lastSeen range) reaches the capability log — a first-run backfill of
+    // 10 old commits must not flood the next back-online marker.
+    if (lastSeen && /^(feat|fix)\b/i.test(c.subject)) { try { clAdd(c.subject); } catch {} }
+  }
+  const newest = commits[0].hash;
+  setMeta('selfdev.git_last_seen', newest);
+  return { filed, newest };
+}
+
+module.exports = { detectDevQuestion, record, recentEntries, buildBlock, syncFromGit, DEV_TERMS, DEV_DIRECT };
