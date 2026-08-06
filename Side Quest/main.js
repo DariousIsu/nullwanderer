@@ -517,7 +517,7 @@ app.whenReady().then(() => {
   try { curatorLib.curateThreads(); curatorLib.curateGaps(); curatorLib.curateNeeds(); curatorLib.curateMonologue(); } catch (e) { console.error('[main] curator failed:', e.message); }
   // Keep pruning spiral/junk during long sessions (write-time guard catches most; this
   // sweeps anything that slips through, e.g. junk readings from tool output).
-  setInterval(() => { try { curatorLib.curateMonologue(); } catch (e) { console.error('[main] periodic curateMonologue failed:', e.message); } }, 20 * 60 * 1000).unref?.();
+  setInterval(() => { markActivity('curate-monologue'); try { curatorLib.curateMonologue(); } catch (e) { console.error('[main] periodic curateMonologue failed:', e.message); } finally { markActivity('idle'); } }, 20 * 60 * 1000).unref?.();
 
   // DAILY CURATION PASS (gated, default OFF). The cloud_curator orchestrator — quarantine prune +
   // cloud near-dup/self-evo merge + graph adjudication — once per ~20h, ONLY when she's been idle
@@ -725,6 +725,7 @@ app.whenReady().then(() => {
       // lane it still can't absorb is browser_download (~460/day) — a throughput/triage question, not a
       // starvation of the rest. Env-overridable for tuning.
       try {
+        markActivity('promote-docs');   // stall-attrib (diagnostic — names the promote leg inside the curation window)
         const pr = await promoteDocumentsPass({ limit: parseInt(process.env.ZOE_PROMOTE_LIMIT, 10) || 150 });
         const beat = require('./lib/promote').promotionBeat(pr);
         if (beat) {
@@ -733,6 +734,7 @@ app.whenReady().then(() => {
           if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
         }
       } catch (e) { console.error('[promote] pass failed:', e.message); }
+      finally { markActivity('curation'); }   // back to the curation umbrella — the pass continues below
       // SUBSTANTIATION LANE (Slice 4, substantiation-grading): the "prove" arm of prove-or-fade. Walk the
       // UNSUBSTANTIATED nodes (Slice-2 endpoint mints etc.) through INTERNAL corpora FIRST (search_entities /
       // search_knowledge — the attached wiki/general-knowledge tier that was going unused), else a bounded WEB
@@ -845,14 +847,14 @@ app.whenReady().then(() => {
     if (agingRunning) return;
     if (!echoSuit || !echoSuit.connected) return;
     if (Date.now() - parseInt(db.getMeta('last_event_aging_at') || '0', 10) < AGING_CHECK_MS) return;
-    agingRunning = true;
+    agingRunning = true; markActivity('event-aging');   // stall-attrib (diagnostic)
     db.setMeta('last_event_aging_at', String(Date.now()));
     try {
       const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_event_aging', args: {} });
       let rep = null; try { rep = JSON.parse(ar && ar.text); } catch {}
       if (rep && rep.flipped > 0) console.log(`[aging] ${rep.flipped} scheduled event(s) past their time → unconfirmed_past (queued to verify)`);
     } catch (e) { console.error('[aging] event-aging sweep failed:', e.message); }
-    finally { agingRunning = false; }
+    finally { markActivity('idle'); agingRunning = false; }
   };
   setInterval(() => { maybeRunEventAging().catch(() => {}); }, AGING_CHECK_MS).unref?.();
   setTimeout(() => { maybeRunEventAging().catch(() => {}); }, 120000).unref?.();   // catch-up kick ~2min after boot
@@ -919,7 +921,7 @@ app.whenReady().then(() => {
     if (!echoSuit || !echoSuit.connected) return;
     if (Date.now() - lastUserTurnTs < RESEARCH_IDLE_MS) return;                 // never drive her browser mid-conversation
     if (Date.now() - parseInt(db.getMeta('last_research_at') || '0', 10) < RESEARCH_MIN_GAP_MS) return;
-    researchRunning = true;
+    researchRunning = true; markActivity('research-pass');   // stall-attrib (diagnostic)
     db.setMeta('last_research_at', String(Date.now()));
     try {
       const researchLane = require('./lib/research_lane');
@@ -966,7 +968,7 @@ app.whenReady().then(() => {
         }
       }
     } catch (e) { console.error('[research] pass failed:', e.message); }
-    finally { researchRunning = false; }
+    finally { markActivity('idle'); researchRunning = false; }
   };
   setInterval(() => { maybeRunResearch().catch(() => {}); }, RESEARCH_CHECK_MS).unref?.();
   // F4 CONTEXTUAL IDENTITY-DEDUP SWEEP — its OWN write-triggered tick (mirrors the auto-cleaner). The
@@ -986,7 +988,7 @@ app.whenReady().then(() => {
     let pdb; try { pdb = require('./lib/puller_db'); pdb.init(); } catch { return; }
     let fp = '0:0'; try { fp = pdb.storeFingerprint(); } catch {}
     if (fp === db.getMeta('last_dedup_fingerprint')) return;    // FINGERPRINT GATE — no writes → nothing to sweep
-    dedupRunning = true;
+    dedupRunning = true; markActivity('dedup-sweep');   // stall-attrib (diagnostic — runSweep is synchronous O(n²) on the main thread)
     db.setMeta('last_dedup_at', String(Date.now()));
     try {
       const corrections = require('./lib/puller_corrections');
@@ -1001,7 +1003,7 @@ app.whenReady().then(() => {
         }
       }
     } catch (e) { console.error('[dedup] sweep failed:', e.message); }
-    finally { dedupRunning = false; }
+    finally { markActivity('idle'); dedupRunning = false; }
   };
   setInterval(() => { maybeRunDedup().catch(() => {}); }, DEDUP_CHECK_MS).unref?.();
   // PULLER CLOSE-THE-LOOP — after an email bounces, the Puller proposes a next-pattern flip (a pending
@@ -1021,7 +1023,7 @@ app.whenReady().then(() => {
     if (Date.now() - parseInt(db.getMeta('last_puller_loop_at') || '0', 10) < PLOOP_MIN_GAP_MS) return;   // floor
     let pdb, revise;
     try { pdb = require('./lib/puller_db'); pdb.init(); revise = require('./studio/puller_revise'); } catch { return; }
-    pLoopRunning = true;
+    pLoopRunning = true; markActivity('puller-loop');   // stall-attrib (diagnostic — decideRevision loop is synchronous)
     db.setMeta('last_puller_loop_at', String(Date.now()));
     try {
       const pending = pdb.listRevisions({ status: 'pending' })
@@ -1040,7 +1042,7 @@ app.whenReady().then(() => {
         }
       }
     } catch (e) { console.error('[puller-loop] failed:', e.message); }
-    finally { pLoopRunning = false; }
+    finally { markActivity('idle'); pLoopRunning = false; }
   };
   setInterval(() => { maybeRunPullerLoop().catch(() => {}); }, PLOOP_CHECK_MS).unref?.();
   // KG BLOCKING DEDUP — the PACED, event-driven "clean within range" lane (Lucas: faster not instant). Not a
@@ -1127,7 +1129,7 @@ app.whenReady().then(() => {
     if (!echoSuit || !echoSuit.connected) return;
     if (Date.now() - lastUserTurnTs < KGAPPLY_IDLE_MS) return;   // heavy + writes the graph — never mid-conversation
     if (Date.now() - parseInt(db.getMeta('last_kg_apply_at') || '0', 10) < KGAPPLY_MIN_GAP_MS) return;  // floor
-    kgApplyRunning = true;
+    kgApplyRunning = true; markActivity('kg-adjudicate');   // stall-attrib (diagnostic)
     db.setMeta('last_kg_apply_at', String(Date.now()));
     try {
       // TIER-SCOPED DRAIN (2026-07-10): target the ANCHORED tiers only. They route to the FAST model
@@ -1159,7 +1161,7 @@ app.whenReady().then(() => {
         }
       }
     } catch (e) { console.error('[kg-apply] adjudication failed:', e.message); }
-    finally { kgApplyRunning = false; }
+    finally { markActivity('idle'); kgApplyRunning = false; }
   };
   setInterval(() => { maybeRunAdjudicate().catch(() => {}); }, KGAPPLY_CHECK_MS).unref?.();
   // NIGHTLY FULL DEDUP SWEEP (2026-07-10): the GUARANTEED once-a-day net. The write-triggered dedup + the fast
@@ -1187,7 +1189,7 @@ app.whenReady().then(() => {
     if (!echoSuit || !echoSuit.connected) return;
     if (Date.now() - lastUserTurnTs < KGAPPLY_IDLE_MS) return;         // heavy + writes the graph — never mid-conversation
     if (db.getMeta('last_kg_nightly_day') === localDayStr()) return;   // once per calendar day
-    kgNightlyRunning = true;
+    kgNightlyRunning = true; markActivity('kg-nightly');   // stall-attrib (diagnostic)
     db.setMeta('last_kg_nightly_day', localDayStr());                  // claim the slot BEFORE running (idempotent for the day)
     try {
       const tiers = (process.env.ZOE_KG_APPLY_TIERS || 'strong-id,name-exact').trim();
@@ -1314,7 +1316,7 @@ app.whenReady().then(() => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
       }
     } catch (e) { console.error('[kg-nightly] sweep failed:', e.message); }
-    finally { kgNightlyRunning = false; }
+    finally { markActivity('idle'); kgNightlyRunning = false; }
   };
   setInterval(() => { maybeRunNightlyDedupSweep().catch(() => {}); }, KGNIGHTLY_CHECK_MS).unref?.();
   // Episodic recall backfill: embed past turns lacking an embedding so "what did we say earlier
@@ -1324,12 +1326,14 @@ app.whenReady().then(() => {
   setTimeout(() => {
     let drained = 0;
     const drain = async () => {
+      markActivity('embed-backfill');   // stall-attrib (diagnostic — CPU embedder batches run in-process)
       try {
         const n = await memoryLib.backfillTurnEmbeddings(300);
         drained += n;
         if (n >= 300 && drained < 6000) { setTimeout(() => { drain().catch(() => {}); }, 30 * 1000).unref?.(); }
         else if (drained) console.log(`[main] turn-embedding backfill caught up (${drained} embedded)`);
       } catch {}
+      finally { markActivity('idle'); }
     };
     drain().catch(() => {});
   }, 20 * 1000).unref?.();
@@ -1566,6 +1570,7 @@ app.whenReady().then(() => {
   const runConversationPass = () => {
     let bId = null;
     try { bId = require('./lib/board').start({ lane: 'memory', kind: 'conversation-pass', target: 'closed chat windows → objects' }).id; } catch {}
+    markActivity('conversation-pass');   // stall-attrib (diagnostic — the pass is synchronous)
     try {
       const r = require('./lib/conversation_objects').pass({});
       if (r.landed || r.halted) console.log(`[conversation] pass — ${r.landed} window(s) filed as objects${r.duplicates ? `, ${r.duplicates} already filed` : ''}${r.halted ? ' (halted on a landing failure — will retry next tick)' : ''}`);
@@ -1574,6 +1579,7 @@ app.whenReady().then(() => {
       console.error('[conversation] pass failed:', e.message);
       try { require('./lib/board').finish(bId, { status: 'failed', note: e.message }); } catch {}
     }
+    finally { markActivity('idle'); }
   };
   setTimeout(runConversationPass, 2 * 60 * 1000);
   setInterval(runConversationPass, 15 * 60 * 1000);
@@ -1585,6 +1591,7 @@ app.whenReady().then(() => {
   // idles on the tail. Bounded batch + fail-soft; the DELETE is on a small tail so it never itself
   // stalls. ~470k/day inflow vs 8k/2min ≈ 5.7M/day capacity, so it keeps pace with wide margin.
   const runRouteDrain = () => {
+    markActivity('route-drain');   // stall-attrib (diagnostic — synchronous fold + delete batches)
     try {
       const rd = require('./lib/route_drain');
       let total = 0, guard = 0;
@@ -1597,6 +1604,7 @@ app.whenReady().then(() => {
       }
       if (total) console.log(`[route-drain] folded + pruned ${total.toLocaleString()} observation(s) → route_health`);
     } catch (e) { console.error('[route-drain] pass failed:', e.message); }
+    finally { markActivity('idle'); }
   };
   setTimeout(runRouteDrain, 60 * 1000);          // first drain ~1m after boot
   setInterval(runRouteDrain, 2 * 60 * 1000);     // then every 2m — keeps route_obs a small tail
@@ -1652,6 +1660,7 @@ app.whenReady().then(() => {
   if (inboxLib.isConfigured()) {
     const INBOX_POLL_MS = 4 * 60 * 1000;
     const runInboxPoll = async () => {
+      markActivity('inbox-poll');   // stall-attrib (diagnostic)
       try {
         const surfaced = JSON.parse(db.getMeta('inbox_surfaced_uids') || '[]');
         const r = await inboxLib.pollUnread(surfaced, 3);
@@ -1729,6 +1738,7 @@ app.whenReady().then(() => {
           }
         }
       } catch (e) { console.error('[inbox-poll]', e.message); }
+      finally { markActivity('idle'); }
     };
     inboxPollTimeout = setTimeout(() => { runInboxPoll().catch(() => {}); }, 20000); // initial sweep ~20s after boot
     inboxPollTimer = setInterval(() => { runInboxPoll().catch(() => {}); }, INBOX_POLL_MS);
@@ -1751,6 +1761,7 @@ app.whenReady().then(() => {
         let seen = []; try { seen = JSON.parse(db.getMeta('canvas.ingested_tabs') || '[]'); } catch {}
         const fresh = ci.newDropTabs(snap, seen);
         if (!fresh.length) return;
+        markActivity('canvas-ingest');   // stall-attrib (diagnostic — file read + land + decompose kick)
         for (const t of fresh) {
           const blocks = (snap.blocks_by_tab && Array.isArray(snap.blocks_by_tab[t.tabKey])) ? snap.blocks_by_tab[t.tabKey] : [];
           let markdown = ci.extractMarkdown(blocks);
@@ -1837,6 +1848,7 @@ app.whenReady().then(() => {
         }
         try { db.setMeta('canvas.ingested_tabs', JSON.stringify(seen.slice(-300))); } catch {}
       } catch (e) { console.error('[canvas-ingest]', e.message); }
+      finally { markActivity('idle'); }
     };
     canvasIngestTimeout = setTimeout(() => { runCanvasIngest().catch(() => {}); }, 15000); // initial sweep ~15s after boot
     canvasIngestTimer = setInterval(() => { runCanvasIngest().catch(() => {}); }, CANVAS_INGEST_MS);
@@ -1983,10 +1995,12 @@ app.whenReady().then(() => {
     const runApiStream = async () => {
       try {
         if (!apiClient.keyStatus().some((s) => s.hasKey)) return;                              // no keys → nothing to do
+        markActivity('api-stream');   // stall-attrib (diagnostic)
         const due = await require('./lib/api_stream').runDue({ limit: 20 });                   // pull only what's past cadence
         const land = await require('./lib/api_landing').landChanged({ landDoc: (d) => require('./lib/doc_store').land(d) });
         if (due.refreshed || land.landed) console.log(`[api-stream] refreshed ${due.refreshed}/${due.due} due · landed ${land.landed} changed → memory`);
       } catch (e) { console.error('[api-stream]', e.message); }
+      finally { markActivity('idle'); }
     };
     apiStreamTimeout = setTimeout(() => { runApiStream().catch(() => {}); }, 5 * 60 * 1000);   // first sweep ~5m after boot
     apiStreamTimer = setInterval(() => { runApiStream().catch(() => {}); }, API_STREAM_MS);
@@ -2001,6 +2015,7 @@ app.whenReady().then(() => {
     const runApiBulk = async () => {
       try {
         if (!echoSuit || !echoSuit.connected) return;                                        // needs Echo domain tools
+        markActivity('api-bulk');   // stall-attrib (diagnostic)
         const r = await require('./lib/api_bulk').runDueBulk({
           dispatch: (t) => echoSuit.dispatch(t),
           landDoc: (d) => require('./lib/doc_store').land(d),
@@ -2010,6 +2025,7 @@ app.whenReady().then(() => {
         const landed = (r || []).reduce((n, j) => n + ((j && j.landed) || 0), 0);
         if (landed) console.log(`[api-bulk] landed ${landed} bills → memory across ${r.length} job(s)`);
       } catch (e) { console.error('[api-bulk]', e.message); }
+      finally { markActivity('idle'); }
     };
     apiBulkTimeout = setTimeout(() => { runApiBulk().catch(() => {}); }, 8 * 60 * 1000);      // first pass ~8m after boot
     apiBulkTimer = setInterval(() => { runApiBulk().catch(() => {}); }, API_BULK_MS);
@@ -2022,10 +2038,12 @@ app.whenReady().then(() => {
   {
     const TRUTH_POLL_MS = parseInt(process.env.TRUTH_POLL_MS || '', 10) || 15 * 60 * 1000;   // every 15m
     const runTruth = async () => {
+      markActivity('truth-poll');   // stall-attrib (diagnostic)
       try {
         const r = await require('./lib/truth_poll').runPoll({ store: require('./lib/news_store'), log: (m) => console.log(m) });
         if (r.inserted) console.log(`[truth] ${r.inserted} new social posts → reservoir (${r.accounts} account(s))`);
       } catch (e) { console.error('[truth]', e.message); }
+      finally { markActivity('idle'); }
     };
     truthTimeout = setTimeout(() => { runTruth().catch(() => {}); }, 2 * 60 * 1000);          // first poll ~2m after boot
     truthTimer = setInterval(() => { runTruth().catch(() => {}); }, TRUTH_POLL_MS);
@@ -2044,6 +2062,7 @@ app.whenReady().then(() => {
     const newsStore = require('./lib/news_store');
     const docStore = require('./lib/doc_store');
     const runEmailIntake = async () => {
+      markActivity('email-intake');   // stall-attrib (diagnostic)
       try {
         const r = await emailIntake.runIntakeTick({
           poll: (sinceUid, cap) => inboxLib.pollForIntake(sinceUid, cap),
@@ -2066,6 +2085,7 @@ app.whenReady().then(() => {
           // no immediate push — it clusters on the hour like everything else.
         }
       } catch (e) { console.error('[email-intake]', e.message); }
+      finally { markActivity('idle'); }
     };
     emailIntakeTimeout = setTimeout(() => { runEmailIntake().catch(() => {}); }, 45000); // initial sweep ~45s after boot
     emailIntakeTimer = setInterval(() => { runEmailIntake().catch(() => {}); }, EMAIL_INTAKE_MS);
@@ -2082,6 +2102,7 @@ app.whenReady().then(() => {
     const news_lane = require('./lib/news_lane');
     const newsStore = require('./lib/news_store');
     const _runHourlyCompression = async () => {
+      markActivity('news-compress');   // stall-attrib (diagnostic — in-process clustering + sqlite batches)
       try {
         const engineUp = await ensureEngine();       // adjudicator (ambiguous band) needs the cloud; the deterministic gate runs regardless
         const cloud = engineUp ? require('./lib/cloud_logic') : null;
@@ -2117,6 +2138,7 @@ app.whenReady().then(() => {
           } catch (e) { console.error('[news] hourly transcript capture failed:', e.message); }
         }
       } catch (e) { console.error('[news] hourly compression failed:', e.message); }
+      finally { markActivity('idle'); }
     };
     // Lane root — a timer-driven pass, unattended by definition. Its resolution gate
     // (promoteStory → canonResolve → entity_block.generateCandidates) is a heavy search_entities
@@ -2164,6 +2186,7 @@ app.whenReady().then(() => {
     // ~22R/13D). Approximate until exact Echo Senate composition is wired; override via env.
     const SENATE_HOLDOVERS = { A: parseInt(process.env.SENATE_HOLDOVER_A || '', 10) || 34, B: parseInt(process.env.SENATE_HOLDOVER_B || '', 10) || 31 };
     const runForecastLoop = async () => {
+      markActivity('forecast');   // stall-attrib (diagnostic — Monte-Carlo sim runs in-process)
       try {
         // one bulk poll fetch per race poll-type → index by subject (avoids an HTTP call per race)
         const pollIndex = {};
@@ -2222,6 +2245,7 @@ app.whenReady().then(() => {
           console.log(`[forecast] recompute: ${res.work.margins.polled}/${res.work.margins.total} polled${cov} · House P(D) ${(res.payload.house.pD_control * 100).toFixed(0)}% · Senate P(D) ${(res.payload.senate.pD_control * 100).toFixed(0)}%${env}${mt}${jd}${res.live ? ' · LIVE' : ''} · ${res.work.timing_ms}ms`);
         } else if (res) { console.log(`[forecast] recompute skipped: ${res.error}`); }
       } catch (e) { console.error('[forecast] recompute loop failed:', e.message); }
+      finally { markActivity('idle'); }
     };
     forecastLoopTimeout = setTimeout(() => { runForecastLoop().catch(() => {}); }, 2 * 60 * 1000);   // first run ~2m after boot
     forecastLoopTimer = setInterval(() => { runForecastLoop().catch(() => {}); }, FORECAST_LOOP_MS);
@@ -2943,6 +2967,7 @@ function startDownloadsIngestWatcher() {
     if (ingested.has(fp)) return;
     try { if (!fsm.existsSync(fp)) return; } catch { return; }
     ingested.add(fp);
+    markActivity('dl-ingest');   // stall-attrib (diagnostic — extract + land + decompose kick)
     try {
       const { text, via } = await extractFileMarkdown(fp);
       const title = pathm.basename(fp);
@@ -3037,6 +3062,7 @@ function startDownloadsIngestWatcher() {
         try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(downloaded) ${title}`, type: 'reading', query: title }); } catch {}
       }
     } catch (e) { console.error('[dl-ingest] failed:', e && e.message); }
+    finally { markActivity('idle'); }
   }
   // Wait until the file stops growing (2 stable size reads) before ingesting — the download may
   // still be writing when the first event fires.
@@ -4098,7 +4124,20 @@ try {
 // _lagNote resets per-window) writes the active lane to a durable log the moment the loop is blocked, so
 // the NEXT stall names its own cause without a reboot to catch it in the act.
 let _mainThreadActivity = { label: 'idle', at: Date.now() };
-function markActivity(label) { _mainThreadActivity = { label: label || 'idle', at: Date.now() }; }
+function markActivity(label) {
+  const a = _mainThreadActivity;
+  const next = { label: label || 'idle', at: Date.now() };
+  // Retain the lane that JUST went idle: a synchronous lane's finally runs in the SAME macrotask as
+  // its block, so the 1s probe always wakes to "idle" and the lane is never named — the histogram's
+  // dominant active="idle" blind spot. Stamping who went idle (and when) lets the probe attribute a
+  // stall to the lane that was running during the blocked window. Consecutive idle marks carry the
+  // stamp forward instead of wiping it.
+  if (next.label === 'idle') {
+    if (a.label !== 'idle') { next.prevLabel = a.label; next.prevStartAt = a.at; next.prevEndAt = next.at; }
+    else { next.prevLabel = a.prevLabel; next.prevStartAt = a.prevStartAt; next.prevEndAt = a.prevEndAt; }
+  }
+  _mainThreadActivity = next;
+}
 function _activeNote() {
   const a = _mainThreadActivity;
   if (!a || a.label === 'idle') return '';
@@ -4122,9 +4161,15 @@ try {
     if (drift >= 1500 && now - _attribLast > 2000) {  // loop was blocked ~1.5s+ beyond schedule
       _attribLast = now;
       const a = _mainThreadActivity;
-      const line = `${new Date(now).toISOString()}\tblocked~${drift}ms\tactive="${a.label}"\tran=${now - a.at}ms\n`;
+      let label = a.label, ranMs = now - a.at;
+      // "idle" but a lane went idle DURING/at the end of the blocked window → that lane's sync block
+      // is what wedged the loop; its finally just beat the probe to the slot. Name it.
+      if (a.label === 'idle' && a.prevLabel && a.prevEndAt >= now - drift - 2000) {
+        label = `idle (just-ended: ${a.prevLabel})`; ranMs = a.prevEndAt - a.prevStartAt;
+      }
+      const line = `${new Date(now).toISOString()}\tblocked~${drift}ms\tactive="${label}"\tran=${ranMs}ms\n`;
       try { require('fs').appendFile(_attribPath, line, () => {}); } catch {}
-      try { console.warn(`[stall-attrib] main thread blocked ~${drift}ms — active: "${a.label}" (${now - a.at}ms)`); } catch {}
+      try { console.warn(`[stall-attrib] main thread blocked ~${drift}ms — active: "${label}" (${ranMs}ms)`); } catch {}
     }
   }, 1000).unref?.();
 } catch {}
@@ -10656,7 +10701,7 @@ async function autonomyTick() {
       if (t - (_autonomyDeferLogAt[k] || 0) > 15 * 60 * 1000) { _autonomyDeferLogAt[k] = t; console.log('[autonomy] running ALONGSIDE the directed focus (slot coexistence, ruling 2026-07-23)'); }
     }
 
-    autonomyInFlight = true;
+    autonomyInFlight = true; markActivity('autonomy-tick');   // stall-attrib (diagnostic — the manifest build is heavy synchronous sqlite)
     _bgInFlight.add('autonomy');
     try { db.setMeta('autonomy.last_decide_at', String(now)); } catch {}
     const autonomy = require('./lib/autonomy');
@@ -11293,6 +11338,7 @@ async function autonomyTick() {
   } catch (e) {
     console.error('[autonomy] tick failed:', e.message);
   } finally {
+    markActivity('idle');
     autonomyInFlight = false;
     try { _bgInFlight.delete('autonomy'); } catch {}
     try { if (_autonomySlot) { require('./lib/board').release(_autonomySlot); _autonomySlot = null; } } catch {}
@@ -11786,7 +11832,9 @@ function _maintenanceSweep(state, beats) {
 // that never goes through runCloudOperator — recallObject/quick_lookup/relatedEntities called
 // straight off the suit, which is most of the beat machinery's traffic.
 async function autonomicSchedulerTick() {
-  return require('./lib/lane').run({ autonomous: true }, () => _autonomicSchedulerTick());
+  markActivity('autonomic-tick');   // stall-attrib (diagnostic — scheduler state + thread scans are synchronous)
+  try { return await require('./lib/lane').run({ autonomous: true }, () => _autonomicSchedulerTick()); }
+  finally { markActivity('idle'); }
 }
 
 async function _autonomicSchedulerTick() {
@@ -12047,13 +12095,14 @@ async function backgroundWorkerPass(focusId) {
   try { if ((db.getMeta('operator.mode') || 'full').trim() === 'off') return; } catch {}
   if (!_researchGateOk(`bg:${focusId}`, focusId)) return;                             // operator throttle — skip this cycle entirely
   _bgInFlight.add(focusId);
+  markActivity('bg-worker');   // stall-attrib (diagnostic — same embed-on-main work as directed-tick)
   try {
     const outcome = await runDirectedResearchPass(t);           // routes its outcome to recordOutcomeBackground (bg flag set)
     if (outcome && outcome.action && outcome.action !== 'continue') {
       try { await condenseRun(t, { reason: outcome.action }); } catch {}   // fold into the dossier; NO chat announce (not the primary/user focus)
     }
   } catch (e) { console.error('[worker] pass failed:', e.message); }
-  finally { _bgInFlight.delete(focusId); }
+  finally { markActivity('idle'); _bgInFlight.delete(focusId); }
 }
 function startBackgroundWorkers() {
   if (_bgTimer) return;
@@ -12268,17 +12317,20 @@ function startAutonomicScheduler() {
       });
       if (!bg.ok) return;   // the sweep gates already narrate idle state — no second narrator
       db.setMeta('graph_integrity.last_tick_at', String(Date.now()));
-      const r = await require('./lib/graph_integrity_tick').runTick({
-        dispatch: (msg) => echoSuit.dispatch(msg, { autonomous: false }),
-        getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v),
-        log: (m) => console.log(`[graph-integrity] ${m}`),
-      });
-      if (r && r.ran) {
-        console.log(`[graph-integrity] ${r.code}: applied ${r.applied} repair(s) — minted ${r.res.minted}, parented ${r.res.parented}, held ${r.res.held.length}, failed ${r.res.failed.length}, remaining ${r.res.remaining}`);
-        // A failure that doesn't name its door is invisible (boot118: "AS failed 2" with no why).
-        // Bite is ≤5, so this is bounded by construction.
-        for (const f of (r.res.failed || [])) console.log(`[graph-integrity] ${r.code} FAILED ${(f.target && (f.target.name || f.target.action)) || '?'}: ${String(f.error || '?').slice(0, 180)}`);
-      } else if (r && r.why) console.log(`[graph-integrity] deferred: ${r.why}`);
+      markActivity('graph-integrity');   // stall-attrib (diagnostic)
+      try {
+        const r = await require('./lib/graph_integrity_tick').runTick({
+          dispatch: (msg) => echoSuit.dispatch(msg, { autonomous: false }),
+          getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v),
+          log: (m) => console.log(`[graph-integrity] ${m}`),
+        });
+        if (r && r.ran) {
+          console.log(`[graph-integrity] ${r.code}: applied ${r.applied} repair(s) — minted ${r.res.minted}, parented ${r.res.parented}, held ${r.res.held.length}, failed ${r.res.failed.length}, remaining ${r.res.remaining}`);
+          // A failure that doesn't name its door is invisible (boot118: "AS failed 2" with no why).
+          // Bite is ≤5, so this is bounded by construction.
+          for (const f of (r.res.failed || [])) console.log(`[graph-integrity] ${r.code} FAILED ${(f.target && (f.target.name || f.target.action)) || '?'}: ${String(f.error || '?').slice(0, 180)}`);
+        } else if (r && r.why) console.log(`[graph-integrity] deferred: ${r.why}`);
+      } finally { markActivity('idle'); }
     })().catch((e) => console.error('[graph-integrity] tick failed:', e && e.message));
   }, GRAPH_INTEGRITY_TICK_MS).unref?.();
   console.log('[graph-integrity] scheduler started (idle-tier, daily cap via meta graph_integrity.daily_cap)');
