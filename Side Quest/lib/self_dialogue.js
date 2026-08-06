@@ -12,7 +12,7 @@
  */
 
 const db = require('./db');
-const { streamChat } = require('./ollama');
+const { streamChat, streamCognition } = require('./ollama');
 const governor = require('./governor');
 
 const MODEL = require('./config').frontModel();
@@ -164,8 +164,7 @@ async function runSelfDialogue({ wonderText, sessionId }) {
       });
       let sthenoRaw = '';
       try {
-        await streamChat({
-          model: MODEL,
+        await streamCognition({
           messages: sthenoMessages,
           options: { temperature: 0.7, top_p: 0.9, num_ctx: 8192, num_predict: PER_TURN_NUM_PREDICT },
           onToken: (t) => { sthenoRaw += t; }
@@ -202,8 +201,7 @@ async function runSelfDialogue({ wonderText, sessionId }) {
       });
       let gemmaRaw = '';
       try {
-        await streamChat({
-          model: MODEL,
+        await streamCognition({
           messages: gemmaMessages,
           options: { temperature: 0.85, top_p: 0.9, num_ctx: 8192, num_predict: PER_TURN_NUM_PREDICT },
           onToken: (t) => { gemmaRaw += t; }

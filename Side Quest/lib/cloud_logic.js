@@ -100,7 +100,7 @@ async function _complete(messages, { temperature = 0.2, num_predict = 400, model
 // answer at ~3,600 chars regardless of the model. Unset → lib/cloud_window decides; pass a number
 // only when the caller genuinely wants a SHORT answer.
 async function streamCloud(messages, { temperature = 0.6, num_predict = null, model: modelOverride = null,
-  onToken = null, signal = null, inactivityMs = 90000, think = undefined, deps = {} } = {}) {
+  onToken = null, signal = null, inactivityMs = 90000, maxMs = 0, think = undefined, deps = {} } = {}) {
   let models, ollama;
   try { models = require('./models'); ollama = require('./ollama'); } catch { return null; }
   const stream = deps.streamChat || ollama.streamChat;
@@ -126,7 +126,7 @@ async function streamCloud(messages, { temperature = 0.6, num_predict = null, mo
       headers: cloud.token ? { Authorization: `Bearer ${cloud.token}` } : {},
       // An explicit caller num_predict still wins — some callers deliberately want a short answer.
       options: { temperature, top_p: 0.9, num_ctx: win.num_ctx, num_predict: num_predict || win.num_predict },
-      signal, inactivityMs, think,
+      signal, inactivityMs, maxMs, think,
       onToken: (t) => {
         text += t; tokens += 1;
         if (onToken) { try { onToken(t, { tokens, elapsedMs: Date.now() - startedAt }); } catch { /* a UI hiccup must not kill the stream */ } }

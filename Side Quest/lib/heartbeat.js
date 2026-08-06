@@ -1,5 +1,5 @@
 const db = require('./db');
-const { streamChat, TagStreamParser } = require('./ollama');
+const { streamChat, streamCognition, TagStreamParser } = require('./ollama');
 const { BOOTSTRAP, buildAwarenessBlock } = require('./context');
 const { runSelfDialogue } = require('./self_dialogue');
 const filesLib = require('./files');
@@ -286,8 +286,10 @@ async function maybeHeartbeat() {
       if (fit.report) console.warn(`[fit] heartbeat prompt ${fit.report.before}ch > ${fit.report.budget}ch budget — dropped ${fit.report.droppedTurns} old turn(s), system -${fit.report.systemCut}ch, final -${fit.report.finalCut}ch → ${fit.report.after}ch`);
     } catch (e) { console.error('[fit] heartbeat fit failed — sending unfitted:', e.message); }
 
-    await streamChat({
-      model: MODEL,
+    // Cloud-first cognition: her unprompted surfacing runs on the cloud subconscious model (kimi,
+    // already warm) so the demoted local front stays cold; falls back to local gemma only if the
+    // cloud is unset/down. Same streaming contract — tokens still feed the tag parser.
+    await streamCognition({
       messages: _hbMessages,
       onToken: (chunk) => parser.feed(chunk),
       options: { num_ctx: 8192, num_predict: HB_NUM_PREDICT }

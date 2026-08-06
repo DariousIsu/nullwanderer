@@ -1,5 +1,5 @@
 const db = require('./db');
-const { streamChat, complete, completeDetailed } = require('./ollama');
+const { streamChat, streamCognition, complete, completeDetailed } = require('./ollama');
 const { search: webSearch, fetchPage } = require('./web_search');
 const { detectCuriosity, isBareCuriositySeed, buildBoredomPrompt, parseBoredomResponse } = require('./curiosity');
 const { runSelfDialogue } = require('./self_dialogue');
@@ -2136,11 +2136,30 @@ async function runPullerMove(_recentTurns, { mode = 'both', candidatesOverride =
 
   // CONTACT stage (enrich an existing target's email). candidatesOverride = the pipeline's pre-partitioned
   // no-email queue; else the internal full-store scan (legacy 'both').
+  // CONVERGENCE 2026-08-05: give the Puller the SHARED domain-resolver + Hunter, folded into the move, so the
+  // whole contact mission runs on ONE set of organs (domain was the universal bottleneck — pattern-fill AND
+  // Hunter both need it). hunterFind routes through Echo's hunter_find_email (the key resolves in Echo's
+  // keychain, not here). Both are best-effort + fail-soft; the move degrades to pattern+web if they return null.
+  const _resolveDomain = (org) => require('./domain_resolve').resolveDomain(org, { webSearch, log: (m) => console.log(m) });
+  const _hunterFind = async ({ name, domain, company } = {}) => {
+    const clean = String(name || '').replace(/\([^)]*\)/g, '').trim();
+    const first = (clean.replace(/[^A-Za-z .'-]/g, '').trim().split(/\s+/).filter(Boolean)[0]) || '';
+    let last = ''; try { last = require('./roster_intake').surnameOf(clean); } catch {}
+    if (!first || !last) return null;
+    const args = { first_name: first, last_name: last };
+    if (domain) args.domain = domain; else if (company) args.company = company; else return null;
+    try {
+      const r = await echoSuit.dispatch({ kind: 'do', name: 'hunter_find_email', args }, { autonomous: true });
+      let d = null; try { d = JSON.parse(String((r && r.text) || '')); } catch {}
+      return (d && d.ok && d.email) ? d : null;
+    } catch { return null; }
+  };
   if (wantContact) {
     const candidatesFn = candidatesOverride ? (async () => candidatesOverride) : candidates;
     const move = await pullerWalk.runPullerMove({
       candidates: candidatesFn, activeKeys, getPatternState: (d) => pdb.getPatternState(d), triedFor,
       land, web, extract, refresh, getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m),
+      hunterFind: _hunterFind, resolveDomain: _resolveDomain,
     });
     try { db.setMeta(PULLER_LAST_KEY, String(Date.now())); } catch {}
     if (move && move.acted) {
@@ -2643,8 +2662,7 @@ async function maybeBoredomSearch() {
   currentController = ctrl;
   let aborted = false;
   try {
-    await streamChat({
-      model: MODEL,
+    await streamCognition({
       messages,
       options: { temperature: 0.9, top_p: 0.9, num_ctx: 8192, num_predict: 30 },
       onToken: (t) => { raw += t; },

@@ -144,7 +144,8 @@ function pickPersonRow(people, name) {
 //   getMeta/setMeta, now, log
 async function runPullerMove(deps = {}) {
   const { candidates, activeKeys = new Set(), getPatternState, triedFor, land, web, extract,
-          refresh, observe, getMeta, setMeta, now = () => Date.now(), log } = deps;
+          refresh, observe, getMeta, setMeta, now = () => Date.now(), log,
+          hunterFind, resolveDomain } = deps;   // convergence 2026-08-05: shared domain-resolver + Hunter
   const nowTs = now();
   try {
     const cands = (typeof candidates === 'function' ? await candidates() : candidates) || [];
@@ -156,6 +157,34 @@ async function runPullerMove(deps = {}) {
     const doLand = async (o) => { if (typeof land === 'function') await land(o); };
     const doRefresh = async () => { if (typeof refresh === 'function') { try { await refresh(pick.id); } catch {} } };
     const doObserve = async (o) => { if (typeof observe === 'function') { try { await observe(o); } catch {} } };
+
+    // 0) DOMAIN — resolve one if the target lacks it (shared resolver; the universal key that gates BOTH
+    // Hunter and pattern-fill — it was the silent bottleneck across the whole contact mission). Best-effort.
+    let _dom = pick.domain || null;
+    if (!_dom && typeof resolveDomain === 'function') {
+      try { _dom = await resolveDomain(pick.company); } catch {}
+      if (_dom) pick.domain = _dom;   // let pattern-fill below see it too
+    }
+
+    // 1a) HUNTER — name + domain (or a company Hunter resolves) → a SCORED, stated email. Highest yield, so
+    // it runs before pattern-fill (a derivation) and web-discovery (a page scrape). Masked teasers rejected;
+    // never invents. Guarded on the dep so offline tests + a Hunter-less config keep the legacy behavior.
+    if (typeof hunterFind === 'function' && (_dom || pick.company)) {
+      let h = null;
+      try { h = await hunterFind({ name: pick.name, domain: _dom, company: pick.company }); } catch {}
+      const hEmail = (h && h.email && !looksMasked(h.email)) ? h.email : null;
+      if (hEmail) {
+        const conf = Math.max(0.5, Math.min(0.95, (Number(h.score) || 60) / 100));
+        const kind = (Number(h.score) || 0) >= 85 ? 'verified' : 'guess';
+        await doLand({ targetId: pick.id, attr: 'email', value: hEmail, kind, confidence: conf,
+                       source: 'hunter', sourceUrl: `hunter:${_dom || pick.company}`, derivation: 'hunter' });
+        await doObserve({ sourceEntity: pick.name, relation: 'email', target: hEmail, url: `hunter:${_dom || pick.company}`,
+                         grade: kind === 'verified' ? 'B' : 'C', confidence: conf, status: 'promoted' });
+        await doRefresh();
+        log && log(`[puller-walk] hunter-fill ${pick.name} → ${hEmail} (${_dom || pick.company}, score ${h.score})`);
+        return { acted: true, mode: 'hunter', targetId: pick.id, name: pick.name, email: hEmail, confidence: conf };
+      }
+    }
 
     // 1) PATTERN-FILL — the domain's own learned email format. GROUNDED-ONLY: a pattern-fill is a pure
     // guess (name × domain), so it's only as trustworthy as the person↔org link. Skip it for an ungrounded
