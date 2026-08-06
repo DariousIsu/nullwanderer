@@ -11947,7 +11947,35 @@ async function _autonomicSchedulerTick() {
             } catch (e) { console.error('[user-work] kind classify failed:', e.message); }
             try { db.setMeta(`focus.${cand.id}.kind`, _kind); } catch {}
             console.log(`[user-work] #${cand.id} kind=${_kind}${_kind === 'entity' ? '' : ' (was hardcoded entity)'}`);
-            try { await generateResearchPlan(f || cand, { goal: cand.content, targets: [], facet: '', deep: true, kind: _kind }); }
+            // P0 PREFLIGHT (ADAPTIVE_RESEARCH_DESIGN, the universal step-0): "do I know the best
+            // practices and tools for this?" — study if not, choose tools from the REAL inventory,
+            // file + say any capability gap. Fail-open: null → the plan generates exactly as before.
+            let _pfGuidance = '';
+            try {
+              const pf = require('./lib/research_preflight');
+              const tier = require('./lib/echo_tier');
+              const _pfRes = await pf.run({
+                goal: cand.content, kind: _kind,
+                deps: {
+                  ask: (o) => require('./lib/cloud_logic').ask(o),
+                  search: async (q) => { try { const r = await webSearch(q); return ((r && r.results) || []).slice(0, 5).map((x) => `${x.title} — ${x.snippet || ''}`).join('\n'); } catch { return ''; } },
+                  operatorToolNames: Object.keys(operatorTools),
+                  deepLane: tier.laneToolNames('deep'), webLane: tier.laneToolNames('web'),
+                  skills: (() => { try { return require('./lib/skills').listNames(); } catch { return []; } })(),
+                  recordNeed: (n) => { try { require('./lib/capability_need').record(n, { bornFrom: `preflight:${cand.id}` }); } catch {} },
+                },
+              });
+              if (_pfRes && _pfRes.guidance) {
+                _pfGuidance = _pfRes.guidance;
+                try { db.setMeta(`focus.${cand.id}.preflight`, JSON.stringify(_pfRes.verdict)); } catch {}
+                console.log(`[preflight] #${cand.id} ${_pfRes.verdict.knows_class ? 'knows the craft' : 'STUDIED the craft'}${_pfRes.studied ? ' (study pass ran)' : ''} — ${(_pfRes.verdict.tool_picks || []).length} tool pick(s), ${(_pfRes.verdict.missing_capabilities || []).length} gap(s)`);
+                const _miss = (_pfRes.verdict.missing_capabilities || []).slice(0, 3);
+                if (_miss.length) {
+                  try { _surfaceSteeringNote(f || cand, `Preflight on "${String(cand.content).slice(0, 70)}": I'm missing ${_miss.length === 1 ? 'a capability' : 'capabilities'} — ${_miss.join('; ')}. Filed as build need(s); I'll work around it honestly with the closest tools I have. Tell me to hold if you'd rather the tool get built first.`, 'preflight gap'); } catch {}
+                }
+              }
+            } catch (e) { console.error('[preflight] failed (plan proceeds without):', e.message); }
+            try { await generateResearchPlan(f || cand, { goal: cand.content, targets: [], facet: '', deep: true, kind: _kind, preflight: _pfGuidance }); }
             catch (e) { console.error('[user-work] plan gen failed:', e.message); }
           }
           kickDirectedFocusDriver();
@@ -13145,12 +13173,12 @@ async function condenseComplete(messages, { numPredict = 2500 } = {}) {
 // editable by the correction handler) and rendered as page 1 at finalize. Fail-safe: cloud down → a
 // fully deterministic fallback plan (a plan ALWAYS exists). Run on the FAST editor model (like intake),
 // so a reasoning model can't burn the budget on hidden thinking and return empty.
-async function generateResearchPlan(focus, { goal = '', targets = [], facet = '', deep = false, kind = 'entity' } = {}) {
+async function generateResearchPlan(focus, { goal = '', targets = [], facet = '', deep = false, kind = 'entity', preflight = '' } = {}) {
   const rp = require('./lib/research_plan');
   const est = require('./lib/estimate');
   let estimate = '';
   try { estimate = est.estimateRun({ orgCount: (targets || []).length, deep }).human; if (estimate === '(nothing to do)') estimate = ''; } catch {}
-  const ctx = { goal, targets, facet, deep, estimate, kind };
+  const ctx = { goal, targets, facet, deep, estimate, kind, preflight };
   let plan = null;
   try {
     // The PLAN shapes the whole project — author it on the deep reasoner with headroom (cloud-leverage

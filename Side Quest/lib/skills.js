@@ -168,7 +168,13 @@ function parseSkillTags(text) {
 }
 function stripSkillTags(text) { return str(text).replace(SKILL_TAG_RE, ''); }
 
+// The shelf's names, most-recently-used first — the preflight tool-survey reads this (P0): a
+// verdict made against the REAL inventory includes the proven procedures she already holds.
+function listNames({ deps = {}, limit = 40 } = {}) {
+  try { return _db(deps).getDb().prepare('SELECT name FROM skills ORDER BY (last_used_ts IS NULL), last_used_ts DESC LIMIT ?').all(Math.max(1, limit)).map((r) => r.name); } catch { return []; }
+}
+
 module.exports = {
   TRIGGER_MAX, register, get, match, matchLines, manifestLines, resolveBody,
-  promoteFromProcedures, syncFlows, parseSkillTags, stripSkillTags,
+  promoteFromProcedures, syncFlows, parseSkillTags, stripSkillTags, listNames,
 };

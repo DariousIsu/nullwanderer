@@ -57,7 +57,7 @@ const KIND_FACETS = {
 };
 const normKind = (k) => (['entity', 'topical', 'forecast', 'argument'].includes(k) ? k : 'entity');
 
-function planInput({ goal = '', targets = [], facet = '', deep = false, estimate = '', kind = 'entity', databases = DEFAULT_DATABASES, thesis = '', hostileReader = '' } = {}) {
+function planInput({ goal = '', targets = [], facet = '', deep = false, estimate = '', kind = 'entity', databases = DEFAULT_DATABASES, thesis = '', hostileReader = '', preflight = '' } = {}) {
   const o = {
     goal: oneLine(goal, 800),
     kind: normKind(kind),
@@ -71,6 +71,9 @@ function planInput({ goal = '', targets = [], facet = '', deep = false, estimate
   // adversary it was built against. Omitted entirely otherwise, so the payload stays small.
   if (oneLine(thesis, 400)) o.thesis = oneLine(thesis, 400);
   if (oneLine(hostileReader, 300)) o.hostileReader = oneLine(hostileReader, 300);
+  // P0 PREFLIGHT (research_preflight.run → guidance): the earned method + toolkit + quant questions
+  // + known gaps. Multi-line by design — the planner must HONOR it, so it rides the input verbatim.
+  if (str(preflight).trim()) o.preflightGuidance = str(preflight).slice(0, 2500);
   return o;
 }
 
@@ -83,7 +86,8 @@ function planWant(kind = 'entity') {
 - objective: one clear paragraph restating what this research will deliver.
 - databases: which of databasesAvailable you'll check first (subset or all).
 - estimate: copy the provided estimate string (or your own brief estimate if none).
-- In approach or facets, name at least ONE QUANTITATIVE sub-question this research should answer with a COMPUTED number or probability (a cross-tab, a flow total, a base rate, an explicit likelihood) — research that never computes is a summary, not an analysis.`;
+- In approach or facets, name at least ONE QUANTITATIVE sub-question this research should answer with a COMPUTED number or probability (a cross-tab, a flow total, a base rate, an explicit likelihood) — research that never computes is a summary, not an analysis.
+- If preflightGuidance is provided, HONOR it: fold its method into approach, keep its tool choices and quantitative questions, and carry its named capability gaps honestly (plan around them, never paper over them).`;
   if (k === 'topical') {
     return `${common}
 - approach: 2-3 sentences on HOW you'll research the SUBJECT — ground first in what we already hold (known→unknown), then web + reputable sources; synthesize into a briefing.

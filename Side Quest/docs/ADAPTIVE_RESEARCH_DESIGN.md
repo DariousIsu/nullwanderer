@@ -88,6 +88,16 @@ existing editor/papers machinery → the completion announcement links it.
 *Proof gate: a completed research task ends in a docx+canvas paper where a spot-check of 10 claims
 finds 10 citations that resolve.*
 
+**P4b — RE-ENTRY AUDIT (Lucas, 2026-08-06 evening — the acceptance test for the whole build).**
+Pointing her at an EXISTING deliverable must enter through JUDGMENT, not accretion: when a run
+adopts a base document (the living-document match, or an explicit "finish/fix this doc"), the
+FIRST pass audits it against the P4 bar — completeness vs. its own stated objective, depth per
+section, citation coverage, quantitative content — and the gap list BECOMES the origin plan's
+targets/facets. She should conclude on her own that the document is flawed, say so (P2 wire), and
+work the gaps. *Proof gate (the whole-build acceptance test): re-pointing her at the Hartfield/
+Green South doc produces (1) an honest audit naming its shallowness, (2) a gap-driven plan, and
+(3) a finished, cited, quantified revision of the SAME document.*
+
 **G5 (state-grounded replies) rides M2.2**: package's plan/self slots carry a live read of
 thread/focus state on any turn whose reply would claim work-state.
 
