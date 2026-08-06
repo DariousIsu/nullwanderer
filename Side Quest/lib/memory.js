@@ -36,10 +36,67 @@ async function getExtractor() {
   return _loading;
 }
 
-async function embed(text) {
+// Embeddings are DETERMINISTIC for a given (text, model), and the WASM extractor runs IN-PROCESS on the
+// MAIN THREAD — each ex() call blocks the event loop for its whole compute. Hot callers re-embed the SAME
+// strings constantly (the heartbeat's self-repeat guard alone embeds recentThoughts/recentSaids ~3×/tick,
+// and those sets overlap tick-to-tick), which measured as a recurring 2-3s main-thread stall (2026-08-04,
+// idle CPU — not starvation, pure redundant compute). A bounded LRU cache keyed by the exact embedded text
+// eliminates the redundant WASM work everywhere embed() is called. Safe because the function is pure.
+const _EMBED_CACHE = new Map();          // key(truncated text) → vector
+const _EMBED_CACHE_MAX = 1024;
+
+// OFF-THREAD EMBEDDING (2026-08-04) — the WASM pipeline runs in a WORKER (lib/embed_worker) so its compute
+// never blocks the MAIN event loop. The recurring multi-second main-thread stalls were embed BURSTS in the
+// decompose / heartbeat / reflection lanes (transformers.js is synchronous WASM; each embed froze the loop
+// 40-60ms, and 40+/burst = seconds of frozen typing/IPC/Echo-heartbeat). Now embed() posts the truncated
+// text to the worker and awaits a small vector; the LRU cache above short-circuits repeats with no round-trip.
+// If the worker can't spawn or errors, we fall back to the ORIGINAL in-process path — embeddings never break;
+// this only changes WHERE the compute happens.
+const _worker = require('worker_threads');
+let _embWorker = null, _embSeq = 0, _embWorkerDead = false;
+const _embPending = new Map();
+
+function _getEmbWorker() {
+  if (_embWorkerDead) return null;
+  if (_embWorker) return _embWorker;
+  try {
+    const path = require('path');
+    const cacheDir = path.join(path.dirname(db.DB_PATH), 'models');
+    const w = new _worker.Worker(path.join(__dirname, 'embed_worker.js'), { workerData: { cacheDir, model: EMBED_MODEL } });
+    w.on('message', (m) => { const p = _embPending.get(m && m.id); if (!p) return; _embPending.delete(m.id); if (m.error) p.reject(new Error(m.error)); else p.resolve(m.vector); });
+    w.on('error', (e) => { _embWorkerDead = true; _embWorker = null; for (const p of _embPending.values()) { try { p.reject(e); } catch {} } _embPending.clear(); console.error('[embed] worker error → in-process fallback:', e && e.message); });
+    w.on('exit', () => { _embWorker = null; });
+    w.unref();   // never keep the process alive just for the embedder
+    _embWorker = w;
+  } catch (e) { _embWorkerDead = true; console.error('[embed] worker spawn failed → in-process:', e && e.message); return null; }
+  return _embWorker;
+}
+
+async function _embedInProcess(key) {   // fallback = the original in-process path
   const ex = await getExtractor();
-  const out = await ex(String(text == null ? '' : text).slice(0, MAX_EMBED_CHARS), { pooling: 'mean', normalize: true });
+  const out = await ex(key, { pooling: 'mean', normalize: true });
   return Array.from(out.data);
+}
+
+async function embed(text) {
+  const key = String(text == null ? '' : text).slice(0, MAX_EMBED_CHARS);
+  const hit = _EMBED_CACHE.get(key);
+  if (hit) { _EMBED_CACHE.delete(key); _EMBED_CACHE.set(key, hit); return hit.slice(); }  // LRU touch; copy so callers can't mutate the cached vector
+  let vec = null;
+  const w = _getEmbWorker();
+  if (w) {
+    try {
+      vec = await new Promise((resolve, reject) => {
+        const id = ++_embSeq;
+        _embPending.set(id, { resolve, reject });
+        try { w.postMessage({ id, text: key }); } catch (e) { _embPending.delete(id); reject(e); }
+      });
+    } catch { vec = null; }   // worker hiccup → fall through to in-process (never break embeddings)
+  }
+  if (!vec) vec = await _embedInProcess(key);   // throws on total failure, matching the original contract (callers catch)
+  _EMBED_CACHE.set(key, vec);
+  if (_EMBED_CACHE.size > _EMBED_CACHE_MAX) { const oldest = _EMBED_CACHE.keys().next().value; _EMBED_CACHE.delete(oldest); }
+  return vec.slice();
 }
 
 // Embeddings are L2-normalized → dot product IS cosine similarity.

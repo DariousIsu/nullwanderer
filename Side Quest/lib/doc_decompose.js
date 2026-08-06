@@ -519,6 +519,13 @@ async function decomposeDoc(doc = {}, deps = {}) {
   const url = doc.url || null;
   const maxEnt = cap.entities || 20, maxRel = cap.relations || 20;
   const out = { minted: 0, reused: 0, connections: 0, held: 0, ambiguous: 0, skipped: 0, minted_unsub: 0, related: [] };
+  // Periodic MACROTASK yield (2026-08-04). A long chain of `await`ed work whose promises resolve on the
+  // MICROTASK queue (synchronous better-sqlite3 writes inside `observe`, cached embeds) never returns control
+  // to the event-loop TIMER/IPC phase — so one dense landing blocks the main thread CONTINUOUSLY (measured:
+  // a 40-entity doc froze the loop ~17s, starving typing + dropping the Echo heartbeat → the "banner flap").
+  // Ceding a macrotask every few items lets keystrokes/IPC/timers run between batches. Behavior-preserving:
+  // same items, same order, only the scheduling changes.
+  let _yN = 0; const _yield = () => new Promise((r) => setImmediate(r));
   if (!url) return { ...out, reason: 'no-citation' };       // requires-citation: no doc url → nothing lands
   if (!text.trim()) return { ...out, reason: 'empty-text' };
   const docSources = [{ url }];                              // the doc IS the citation (grade B)
@@ -599,6 +606,7 @@ async function decomposeDoc(doc = {}, deps = {}) {
   // its LOCATED_IN edge — which is a split identity, the one failure the merge model cannot survive.
   const usableType = new Map();   // coreKey → the extracted entity type
   for (const d of plan.decisions) {
+    if ((++_yN & 7) === 0) await _yield();   // cede the loop every 8 items so a dense doc can't wedge typing/IPC
     const key = coreKey(d.name) || d.name.toLowerCase();
     if (d.action === 'reuse') { usable.set(key, d.canonical || d.name); usableType.set(key, d.type); out.reused++; continue; }
     if (d.action === 'mint') {
@@ -660,6 +668,7 @@ async function decomposeDoc(doc = {}, deps = {}) {
   {
     const seenC = new Set(); const maxConcepts = cap.concepts || parseInt(process.env.ZOE_DECOMP_CONCEPT_CAP || '', 10) || 40;
     for (const c of conceptCands) {
+      if ((++_yN & 7) === 0) await _yield();   // cede the loop every 8 items (see decisions loop)
       // NO SILENT CAPS: count what the cap drops so the log shows it (the lazy concept lane will see
       // these names again on the next doc that mentions them — deferral is cheap here, invisibility isn't).
       if (out.concepts_minted + out.concepts_promoted >= maxConcepts) { out.concepts_dropped = (out.concepts_dropped || 0) + 1; continue; }
@@ -674,6 +683,7 @@ async function decomposeDoc(doc = {}, deps = {}) {
 
   // 4) relations: propose only when BOTH endpoints resolved (reuse/mint); else a HELD fall-through
   for (const r of relations) {
+    if ((++_yN & 7) === 0) await _yield();   // cede the loop every 8 items (see decisions loop)
     // Over the cap → HELD, not `break`. The old break dropped every remaining relation of the chunk
     // with no trace; held rows keep them visible to the upgrade pass.
     if (out.connections >= maxRel) {
