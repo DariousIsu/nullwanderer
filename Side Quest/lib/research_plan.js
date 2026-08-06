@@ -235,7 +235,71 @@ function renderPlanPage(plan = {}) {
   ].join('\n');
 }
 
+// ── P1 THE LIVING PLAN (ADAPTIVE_RESEARCH_DESIGN §G3) ────────────────────────────────────────────
+// The plan is provisional by contract: every few syntheses, the run re-tests it against what was
+// just learned (correct? complete? tools sufficient?) and MUTATES it — versioned, conservative by
+// default ("no changes" is a valid and common verdict). Pure contract + pure delta application, so
+// the whole revalidate step is offline-testable; the cloud call and the meta writes live in main.js.
+
+function revalidateInput({ plan = {}, synthesis = '', covered = [], goal = '' } = {}) {
+  return {
+    goal: String(goal || '').slice(0, 400),
+    plan: {
+      objective: String(plan.objective || '').slice(0, 1200),
+      approach: String(plan.approach || '').slice(0, 1200),
+      targets: _arr(plan.targets, 40),
+      facets: _arr(plan.facets, 20),
+    },
+    covered: _arr(covered, 30),
+    latestSynthesis: String(synthesis || '').slice(0, 6000),
+  };
+}
+
+function revalidateWant() {
+  return `You are RE-VALIDATING a research plan against what the run just learned — the scientific method applied to the plan itself: new evidence re-tests it. Reply with ONE JSON object and nothing else:
+{"correct": bool, "complete": bool, "tools_sufficient": bool, "reason": string, "add_targets": [string], "drop_targets": [string], "approach_update": string|null, "tool_needs": [string]}
+- correct: does the plan still point at the right objective given the findings?
+- complete: does it now cover everything the findings show matters — people, orgs, money flows, the quantitative checks?
+- tools_sufficient: can the current toolkit answer the open questions (python analysis, probability models, structured DBs included)? A missing capability goes in tool_needs, named concretely.
+- add_targets / drop_targets: CONCRETE target changes the findings justify (empty arrays if none).
+- approach_update: a REPLACEMENT approach paragraph ONLY if tactics should genuinely change; else null.
+- reason: one sentence on the verdict.
+Be conservative: {"correct":true,"complete":true,"tools_sufficient":true,...empty arrays, approach_update null} is a valid and common verdict. Change the plan only when the evidence demands it.`;
+}
+
+// Validate the cloud verdict → {valid, value}. `correct` must be present as a boolean.
+function revalidateValidator(raw) {
+  try {
+    // Reasoning models wrap output in <think> blocks — strip BEFORE locating the JSON span, or a
+    // brace inside the reasoning poisons the match (the planValidator lesson).
+    const cleaned = String(raw || '').replace(/<(think|thoughts?|thinking)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ');
+    const m = cleaned.match(/\{[\s\S]*\}/);
+    if (!m) return { valid: false, error: 'no JSON object' };
+    const obj = JSON.parse(m[0]);
+    if (typeof obj.correct !== 'boolean') return { valid: false, error: 'no boolean verdict' };
+    return { valid: true, value: obj };
+  } catch (e) { return { valid: false, error: e.message }; }
+}
+
+// PURE delta application: returns { plan, changed, notes } — never throws, never mutates the input.
+function applyPlanDelta(plan = {}, verdict = {}) {
+  const p = { ...plan, targets: _arr(plan.targets, 60), facets: _arr(plan.facets, 20) };
+  const notes = [];
+  const drop = new Set(_arr(verdict.drop_targets, 20).map((t) => t.toLowerCase()));
+  if (drop.size) {
+    const before = p.targets.length;
+    p.targets = p.targets.filter((t) => !drop.has(String(t).toLowerCase()));
+    if (p.targets.length !== before) notes.push(`dropped ${before - p.targets.length} target(s)`);
+  }
+  const adds = _arr(verdict.add_targets, 20).filter((t) => !p.targets.some((x) => String(x).toLowerCase() === t.toLowerCase()));
+  if (adds.length) { p.targets = p.targets.concat(adds).slice(0, 60); notes.push(`added target(s): ${adds.slice(0, 4).join(', ')}${adds.length > 4 ? '…' : ''}`); }
+  const au = verdict.approach_update && String(verdict.approach_update).trim();
+  if (au && au.length > 20 && au !== p.approach) { p.approach = au.slice(0, 1200); notes.push('tactics revised'); }
+  return { plan: p, changed: notes.length > 0, notes };
+}
+
 module.exports = {
   DEFAULT_DATABASES, KIND_FACETS,
   planInput, planWant, planValidator, normalizePlan, fallbackPlan, renderPlanPage,
+  revalidateInput, revalidateWant, revalidateValidator, applyPlanDelta,
 };

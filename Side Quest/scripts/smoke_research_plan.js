@@ -24,6 +24,22 @@ ok(/known→unknown/i.test(want), 'planWant tells the model to ground known→un
 ok(/QUANTITATIVE/.test(want) && /computed number or probability/i.test(want), 'planWant demands a quantitative sub-question');
 ok(/QUANTITATIVE/.test(rp.planWant('topical')) && /QUANTITATIVE/.test(rp.planWant('forecast')) && /QUANTITATIVE/.test(rp.planWant('argument')), 'the quant clause rides the COMMON contract — every kind gets it');
 
+// --- P1 the living plan: revalidate contract + pure delta application ---
+const rvIn = rp.revalidateInput({ plan: { objective: 'map the orgs', approach: 'depth-first', targets: ['A', 'B'], facets: ['f1'] }, synthesis: 'S'.repeat(9000), covered: ['A'], goal: 'the goal' });
+ok(rvIn.plan.targets.length === 2 && rvIn.latestSynthesis.length === 6000 && rvIn.covered[0] === 'A', 'revalidateInput bounds and carries the state');
+ok(/re-?validating/i.test(rp.revalidateWant()) && /tools_sufficient/.test(rp.revalidateWant()) && /conservative/i.test(rp.revalidateWant()), 'revalidateWant frames the scientific-method re-test, conservatively');
+ok(rp.revalidateValidator('{"correct":true,"complete":true,"tools_sufficient":true,"add_targets":[]}').valid === true, 'validator accepts a no-change verdict');
+ok(rp.revalidateValidator('<think>hm {x} tricky</think>{"correct":false,"add_targets":["C"]}').valid === true, 'validator strips reasoning blocks before locating the JSON');
+ok(rp.revalidateValidator('{"complete":true}').valid === false, 'a verdict without the boolean core is rejected');
+const base = { objective: 'o', approach: 'old approach', targets: ['A', 'B'], facets: [] };
+const d1 = rp.applyPlanDelta(base, { correct: true, complete: true, tools_sufficient: true, add_targets: [], drop_targets: [], approach_update: null });
+ok(d1.changed === false && d1.plan.targets.length === 2, 'a no-change verdict changes nothing');
+const d2 = rp.applyPlanDelta(base, { add_targets: ['C', 'a'], drop_targets: ['B'], approach_update: 'new tactics: follow the money through FEC and cross-tab the grants' });
+ok(d2.changed === true && d2.plan.targets.includes('C') && !d2.plan.targets.includes('B'), 'delta adds/drops targets (case-insensitive dedupe)');
+ok(d2.plan.targets.filter((t) => t.toLowerCase() === 'a').length === 1, 'an add that duplicates an existing target is not doubled');
+ok(/new tactics/.test(d2.plan.approach) && d2.notes.some((n) => /tactics revised/.test(n)), 'an approach update replaces tactics and is named in the notes');
+ok(base.targets.length === 2 && base.approach === 'old approach', 'applyPlanDelta never mutates its input');
+
 // --- planValidator: accepts a real plan, rejects junk/empty ---
 ok(rp.planValidator('{"objective":"x","approach":"y","targets":["A"]}').valid === true, 'validator accepts a real plan object');
 ok(rp.planValidator('no json here').valid === false, 'validator rejects non-JSON');

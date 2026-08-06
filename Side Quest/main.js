@@ -13343,25 +13343,32 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
 // learned, what she'll do, how to object. Throttled per focus so a productive run never floods;
 // same delivery shape as announceResearchComplete; swarm-suppression respected.
 const PIVOT_SURFACE_GAP_MS = 10 * 60 * 1000;
-function surfaceResearchPivot(focus, novel) {
+// The shared delivery core: throttle per focus, then the announce-shaped insert+send. Both the
+// novel-question surfacer and the plan-revalidation tactics note ride this one wire.
+function _surfaceSteeringNote(focus, msg, label) {
   try {
     const sid = currentSessionId;
-    if (!sid || !focus || focus.id == null || !Array.isArray(novel) || !novel.length) return;
-    if (!_surfaceAllowed(focus.id)) return;
+    if (!sid || !focus || focus.id == null || !msg) return false;
+    if (!_surfaceAllowed(focus.id)) return false;
     const k = `focus.${focus.id}.pivot_surfaced_at`;
-    if (Date.now() - (parseInt(db.getMeta(k) || '0', 10) || 0) < PIVOT_SURFACE_GAP_MS) return;
+    if (Date.now() - (parseInt(db.getMeta(k) || '0', 10) || 0) < PIVOT_SURFACE_GAP_MS) return false;
     db.setMeta(k, String(Date.now()));
-    const qs = novel.slice(0, 2).map((q) => String(q).replace(/\s+/g, ' ').trim().replace(/[.?]+$/, '')).filter((q) => q.length > 8);
-    if (!qs.length) return;
-    const msg = qs.length === 1
-      ? `Steering note on the research: what I just learned raises a new question — ${qs[0]}? I'm folding it into the run and chasing it; redirect me if that's the wrong thread to pull.`
-      : `Steering note on the research: what I just learned raises new questions — ${qs[0]}? And: ${qs[1]}? Both are now steering the run; redirect me if either is the wrong thread to pull.`;
     const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'research', unprompted: 1 });
     try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
     try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
     try { require('./lib/blackboard').append({ source: 'research', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
-    console.log(`[user-work] pivot surfaced to chat — ${qs.length} novel question(s)`);
-  } catch (e) { console.error('[user-work] pivot surfacing failed:', e.message); }
+    console.log(`[user-work] steering note surfaced to chat — ${label}`);
+    return true;
+  } catch (e) { console.error('[user-work] steering surfacing failed:', e.message); return false; }
+}
+function surfaceResearchPivot(focus, novel) {
+  const qs = (Array.isArray(novel) ? novel : []).slice(0, 2)
+    .map((q) => String(q).replace(/\s+/g, ' ').trim().replace(/[.?]+$/, '')).filter((q) => q.length > 8);
+  if (!qs.length) return;
+  const msg = qs.length === 1
+    ? `Steering note on the research: what I just learned raises a new question — ${qs[0]}? I'm folding it into the run and chasing it; redirect me if that's the wrong thread to pull.`
+    : `Steering note on the research: what I just learned raises new questions — ${qs[0]}? And: ${qs[1]}? Both are now steering the run; redirect me if either is the wrong thread to pull.`;
+  _surfaceSteeringNote(focus, msg, `${qs.length} novel question(s)`);
 }
 
 async function announceResearchComplete(focus, done) {
@@ -14002,6 +14009,40 @@ async function runDirectedResearchPass(focus) {
           } else if (oq.length) {
             console.log(`[closure] synthesis raised ${oq.length} question(s), all already asked — frontier narrowing (streak ${parseInt(db.getMeta(_nnKey) || '0', 10)})`);
           }
+          // P1 THE LIVING PLAN (ADAPTIVE_RESEARCH_DESIGN §G3): every 2nd synthesis, re-test the plan
+          // against what was just learned — correct? complete? tools sufficient? Conservative by
+          // contract ("no changes" is the common verdict); a real delta VERSIONS the plan (old revs
+          // retained), a tools-insufficient verdict files capability needs, and a tactics change is
+          // said to Lucas through the same steering wire. Fire-and-forget: the pass never waits.
+          try {
+            const _scKey = `focus.${focus.id}.synth_count`;
+            const _sc = (parseInt(db.getMeta(_scKey) || '0', 10) || 0) + 1;
+            db.setMeta(_scKey, String(_sc));
+            if (_sc % 2 === 0) {
+              (async () => {
+                const plan0 = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || '{}');
+                const rpm = require('./lib/research_plan');
+                const verdict = await require('./lib/cloud_logic').ask({
+                  task: 'plan_revalidate', v: 1, numPredict: 700,
+                  input: rpm.revalidateInput({ plan: plan0, synthesis: section, covered, goal }),
+                  want: rpm.revalidateWant(),
+                  validate: rpm.revalidateValidator,
+                });
+                if (!verdict) return;
+                const { plan: plan1, changed, notes } = require('./lib/research_plan').applyPlanDelta(plan0, verdict);
+                for (const need of (Array.isArray(verdict.tool_needs) ? verdict.tool_needs : []).slice(0, 3)) {
+                  try { require('./lib/capability_need').record(String(need).slice(0, 300), { bornFrom: `plan-revalidate:${focus.id}` }); } catch {}
+                }
+                if (!changed) return;
+                const rev = (parseInt(db.getMeta(`focus.${focus.id}.plan_rev`) || '1', 10) || 1) + 1;
+                try { db.setMeta(`focus.${focus.id}.plan_v${rev - 1}`, JSON.stringify(plan0)); } catch {}   // old revs retained — a mutation is auditable, never a scrub
+                db.setMeta(`focus.${focus.id}.plan_rev`, String(rev));
+                db.setMeta(`focus.${focus.id}.plan`, JSON.stringify(plan1));
+                console.log(`[user-work] plan REVALIDATED → rev ${rev}: ${notes.join('; ').slice(0, 220)}${verdict.reason ? ` (${String(verdict.reason).slice(0, 120)})` : ''}`);
+                try { _surfaceSteeringNote(focus, `Tactics update on the research (plan rev ${rev}): ${notes.join('; ')}${verdict.reason ? ` — ${String(verdict.reason).trim()}` : ''}. Object if this is the wrong turn.`, `plan rev ${rev}`); } catch {}
+              })().catch((e) => console.error('[user-work] plan revalidation failed:', e.message));
+            }
+          } catch { /* revalidation is additive */ }
         } catch { /* steering is additive */ }
       }
       section = (section && section.trim()) ? section.trim() : `## ${target.name}\n${target.raw.slice(0, 1500)}`;
