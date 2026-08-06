@@ -127,6 +127,10 @@ ok(/Drivers & causes/.test(tp) && /ASPECT:/.test(tp), 'topical prompt targets ON
 ok(/NOT profiling organizations/i.test(tp) && /NOT gathering.*contact|do NOT.*emails\/phones/i.test(tp), 'topical prompt FORBIDS org-profiling + contact hunting (the misroute fix)');
 ok(/do NOT repeat/i.test(tp) && /Current state/.test(tp), 'topical prompt lists already-covered aspects (anti-repeat)');
 ok(/never invent|Ground EVERY claim/i.test(tp), 'topical prompt is grounded (no invention)');
+// Quant directive (measured 2026-08-06: ZERO analyze_data/forecast_query calls in any research run —
+// the tools sat in the MENU but no pass prompt ever ORDERED a computation).
+ok(/COMPUTE it, never estimate it in prose/.test(tp) && /analyze_data/.test(tp) && /forecast_query/.test(tp), 'topical pass ORDERS computation for number/probability aspects (P3 reaches the pass, not just the menu)');
+ok(/analyze_data/.test(r.buildDeepLanePrompt({ org: 'X', facet: 'total grant flow' })) && /never estimate a figure in prose/.test(r.buildDeepLanePrompt({ org: 'X', facet: 'f' })), 'deep lane names its own quant tools with the same compute order');
 ok(/## Cato/.test(op[0].content) && /Key people|Contact/i.test(op[0].content), 'organize prompt enforces the per-org schema');
 
 // --- MID-RUN CLARIFICATION: detect his refinement, fold it into every pass ---

@@ -87,6 +87,7 @@ function planWant(kind = 'entity') {
 - databases: which of databasesAvailable you'll check first (subset or all).
 - estimate: copy the provided estimate string (or your own brief estimate if none).
 - In approach or facets, name at least ONE QUANTITATIVE sub-question this research should answer with a COMPUTED number or probability (a cross-tab, a flow total, a base rate, an explicit likelihood) — research that never computes is a summary, not an analysis.
+- THE REQUESTER IS THE AUDIENCE, NEVER THE SUBJECT: a goal phrased "research X for <name>" or "over the course of the night for <name>" means DELIVER X to that person — it never means investigate that person, their finances, or their affairs. Plan the requester as a research subject ONLY when the goal explicitly and unambiguously names them as the thing to be researched. (Measured failure: "financial forensic investigation for Lucas" was planned as an investigation OF Lucas.)
 - If preflightGuidance is provided, HONOR it: fold its method into approach, keep its tool choices and quantitative questions, and carry its named capability gaps honestly (plan around them, never paper over them).`;
   if (k === 'topical') {
     return `${common}

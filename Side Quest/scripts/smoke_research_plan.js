@@ -23,6 +23,10 @@ ok(/known→unknown/i.test(want), 'planWant tells the model to ground known→un
 // "research that never computes is a summary, not an analysis."
 ok(/QUANTITATIVE/.test(want) && /computed number or probability/i.test(want), 'planWant demands a quantitative sub-question');
 ok(/QUANTITATIVE/.test(rp.planWant('topical')) && /QUANTITATIVE/.test(rp.planWant('forecast')) && /QUANTITATIVE/.test(rp.planWant('argument')), 'the quant clause rides the COMMON contract — every kind gets it');
+// Requester ≠ subject (measured 2026-08-06: "financial forensic investigation for Lucas" was
+// planned as an investigation OF Lucas — six passes on the wrong subject).
+ok(/REQUESTER IS THE AUDIENCE, NEVER THE SUBJECT/.test(want) && /never means investigate that person/i.test(want), 'planWant forbids reading "for <name>" as "about <name>"');
+ok(/REQUESTER IS THE AUDIENCE/.test(rp.planWant('topical')) && /REQUESTER IS THE AUDIENCE/.test(rp.planWant('forecast')), 'the requester-audience clause rides the COMMON contract too');
 
 // --- P1 the living plan: revalidate contract + pure delta application ---
 const rvIn = rp.revalidateInput({ plan: { objective: 'map the orgs', approach: 'depth-first', targets: ['A', 'B'], facets: ['f1'] }, synthesis: 'S'.repeat(9000), covered: ['A'], goal: 'the goal' });
