@@ -40,7 +40,8 @@ function parseStreamableBody(contentType, text) {
 
 // Streamable-HTTP transport. Carries the bearer token + MCP session id; accepts both JSON and
 // SSE responses. `fetchImpl` is injectable for tests.
-function httpTransport({ url, token = null, fetchImpl = (typeof fetch !== 'undefined' ? fetch : null) } = {}) {
+function httpTransport({ url, token = null, fetchImpl = (typeof fetch !== 'undefined' ? fetch : null),
+                         requestTimeoutMs = Number(process.env.ECHO_HTTP_TIMEOUT_MS) || 180000 } = {}) {
   if (!url) throw new Error('echo httpTransport: url required');
   if (!fetchImpl) throw new Error('echo httpTransport: no fetch available');
   let sessionId = null;
@@ -55,7 +56,16 @@ function httpTransport({ url, token = null, fetchImpl = (typeof fetch !== 'undef
       const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
       if (sessionId) headers['Mcp-Session-Id'] = sessionId;
-      const res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(message) });
+      // M2.5 HANG GUARD: this send had NO timeout — a dead/hung Echo left `await fetch` pending forever,
+      // wedging the caller (the attach heartbeat could retry-loop without ever landing; a tool dispatch would
+      // hang the turn). Bound it with an AbortController. GENEROUS default (180s, ECHO_HTTP_TIMEOUT_MS-overridable)
+      // so legitimately long tool calls still complete — this guards a true connection hang, not a tight SLA.
+      const _ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      const _to = _ctrl ? setTimeout(() => { try { _ctrl.abort(); } catch {} }, requestTimeoutMs) : null;
+      let res;
+      try {
+        res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(message), signal: _ctrl ? _ctrl.signal : undefined });
+      } finally { if (_to) clearTimeout(_to); }
       const sid = res.headers && res.headers.get && res.headers.get('mcp-session-id');
       if (sid) sessionId = sid;
       if (res.status === 202 || res.status === 204) return null;   // notification/ack, no body
