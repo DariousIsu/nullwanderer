@@ -114,9 +114,10 @@ TOOLS (call exactly ONE per step):
 - browser_read {}               read the page currently open in her browser
 - file {"op":"read|write|append|list","path":"notes/x.md","content":"…"}   her workspace files
 - puller_add {"company":"…","contacts":[{"name":"…","title":"…","email":"…","phone":"…","verified":true}]}   BANK the real people you found into Puller (our contact store) — it learns the company's email pattern + grades confidence. On a CONTACTS task, call this as you find each executive: name + title always; email/phone when found; verified:true ONLY if the email came from an official/public source (else it's treated as a pattern candidate)
-- source_map {}                 HER OWN SOURCE CODE — the file map of the program she runs on, each module with its own description. Use for "how am I coded / where does X live"
-- source_read {"path":"lib/board.js"}   read one of her own source files (read-only; code + docs only — data, logs, and secrets are unreachable)
-- source_search {"pattern":"…"}         search her source for a string/regex ("where is X implemented", "who calls Y")
+- source_map {"focus":"optional topic"}   HER OWN SOURCE CODE — the file map of the program she runs on, RANKED by how much the rest of the code leans on each module (pass focus to pull the map toward a topic). Use for "how am I coded / where does X live"
+- source_read {"path":"lib/board.js","offset":0}   read one of her own source files (read-only; code + docs only — data, logs, and secrets are unreachable). A long file returns ONE PAGE plus a note naming the exact next call — repeat with the offset it gives (or an @char from source_outline) until you have what you need; page 2 is never a guess
+- source_search {"pattern":"…"}         search ALL her source for a string/regex ("where is X implemented", "who calls Y") — the whole repo is scanned, results come back file:line
+- source_outline {"path":"main.js"}     the symbol map of ONE file: functions/classes/exports with line + @char addresses — navigate a huge file first, then source_read {"offset":<@char>} to start exactly at the symbol you want
 - self_test {"suite":"smoke_board.js"}  run her own offline verification gate — ONE named suite in seconds, or omit suite for the FULL gate (minutes; use sparingly). The honest answer to "am I healthy?"
 - rehearsal_create {"slug":"my-idea"}   REHEARSE a change to her own code: a full working COPY of her source (the live program is never touched). Then rehearsal_edit {"slug","path","find","replace"} (find must match EXACTLY ONCE — read the file first), rehearsal_test {"slug","suite":"smoke_x.js"} to judge it with her own gate, rehearsal_diff {"slug"} for the honest change report, rehearsal_discard {"slug"} when done. NOTHING here can change the live program — a good rehearsal ends as a diff+verdict report for Lucas
 - rehearsal_write {"slug","path":"tools/x.py","content":"…"}   BUILD A NEW python tool (tools/<name>.py) you don't have yet, or its harness (scripts/smoke_<name>.js). The harness shells your python via process.env.ZOE_PY and prints PASS/FAIL; judge it with rehearsal_test {"slug","suite":"smoke_x.js"}. NEW files only (change existing source with rehearsal_edit). This is how she writes and runs her own scripts — still sandboxed, still ends as a proposal for Lucas
@@ -218,7 +219,7 @@ function actionsOf(parsed) {
 // way. Concurrency is only the latency bonus.
 const READ_SAFE = new Set([
   'web_search', 'web_fetch', 'web_extract', 'news_search', 'browser_read', 'see_page',
-  'recall', 'localdb', 'localdb_map', 'source_map', 'source_read', 'source_search',
+  'recall', 'localdb', 'localdb_map', 'source_map', 'source_read', 'source_search', 'source_outline',
   'kg_search', 'kg_neighborhood', 'knowledge_search', 'gov_funding', 'fec_lookup',
   'bill_lookup', 'nonprofit_lookup', 'forecast_query', 'skill_pull',
   'rehearsal_diff', 'rehearsal_drive_status',

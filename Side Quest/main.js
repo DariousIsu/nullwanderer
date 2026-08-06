@@ -10194,9 +10194,10 @@ const operatorTools = {
   },
   // SELF-KNOWLEDGE (slice 3a) — read-only access to her OWN source + the offline verification gate
   // (lib/self_source: allowlist-jailed; data/, .env*, logs, node_modules are unreachable by name).
-  source_map: async () => { try { return require('./lib/self_source').sourceMap(); } catch (e) { return 'ERROR: ' + e.message; } },
-  source_read: async ({ path: p } = {}) => { try { return require('./lib/self_source').readSource(String(p || '')); } catch (e) { return 'ERROR: ' + e.message; } },
-  source_search: async ({ pattern } = {}) => { try { return require('./lib/self_source').searchSource(String(pattern || '')); } catch (e) { return 'ERROR: ' + e.message; } },
+  source_map: async ({ focus } = {}) => { try { return await require('./lib/self_source').sourceMap({ focus: String(focus || '') }); } catch (e) { return 'ERROR: ' + e.message; } },
+  source_read: async ({ path: p, offset } = {}) => { try { return require('./lib/self_source').readSource(String(p || ''), { offset: Number(offset) || 0 }); } catch (e) { return 'ERROR: ' + e.message; } },
+  source_search: async ({ pattern } = {}) => { try { return await require('./lib/self_source').searchSource(String(pattern || '')); } catch (e) { return 'ERROR: ' + e.message; } },
+  source_outline: async ({ path: p } = {}) => { try { return require('./lib/self_source').sourceOutline(String(p || '')); } catch (e) { return 'ERROR: ' + e.message; } },
   self_test: async ({ suite } = {}) => { try { return await require('./lib/self_source').selfTest({ suite: suite || null }); } catch (e) { return 'ERROR: ' + e.message; } },
   // REHEARSAL (R1, docs/REHEARSAL_SANDBOX_DESIGN.md) — try a change to her own code in a COPY,
   // judged by her own gate. NO adoption surface exists; a finished rehearsal exits as a report.
