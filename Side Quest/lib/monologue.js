@@ -1794,6 +1794,14 @@ function _directedFocusActive() {
   try { const fl = require('./focus'); const f = fl.getCurrent(); return !!(f && fl.isDirected(f)); }
   catch { return false; }
 }
+// DIRECTED PREEMPTION (Lucas 2026-08-06: "a directed task should take over ALL the bandwidth").
+// HIS runs only — a beat-origin autonomic focus does NOT suppress the puller (that is the puller's
+// normal working time). Distinct from _directedFocusActive above, which any directed focus (beats
+// included) satisfies and which leashes DISCOVERY for domain-purity reasons, not bandwidth.
+function _userDirectedActive() {
+  try { const fl = require('./focus'); const f = fl.getCurrent(); return !!(f && fl.isDirected(f) && fl.originOf(f) !== 'beat'); }
+  catch { return false; }
+}
 // Domain-leash tokens for the CONTACT stage: the operator's domain (active directed focus, ELSE their
 // standing civic threads) — see lib/focus.domainLeashTokens. Delegated so it stays ON even after a directed
 // focus STALLS (the off-domain backlog would otherwise get worked again the moment the focus stops).
@@ -2028,7 +2036,10 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
 // no-email targets) — replaces the internal full-store scan.
 async function runPullerMove(_recentTurns, { mode = 'both', candidatesOverride = null } = {}) {
   const nowTs = Date.now();
-  const wantContact = mode === 'both' || mode === 'contact';
+  // Directed preemption widens the old discovery-only leash: the WHOLE contact mission (Hunter,
+  // pattern-fill, web-discovery — the "find elected officials contact information" work) idles
+  // while a USER-directed research run is active, not just the discovery stage.
+  const wantContact = (mode === 'both' || mode === 'contact') && !_userDirectedActive();
   // DOMAIN LEASH (D1): suppress net-new DISCOVERY while a directed focus is active — discovery is the stage
   // that mints off-domain prospects (the medical-directory "Dr. X" records that then jam the promotion
   // queue). Contact-enrichment of already-held (on-domain) targets still runs. Single choke: covers the

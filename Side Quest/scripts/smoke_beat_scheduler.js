@@ -168,5 +168,22 @@ ok(s.chooseNextByPriority({ beats: bp, state: { beats: { a: { lastRun: 5000, yie
   ok(s.ladderFilter([], {}).length === 0 && s.ladderFilter(pool).length >= 3, 'ladder: empty pool / omitted state never throw');
 }
 
+// ── DIRECTED PREEMPTION wiring (source asserts — Lucas 2026-08-06: "a directed task should take
+// over ALL the bandwidth"). His run displaces the worker fleet (swarms exempt — he commanded
+// those) and idles the puller's whole contact mission, not just discovery.
+{
+  const fs = require('fs'), path = require('path');
+  const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/if \(_userDirectedActive\(\)\) \{ if \(_pauseAllWorkers\(state, 'user-directed research holds the bandwidth'\)\)/.test(m),
+    'preempt: the worker-fill displaces the fleet while a user-directed run is active');
+  ok(/if \(!_userDirectedActive\(\)\) \{[^]{0,220}?for \(const w of Object\.values\(st\.workers/.test(m),
+    'preempt: the driver loop skips normal workers immediately (swarm partitions keep driving)');
+  ok(/originOf\(f\) !== 'beat'/.test(m) && /ZOE_DIRECTED_PREEMPT/.test(m),
+    'preempt: HIS work only (beat-origin never self-preempts) + kill switch exists');
+  const mono = fs.readFileSync(path.join(__dirname, '..', 'lib', 'monologue.js'), 'utf8');
+  ok(/wantContact = \(mode === 'both' \|\| mode === 'contact'\) && !_userDirectedActive\(\)/.test(mono),
+    'preempt: the puller CONTACT mission idles under a user-directed run (beyond the discovery-only leash)');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

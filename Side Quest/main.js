@@ -12167,9 +12167,44 @@ function _logMappingPaused(where) {
   _mapPausedLogAt = now;
   console.log(`[autonomic] sweep PAUSED (mapping.paused=1) — ${where} not resuming/seeding/filling; set to 0 to resume`);
 }
+// DIRECTED PREEMPTION (Lucas 2026-08-06: "a directed task should take over ALL the bandwidth —
+// find-elected-officials contact mapping shouldn't be running when a massive research project is
+// in task"). While the CURRENT focus is HIS work (user-directed, not beat-origin), the background
+// fleet is DISPLACED, not merely out-ranked by quota: every driven worker is paused mid-run via
+// the SAME mechanism the swarm uses to displace breadth (slot emptied → the driver loop stops
+// passing its thread; `.background` flag cleared; the open thread + covered/plan meta survive),
+// and no new assignments fill. The fleet refills on the first tick after his run concludes.
+// Swarms are exempt — a swarm exists because Lucas commanded it. Kill switch: ZOE_DIRECTED_PREEMPT=0.
+function _userDirectedActive() {
+  try {
+    if (String(process.env.ZOE_DIRECTED_PREEMPT || '') === '0') return false;
+    const focusLib = require('./lib/focus');
+    const f = focusLib.getCurrent();
+    if (!f || !focusLib.isDirected(f)) return false;
+    if ((db.getMeta(`focus.${f.id}.beat`) || '').trim()) return false;   // an autonomic beat run is not HIS work
+    return focusLib.originOf(f) !== 'beat';
+  } catch { return false; }
+}
+let _preemptLogAt = 0;
+function _pauseAllWorkers(state, why) {
+  let paused = 0;
+  try {
+    for (const [slot, w] of Object.entries(state.workers || {})) {
+      if (!w || !w.beatId) continue;
+      const bs = state.beats[w.beatId];
+      if (bs && bs.thread) { try { db.setMeta(`focus.${bs.thread}.background`, ''); } catch {} }
+      state.workers[slot] = {};
+      paused++;
+    }
+  } catch {}
+  if (paused) console.log(`[worker] DISPLACED ${paused} background worker(s) — ${why}; threads stay resumable, fleet refills when the run concludes`);
+  else if (Date.now() - _preemptLogAt > 15 * 60 * 1000) { _preemptLogAt = Date.now(); console.log(`[worker] fleet idle — ${why}`); }
+  return paused > 0;
+}
 function _fillBackgroundWorkers(state, electedPool, topicPool, primaryBeatId) {
   try {
     if (_mappingPaused()) { _logMappingPaused('worker-fill'); return; }
+    if (_userDirectedActive()) { if (_pauseAllWorkers(state, 'user-directed research holds the bandwidth')) _saveSchedState(state); return; }
     if (!state.workers) state.workers = {};
     const swarmK = _maintainSwarm(state);                     // advance/release a live swarm; it consumes swarmK bg workers
     const swarmBeatId = state.swarm && state.swarm.beatId;    // keep the swarm's beat out of normal rotation while surging
@@ -12258,7 +12293,11 @@ function startBackgroundWorkers() {
   _bgTimer = setInterval(() => {
     try {
       const st = _loadSchedState();
-      for (const w of Object.values(st.workers || {})) { const bid = w && w.beatId; const th = bid && st.beats[bid] && st.beats[bid].thread; if (th) backgroundWorkerPass(th).catch(() => {}); }
+      // Directed preemption: skip normal workers IMMEDIATELY (this loop runs faster than the
+      // autonomic tick that empties the slots) — a swarm is Lucas-commanded, so it keeps driving.
+      if (!_userDirectedActive()) {
+        for (const w of Object.values(st.workers || {})) { const bid = w && w.beatId; const th = bid && st.beats[bid] && st.beats[bid].thread; if (th) backgroundWorkerPass(th).catch(() => {}); }
+      }
       if (st.swarm && st.swarm.parts) for (const p of Object.values(st.swarm.parts)) { if (p && p.thread && !p.done) backgroundWorkerPass(p.thread).catch(() => {}); }   // drive the swarm partitions too
     } catch {}
   }, DIRECTED_CADENCE_MS);
