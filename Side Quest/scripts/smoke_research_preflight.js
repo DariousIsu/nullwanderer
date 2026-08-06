@@ -58,6 +58,21 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   r = await pf.run({ goal: 'g', deps: { ask: async () => { asks++; return verdictStudy1; }, search: async () => { throw new Error('search down'); } } });
   ok(r && r.studied === false && asks === 1, 'a failed study search falls back to the un-studied verdict');
 
+  // --- P4b RE-ENTRY AUDIT: judgment before accretion ---
+  ok(/meets_bar/.test(pf.auditWant()) && /Judge it honestly/.test(pf.auditWant()) && /uncomputed/.test(pf.auditWant()), 'audit want demands honest judgment + the uncomputed list');
+  ok(pf.auditValidator('{"meets_bar":false,"gaps":[]}').valid === true && pf.auditValidator('{"gaps":[]}').valid === false, 'audit validator requires the boolean verdict');
+  const flawed = { meets_bar: false, assessment: 'Organized notes, not a finished paper.', depth_score: 3, citation_coverage: 'sparse', gaps: [{ section: 'Funding', missing: 'grant-level flows with amounts' }, { section: 'Network', missing: 'second-layer connections' }], uncomputed: ['total grants by recipient'] };
+  const g = pf.renderAuditGuidance(flawed);
+  ok(/depth 3\/10, citations sparse/.test(g) && /Organized notes/.test(g), 'audit guidance states the blunt verdict');
+  ok(/THE GAPS ARE THE PLAN/.test(g) && /Funding — grant-level flows/.test(g) && /NEVER COMPUTED/.test(g), 'the gaps and uncomputed questions become the work');
+  ok(/REVISES this same document/.test(g) && /never restate/.test(g), 'guidance binds revision-in-place, not restating');
+  ok(pf.renderAuditGuidance({ meets_bar: true, gaps: [] }) === '', 'a document that meets the bar produces no gap plan');
+  let auditAsks = 0;
+  let ar = await pf.auditDocument({ goal: 'g', title: 't', body: 'B'.repeat(300), deps: { ask: async () => { auditAsks++; return flawed; } } });
+  ok(auditAsks === 1 && ar && ar.verdict.meets_bar === false && /GAPS ARE THE PLAN/.test(ar.guidance), 'auditDocument returns verdict + guidance');
+  ok(await pf.auditDocument({ goal: 'g', title: 't', body: '  ', deps: { ask: async () => flawed } }) === null, 'no document body → null (nothing to audit)');
+  ok(await pf.auditDocument({ goal: 'g', title: 't', body: 'B'.repeat(300), deps: { ask: async () => { throw new Error('down'); } } }) === null, 'audit ask failure → null, fail-open');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

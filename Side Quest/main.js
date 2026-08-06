@@ -11974,6 +11974,31 @@ async function _autonomicSchedulerTick() {
                   try { _surfaceSteeringNote(f || cand, `Preflight on "${String(cand.content).slice(0, 70)}": I'm missing ${_miss.length === 1 ? 'a capability' : 'capabilities'} — ${_miss.join('; ')}. Filed as build need(s); I'll work around it honestly with the closest tools I have. Tell me to hold if you'd rather the tool get built first.`, 'preflight gap'); } catch {}
                 }
               }
+              // P4b RE-ENTRY AUDIT: a run adopting an existing document enters through JUDGMENT —
+              // audit it against the paper bar, make the gaps the plan, and SAY the honest verdict
+              // ("this document is flawed" is her conclusion to reach, not Lucas's to supply).
+              try {
+                const _bdId = parseInt(db.getMeta(`focus.${cand.id}.base_doc`) || '0', 10);
+                if (_bdId) {
+                  const _bd = db.getDocumentById(_bdId);
+                  if (_bd && String(_bd.body || '').trim().length > 200) {
+                    const _audit = await require('./lib/research_preflight').auditDocument({
+                      goal: cand.content, title: _bd.title, body: _bd.body,
+                      deps: { ask: (o) => require('./lib/cloud_logic').ask(o) },
+                    });
+                    if (_audit) {
+                      try { db.setMeta(`focus.${cand.id}.reentry_audit`, JSON.stringify(_audit.verdict)); } catch {}
+                      if (!_audit.verdict.meets_bar) {
+                        _pfGuidance = [_pfGuidance, _audit.guidance].filter(Boolean).join('\n');
+                        console.log(`[preflight] re-entry audit of doc #${_bdId}: depth ${_audit.verdict.depth_score}/10, citations ${_audit.verdict.citation_coverage}, ${(_audit.verdict.gaps || []).length} gap(s) → the gaps are the plan`);
+                        try { _surfaceSteeringNote(f || cand, `I re-read the document I'm continuing ("${String(_bd.title).slice(0, 60)}") and judged it against the finished-research bar: ${String(_audit.verdict.assessment).slice(0, 240)} I'm treating its gaps as the plan and revising the same document up to standard.`, 're-entry audit', { force: true }); } catch {}
+                      } else {
+                        console.log(`[preflight] re-entry audit of doc #${_bdId}: meets the bar — continuing without a gap plan`);
+                      }
+                    }
+                  }
+                }
+              } catch (e) { console.error('[preflight] re-entry audit failed (plan proceeds without):', e.message); }
             } catch (e) { console.error('[preflight] failed (plan proceeds without):', e.message); }
             try { await generateResearchPlan(f || cand, { goal: cand.content, targets: [], facet: '', deep: true, kind: _kind, preflight: _pfGuidance }); }
             catch (e) { console.error('[user-work] plan gen failed:', e.message); }
@@ -13373,13 +13398,15 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
 const PIVOT_SURFACE_GAP_MS = 10 * 60 * 1000;
 // The shared delivery core: throttle per focus, then the announce-shaped insert+send. Both the
 // novel-question surfacer and the plan-revalidation tactics note ride this one wire.
-function _surfaceSteeringNote(focus, msg, label) {
+function _surfaceSteeringNote(focus, msg, label, { force = false } = {}) {
   try {
     const sid = currentSessionId;
     if (!sid || !focus || focus.id == null || !msg) return false;
     if (!_surfaceAllowed(focus.id)) return false;
     const k = `focus.${focus.id}.pivot_surfaced_at`;
-    if (Date.now() - (parseInt(db.getMeta(k) || '0', 10) || 0) < PIVOT_SURFACE_GAP_MS) return false;
+    // force: a re-entry audit verdict must never be swallowed by an earlier note's throttle — it is
+    // the run's one honest "this document is flawed" statement. Still stamps, so what FOLLOWS paces.
+    if (!force && Date.now() - (parseInt(db.getMeta(k) || '0', 10) || 0) < PIVOT_SURFACE_GAP_MS) return false;
     db.setMeta(k, String(Date.now()));
     const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'research', unprompted: 1 });
     try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}

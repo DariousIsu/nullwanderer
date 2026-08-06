@@ -116,4 +116,64 @@ async function run({ goal = '', kind = 'entity', deps = {} } = {}) {
   } catch (e) { try { console.error('[preflight] failed (fail-open):', e.message); } catch {} return null; }
 }
 
-module.exports = { inventoryText, preflightInput, preflightWant, preflightValidator, renderGuidance, run };
+// ── P4b RE-ENTRY AUDIT (the acceptance test) ─────────────────────────────────────────────────────
+// A run that adopts an EXISTING deliverable enters through JUDGMENT, not accretion: audit the
+// document against the paper bar FIRST — does it deliver its own stated objective? where is it
+// shallow? what is uncited? what was never computed? — and the gap list becomes the plan. The
+// honest assessment is also SAID (the steering wire), so "this document is flawed" is a conclusion
+// she reaches and states, not one Lucas has to supply.
+
+function auditInput({ goal = '', title = '', body = '' } = {}) {
+  return { goal: _clean(goal, 500), documentTitle: _clean(title, 200), documentBody: str(body).slice(0, 18000) };
+}
+
+function auditWant() {
+  return `You are AUDITING an existing research document against a submission-grade bar before continuing the work. Judge it honestly — flattering a flawed document wastes the whole run. Reply with ONE JSON object and nothing else:
+{"meets_bar": bool, "assessment": string, "depth_score": number, "citation_coverage": "none"|"sparse"|"partial"|"full", "gaps": [{"section": string, "missing": string}], "uncomputed": [string]}
+- meets_bar: is this already a complete, deep, cited research document that delivers its own stated objective? (Expect false for drafts/notes.)
+- assessment: 2-3 blunt sentences: what the document is today and what it is not yet.
+- depth_score: 1-10 — 10 = every section evidenced and analyzed; 3 = organized notes; 1 = an outline.
+- citation_coverage: how much of the load-bearing content carries a real source.
+- gaps: the CONCRETE holes, per section or theme — each "missing" specific enough to research directly (empty only if meets_bar).
+- uncomputed: questions the document should answer with a computed number/probability but doesn't.`;
+}
+
+function auditValidator(raw) {
+  try {
+    const cleaned = str(raw).replace(/<(think|thoughts?|thinking)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ');
+    const m = cleaned.match(/\{[\s\S]*\}/);
+    if (!m) return { valid: false, error: 'no JSON object' };
+    const obj = JSON.parse(m[0]);
+    if (typeof obj.meets_bar !== 'boolean' || !Array.isArray(obj.gaps)) return { valid: false, error: 'not an audit verdict' };
+    return { valid: true, value: obj };
+  } catch (e) { return { valid: false, error: e.message }; }
+}
+
+// Audit verdict → planner guidance: the gaps ARE the work.
+function renderAuditGuidance(verdict = {}) {
+  if (!verdict || verdict.meets_bar) return '';
+  const lines = [`RE-ENTRY AUDIT of the existing document (depth ${Number(verdict.depth_score) || '?'}/10, citations ${_clean(verdict.citation_coverage, 20) || 'unknown'}): ${_clean(verdict.assessment, 500)}`];
+  const gaps = (Array.isArray(verdict.gaps) ? verdict.gaps : [])
+    .map((g) => g && g.missing ? `${_clean(g.section, 80) || 'general'} — ${_clean(g.missing, 200)}` : null).filter(Boolean).slice(0, 10);
+  if (gaps.length) lines.push(`THE GAPS ARE THE PLAN — research these directly: ${gaps.join(' | ')}`);
+  const un = _arr(verdict.uncomputed, 4);
+  if (un.length) lines.push(`NEVER COMPUTED (do it this run): ${un.join(' | ')}`);
+  lines.push('The deliverable REVISES this same document to the bar — deepen and cite every section; never restate what it already holds.');
+  return lines.join('\n');
+}
+
+// Orchestrate the audit; fail-open like run(). Returns { verdict, guidance } | null.
+async function auditDocument({ goal = '', title = '', body = '', deps = {} } = {}) {
+  if (!str(body).trim() || typeof deps.ask !== 'function') return null;
+  try {
+    const verdict = await deps.ask({
+      task: 'doc_reentry_audit', v: 1, numPredict: 900,
+      input: auditInput({ goal, title, body }),
+      want: auditWant(), validate: auditValidator,
+    });
+    if (!verdict) return null;
+    return { verdict, guidance: renderAuditGuidance(verdict) };
+  } catch (e) { try { console.error('[preflight] doc audit failed (fail-open):', e.message); } catch {} return null; }
+}
+
+module.exports = { inventoryText, preflightInput, preflightWant, preflightValidator, renderGuidance, run, auditInput, auditWant, auditValidator, renderAuditGuidance, auditDocument };
