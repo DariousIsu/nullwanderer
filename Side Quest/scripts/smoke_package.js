@@ -261,7 +261,10 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
   ok(/async function resolveWindow/.test(cl) && /streamCloud, resolveWindow/.test(cl),
     'resolveWindow is exported and shares streamCloud\'s model resolution');
   ok(/\[package\] \$\{pkg\.describe/.test(src), 'package size is logged per turn — observable, not inferred');
-  ok(/cloudMessages = built\.messages/.test(src), 'the built package is what actually gets sent');
+  // ROOT FIX 2026-08-03: built.messages is ONE system message; sent alone, ollama.com had no user
+  // turn to answer (done_reason:"load", empty output — the true cause of CLOUD wrote=0). The package
+  // now rides as the SYSTEM prompt with the real conversation turns appended after it.
+  ok(/cloudMessages = \[_pkgSys, \.\.\._convoTurns\]/.test(src), 'the built package rides as the system prompt + the real convo turns');
 }
 
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);

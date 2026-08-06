@@ -54,7 +54,11 @@ ok(offenders.length === 0, `no lib module pins the local model() (offenders: ${o
 const EXTRACTION = ['memory', 'personal_facts', 'preferences', 'importance', 'commitments', 'open_threads',
   'graph_extract', 'protocols', 'continuity', 'experience', 'learning', 'self_model', 'consolidate',
   'convo_state', 'reflection', 'rumination', 'gmeet', 'media_cc'];
-const VOICE = ['voice', 'byline', 'self_narrative', 'self_dialogue', 'play_session', 'heartbeat'];
+// self_narrative left this bucket 2026-08-06 (15b4e08): its compose is COGNITION, not voice, and its
+// per-turn frontModel call was the mystery VRAM pin (local gemma loaded + 24h-pinned every chat turn
+// by a refresh that always failed on the reasoning channel). It rides streamCognition now
+// (cloud-first, local fallback) — asserted separately below.
+const VOICE = ['voice', 'byline', 'self_dialogue', 'play_session', 'heartbeat'];
 const readSrc = (n) => fs.readFileSync(path.join(libDir, n + '.js'), 'utf8');
 // Extraction modules route through a CLOUD extraction slot — either the shared extractionModel() or
 // one of the per-stage mix-and-match slots (claim/graph/importance), which themselves default to
@@ -63,6 +67,7 @@ const missingExtract = EXTRACTION.filter(n => !/(?:extraction|claim|graph|import
 const missingVoice = VOICE.filter(n => !/frontModel\(\)/.test(readSrc(n)));
 ok(missingExtract.length === 0, `all extraction modules route to a cloud extraction slot (missing: ${missingExtract.join(', ') || 'none'})`);
 ok(missingVoice.length === 0, `all voice modules route to frontModel (missing: ${missingVoice.join(', ') || 'none'})`);
+ok(/streamCognition/.test(readSrc('self_narrative')), 'self_narrative composes on streamCognition (cloud-first — the VRAM-pin fix), not the front voice');
 
 // The per-stage slots must STILL resolve to cloud (off-GPU) — splitting extraction can't silently
 // pin a stage back on the local card. (Each falls back to extractionModel() when its env is unset.)

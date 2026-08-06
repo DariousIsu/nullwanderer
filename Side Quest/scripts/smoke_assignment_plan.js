@@ -140,7 +140,9 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     'the three required keys are named — the arg shape wobbled across every retry');
   ok(/never "content", never a bare string/.test(m), 'and the two wrong shapes she actually tried are ruled out');
   ok(/block_type":"heading","data":\{"level"/.test(m), 'and the heading shape, so a document can have sections');
-  ok(/heading · paragraph · list · code · table · chart/.test(m),
+  // 2026-08-04 rich-canvas build widened the palette (metric_card, callout, media, diagram…); the
+  // manifest lists the full comma-separated set and still rejects anything else.
+  ok(/heading, paragraph, list, code, table, chart, metric_card, callout, image, audio, video, diagram, document_file/.test(m),
     'and the exact valid block_type values, so there is nothing left to guess');
   ok(/block_type":"table","data":\{"headers"/.test(m), 'the table shape survives alongside it');
 

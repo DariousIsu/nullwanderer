@@ -290,6 +290,7 @@ const smokes = [
   'smoke_self_source.js',
   'smoke_self_ops.js',
   'smoke_research_preflight.js',
+  'smoke_adaptive_loop.js',
   'smoke_rehearsal.js',
   'smoke_inquiry.js',
   'smoke_dig.js',
@@ -414,13 +415,13 @@ sweepOrphanedTempDbs('before the run\n');
 let passed = 0, failed = 0;
 const failures = [];
 for (const s of smokes) {
-  let out = '';
+  let out = '', childOk = true;   // childOk = the child exited 0 (execFileSync throws on nonzero/timeout)
   try {
     out = execFileSync(electron, [path.join(dir, s)], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 300000,
     });
-  } catch (e) { out = (e.stdout || '') + (e.stderr || ''); }
+  } catch (e) { childOk = false; out = (e.stdout || '') + (e.stderr || ''); }
   // Two result-line dialects are in use: "PASS — n ok, m failed" (memory/curation smokes) and
   // "ALL PASS — n passed, m failed" (the editor/verify suites). Accept both — the editor suites were
   // silently outside the gate for want of a matching regex, so the whole verification spine could be
@@ -432,6 +433,13 @@ for (const s of smokes) {
   // bug the comment above describes, one dialect later. A green suite counted as red is not the safe
   // direction it looks like: it trains everyone to read past a red gate.
   else if (!m && /^\s*SMOKE PASSED\s*$/m.test(out)) { passed++; console.log(`PASS  ${s.padEnd(30)} (no count reported)`); }
+  // FOURTH dialect (measured 2026-08-06): Electron's piped stdout can DROP the final console.log
+  // when process.exit fires before the pipe drains — a suite whose ok() is success-silent
+  // (smoke_self_question) then produces ZERO output on a clean pass, and three others lose only
+  // their tail "PASS —" line. The EXIT CODE is the suite's own verdict (every suite ends
+  // process.exit(fail ? 1 : 0)), so exit 0 with no failure marker in what DID arrive is a pass.
+  // A crash/timeout still throws (childOk=false) and a lost-line FAILING suite still exits 1.
+  else if (!m && childOk && !/✗|FAIL/.test(out)) { passed++; console.log(`PASS  ${s.padEnd(30)} (exit 0 — result line lost to the stdout pipe race)`); }
   else { failed++; failures.push(s); console.log(`FAIL  ${s.padEnd(30)} ${m ? `(${m[3]} failed)` : '(no result line — crashed?)'}`); }
 }
 

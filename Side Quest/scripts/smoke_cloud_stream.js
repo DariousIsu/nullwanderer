@@ -94,13 +94,18 @@ function fakeStream(tokens, { throwAfter = -1 } = {}) {
     // stays gated on cloudOwnsAnswer.
     ok(/const cloudWritesReply = process\.env\.ZOE_CLOUD_WRITES_REPLY !== '0';/.test(src),
       'the writer gate is its own flag, defaulting ON and still kill-switchable');
-    ok(/[^\n]*if \(cloudWritesReply\) \{/.test(src),
-      'EVERY reply routes to the cloud writer, not just the factual ones');
+    // 2.5.4 (5c6c96a): the ONE exception is a direct-deliver self-review — re-voicing a long review
+    // truncates/paraphrases it, so operatorReviewDirect skips the cloud voice by design.
+    ok(/[^\n]*if \(cloudWritesReply && !operatorReviewDirect\) \{/.test(src),
+      'EVERY reply routes to the cloud writer, except a direct-deliver self-review (2.5.4)');
     ok(/if \(cloudOwnsAnswer \|\| personalFactQ(?: \|\| scheduleQ)?\) \{/.test(src),
       'the retrieval ladder stays gated — five tiers against "good morning" is what broke 2026-07-21');
     ok(/streamCloud\(messages,/.test(src), 'the cloud is handed the SAME package the local side assembled');
     ok(/onToken: \(chunk\) => parser\.feed\(chunk\)/.test(src), 'cloud tokens go through the same parser/leak-filter/emit');
-    ok(/replyWriter !== MODEL[^\n]*\r?\n\s*else await streamChat/.test(src), 'the local generation is SKIPPED when the cloud wrote it');
+    // 2.5.4 widened the skip chain: cloud-wrote → skip; else a directed/review deliverable with no
+    // cloud voice is delivered DIRECTLY; only then does the local model write.
+    ok(/if \(replyWriter !== MODEL\) \{ \/\* the cloud already wrote it/.test(src) && /else await streamChat\(\{/.test(src),
+      'the local generation is SKIPPED when the cloud wrote it (direct-deliver branch sits between)');
     ok((src.match(/model: replyWriter,/g) || []).length === 2,
       'both turn rows record WHO wrote the reply — the only way truncation is measurable per writer');
     ok(!/model: MODEL,\r?\n\s*truncated/.test(src), 'REGRESSION: no reply row is still hardcoded to the local model');

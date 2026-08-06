@@ -76,8 +76,10 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
     ok(/const cloudWritesReply = process\.env\.ZOE_CLOUD_WRITES_REPLY !== '0';/.test(m),
       'the writer gate is its own flag, defaulting ON');
-    ok(/[^\n]*if \(cloudWritesReply\) \{/.test(m),
-      'the cloud reply block is gated on the writer flag alone — every reply, not just factual ones');
+    // 2.5.4: the sole added condition is the direct-deliver self-review skip (a verbatim review must
+    // not be re-voiced) — the FACTUAL-ONLY conjunction stays dead.
+    ok(/[^\n]*if \(cloudWritesReply && !operatorReviewDirect\) \{/.test(m),
+      'the cloud reply block is gated on the writer flag (+ the 2.5.4 review skip) — never factual-only');
     ok(!/if \(cloudOwnsAnswer && process\.env\.ZOE_CLOUD_WRITES_REPLY/.test(m),
       'REGRESSION: the old conjunction (factual-only writing) is gone');
     // the ladder must STAY gated — this is the half that costs five retrieval tiers
