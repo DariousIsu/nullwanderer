@@ -7111,6 +7111,41 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           directedStopHandled = true;   // fully handled — no park, no fork
           composedUserMessage += `\n\n[${userName} REFINED your CURRENT working focus (thread #${f.id}) — "${red.topic}". This is the SAME work, narrowed or re-ordered, NOT a new direction: it folds into what you are already doing, and NO thread was opened or parked. Say plainly you've folded the refinement into your current focus — do NOT promise actions beyond this, and do NOT claim a pivot or a parked/queued thread.]`;
           console.log(`[user-work] REFINEMENT folded into current focus #${f.id} ("${String(red.topic).slice(0, 60)}") — no new thread`);
+          // P4b MID-FLIGHT RE-ENTRY (ADAPTIVE_RESEARCH_DESIGN — the acceptance-test gap, measured
+          // live 2026-08-06): "take another look at the report" folds into the LIVE thread, so the
+          // seed-site audit never fires and the run would finish in the old dossier shape. A
+          // re-point at active work enters through JUDGMENT here instead: audit the thread's own
+          // accreted deliverable (or its base doc) against the paper bar ONCE, make the gaps steer
+          // the plan, and say the honest verdict. Storing reentry_audit also flips composeDocument
+          // into PAPER mode for this focus. Fire-and-forget; a miss never blocks the turn.
+          if (!(db.getMeta(`focus.${f.id}.reentry_audit`) || '').trim()) {
+            (async () => {
+              let _title = '', _body = '';
+              try { const _p = db.getMeta(`focus.${f.id}.file`); if (_p) { const r = filesLib.fileReadFull(_p); _body = (r && r.text) || ''; _title = String(f.content || '').slice(0, 120); } } catch {}
+              if (_body.trim().length < 300) {
+                try { const _bdId = parseInt(db.getMeta(`focus.${f.id}.base_doc`) || '0', 10); if (_bdId) { const _bd = db.getDocumentById(_bdId); if (_bd) { _title = _bd.title; _body = String(_bd.body || ''); } } } catch {}
+              }
+              if (_body.trim().length < 300) return;
+              const _audit = await require('./lib/research_preflight').auditDocument({
+                goal: String(f.content || ''), title: _title, body: _body,
+                deps: { ask: (o) => require('./lib/cloud_logic').ask(o) },
+              });
+              if (!_audit) return;
+              try { db.setMeta(`focus.${f.id}.reentry_audit`, JSON.stringify(_audit.verdict)); } catch {}
+              if (_audit.verdict.meets_bar) { console.log(`[preflight] mid-flight audit #${f.id}: meets the bar — continuing`); return; }
+              try {
+                const _plan = JSON.parse(db.getMeta(`focus.${f.id}.plan`) || '{}');
+                const _gapFacets = (Array.isArray(_audit.verdict.gaps) ? _audit.verdict.gaps : [])
+                  .map((g) => g && g.missing ? `${String(g.section || '').slice(0, 60)}: ${String(g.missing).slice(0, 160)}`.replace(/^:\s*/, '') : null).filter(Boolean).slice(0, 8);
+                if (_gapFacets.length) {
+                  _plan.facets = [...new Set([...(Array.isArray(_plan.facets) ? _plan.facets : []), ..._gapFacets])].slice(-14);
+                  db.setMeta(`focus.${f.id}.plan`, JSON.stringify(_plan));
+                }
+                console.log(`[preflight] mid-flight re-entry audit #${f.id}: depth ${_audit.verdict.depth_score}/10, citations ${_audit.verdict.citation_coverage}, ${_gapFacets.length} gap(s) → folded into the plan; paper mode armed`);
+              } catch {}
+              try { _surfaceSteeringNote(f, `I took another look at the ${String(_title || 'report').slice(0, 60)} draft and judged it against the finished-research bar: ${String(_audit.verdict.assessment).slice(0, 240)} I'm treating the gaps as the plan and bringing this same document up to standard.`, 'mid-flight re-entry audit', { force: true }); } catch {}
+            })().catch((e) => console.error('[preflight] mid-flight audit failed (run continues):', e.message));
+          }
         } else {
         let parkedNote = '';
         // IMMEDIATE steering parks the live focus; a QUEUED one ("finish Y first, then X") lets

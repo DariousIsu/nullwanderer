@@ -109,6 +109,17 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(/3\/4 content sections carry a source/.test(cp.renderCoverageFooter(cov)), 'P4: the coverage footer states the measured truth');
   ok(paper.indexOf('## Abstract') < paper.indexOf('## Hartfield Foundation') && paper.indexOf('## Appendix — research plan') > paper.indexOf('## Roy-Richards Trust'), 'P4: paper shape holds — front matter, evidence body, plan appendix');
 
+  // ── mid-flight re-entry wiring (source assert — the acceptance-test gap, measured live) ─────────
+  // "take another look at the report" folds into the LIVE thread, so the seed-site audit never
+  // fires; the REFINEMENT branch must enter through judgment instead and arm paper mode.
+  {
+    const fs = require('fs'), path = require('path');
+    const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+    ok(/REFINEMENT folded into current focus[\s\S]{0,3500}?auditDocument\(/.test(m), 'the refinement branch runs the re-entry audit on the live thread');
+    ok(/mid-flight re-entry audit/.test(m) && m.indexOf('reentry_audit`, JSON.stringify(_audit.verdict)') > -1, 'the mid-flight verdict is stored (arms paper mode at condense)');
+    ok(/paper mode armed/.test(m), 'the log says paper mode is armed for the run');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

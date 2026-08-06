@@ -437,12 +437,14 @@ function detectRedirect(message) {
 // "Complete any research related to China first" — three real steering phrasings, zero fired.
 // Enumerating surface forms fails identically in JavaScript or English; the prompt states the
 // DISTINCTION). Wide cheap trigger → cloud classify → regex only when the cloud is unreachable.
-const REDIRECT_TRIGGER_RE = /\b(pivot|shift|switch|move|focus|prioriti[sz]e|rather|instead|first|concentrate|complete|finish)\b/i;
+// RE-LOOK verbs added 2026-08-06 (measured live: "can you take another look at the Hartfield and
+// Green South report" fired NOTHING — the P4b acceptance-test turn never reached the classifier).
+const REDIRECT_TRIGGER_RE = /\b(pivot|shift|switch|move|focus|prioriti[sz]e|rather|instead|first|concentrate|complete|finish|revisit|re-?examine|rework|another look|look (?:at\b[^.?!]{0,60}?)?again|go (?:back )?over)\b/i;
 function buildRedirectAsk(message) {
   return {
     task: 'redirect_intent', v: 1, think: false,
     input: { message: String(message || '').slice(0, 800) },
-    want: `Lucas is talking to his research assistant, who has a live working focus. Decide: is he STEERING WHAT SHE WORKS ON — changing or ordering HER research/working focus? ANY phrasing counts ("pivot your attention to X", "move to the X research", "complete X first", "I'd rather you focus on X", "switch to X"). It is NOT steering when he asks a question, plans HIS OWN work ("I'll work on the deck"), or narrates the past.
+    want: `Lucas is talking to his research assistant, who has a live working focus. Decide: is he STEERING WHAT SHE WORKS ON — changing or ordering HER research/working focus? ANY phrasing counts ("pivot your attention to X", "move to the X research", "complete X first", "I'd rather you focus on X", "switch to X", "take another look at the X report" — sending her BACK to finished or in-flight work is steering too). It is NOT steering when he asks a question, plans HIS OWN work ("I'll work on the deck"), or narrates the past.
 Reply ONLY: {"redirect": true|false, "immediate": true|false, "topic": "<the work he steered her toward, in his words — empty when redirect is false>"}
 immediate=true when the new topic should take over NOW; immediate=false when he queued it AFTER current work ("finish Y first, then X").`,
     validate: (raw) => {

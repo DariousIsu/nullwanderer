@@ -150,8 +150,13 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
   ok(uw.REDIRECT_TRIGGER_RE.test('can you gather these now and then move to the china research?'), 'trigger fires on "move to the X research"');
   ok(uw.REDIRECT_TRIGGER_RE.test('Complete any research related to China first'), 'trigger fires on "complete X first"');
   ok(!uw.REDIRECT_TRIGGER_RE.test('good morning, how did the evening go'), 'small talk never reaches the classifier');
+  // RE-LOOK verbs (measured live 2026-08-06: the P4b acceptance-test turn evaded the trigger)
+  ok(uw.REDIRECT_TRIGGER_RE.test('Hey Zo, can you take another look at the Hartfield and Green South report please'), 'trigger fires on "take another look at the X report" (the live acceptance-test miss)');
+  ok(uw.REDIRECT_TRIGGER_RE.test('revisit the Monroe dossier when you can'), 'trigger fires on "revisit"');
+  ok(uw.REDIRECT_TRIGGER_RE.test('go over the funding section again'), 'trigger fires on "go over"');
   const spec = uw.buildRedirectAsk('move to the china research');
   ok(spec.task === 'redirect_intent' && /STEERING WHAT SHE WORKS ON/.test(spec.want), 'the prompt states the DISTINCTION, not a phrase list');
+  ok(/BACK to finished or in-flight work is steering too/.test(spec.want), 'the prompt counts a re-look at existing work as steering');
   ok(/NOT steering when he asks a question, plans HIS OWN work/.test(spec.want), 'the prompt names the non-steering shapes (direction grid)');
   ok(/immediate=false when he queued it AFTER current work/.test(spec.want), 'immediate-vs-queued is part of the contract');
   const v1 = spec.validate('{"redirect": true, "immediate": false, "topic": "the the China AI and materials research"}');
