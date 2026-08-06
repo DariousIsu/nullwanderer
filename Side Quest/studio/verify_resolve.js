@@ -317,10 +317,15 @@
     // collapsing both into `inaccessible` made the report apologise for a fetch that never had a
     // target. Computed at the END, not up front — a unit with no url is precisely what rung 4's
     // search-by-quote exists for, so it must still get there when search is enabled.
-    const nothingCited = !citedUrls.length && !(unit && unit.doi);
+    // A unit that carries a citation marker / dereferenced endnote ordinal / bare cited domain IS
+    // cited — the author named a source that simply is not a retrievable link (an unlinked endnote,
+    // "AP/PBS NewsHour, July 29, 2026") — so it is INACCESSIBLE, not UNCITED. Collapsing the two
+    // reported the author's own citation back to them as "no source given".
+    const cited = !!(unit && (unit.marker || unit.refOrdinal || unit.inheritedMarker || unit.domain || unit.citationText));
+    const nothingCited = !citedUrls.length && !(unit && unit.doi) && !cited;
     const terminal = () => (nothingCited
       ? { uid, resolved: false, tier: 'uncited', source_text: '', source_url: null, archive_url: null, reason: 'uncited', trail }
-      : { uid, resolved: false, tier: 'inaccessible', source_text: '', source_url: (unit && unit.url) || null, archive_url: null, reason: 'inaccessible', trail });
+      : { uid, resolved: false, tier: 'inaccessible', source_text: '', source_url: (unit && unit.url) || (unit && unit.citationText) || null, archive_url: null, reason: (unit && unit.citationText) ? 'cited source has no retrievable link' : 'inaccessible', trail });
 
     // Rung 1 — direct fetch. Every cited url is fetched, not just the first that works: when a note
     // cites two sources, which one actually carries the claim is a question for the MATCH stage, and

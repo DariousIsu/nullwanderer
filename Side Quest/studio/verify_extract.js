@@ -211,27 +211,43 @@
     // ref-shaped blocks that EACH carry a url. Requiring the url per block is what keeps the run from
     // swallowing body prose: an endnote list is uniformly linked, an argument is not.
     if (startIndex < 0) {
+      // What makes a block look like a reference ENTRY rather than body prose — three positive
+      // signals, any one suffices:
+      //   • it carries a url (the classic linked endnote);
+      //   • it is a list_item (structurally a list, and body argument is written in PARAGRAPHS — a
+      //     trailing run of list items is an endnote list even when the citations are bare text with
+      //     no hyperlink, as a policy op-ed that names "AP/PBS NewsHour, July 29, 2026" without a link);
+      //   • it prints a leading ordinal ("1." / "[1]" / "**1 **"), the docx endnote-list shape.
+      // Requiring a url PER BLOCK was too strict: an entire class of documents cites sources by name
+      // without links, so findReferenceSection saw nothing, every body "[n]" marker failed to
+      // dereference, and each was reported to the author as UNCITED — the connection between a claim
+      // and its cited source lost precisely where the author had supplied it.
+      const refShaped = (b) => !!b && REF_BLOCKS.has(b.type)
+        && (hasUrl(b) || b.type === 'list_item' || LEADING_ORDINAL_RE.test(String((b && b.text) || '')));
+      // References TRAIL the argument. Only a run reaching the document's end (within maxTail) can be
+      // the source list — a long bulleted list mid-argument must never win over it — so the trailing
+      // test gates which runs are ELIGIBLE, not merely the final pick.
+      const trails = (end) => end >= list.length - 1 - maxTail;
       let best = null, runStart = -1;
       for (let i = 0; i <= list.length; i++) {
-        const ok = i < list.length && list[i] && REF_BLOCKS.has(list[i].type) && hasUrl(list[i]);
+        const ok = i < list.length && refShaped(list[i]);
         if (ok) { if (runStart < 0) runStart = i; continue; }
         if (runStart >= 0) {
-          const len = i - runStart;
-          if (!best || len > best.len) best = { start: runStart, end: i - 1, len };
+          const end = i - 1, len = i - runStart;
+          if (trails(end) && (!best || len > best.len)) best = { start: runStart, end, len };
           runStart = -1;
         }
       }
-      // References TRAIL the argument — a linked run buried mid-document is evidence, not a source list.
-      if (!best || best.len < minEntries || best.end < list.length - 1 - maxTail) return null;
+      if (!best || best.len < minEntries) return null;
       startIndex = best.start;
       endIndex = best.end;
 
-      // Requiring a url PER BLOCK finds the run, but a reference list may OPEN with an unlinked
-      // entry (a poll provided directly, an interview, a book). Dropping it shifts every positional
-      // ordinal by one and silently cites each claim one source off — observed live: the SNAP op-ed's
-      // note 1 is an unlinked Rainey Center poll, so a polling claim resolved to a USDA fraud page.
-      // Extend backwards only over blocks that are unmistakably part of the SAME list: a contiguous
-      // list_item run, or a paragraph that prints its own leading ordinal.
+      // A reference list may OPEN with an unlinked entry (a poll provided directly, an interview, a
+      // book) that the run scan's first anchor skipped. Dropping it shifts every positional ordinal by
+      // one and silently cites each claim one source off — observed live: the SNAP op-ed's note 1 is an
+      // unlinked Rainey Center poll, so a polling claim resolved to a USDA fraud page. Extend backwards
+      // only over blocks unmistakably part of the SAME list: a contiguous list_item run, or a paragraph
+      // that prints its own leading ordinal.
       const runIsList = list[startIndex] && list[startIndex].type === 'list_item';
       while (startIndex > 0) {
         const prev = list[startIndex - 1];
@@ -241,6 +257,19 @@
         if (!sameList && !numbered) break;
         startIndex--;
       }
+
+      // WHOLE-SECTION positive gate. Accepting bare list_items structurally risks swallowing a genuine
+      // content list that happens to END the document (a "key takeaways" bullet list). A real source
+      // list is dense with citation signals — a year, a url, or a quoted title — so require that MOST
+      // of the run carries one. A recommendations list carries none and is correctly refused, so its
+      // items stay claim material instead of being mistaken for the source table.
+      const CITE_YEAR = /\b(?:1[89]|20)\d{2}\b/;
+      const citationish = (b) => {
+        const t = String((b && b.text) || '');
+        return detectUrls(t).length > 0 || CITE_YEAR.test(t) || /["“][^"”]{6,}["”]/.test(t) || LEADING_ORDINAL_RE.test(t);
+      };
+      const sec = list.slice(startIndex, endIndex + 1);
+      if (sec.filter(citationish).length < Math.ceil(sec.length / 2)) return null;
     }
     if (startIndex < 0 || startIndex >= list.length) return null;
 
@@ -373,9 +402,18 @@
         if (refs && sig.marker && !unit.url) {
           const ord = markerOrdinal(sig.marker);
           const ref = ord != null ? refs.entries[ord] : null;
-          if (ref && ref.url) {
-            unit.url = ref.url;
-            if (ref.urls && ref.urls.length > 1) unit.urls = ref.urls.slice();
+          if (ref) {
+            // Record the claim→endnote connection whether or not the endnote is LINKED. A linked note
+            // hands the resolver a url to fetch (ladder rung 1); an UNLINKED note ("AP/PBS NewsHour,
+            // July 29, 2026") hands it none — but the claim is still CITED, the author named a source,
+            // so it must not fall through to the "uncited / no source given" verdict. The endnote text
+            // rides along as `citationText` so the report can show what the claim was sourced to.
+            if (ref.url) {
+              unit.url = ref.url;
+              if (ref.urls && ref.urls.length > 1) unit.urls = ref.urls.slice();
+            } else if (ref.text) {
+              unit.citationText = String(ref.text).replace(/\s+/g, ' ').trim().slice(0, 400);
+            }
             unit.refOrdinal = ord;
             unit.refAnchor = ref.anchor;
           }

@@ -354,5 +354,43 @@ ok('findReferenceSection tolerates junk', VE.findReferenceSection(null) === null
   ] }).units.length === 1);
 }
 
+// 5) UNLINKED endnote list. A policy op-ed routinely cites sources by NAME (publication, title, date)
+// with no hyperlink. Requiring a url per reference block made findReferenceSection blind to the whole
+// section, so every body "[n]" marker failed to dereference and each claim was reported UNCITED — the
+// author's own citation handed back as "no source given". The section must be found on the structural
+// signal (a trailing run of list_items dense with citation cues), the marker must dereference to it,
+// and the connection must be recorded (refOrdinal + citationText) even though there is nothing to fetch.
+{
+  const doc = { blocks: [
+    { anchor: 'a0', type: 'paragraph', text: 'Beijing has told us what it intends to do.[1] The FCC acted in July.[2]' },
+    { anchor: 'a1', type: 'paragraph', text: 'China manufactures most of the world’s inverters.[3]' },
+    { anchor: 'r0', type: 'list_item', text: 'Qiao Liang and Wang Xiangsui, Unrestricted Warfare (Beijing: PLA Publishing House, 1999).' },
+    { anchor: 'r1', type: 'list_item', text: '“US bans foreign-made humanoid robots,” Associated Press/PBS NewsHour, July 29, 2026.' },
+    { anchor: 'r2', type: 'list_item', text: 'Omdia market data cited in ABC News, July 29, 2026.' },
+  ] };
+  const refs = VE.findReferenceSection(doc.blocks);
+  ok('unlinked list_item endnote section is detected', !!refs && Object.keys(refs.entries).length === 3,
+    JSON.stringify(refs && refs.startIndex));
+  const u = extractUnits(doc).units;
+  const byUid = Object.fromEntries(u.map(x => [x.uid, x]));
+  ok('endnote list is not mined as claim material', u.every(x => !x.uid.startsWith('r')),
+    JSON.stringify(u.map(x => x.uid)));
+  ok('body markers dereference to the unlinked endnote', (byUid['a0.s0'] || {}).refOrdinal === 1 && (byUid['a1.s0'] || {}).refOrdinal === 3,
+    JSON.stringify(u.map(x => [x.uid, x.refOrdinal, x.url || null])));
+  ok('an unlinked citation carries citationText and no url', !!(byUid['a0.s0'] || {}).citationText && !(byUid['a0.s0'] || {}).url);
+}
+
+// 6) A trailing CONTENT list (recommendations, no citation cues) is NOT a reference section — its
+// items must stay claim material rather than be mistaken for the source table.
+{
+  const doc = { blocks: [
+    { anchor: 'a0', type: 'paragraph', text: 'The state should act now on three fronts.' },
+    { anchor: 'l0', type: 'list_item', text: 'Increase funding for early literacy programs.' },
+    { anchor: 'l1', type: 'list_item', text: 'Expand eligibility for rural districts.' },
+    { anchor: 'l2', type: 'list_item', text: 'Publish outcomes every quarter.' },
+  ] };
+  ok('a bare recommendations list is not a reference section', VE.findReferenceSection(doc.blocks) === null);
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
