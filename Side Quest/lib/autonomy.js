@@ -557,16 +557,25 @@ function summarizeOutcome(decision, opRes, { now = Date.now(), verify = null } =
     }
   }
   const ok = !!(opRes && opRes.answer && String(opRes.answer).trim());
-  let outcome = !opRes ? 'no-run (cloud unavailable)' : ok
-    ? `ok — ${toolsUsed.length} tool step${toolsUsed.length === 1 ? '' : 's'}${artifacts.length ? `, artifact: ${artifacts.join(', ')}` : ''}`
-    : 'ran but produced no answer';
-  if (verify && typeof verify.met === 'boolean') {
+  // A quota deferral is NOT a result. The decision prompt teaches "RECENT FAILURES are results —
+  // don't repeat a failed approach"; recording a deferred run as "produced no answer" trained the
+  // decider AWAY from healthy moves (measured: explore's only 3 firings ever were all deferral-era
+  // steps=0 — the move looked broken when it was never allowed to run). Name the pause honestly.
+  const deferred = !!(opRes && opRes.deferred);
+  let outcome = !opRes ? 'no-run (cloud unavailable)'
+    : deferred ? 'deferred by the quota governor before any work ran — not a verdict on this move; retry when pace recovers'
+      : ok
+        ? `ok — ${toolsUsed.length} tool step${toolsUsed.length === 1 ? '' : 's'}${artifacts.length ? `, artifact: ${artifacts.join(', ')}` : ''}`
+        : 'ran but produced no answer';
+  if (!deferred && verify && typeof verify.met === 'boolean') {
     outcome += `; expect ${verify.met ? 'MET' : 'NOT met'}${verify.why ? ` — ${verify.why}` : ''}`;
   }
   return {
-    entry: { ts: now, move: d.move, target: d.target, outcome, ...(verify ? { expectMet: verify.met } : {}) },
-    report: `[autonomy] chose=${d.move} target="${String(d.target || '').slice(0, 60)}" steps=${toolsUsed.length} ok=${ok ? 1 : 0} artifacts=${artifacts.length}${verify ? ` expect=${verify.met ? 'met' : 'NOT-met'}` : ''}`,
-    artifacts, ok, toolsUsed,
+    entry: { ts: now, move: d.move, target: d.target, outcome, ...(deferred ? { deferred: true } : {}), ...(!deferred && verify ? { expectMet: verify.met } : {}) },
+    report: deferred
+      ? `[autonomy] chose=${d.move} target="${String(d.target || '').slice(0, 60)}" DEFERRED (quota) — no work attempted`
+      : `[autonomy] chose=${d.move} target="${String(d.target || '').slice(0, 60)}" steps=${toolsUsed.length} ok=${ok ? 1 : 0} artifacts=${artifacts.length}${verify ? ` expect=${verify.met ? 'met' : 'NOT-met'}` : ''}`,
+    artifacts, ok, toolsUsed, deferred,
   };
 }
 

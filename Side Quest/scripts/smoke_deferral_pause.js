@@ -51,6 +51,20 @@ const deferredErr = () => { const e = new Error('quota: research deferred — ov
   ok('mid-run plain failure does not throw', !threw4);
   ok('mid-run plain failure salvages gathered steps', !!(res4 && Array.isArray(res4.steps) && res4.steps.length === 1));
 
+  // 5) OUTCOME HONESTY (autonomy history): a deferred run must never read as a failed move —
+  //    the decision prompt treats recorded failures as "don't repeat this approach", so a deferral
+  //    recorded as "produced no answer" trains the decider away from healthy moves.
+  const { summarizeOutcome } = require(path.join(__dirname, '..', 'lib', 'autonomy'));
+  const dec = { move: 'explore', target: 'City of Springfield, Illinois', expect: 'a cited note' };
+  const sDef = summarizeOutcome(dec, { deferred: true, answer: '', steps: [] });
+  ok('deferred outcome names the pause, not a failure', /deferred by the quota governor/.test(sDef.entry.outcome) && sDef.entry.deferred === true);
+  ok('deferred report says DEFERRED, not steps=0', /DEFERRED \(quota\)/.test(sDef.report) && !/steps=0/.test(sDef.report));
+  ok('deferred outcome carries no expect verdict', !('expectMet' in sDef.entry));
+  const sFail = summarizeOutcome(dec, { answer: '', steps: [] });
+  ok('a real empty run still reads as no-answer', /no answer/.test(sFail.entry.outcome) && !sFail.entry.deferred);
+  const sOk = summarizeOutcome(dec, { answer: 'found it', steps: [{ tool: 'file', args: { op: 'write', path: 'n.md' }, result: 'ok' }] }, { verify: { met: true, why: 'cited' } });
+  ok('a real run keeps the legacy shape', /ok — 1 tool step/.test(sOk.entry.outcome) && sOk.entry.expectMet === true);
+
   console.log(`smoke_deferral_pause: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
