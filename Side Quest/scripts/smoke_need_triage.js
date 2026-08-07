@@ -63,6 +63,23 @@ ok(nt.isSelfWatch({ born_from: 'self-watch: recurred 3x/…' }) === true && nt.i
   ];
   const s = nt.duePressure({ run: { status: 'discarded' }, needs: twoSW, lastRehearseTs: 0, nowMs: now, gapMs: GAP });
   ok(s && s.needId === 13, 'two self-watch needs → the OLDER one first (#13 before #48, matching the plan)');
+
+  // ⭐ THE PRECEDENCE FIX (2026-08-07): a self-watch BUILDABLE must OPEN before a pile of non-self-watch
+  // untriaged needs are triaged — otherwise #13 waits hours behind the triage backlog.
+  const mixedQueue = [
+    { id: 13, status: 'open', created_ts: 100, triage: 'buildable', born_from: 'self-watch: recurring' },
+    { id: 16, status: 'open', created_ts: 200, triage: null, born_from: 'inquiry-16' },
+    { id: 17, status: 'open', created_ts: 300, triage: null, born_from: 'inquiry-17' },
+  ];
+  const q = nt.duePressure({ run: { status: 'discarded' }, needs: mixedQueue, lastRehearseTs: 0, nowMs: now, gapMs: GAP });
+  ok(q && q.kind === 'open' && q.needId === 13, 'a self-watch BUILDABLE opens BEFORE the non-self-watch untriaged backlog is triaged (self-watch OPEN beats non-self-watch TRIAGE)');
+  // but a self-watch UNTRIAGED still gets triaged before a self-watch buildable opens (triage-first within the group)
+  const swUntriagedFirst = [
+    { id: 13, status: 'open', created_ts: 100, triage: 'buildable', born_from: 'self-watch: A' },
+    { id: 48, status: 'open', created_ts: 50, triage: null, born_from: 'self-watch: B' },
+  ];
+  const u = nt.duePressure({ run: { status: 'discarded' }, needs: swUntriagedFirst, lastRehearseTs: 0, nowMs: now, gapMs: GAP });
+  ok(u && u.kind === 'triage' && u.needId === 48, 'within the self-watch group, an untriaged one is still triaged before a buildable opens');
 }
 
 // --- M2.5.6 stale-need reaper: park old non-self-watch, EXEMPT self-watch ---

@@ -90,11 +90,20 @@ function duePressure({ run = null, needs = [], lastRehearseTs = 0, nowMs = Date.
   if (run && (run.status === 'active' || run.status === 'parked')) return { kind: 'iterate' };
   const open = (Array.isArray(needs) ? needs : [])
     .filter((n) => n && n.status === 'open')
-    .sort(_priorityCmp);   // self-watch first, then oldest — the self-repair loop jumps the queue
-  const untriaged = open.find((n) => !n.triage);
-  if (untriaged) return { kind: 'triage', needId: untriaged.id };
-  const buildable = open.find((n) => n.triage === 'buildable');
-  if (buildable) return { kind: 'open', needId: buildable.id };
+    .sort(_priorityCmp);   // oldest-first within each group (the tie-break inside a group)
+  // TRUE self-repair priority (fixed 2026-08-07): drain the SELF-WATCH group ENTIRELY — triage its
+  // untriaged, then OPEN its buildable — before touching non-self-watch at all. The first cut only
+  // reordered WITHIN the triage step and WITHIN the open step, but the triage step runs before the
+  // open step, so a self-watch BUILDABLE still waited behind triaging the whole non-self-watch
+  // backlog. Measured: 32 untriaged inquiry needs would be triaged (one per pressure tick, ~hours)
+  // before #13 — a 7-day-old self-watch buildable — could open. Grouping fixes it: self-watch's
+  // OPEN now beats non-self-watch's TRIAGE.
+  for (const group of [open.filter(isSelfWatch), open.filter((n) => !isSelfWatch(n))]) {
+    const untriaged = group.find((n) => !n.triage);
+    if (untriaged) return { kind: 'triage', needId: untriaged.id };
+    const buildable = group.find((n) => n.triage === 'buildable');
+    if (buildable) return { kind: 'open', needId: buildable.id };
+  }
   return null;
 }
 
