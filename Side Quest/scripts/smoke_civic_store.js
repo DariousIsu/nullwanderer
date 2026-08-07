@@ -84,6 +84,20 @@ const T = 1785400000000;
   ok(inc.unknownDenominator.some((r) => r.body_key === b2.bodyKey), 'bodies with no known seat count are reported SEPARATELY, never miscounted as complete');
   ok(cs.incomplete({ state: 'ZZ' }).incomplete.length === 0, 'a state with no bodies is empty, never a throw');
 
+  // --- heldRostersFor: deterministic injection digest (08-08, the all-pending parish fill) ---
+  cs.upsertBody({ title: 'Tangipahoa Parish Council', level: 'county', state: 'LA' });
+  cs.recordRoster({ bodyTitle: 'Tangipahoa Parish Council', members: [
+    { personName: 'Alice Amite', role: 'Member' }, { personName: 'Bob Hammond', role: 'Chair' },
+    { personName: 'Cara Ponchatoula', role: 'Member' }, { personName: 'Dan Kentwood', role: 'Member' },
+    { personName: 'Eve Independence', role: 'Member' }, { personName: 'Frank Roseland', role: 'Member' },
+    { personName: 'Gail Tickfaw', role: 'Member' }, { personName: 'Hank Amite', role: 'Member' },
+    { personName: 'Ida Loranger', role: 'Member' }, { personName: 'Jack Robert', role: 'Member' },
+  ], sourceKind: 'official', sourceUrl: 'https://tangipahoa.gov' });
+  const heldHit = cs.heldRostersFor('- **Tangipahoa Parish**\n  - Council-President government');
+  ok(heldHit.length === 1 && heldHit[0].count === 10 && /Bob Hammond \(Chair\)/.test(heldHit[0].line), 'heldRostersFor matches the doc by distinctive words and digests the roster');
+  ok(cs.heldRostersFor('- **Acadia Parish**\n  - Police Jury').length === 0, 'a doc naming only OTHER parishes matches nothing (generic civic nouns never match)');
+  ok(cs.heldRostersFor('').length === 0, 'empty text is empty, never a throw');
+
   // --- fail-soft everywhere ---
   ok(cs.roster('nothing here').length === 0 && cs.history('x', 'y').length === 0, 'unknown bodies read back empty, never throw');
 

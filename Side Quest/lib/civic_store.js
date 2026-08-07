@@ -187,6 +187,33 @@ function roster(bodyKeyOrTitle, { deps = {} } = {}) {
   } catch { return []; }
 }
 
+// HELD ROSTERS FOR A TEXT (2026-08-08, the all-pending parish fill): the edit executor marked all
+// 64 parishes "(pending verification)" while 12 live rosters sat in this store — instructed to
+// check "held stores", the model took the lazy valid exit rather than composing the queries. The
+// cure is DETERMINISTIC INJECTION (same shape as recheck_queue.heldContext): give the caller a
+// compact digest of every live roster whose body matches the text, so the facts are IN the prompt
+// and pending marks are only honest where this digest is silent. Matching is by the body_key's
+// DISTINCTIVE words (generic civic nouns stripped) — "st landry parish police jury" matches a doc
+// that mentions St. Landry, never every doc that says "parish".
+const _GENERIC_BODY_WORDS = new Set(['parish', 'county', 'city', 'town', 'village', 'council', 'police', 'jury', 'commission', 'board', 'government', 'consolidated', 'of', 'the', 'and', 'state', 'house', 'senate', 'representatives', 'louisiana']);
+function heldRostersFor(text, { limit = 40, deps = {} } = {}) {
+  const hay = str(text).toLowerCase();
+  if (!hay.trim()) return [];
+  let bodies = [];
+  try { bodies = _db(deps).getDb().prepare(`SELECT DISTINCT body_key FROM civic_memberships WHERE superseded_by IS NULL`).all(); } catch { return []; }
+  const out = [];
+  for (const b of bodies) {
+    const words = String(b.body_key).split(/\s+/).filter((w) => w.length > 2 && !_GENERIC_BODY_WORDS.has(w));
+    if (!words.length || !words.every((w) => hay.includes(w))) continue;
+    const rows = roster(b.body_key, { deps });
+    if (!rows.length) continue;
+    const named = rows.map((r) => `${r.person_name}${r.role && !/^member$/i.test(r.role) ? ` (${r.role})` : ''}${r.district ? ` [${r.district}]` : ''}`);
+    out.push({ bodyKey: b.body_key, count: rows.length, line: `${b.body_key} — ${rows.length} held: ${named.join('; ')}` });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 // Every version of a seat, oldest first — what supersession preserves.
 function history(bodyKeyOrTitle, personName, { deps = {} } = {}) {
   try {
@@ -229,4 +256,4 @@ function incomplete({ state = null, level = null, limit = 200 } = {}, { deps = {
   } catch { return { incomplete: [], complete: 0, unknownDenominator: [] }; }
 }
 
-module.exports = { keyFor, upsertBody, getBody, recordMembership, recordSeatHolder, recordRoster, roster, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };
+module.exports = { keyFor, upsertBody, getBody, recordMembership, recordSeatHolder, recordRoster, roster, heldRostersFor, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };
