@@ -2181,6 +2181,21 @@ app.whenReady().then(() => {
     console.log('[main] roster-refresh organ armed (weekly + election-night watch; official House/Senate rosters + cross-check)');
   }
 
+  // PULLER ORG-KIND BACKFILL — one-shot organ, meta-gated (M4.4 follow-up, 2026-08-07). The org
+  // door only guards NEW enrollments; the pre-door stock (271k person rows, org-shaped names among
+  // them) still routed org asks to person walks. Runs once (~12m after boot, chunked + yielding),
+  // stamps the marker, never runs again. See lib/puller_db.backfillOrgKinds.
+  setTimeout(async () => {
+    try {
+      if (db.getMeta('puller.orgkind_backfill_done') === '1') return;
+      markActivity('org-backfill');
+      const r = await require('./lib/puller_db').backfillOrgKinds({});
+      db.setMeta('puller.orgkind_backfill_done', '1');
+      console.log(`[puller] org-kind backfill: ${r.rekinded} of ${r.scanned} pre-door person rows re-kinded 'org' — org asks stop degrading to person walks`);
+    } catch (e) { console.error('[puller] org-kind backfill failed:', e.message); }
+    finally { markActivity('idle'); }
+  }, 12 * 60 * 1000).unref?.();
+
   // EMAIL INTAKE LANE — Zoe's own inbox is a subscription surface (newsletters + Gemini meeting-notes).
   // READ-ONLY (EXAMINE): this connection provably cannot mark-read/delete. Newsletters route into the
   // SAME isolated news bucket as RSS (source_kind='newsletter') → they ride the hourly briefing rail;
@@ -4698,6 +4713,42 @@ async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
 // document. This gathers the research docs she HOLDS on the topic, composes ONE report through the
 // caged composer, SAVES it to notes/, and lands it on the canvas — an artifact, not a promise. If she
 // genuinely holds nothing, it says so plainly (and does NOT fabricate a document).
+// Execute an EXPLICIT canvas order (lib/canvas_command) and land the result DETERMINISTICALLY —
+// the parish-list fix: "identify on a fresh canvas doc…" + "print to the canvas" produced zero
+// canvas writes while the replier narrated success. One bounded INTERACTIVE-lane operator run
+// produces the grounded content; promiseArtifactEmit lands it; the delivery claim is true by
+// construction. A CANNOT: answer is relayed plainly — never a narrated success.
+async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
+  const recent = (db.getRecentTurns(10) || []).filter((t) => t.speaker === 'user').sort((a, b) => (a.ts || 0) - (b.ts || 0)).slice(-4)
+    .map((t) => `- ${String(t.content).slice(0, 300)}`).join('\n');
+  let md = '';
+  try {
+    const res = await runCloudOperator({
+      userMessage: `Lucas ordered content ONTO HIS CANVAS. His order: "${order}"\n\nHis recent messages (oldest first — they carry the subject when the order is a bare "print it"):\n${recent}\n\nProduce the EXACT markdown content the canvas doc should hold — nothing else, no preamble. Ground every entry via your tools (echo / localdb / recall / web as needed); NEVER invent entries. A bounded list (places, names, items) must be COMPLETE and one item per line, in the order he asked for. If you cannot ground the content, reply with ONE line starting "CANNOT:" naming what is missing.`,
+      context: '', task: true,     // Lucas-directed → interactive lane; never quota-deferred
+    });
+    md = res && res.answer ? String(res.answer).trim() : '';
+  } catch (e) { console.error('[canvas-cmd] execute failed:', e.message); }
+  if (!md) {
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas ordered content onto his canvas ("${order.slice(0, 120)}") but the execution produced nothing. Say plainly that the canvas write did NOT happen and you'll retry on his word — never claim it landed.]` });
+    return;
+  }
+  if (/^CANNOT:/i.test(md)) {
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas ordered content onto his canvas but it could not be grounded: "${md.slice(0, 200)}". Tell him exactly that — what is missing — and do NOT claim anything landed.]` });
+    return;
+  }
+  const title = order.replace(/\b(?:please|can you|could you)\b/gi, '').replace(/\b(?:on|onto|to|into)\s+(?:a\s+fresh\s+|a\s+new\s+|a\s+|the\s+|my\s+|your\s+)?canvas(?:\s+doc(?:ument)?|\s+tab)?\b/gi, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'Canvas doc';
+  const slug = `canvas-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'doc'}`;
+  try { await promiseArtifactEmit({ slug, title, markdown: md }); } catch (e) {
+    console.error('[canvas-cmd] emit failed:', e.message);
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[The canvas write FAILED (${e.message}). Tell Lucas plainly — the content is composed but did not land; never claim it is on the canvas.]` });
+    return;
+  }
+  const lines = md.split('\n').filter((l) => l.trim()).length;
+  console.log(`[canvas-cmd] order executed → "${title}" landed on canvas (${md.length}ch, ${lines} line(s))`);
+  await fireToolFollowup({ io, channel, sessionId, resultText: `[The canvas doc Lucas ordered IS LANDED — "${title}", ${lines} content line(s), on his Canvas now. Tell him it's there and what it holds in one sentence, and invite him to verify. Do NOT add extras he didn't ask for and do NOT offer follow-on work — he said slow, one step at a time.]` });
+}
+
 // Land a HELD product (found by the pull-up gate) on the canvas and hand it over honestly: what it
 // is, when it was made, where it came from — never a regenerated substitute. The sibling of
 // buildReportFromHeld: that one COMPOSES from held material; this one RETRIEVES a finished product.
@@ -5630,14 +5681,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       .then((r) => { if (r && !r.skipped) { const np = (r.people || []).length, no = (r.orgs || []).length, nm = (r.meetings || []).length; if (np + no + nm) console.log(`[owner-ingest] +${np} people +${no} orgs +${nm} meetings, ${r.edges || 0} edges → owner-world`); } })
       .catch(() => {});
   } catch {}
-  // MEETING-OVER CHAT TRIGGER (2026-08-03): if Lucas says the meeting is over / tells her to leave WHILE
-  // she's in a Google Meet, set the leave flag — the gmeet tick (which owns the browser) hangs up on its
-  // next pass. Decoupled through meta so the chat path never touches the meeting's browser deps directly.
+  // MEETING-OVER CHAT TRIGGER (2026-08-03; polarity-safe + Teams parity 2026-08-07, Disease G):
+  // leaving a live call is IRREVERSIBLE, and the old bare regex matched questions ("is the meeting
+  // over?") and negations ("don't leave the meeting yet") — and covered Google Meet only. The
+  // shared detector (lib/meeting_leave) fires only on a genuine directive or a declarative
+  // "it's over", and sets the flag for WHICHEVER lane is live; each lane's tick (which owns its
+  // browser) does the actual hang-up on its next pass.
   try {
-    const _gm = require('./lib/gmeet');
-    if (_gm.active() && /\b(?:the\s+)?(?:meeting|call)(?:'?s| is| was)?\s*(?:over|done|ended|finished|wrapped(?:\s*up)?|adjourned)\b|\b(?:you\s+can\s+|please\s+|go\s+ahead\s+and\s+)?(?:leave|exit|drop\s*off|hang\s*up|step\s*out\s*of|get\s+out\s+of)\s+(?:the\s+)?(?:meeting|call)\b|\bend\s+the\s+(?:meeting|call)\b/i.test(String(userMessage || ''))) {
-      db.setMeta('gmeet_leave_requested', '1');
-      console.log('[gmeet] chat leave-trigger — "meeting is over" → leave flag set; the tick will hang up');
+    const _leave = require('./lib/meeting_leave').detectChatLeave(String(userMessage || ''));
+    if (_leave) {
+      const _gm = require('./lib/gmeet');
+      const _tm = require('./lib/teams');
+      if (_gm.active()) {
+        db.setMeta('gmeet_leave_requested', '1');
+        console.log(`[gmeet] chat leave-trigger (${_leave.reason}) → leave flag set; the tick will hang up`);
+      } else if (_tm.active && _tm.active()) {
+        db.setMeta('teams_leave_requested', '1');
+        console.log(`[teams] chat leave-trigger (${_leave.reason}) → leave flag set; the tick will hang up`);
+      }
     }
   } catch {}
   // Blackboard: a user message is the StuckDetector's reset boundary — events
@@ -9628,6 +9689,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // substitution. A miss falls through un-fired so the report-command net / operator can still
     // build fresh, honestly. Runs BEFORE report-cmd: handing over an existing report beats
     // recomposing it. Kill switch ZOE_PRODUCT_LEDGER=0.
+    // CANVAS ORDER NET (2026-08-07, lib/canvas_command — the parish list, #11104-#11110): an
+    // explicit "put/print X on the canvas" names its destination; it runs FIRST among the artifact
+    // nets and lands deterministically. Kill switch ZOE_CANVAS_CMD=0.
+    if (!followupFired && !/^(0|false|off)$/i.test(String(process.env.ZOE_CANVAS_CMD || '').trim())) {
+      let _ccmd = null;
+      try { _ccmd = require('./lib/canvas_command').detect(userMessage); } catch {}
+      if (_ccmd) {
+        followupFired = true;
+        console.log('[canvas-cmd] explicit canvas order → executing + landing deterministically');
+        buildCanvasFromOrder({ io, channel, sessionId, order: _ccmd.order })
+          .catch((e) => console.error('[canvas-cmd] failed:', e.message));
+      }
+    }
+
     if (!followupFired && !/^(0|false|off)$/i.test(String(process.env.ZOE_PRODUCT_LEDGER || '').trim())) {
       let _pask = null;
       try { _pask = require('./lib/product_ledger').detectAsk(userMessage); } catch {}
