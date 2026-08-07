@@ -86,11 +86,27 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
     const unknown = d.prepare("SELECT COUNT(*) n FROM encounters WHERE authority = 'unknown'").get().n;
     // Largest single-source object clusters = the best corroboration targets (one origin vouches
     // for many claims and nothing else does).
-    const singles = d.prepare(`
-      SELECT object_label, COUNT(*) c FROM encounters
-      WHERE object_label IS NOT NULL AND object_key IN (
-        SELECT object_key FROM encounters GROUP BY object_key HAVING COUNT(DISTINCT COALESCE(origin_host, source_ref, 'x')) = 1
-      ) GROUP BY object_key ORDER BY c DESC LIMIT 3`).all();
+    // ⚠ THE manifest's one expensive query — measured 2.43s SYNCHRONOUS over 482,720 rows
+    // (2026-08-07), which made autonomy-tick the stall attributor's top named offender (n=43,
+    // ~210s blocked). Two fixes together: the double GROUP BY (full-table subquery, then group
+    // again) folds into ONE pass with HAVING (same 3 rows, measured 1.56s) — and the ranking only
+    // changes as new claims land, so it rides a 6h meta cache like the pass-status/approvals
+    // snapshots. Steady-state cost per tick: one COUNT + one cache read.
+    let singles = [];
+    try {
+      const hasMeta = typeof dbm.getMeta === 'function' && typeof dbm.setMeta === 'function';
+      const cached = hasMeta ? (() => { try { return JSON.parse(dbm.getMeta('autonomy.singles_cache') || 'null'); } catch { return null; } })() : null;
+      if (cached && now - (cached.ts || 0) < 6 * 3600e3 && Array.isArray(cached.rows)) {
+        singles = cached.rows;
+      } else {
+        singles = d.prepare(`
+          SELECT MAX(object_label) object_label, COUNT(*) c,
+                 COUNT(DISTINCT COALESCE(origin_host, source_ref, 'x')) srcs
+          FROM encounters WHERE object_label IS NOT NULL
+          GROUP BY object_key HAVING srcs = 1 ORDER BY c DESC LIMIT 3`).all();
+        if (hasMeta) dbm.setMeta('autonomy.singles_cache', JSON.stringify({ ts: now, rows: singles }));
+      }
+    } catch (e) { console.error('[autonomy] singles ranking failed (section degrades to counts):', e.message); }
     return `• CLAIMS HELD (encounters): ${n.toLocaleString()}, ${unknown.toLocaleString()} with UNKNOWN authority.`
       + (singles.length ? ` Largest single-source clusters (uncorroborated):\n` + singles.map((r) => `   - ${r.object_label} (${r.c} claims, one source)`).join('\n') : '');
   });

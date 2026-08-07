@@ -61,6 +61,22 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(/neuromorphic computing \(weight 1.40/.test(man.text), 'manifest carries her interests as idea material');
   ok(/map the state AI task forces.*untouched 5d ago/.test(man.text), 'manifest lists the stalest open thread with age');
   ok(man.counts.absence === 1 && man.counts.encounters === 2, 'counts ride alongside the text');
+
+  // STALL FIX (2026-08-07): the singles ranking was the autonomy-tick stall — 2.43s SYNCHRONOUS
+  // over 482,720 live rows, every tick (attributor top offender n=43, ~210s). Folded to one
+  // GROUP-BY pass + a 6h meta cache; a mock db without meta (above) still computes directly.
+  {
+    const store = {};
+    const mdb = { getDb: () => mem, getMeta: (k) => store[k] || '', setMeta: (k, v) => { store[k] = v; } };
+    const m1 = auto.buildManifest({ db: mdb, now: NOW });
+    ok(/Acme PAC \(2 claims, one source\)/.test(m1.text) && !!store['autonomy.singles_cache'], 'first meta-capable build computes the singles ranking and banks the 6h cache');
+    mem.prepare("INSERT INTO encounters (object_key,object_label,claim_class,origin_host,authority,ingested_at) VALUES ('k9','Fresh Corp','role','solo.org','unknown',?)").run(NOW);
+    const m2 = auto.buildManifest({ db: mdb, now: NOW + 60e3 });
+    ok(/Acme PAC/.test(m2.text) && !/Fresh Corp/.test(m2.text), 'within the TTL the ranking serves from cache — no full-table pass per tick');
+    const m3 = auto.buildManifest({ db: mdb, now: NOW + 7 * 3600e3 });
+    ok(/Fresh Corp/.test(m3.text), 'past the 6h TTL the ranking recomputes and sees new claims');
+    mem.prepare("DELETE FROM encounters WHERE object_key = 'k9'").run();
+  }
   ok(/OPEN LINES OF INQUIRY \(advancing one is the DEFAULT move\)/.test(man.text) && /\[inquiry #1\].*standing AI task forces.*next: work the NCSL tracker/.test(man.text),
     'O0: the manifest carries open inquiries with their own next steps');
   ok(/RECENT FAILURES/.test(man.text) && /doomed run.*operator returned no answer/.test(man.text),
