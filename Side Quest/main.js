@@ -1518,7 +1518,11 @@ app.whenReady().then(() => {
     getWindow: () => mainWindow,
     kickHeartbeat: () => {
       const { maybeHeartbeat } = require('./lib/heartbeat');
-      maybeHeartbeat().catch(err => console.error('[main] scheduler heartbeat kick failed:', err.message));
+      // stall-attrib: the heartbeat's sync phases (27k-char prompt assembly + [fit] eviction +
+      // context reads) were the measured prime suspect behind the active="idle" blind spot —
+      // [fit] heartbeat lines sat adjacent to unattributed stalls across boots. Name the lane.
+      markActivity('heartbeat');
+      maybeHeartbeat().catch(err => console.error('[main] scheduler heartbeat kick failed:', err.message)).finally(() => markActivity('idle'));
     }
   });
 
@@ -1691,7 +1695,8 @@ app.whenReady().then(() => {
           }
           console.log(`[inbox-poll] ${r.messages.length} unread email(s) → queued + heartbeat kick`);
           const { maybeHeartbeat } = require('./lib/heartbeat');
-          maybeHeartbeat().catch(() => {});
+          markActivity('heartbeat');
+          maybeHeartbeat().catch(() => {}).finally(() => markActivity('idle'));
         } else {
           console.log('[inbox-poll] no unsurfaced unread');
         }
@@ -2426,7 +2431,8 @@ app.whenReady().then(() => {
       // Kick heartbeat immediately so Stheno reacts within ~2s rather than 30s
       const { maybeHeartbeat } = require('./lib/heartbeat');
       setTimeout(() => {
-        maybeHeartbeat().catch(err => console.error('[main] heartbeat kick failed:', err.message));
+        markActivity('heartbeat');
+        maybeHeartbeat().catch(err => console.error('[main] heartbeat kick failed:', err.message)).finally(() => markActivity('idle'));
       }, 600);
     },
     onReplyTimeout: (ev) => {
@@ -14953,6 +14959,9 @@ async function runDeepResearchTarget({ org, goal = '', facet = '', guidance = ''
     runCloudOperator({ userMessage: rs.buildWebLanePrompt({ goal, org, facet, guidance, known }), context: '', task: true, autonomous: true, toolNames: tier.laneToolNames('web'), model: fastModel, toolSpec: webSpec }).catch(() => null),
     runCloudOperator({ userMessage: rs.buildDeepLanePrompt({ goal, org, facet, guidance, known }), context: '', task: true, autonomous: true, toolNames: tier.laneToolNames('deep'), model: deepModel, toolSpec: deepSpec }).catch(() => null)
   ]);
+  // BOTH lanes quota-deferred = no work happened at all — surface the pause so the caller can hold
+  // the org instead of landing a fabricated "not found" section. One live lane = real (partial) work.
+  if (web && web.deferred && deep && deep.deferred) return { deferred: true, section: '', webRaw: '', deepRaw: '', lanes: { web: false, deep: false } };
   const webRaw = (web && web.answer) ? String(web.answer).trim() : '';
   const deepRaw = (deep && deep.answer) ? String(deep.answer).trim() : '';
   let section = '';
@@ -14999,14 +15008,21 @@ async function runEnrichResearchPass(focus) {
     let section = '', laneNote = '';
     if (deepMode) {
       const dr = await runDeepResearchTarget({ org, goal, facet, guidance, known });
+      // Quota-deferred = no work happened. Pause the thread (no covered push, no "not found"
+      // section, no outcome/strike) — the same contract as the directed driver's pass guards.
+      if (dr.deferred) { console.log(`[enrich] #${focus.id} deep pass deferred by quota — thread paused this tick ("${org}" not consumed)`); return; }
       section = dr.section; laneNote = ` [web:${dr.lanes.web ? '✓' : '–'} deep:${dr.lanes.deep ? '✓' : '–'}${known ? ' known✓' : ''}]`;
     } else {
       // ONE focused pass: fill ONLY the named facet for THIS org.
-      let ans = '';
+      let ans = '', _defEnrich = false;
       try {
         const r = await runCloudOperator({ userMessage: rs.buildEnrichPrompt({ goal, org, facet, guidance, known }), context: '', task: true, autonomous: true });
-        ans = (r && r.answer) ? String(r.answer).trim() : '';
+        if (r && r.deferred) _defEnrich = true;
+        else ans = (r && r.answer) ? String(r.answer).trim() : '';
       } catch (e) { console.error('[enrich] pass failed:', e.message); }
+      // Same pause contract: without this, a deferred pass marked the org ENRICHED with a
+      // fabricated "not found" section (enriched.push below runs unconditionally).
+      if (_defEnrich) { console.log(`[enrich] #${focus.id} pass deferred by quota — thread paused this tick ("${org}" not consumed)`); return; }
       const p = rs.parsePass(ans);
       // ORGANIZE this org's facet findings → one clean section, appended NOW (continuous, like discovery).
       try { section = await condenseComplete(rs.buildOrganizeEnrichPrompt({ org, facet, raw: p.body || ans }), { numPredict: config.sectionNumPredict() }); } catch {}
@@ -15196,11 +15212,15 @@ async function runTopicalResearchPass(focus) {
   if (!nextFacet) {
     done = true; note = `briefing complete — ${covered.length} aspect(s) covered`;
   } else {
-    let ans = '';
+    let ans = '', _defTopical = false;
     try {
       const r = await runCloudOperator({ userMessage: rs.buildTopicalPrompt({ goal, facet: nextFacet, covered, guidance, thesis: _thesis, hostileReader: _hostile }), context: '', task: true, autonomous: true });
-      ans = (r && r.answer) ? String(r.answer).trim() : '';
+      if (r && r.deferred) _defTopical = true;
+      else ans = (r && r.answer) ? String(r.answer).trim() : '';
     } catch (e) { console.error('[topical] pass failed:', e.message); }
+    // Quota-deferred = no work happened. Pause: without this the aspect landed as a fabricated
+    // "_not found this pass_" section and was marked covered (same grinder as the directed loop).
+    if (_defTopical) { console.log(`[topical] #${focus.id} pass deferred by quota — thread paused this tick ("${nextFacet}" not consumed)`); return; }
     const p = rs.parsePass(ans);
     const body = (p.body || ans || '').trim();
     // Organize this aspect into a clean, sourced section (fail-safe to the raw body under an aspect heading).
