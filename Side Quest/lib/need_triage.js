@@ -48,13 +48,40 @@ function triageValidator(raw) {
   } catch (e) { return { valid: false, error: e.message }; }
 }
 
+// ── self-repair priority (M2.5.6) ────────────────────────────────────────────────────────────────
+// A need born from SELF-WATCH is a gap in HER OWN program (a recurring failure her self-watcher
+// caught), not another roster/research errand. Closing the self-repair loop means these jump the
+// queue: they are triaged and opened BEFORE the pile of external/inquiry needs, so the machinery
+// that already exists (study-first open → iterate → R2 proposal card) actually gets pointed at her.
+const SELF_WATCH_RE = /^self-watch/i;
+function isSelfWatch(need) { return SELF_WATCH_RE.test(str(need && need.born_from)); }
+// Sort key: self-watch first, then oldest-first — deterministic, stable across ties.
+function _priorityCmp(a, b) {
+  const sa = isSelfWatch(a) ? 0 : 1, sb = isSelfWatch(b) ? 0 : 1;
+  if (sa !== sb) return sa - sb;
+  return (Number(a.created_ts) || 0) - (Number(b.created_ts) || 0);
+}
+
+// ── the stale-need reaper (M2.5.6) ───────────────────────────────────────────────────────────────
+// A need that has sat OPEN past the reap age without ever being built is queue clog — it keeps
+// getting passed over (untriaged research/external that never parked, or a buildable that never
+// fit). Park it so the pressure lane stays pointed at live work. SELF-WATCH needs are EXEMPT: they
+// are the self-repair targets we WANT to keep chasing to a verdict, never reaped for mere age.
+// Pure: returns the ids to park; the caller does the status write. Default age 7 days.
+function staleReap({ needs = [], nowMs = Date.now(), maxAgeMs = 7 * 24 * 3600 * 1000 } = {}) {
+  return (Array.isArray(needs) ? needs : [])
+    .filter((n) => n && n.status === 'open' && !isSelfWatch(n) && (nowMs - (Number(n.created_ts) || 0)) > maxAgeMs)
+    .map((n) => n.id);
+}
+
 // ── the pressure rule ───────────────────────────────────────────────────────────────────────────
 // Deterministic: given the live rehearsal run, the open needs (each annotated with its stored
 // triage class or null), and the last time needs-work ran, decide what is DUE:
 //   {kind:'iterate'}            — a live (active|parked) run to advance; one-at-a-time discipline
 //                                 means nothing opens while a run exists.
-//   {kind:'triage', needId}     — the oldest OPEN need with no triage verdict yet.
-//   {kind:'open',   needId}     — the oldest OPEN need already triaged buildable.
+//   {kind:'triage', needId}     — the highest-PRIORITY OPEN need with no triage verdict yet
+//                                 (self-watch first, then oldest).
+//   {kind:'open',   needId}     — the highest-PRIORITY OPEN need already triaged buildable.
 //   null                        — nothing due, or the calm gap has not elapsed.
 // The gap paces EVERYTHING (a triage verdict is cheap but the tick is not free); lastRehearseTs=0
 // (fresh boot) is immediately due by construction.
@@ -63,7 +90,7 @@ function duePressure({ run = null, needs = [], lastRehearseTs = 0, nowMs = Date.
   if (run && (run.status === 'active' || run.status === 'parked')) return { kind: 'iterate' };
   const open = (Array.isArray(needs) ? needs : [])
     .filter((n) => n && n.status === 'open')
-    .sort((a, b) => (Number(a.created_ts) || 0) - (Number(b.created_ts) || 0));
+    .sort(_priorityCmp);   // self-watch first, then oldest — the self-repair loop jumps the queue
   const untriaged = open.find((n) => !n.triage);
   if (untriaged) return { kind: 'triage', needId: untriaged.id };
   const buildable = open.find((n) => n.triage === 'buildable');
@@ -84,4 +111,4 @@ function renderExternalAsk(rows = []) {
   return `${head}${items.map((a, i) => items.length === 1 ? a : `(${i + 1}) ${a}`).join(' ')} — I've routed everything I CAN build into my own build queue; these are the ones only you can unlock. No rush, just don't want them invisible.`;
 }
 
-module.exports = { triageInput, triageWant, triageValidator, duePressure, renderExternalAsk };
+module.exports = { triageInput, triageWant, triageValidator, duePressure, renderExternalAsk, isSelfWatch, staleReap };

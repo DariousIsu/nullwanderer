@@ -42,6 +42,46 @@ ok(d && d.kind === 'open' && d.needId === 2, 'all triaged → the oldest BUILDAB
 ok(nt.duePressure({ needs: [{ id: 9, status: 'open', created_ts: 1, triage: 'external' }], lastRehearseTs: 0, nowMs: now }) === null, 'a queue of only non-buildable needs forces nothing');
 ok(nt.duePressure({}) === null, 'empty world → null, no throw');
 
+// --- M2.5.6 self-repair priority: a self-watch need jumps the queue ---
+ok(nt.isSelfWatch({ born_from: 'self-watch: recurred 3x/…' }) === true && nt.isSelfWatch({ born_from: 'inquiry-54-t4' }) === false, 'isSelfWatch keys off the born_from prefix');
+{
+  // #1 (older, inquiry) vs #7 (younger, self-watch): the self-watch need is triaged FIRST.
+  const mixed = [
+    { id: 1, status: 'open', created_ts: 100, triage: null, born_from: 'inquiry-9-t2' },
+    { id: 7, status: 'open', created_ts: 500, triage: null, born_from: 'self-watch: exhaust audit loop' },
+  ];
+  const t = nt.duePressure({ run: { status: 'discarded' }, needs: mixed, lastRehearseTs: 0, nowMs: now, gapMs: GAP });
+  ok(t && t.kind === 'triage' && t.needId === 7, 'a younger SELF-WATCH need is triaged before an older inquiry need (self-repair jumps the queue)');
+  // and once triaged buildable, the self-watch one opens first too
+  const mixedB = mixed.map((n) => ({ ...n, triage: 'buildable' }));
+  const o = nt.duePressure({ needs: mixedB, lastRehearseTs: 0, nowMs: now, gapMs: GAP });
+  ok(o && o.kind === 'open' && o.needId === 7, 'the self-watch buildable opens before the older inquiry buildable');
+  // among two self-watch needs, oldest-first still holds
+  const twoSW = [
+    { id: 13, status: 'open', created_ts: 100, triage: null, born_from: 'self-watch: A' },
+    { id: 48, status: 'open', created_ts: 900, triage: null, born_from: 'self-watch: B' },
+  ];
+  const s = nt.duePressure({ run: { status: 'discarded' }, needs: twoSW, lastRehearseTs: 0, nowMs: now, gapMs: GAP });
+  ok(s && s.needId === 13, 'two self-watch needs → the OLDER one first (#13 before #48, matching the plan)');
+}
+
+// --- M2.5.6 stale-need reaper: park old non-self-watch, EXEMPT self-watch ---
+{
+  const DAY = 24 * 3600 * 1000;
+  const t0 = 100 * DAY;
+  const needs = [
+    { id: 1, status: 'open', created_ts: t0 - 8 * DAY, born_from: 'inquiry-1' },       // 8d old inquiry → reap
+    { id: 2, status: 'open', created_ts: t0 - 3 * DAY, born_from: 'inquiry-2' },       // 3d old → keep
+    { id: 3, status: 'open', created_ts: t0 - 30 * DAY, born_from: 'self-watch: x' },  // 30d old but self-watch → EXEMPT
+    { id: 4, status: 'parked', created_ts: t0 - 40 * DAY, born_from: 'inquiry-4' },    // already parked → ignore
+  ];
+  const reap = nt.staleReap({ needs, nowMs: t0 });
+  ok(reap.length === 1 && reap[0] === 1, 'reaper parks only the 8d-old OPEN inquiry need');
+  ok(!reap.includes(3), 'a 30d-old SELF-WATCH need is EXEMPT from the reaper (it stays a self-repair target)');
+  ok(!reap.includes(2) && !reap.includes(4), 'a fresh need and an already-parked need are untouched');
+  ok(nt.staleReap({ needs, nowMs: t0, maxAgeMs: 60 * DAY }).length === 0, 'a longer reap age spares everything (age is configurable)');
+}
+
 // --- renderExternalAsk ---
 const ask1 = nt.renderExternalAsk([{ id: 1, need: 'FDO access', ask: 'a Foundation Directory Online subscription' }]);
 ok(/One capability I can't build myself/.test(ask1) && /Foundation Directory Online subscription/.test(ask1), 'single blocked need → the one-sentence ask');
@@ -60,6 +100,9 @@ ok(nt.renderExternalAsk([]) === '' && nt.renderExternalAsk(null) === '', 'nothin
   ok(/blocked_external/.test(m) && /routed_research/.test(m) && /parked as junk/.test(m), 'all three non-buildable routes exist (external / research / junk)');
   ok(/needs\.external_surfaced_at/.test(m) && /24 \* 3600e3/.test(m), 'the external ask is consolidated + throttled to once a day');
   ok(/TRIAGE SKETCH:/.test(m), 'a buildable verdict seeds the study block for the rehearsal open');
+  // M2.5.6: the reaper runs in the tick and its result excludes those needs from this pick
+  ok(/nt\.staleReap\(\{ needs, nowMs: now \}\)/.test(m) && /reaped \$\{stale\.size\} stale need/.test(m), 'the stale-need reaper runs in the pressure tick and parks past-age needs');
+  ok(/openNeeds = needs\.filter\(\(n\) => !stale\.has\(n\.id\)\)/.test(m) && /needs: openNeeds/.test(m), 'a just-reaped need is excluded from this tick\'s pressure pick');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

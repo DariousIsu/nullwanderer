@@ -13731,7 +13731,22 @@ async function _needsPressure(now = Date.now()) {
   let run = null; try { run = require('./lib/rehearsal_driver').load(); } catch {}
   const lastTs = parseInt(db.getMeta('needs.last_rehearse_at') || '0', 10) || 0;
   const needs = (capn.listOpen() || []).map((n) => ({ ...n, triage: (() => { try { return db.getMeta(`need.${n.id}.triage`) || null; } catch { return null; } })() }));
-  const due = nt.duePressure({ run, needs, lastRehearseTs: lastTs, nowMs: now, gapMs: NEEDS_REHEARSE_GAP_MS });
+  // M2.5.6 STALE-NEED REAPER: park OPEN needs that have sat past the reap age without ever being
+  // built (self-watch needs are exempt — they stay as self-repair targets). Keeps the pressure lane
+  // pointed at live work instead of a growing pile of never-buildable inquiry/external needs.
+  let openNeeds = needs;
+  try {
+    const stale = new Set(nt.staleReap({ needs, nowMs: now }));
+    for (const id of stale) {
+      capn.setStatus(id, 'parked', { nowMs: now });
+      try { db.setMeta(`need.${id}.reaped_at`, String(now)); } catch {}
+    }
+    if (stale.size) {
+      console.log(`[needs] reaped ${stale.size} stale need(s) past 7d → parked (${[...stale].join(', ')})`);
+      openNeeds = needs.filter((n) => !stale.has(n.id));   // don't pick a need we just parked this tick
+    }
+  } catch (e) { console.error('[needs] stale reap failed:', e.message); }
+  const due = nt.duePressure({ run, needs: openNeeds, lastRehearseTs: lastTs, nowMs: now, gapMs: NEEDS_REHEARSE_GAP_MS });
   if (!due) return null;
   if (due.kind === 'iterate') {
     db.setMeta('needs.last_rehearse_at', String(now));
