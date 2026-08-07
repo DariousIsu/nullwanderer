@@ -38,6 +38,17 @@ function parseStreamableBody(contentType, text) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
+// A NETWORK-LEVEL failure (socket died before a response existed) vs everything else. Only these
+// are safe+useful to retry once on a fresh connection: an AbortError is the hang guard's verdict
+// (retrying doubles the wedge), and an HTTP-status error means Echo answered — the transport's
+// job is done. undici surfaces the keep-alive race as TypeError "fetch failed" with the real
+// code on `cause`; the message alternation covers runtimes that throw the code directly.
+function isNetFail(e) {
+  if (!e || e.name === 'AbortError') return false;
+  const s = `${e.message || ''} ${(e.cause && (e.cause.code || e.cause.message)) || ''}`;
+  return /fetch failed|ECONNRESET|ECONNREFUSED|EPIPE|UND_ERR_SOCKET|socket hang up|other side closed/i.test(s);
+}
+
 // Streamable-HTTP transport. Carries the bearer token + MCP session id; accepts both JSON and
 // SSE responses. `fetchImpl` is injectable for tests.
 function httpTransport({ url, token = null, fetchImpl = (typeof fetch !== 'undefined' ? fetch : null),
@@ -60,12 +71,28 @@ function httpTransport({ url, token = null, fetchImpl = (typeof fetch !== 'undef
       // wedging the caller (the attach heartbeat could retry-loop without ever landing; a tool dispatch would
       // hang the turn). Bound it with an AbortController. GENEROUS default (180s, ECHO_HTTP_TIMEOUT_MS-overridable)
       // so legitimately long tool calls still complete — this guards a true connection hang, not a tight SLA.
-      const _ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-      const _to = _ctrl ? setTimeout(() => { try { _ctrl.abort(); } catch {} }, requestTimeoutMs) : null;
+      const _fetchOnce = async () => {
+        const _ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        const _to = _ctrl ? setTimeout(() => { try { _ctrl.abort(); } catch {} }, requestTimeoutMs) : null;
+        try {
+          return await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(message), signal: _ctrl ? _ctrl.signal : undefined });
+        } finally { if (_to) clearTimeout(_to); }
+      };
+      // M2.5 KEEP-ALIVE RACE (transport hardening): after an idle gap (a main-thread stall, a long
+      // tool run) the fetch pool reuses a socket Echo's uvicorn already closed (~5s keep-alive) —
+      // the request dies at write time with a bare "fetch failed" though Echo is healthy (measured
+      // 1-7×/boot as "[route-obs] … Echo call failed: fetch failed"). The connection died, the
+      // request was not processed; ONE immediate retry rides a fresh socket. Never retried on
+      // abort (that's the hang guard's verdict — a second 180s wait would double the wedge) and
+      // never more than once (a hard-down Echo must fail fast into the reconnect path).
       let res;
       try {
-        res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(message), signal: _ctrl ? _ctrl.signal : undefined });
-      } finally { if (_to) clearTimeout(_to); }
+        res = await _fetchOnce();
+      } catch (e) {
+        if (!isNetFail(e)) throw e;
+        try { console.log(`[echo] transport: dead keep-alive socket (${e && e.message}) — one retry on a fresh connection`); } catch {}
+        res = await _fetchOnce();
+      }
       const sid = res.headers && res.headers.get && res.headers.get('mcp-session-id');
       if (sid) sessionId = sid;
       if (res.status === 202 || res.status === 204) return null;   // notification/ack, no body
@@ -250,4 +277,4 @@ function toolJson(raw) {
   return raw;
 }
 
-module.exports = { EchoClient, httpTransport, stdioTransport, parseStreamableBody, fromEnv, spawnEcho, toolJson, PROTOCOL_VERSION };
+module.exports = { EchoClient, httpTransport, stdioTransport, parseStreamableBody, isNetFail, fromEnv, spawnEcho, toolJson, PROTOCOL_VERSION };

@@ -2067,7 +2067,9 @@ app.whenReady().then(() => {
   // page leaves the mark untouched and says so. Kill switch: ZOE_QUOTA_SCRAPE=0.
   if (!/^(0|false|no|off)$/i.test(String(process.env.ZOE_QUOTA_SCRAPE || '').trim())) {
     const SCRAPE_MS = parseInt(process.env.ZOE_QUOTA_SCRAPE_MS || '', 10) || 6 * 3600 * 1000;   // every 6h
-    const SCRAPE_URL = String(process.env.ZOE_QUOTA_SCRAPE_URL || '').trim() || 'https://ollama.com/settings/usage';
+    // /settings, NOT /settings/usage — the latter 404s (measured live boot17: "404. That's an
+    // error."). /settings and /settings/billing both exist (303 → sign-in when logged out).
+    const SCRAPE_URL = String(process.env.ZOE_QUOTA_SCRAPE_URL || '').trim() || 'https://ollama.com/settings';
     const runQuotaScrape = async () => {
       let win = null;
       try {

@@ -72,6 +72,37 @@ function mockTransport() {
   ok('sends MCP Accept header (json + sse)', /application\/json/.test(captured.opts.headers['Accept']) && /text\/event-stream/.test(captured.opts.headers['Accept']));
   ok('captures + echoes the session id', http.sessionId === 'sess-123');
 
+  console.log('\nkeep-alive race retry (M2.5 transport hardening — 2026-08-07):');
+  // After an idle gap the fetch pool reuses a socket uvicorn already closed → bare "fetch failed"
+  // though Echo is healthy (measured 1-7×/boot). ONE retry on a fresh connection; abort (the hang
+  // guard) and HTTP-status errors are never retried.
+  {
+    const mkRes = () => ({ ok: true, status: 200, headers: { get: (k) => (String(k).toLowerCase() === 'content-type' ? 'application/json' : null) }, text: async () => '{"jsonrpc":"2.0","id":9,"result":{"ok":true}}' });
+    const netErr = () => { const e = new TypeError('fetch failed'); e.cause = { code: 'UND_ERR_SOCKET', message: 'other side closed' }; return e; };
+    let calls = 0;
+    const flaky = async () => { calls++; if (calls === 1) throw netErr(); return mkRes(); };
+    const tr = echo.httpTransport({ url: 'http://127.0.0.1:9000/mcp/', fetchImpl: flaky });
+    const r = await tr.send({ jsonrpc: '2.0', id: 9, method: 'ping', params: {} });
+    ok('dead-socket failure → ONE retry on a fresh connection → the call lands', calls === 2 && r && r.result && r.result.ok === true);
+
+    calls = 0;
+    const dead = async () => { calls++; throw netErr(); };
+    const tr2b = echo.httpTransport({ url: 'http://127.0.0.1:9000/mcp/', fetchImpl: dead });
+    let threw2 = false;
+    try { await tr2b.send({ jsonrpc: '2.0', id: 10, method: 'ping', params: {} }); } catch { threw2 = true; }
+    ok('a second failure throws — never more than one retry (hard-down fails fast)', threw2 && calls === 2);
+
+    calls = 0;
+    const aborted = async () => { calls++; const e = new Error('This operation was aborted'); e.name = 'AbortError'; throw e; };
+    const tr3 = echo.httpTransport({ url: 'http://127.0.0.1:9000/mcp/', fetchImpl: aborted });
+    let threw3 = false;
+    try { await tr3.send({ jsonrpc: '2.0', id: 11, method: 'ping', params: {} }); } catch { threw3 = true; }
+    ok('an ABORT (the hang guard) is never retried — one attempt only', threw3 && calls === 1);
+
+    ok('isNetFail: "fetch failed" + socket causes → true', echo.isNetFail(netErr()) && echo.isNetFail(Object.assign(new Error('x'), { cause: { code: 'ECONNRESET' } })));
+    ok('isNetFail: AbortError / plain error → false', !echo.isNetFail(Object.assign(new Error('aborted'), { name: 'AbortError' })) && !echo.isNetFail(new Error('boom')));
+  }
+
   console.log('\nsession lifecycle (the boot97 reattach poison — 2026-07-29):');
   // After a session is latched, a NEW initialize must go out WITHOUT the stale id (initialize
   // STARTS a session), and a mid-session 404 must drop the latch AND un-ready the client so the
