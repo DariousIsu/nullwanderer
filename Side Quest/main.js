@@ -4768,10 +4768,17 @@ async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
 async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
   const recent = (db.getRecentTurns(10) || []).filter((t) => t.speaker === 'user').sort((a, b) => (a.ts || 0) - (b.ts || 0)).slice(-4)
     .map((t) => `- ${String(t.content).slice(0, 300)}`).join('\n');
+  // Held rosters ride along here too (M5.5) — a create naming civic bodies should use store names,
+  // same contract as the edit door.
+  let heldBlock = '';
+  try {
+    const held = require('./lib/civic_store').heldRostersFor(`${order}\n${recent}`);
+    if (held.length) heldBlock = `\nROSTERS WE ALREADY HOLD (verified store data — use these names where they answer):\n${held.map((h) => `- ${h.line}`).join('\n')}\n`;
+  } catch {}
   let md = '';
   try {
     const res = await runCloudOperator({
-      userMessage: `Lucas ordered content ONTO HIS CANVAS. His order: "${order}"\n\nHis recent messages (oldest first — they carry the subject when the order is a bare "print it"):\n${recent}\n\nProduce the EXACT markdown content the canvas doc should hold — nothing else, no preamble. Ground every entry via your tools (echo / localdb / recall / web as needed); NEVER invent entries. A bounded list (places, names, items) must be COMPLETE and one item per line, in the order he asked for. If you cannot ground the content, reply with ONE line starting "CANNOT:" naming what is missing.`,
+      userMessage: `Lucas ordered content ONTO HIS CANVAS. His order: "${order}"\n\nHis recent messages (oldest first — they carry the subject when the order is a bare "print it"):\n${recent}\n${heldBlock}\nProduce the EXACT markdown content the canvas doc should hold — nothing else, no preamble. Ground every entry via your tools (echo / localdb / recall / web as needed); NEVER invent entries. A bounded list (places, names, items) must be COMPLETE and one item per line, in the order he asked for. If you cannot ground the content, reply with ONE line starting "CANNOT:" naming what is missing.`,
       context: '', task: true,     // Lucas-directed → interactive lane; never quota-deferred
     });
     md = res && res.answer ? String(res.answer).trim() : '';
@@ -9951,7 +9958,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               } else if (verdict.intent === 'report') {
                 buildReportFromHeld({ io, channel, sessionId, userName, topic: verdict.subject || userMessage.slice(0, 120) })
                   .catch((e) => console.error('[artifact-router] report failed:', e.message));
-              } else if (verdict.intent === 'pullup') {
+              }
+              // M5.6 (2026-08-08, the promise-narration divergence): the replier answered "I'll pull
+              // the parish list from the Wikipedia page…" while the door was already executing with
+              // held data — two voices, one wrong. When a door owns the turn, the reply is an ACK,
+              // and the door's own relay is the only report of what happened.
+              composedUserMessage = `${composedUserMessage}\n\n[A deterministic door (${verdict.intent}) is EXECUTING this order right now and will report its own outcome — landed, rejected, or failed — in a separate message. Your reply: ONE short sentence acknowledging you're on it. Do NOT describe steps or sources, do NOT promise specifics, and do NOT claim anything landed — the door's report is the only truth about the outcome.]`;
+              if (verdict.intent === 'pullup') {
                 let _phits = [];
                 try { _phits = require('./lib/product_ledger').searchProducts({ db, query: verdict.subject || userMessage, notesDir: filesLib.resolvePath('notes'), limit: 3 }); } catch {}
                 if (_phits.length) {
