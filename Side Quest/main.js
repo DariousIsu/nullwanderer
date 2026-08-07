@@ -6984,6 +6984,31 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // only as the cloud-down fallback above. [[detectors-vs-comprehension]] — cap the BEHAVIOR, not phrasings.
     if (routerOn && _contactsQ.isQuery) console.log(`[contacts-intent] ${_llmC && _llmC.isQuery ? 'LLM' : 'regex'} → list (type=${_contactsQ.type || '-'} grade=${_contactsQ.grade || '-'} state=${_contactsQ.state || '-'} sectors=${(_contactsQ.sectors || []).join('/') || '-'})`);
   }
+  // ARTIFACT-SESSION PRECEDENCE (2026-08-08, "Now identify every person in each of those positions
+  // in each parish" → an 849-row CRM dump): while a working canvas doc is FRESH, an artifact-shaped
+  // message belongs to the ARTIFACT ROUTER — whose judgment KNOWS the session — not the contacts
+  // lane, which judged in a vacuum (conf 0.85 'list') and regenerated the exact fresh-dump the
+  // product ledger exists to prevent. The judgment runs ONCE here; the router block below reuses
+  // it instead of re-asking. A 'none' verdict, a prefilter miss, or a cloud mute leaves the
+  // contacts route exactly as it was — precedence only ever yields to a CONFIDENT artifact intent.
+  let _artifactVerdictEarly = null;
+  if (_workingCanvasFresh()) {
+    try {
+      const ai = require('./lib/artifact_intent');
+      if (ai.prefilter(userMessage, { workingFresh: true })) {
+        _artifactVerdictEarly = await require('./lib/cloud_logic').ask({
+          task: 'artifact_intent', v: 1,
+          input: { message: String(userMessage).slice(0, 4000), workingDoc: db.getMeta('canvas.working_title') || '' },
+          want: ai.wantText({ workingFresh: true, workingTitle: db.getMeta('canvas.working_title') || '' }),
+          validate: ai.validate, numPredict: 180, think: false,
+        });
+        if (_artifactVerdictEarly && _artifactVerdictEarly.intent && _artifactVerdictEarly.intent !== 'none' && _contactsQ.isQuery) {
+          console.log(`[turn-router] contacts route YIELDED — the artifact session owns this turn (intent=${_artifactVerdictEarly.intent})`);
+          _contactsQ = { isQuery: false };
+        }
+      }
+    } catch (e) { console.error('[turn-router] artifact-precedence check failed (contacts route unchanged):', e.message); }
+  }
   let turnRoute = require('./lib/turn_router').computeTurnRoute({
     socialTurn, activityQ, deliverableAggQ,
     factual: _factualR, personalFactQ, devQ, stateQ,
@@ -9857,7 +9882,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         const ai = require('./lib/artifact_intent');
         const _fresh = _workingCanvasFresh();
         if (ai.prefilter(userMessage, { workingFresh: _fresh })) {
-          const verdict = await require('./lib/cloud_logic').ask({
+          // The artifact-session precedence check (above the turn-router) may have judged already —
+          // ONE judgment per turn; re-asking would double the cost and could disagree with itself.
+          const verdict = _artifactVerdictEarly || await require('./lib/cloud_logic').ask({
             task: 'artifact_intent', v: 1,
             input: { message: String(userMessage).slice(0, 4000), workingDoc: _fresh ? (db.getMeta('canvas.working_title') || '') : '' },   // sized to the window, not a constant — cloud_logic packs input to its own budget
             want: ai.wantText({ workingFresh: _fresh, workingTitle: db.getMeta('canvas.working_title') || '' }),
