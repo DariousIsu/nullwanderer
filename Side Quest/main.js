@@ -13494,7 +13494,22 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
         const _docxRel = `notes/directed-${focus.id}-dossier.docx`;
         const _buf = await require('./lib/md_to_docx').buildDocxBuffer({ title: goal.replace(/\s+/g, ' ').trim().slice(0, 120), markdown: condensed });
         const _abs = filesLib.resolvePath(_docxRel);
-        if (_abs && _buf) { require('fs').writeFileSync(_abs, _buf); docxPath = _docxRel; console.log(`[condense] rendered paper .docx → ${_docxRel}`); }
+        if (_abs && _buf) {
+          require('fs').writeFileSync(_abs, _buf);
+          docxPath = _docxRel;
+          console.log(`[condense] rendered paper .docx → ${_docxRel}`);
+          // THE WORD DOC LANDS ON THE CANVAS (Lucas 2026-08-07: "a clean, completed, properly
+          // formatted word doc has not landed on the canvas yet") — not just a path in a chat
+          // line. document_file renders the docx's rich HTML (the same mammoth path the drop-a-
+          // file door uses), so what he sees on the canvas IS the formatted deliverable.
+          try {
+            const _dh = await require('./lib/doc_extract').extractDocxHtml(_abs);
+            if (_dh && _dh.html && _dh.html.trim()) {
+              await canvasEmit({ focusId: focus.id, title: goal, tabMode: 'DOC', blockType: 'document_file', data: { html: _dh.html, alt: `${goal.replace(/\s+/g, ' ').slice(0, 80)} — Word document (${_docxRel})` } });
+              console.log('[condense] paper .docx rendered onto the canvas (document_file block)');
+            }
+          } catch (e) { console.error('[condense] docx canvas emit failed (the file deliverable stands):', e.message); }
+        }
       }
     } catch (e) { console.error('[condense] docx render failed (markdown deliverable stands):', e.message); }
     try { await memoryLib.store({ kind: 'note', content: `Research dossier — ${goal.slice(0, 90)} (${sections.length} orgs):\n${condensed.slice(0, 4000)}`, source: 'research_dossier', importance: 0.85, embedText: goal }); } catch {}
