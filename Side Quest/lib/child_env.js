@@ -44,6 +44,7 @@ function forEcho(base = process.env, { passthrough = null } = {}) {
     ? String(src.ZOE_ECHO_MODEL_PASSTHROUGH || '') === '1'
     : !!passthrough;
   const out = { ...src };
+  _addFsRoots(out);
   if (allow) return out;
   const stripped = [];
   for (const k of MODEL_PIN_KEYS) {
@@ -51,6 +52,22 @@ function forEcho(base = process.env, { passthrough = null } = {}) {
   }
   if (stripped.length) console.log(`[child_env] not forwarding Zoe's model pins to Echo (${stripped.join(', ')}) — Echo resolves its own fleet`);
   return out;
+}
+
+// NX_ECHO_FS_ROOTS — widen Echo's fs_read_file scope to Zoe's SOURCE dirs (O5 review fan-out:
+// shard delegates read lib/ files by path). SOURCE ONLY — lib/scripts/docs — never the app root:
+// data/ (her DB) and .env (credentials) must stay outside every Echo-readable root. Operator-set
+// roots are kept; ours are unioned in (fs_edit.py dedups on its side too).
+function _addFsRoots(out) {
+  try {
+    const path = require('path');
+    const sqRoot = path.join(__dirname, '..');
+    const ours = ['lib', 'scripts', 'docs'].map((d) => path.resolve(sqRoot, d));
+    const existing = String(out.NX_ECHO_FS_ROOTS || '').split(path.delimiter).map((s) => s.trim()).filter(Boolean);
+    const seen = new Set(existing.map((s) => s.toLowerCase()));
+    for (const r of ours) if (!seen.has(r.toLowerCase())) existing.push(r);
+    out.NX_ECHO_FS_ROOTS = existing.join(path.delimiter);
+  } catch { /* env stays as-is — Echo just keeps its own repo scope */ }
 }
 
 module.exports = { forEcho, MODEL_PIN_KEYS };

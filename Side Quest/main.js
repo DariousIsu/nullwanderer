@@ -2114,7 +2114,9 @@ app.whenReady().then(() => {
             try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
           }
         } else {
-          console.log(`[quota] self-true-up: could not parse the usage page (${String(text || '').length}ch: ${p.reason}) — mark left untouched`);
+          // The snippet makes a failed scrape self-diagnosing (first live run served 137ch of
+          // something — without seeing it, wrong-URL vs JS-shell vs consent-wall is a guess).
+          console.log(`[quota] self-true-up: could not parse the usage page (${String(text || '').length}ch: ${p.reason}) — mark left untouched. Page starts: "${String(text || '').replace(/\s+/g, ' ').slice(0, 180)}"`);
         }
       } catch (e) { console.error('[quota] self-true-up failed:', e.message); }
       finally { try { if (win && !win.isDestroyed()) win.destroy(); } catch {} markActivity('idle'); }
@@ -7789,7 +7791,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const _codeReviewSteer = selfCodeReview
         ? 'THIS IS A REQUEST TO REVIEW YOUR OWN CODE — and you HAVE the tools for it: source_map {} (the file map of the program you run on), source_read {"path":"lib/x.js"} (read a whole file), source_search {"pattern":"…"} (find where something lives / who calls it), self_test {"suite":"smoke_x.js"} (run your own offline gate — the honest "am I healthy?"). BUDGET YOUR STEPS — this is the failure to avoid: reading EVERYTHING and running out before you write. So: source_map ONCE, self_test if health is in question, then source_outline / source_read the files that actually matter (~8 at most — you have the review-lane budget, not unlimited steps) — then STOP gathering and WRITE the review. A focused review of a few files you actually analyzed beats mapping the whole tree and having no steps left to compile it. Your FINAL message MUST BE the review itself — concrete findings with file:line — NOT "let me compile", NOT "I\'ll report shortly", NOT "starting on that now". Produce the report THIS turn from what the tools returned; if you have only partial coverage, report THAT (what you read, what you found, what you did not get to) — a partial real review beats a promise.\n\n'
         : '';
-      const opRes = await runCloudOperator({ userMessage, context: _codeReviewSteer + (docSetBlock ? `${docSetBlock}\n\n` : '') + (distilledBrief || retrievedKnowledgeBlock || ''), task: directed, review: selfCodeReview });
+      // O5 WIDE-REVIEW FAN-OUT (M2.5.4): "review your whole program / all of lib" exceeds one
+      // context — the single-context operator would read ~8 files and honestly report partial
+      // coverage forever. Shard lib/ across Echo code-reviewer delegates (spawn_agent_async),
+      // join in _reviewFanoutTick, deliver the compiled review unprompted when they land. The
+      // narrow ask ("review your reply pipeline") stays on the single-context direct path. Any
+      // start failure falls back to that path — fan-out is an upgrade, never a new way to fail.
+      let _fanoutNote = null;
+      if (selfCodeReview && require('./lib/review_fanout').isWideReview(userMessage)) {
+        try { _fanoutNote = await startReviewFanout(userMessage); }
+        catch (e) { console.error('[review-fanout] start failed, falling back to single-context review:', e.message); }
+      }
+      const opRes = _fanoutNote
+        ? { answer: _fanoutNote, toolsUsed: ['spawn_agent_async'] }
+        : await runCloudOperator({ userMessage, context: _codeReviewSteer + (docSetBlock ? `${docSetBlock}\n\n` : '') + (distilledBrief || retrievedKnowledgeBlock || ''), task: directed, review: selfCodeReview });
       if (opRes && opRes.answer) {
         operatorAnswer = opRes.answer;
         if (directed) operatorDirected = true;   // verbatim-delivery contract → survives a cloud-voice outage (direct-deliver below)
@@ -13774,6 +13789,95 @@ function _surfaceExternalNeeds(now = Date.now()) {
     console.log(`[needs] external-needs ask surfaced to chat (${rows.length} blocked)`);
   } catch (e) { console.error('[needs] external surfacing failed:', e.message); }
 }
+
+// ── O5 REVIEW FAN-OUT (M2.5.4) — the impure half of lib/review_fanout ──────────────────────────
+// A wide self-review shards lib/ across Echo code-reviewer delegates; the join + compile run here
+// in the background and the finished review is delivered unprompted. State lives in the
+// `review.fanout` meta key so a reboot resumes the join instead of losing the runs.
+async function startReviewFanout(goal) {
+  const rf = require('./lib/review_fanout');
+  const existing = (() => { try { return JSON.parse(db.getMeta('review.fanout') || 'null'); } catch { return null; } })();
+  if (existing && Array.isArray(existing.runs) && existing.runs.length) {
+    return `A wide review is already in flight — ${existing.runs.length} delegate(s) on "${String(existing.goal || '').slice(0, 80)}" since ${new Date(existing.started_at).toLocaleTimeString()}. I'll compile and deliver it when they land; say "abandon the review" if you want it dropped.`;
+  }
+  if (!echoSuit || !echoSuit.connected) throw new Error('Echo suit not connected');
+  const fsMod = require('fs'), pathMod = require('path');
+  const libDir = pathMod.join(__dirname, 'lib');
+  const files = fsMod.readdirSync(libDir)
+    .filter((f) => f.endsWith('.js'))
+    .map((f) => { const p = pathMod.join(libDir, f); try { return { path: p, bytes: fsMod.statSync(p).size }; } catch { return null; } })
+    .filter(Boolean);
+  if (files.length < 6) throw new Error(`only ${files.length} lib files found — not a fan-out scope`);
+  const shards = rf.shardFiles(files, 3);
+  const runs = [];
+  for (let i = 0; i < shards.length; i++) {
+    const task = rf.buildShardTask({ goal, files: shards[i], index: i, total: shards.length });
+    const r = await echoSuit.dispatch({ kind: 'do', name: 'spawn_agent_async', args: { name: 'code-reviewer', prompt: task } }, { autonomous: false });
+    const runId = r && r.ok !== false ? rf.parseRunId(r.text) : null;
+    if (runId) runs.push({ run_id: runId, label: `shard-${i + 1}`, files: shards[i].length, state: 'queued' });
+    else console.error(`[review-fanout] shard ${i + 1} spawn failed: ${(r && r.text || 'no result').slice(0, 160)}`);
+  }
+  if (!runs.length) throw new Error('every shard spawn failed');
+  const st = { goal: String(goal).slice(0, 500), started_at: Date.now(), sessionId: currentSessionId, runs };
+  db.setMeta('review.fanout', JSON.stringify(st));
+  const covered = runs.reduce((n, r) => n + r.files, 0);
+  console.log(`[review-fanout] dispatched ${runs.length} delegate(s) over ${covered}/${files.length} lib files (${runs.map((r) => r.run_id).join(', ')})`);
+  return `That's bigger than one sitting, so I've sharded it: ${files.length} files in lib/ split across ${runs.length} delegate reviewers, each reading its share in full. I'll compile their reports into one review and bring it to you when they land — usually a few minutes.${runs.length < shards.length ? ` (${shards.length - runs.length} shard(s) failed to dispatch — the compiled review will say what they left uncovered.)` : ''}`;
+}
+
+const REVIEW_FANOUT_DEADLINE_MS = parseInt(process.env.ZOE_REVIEW_FANOUT_DEADLINE_MS || '', 10) || 25 * 60 * 1000;
+let _fanoutCompiling = false;
+async function _reviewFanoutTick() {
+  let st = null;
+  try { st = JSON.parse(db.getMeta('review.fanout') || 'null'); } catch {}
+  if (!st || !Array.isArray(st.runs) || !st.runs.length || _fanoutCompiling) return;
+  if (!echoSuit || !echoSuit.connected) return;
+  const rf = require('./lib/review_fanout');
+  const now = Date.now();
+  try {
+    for (const run of st.runs) {
+      if (rf.isTerminal(run.state)) continue;
+      try {
+        const r = await echoSuit.dispatch({ kind: 'do', name: 'agent_status', args: { run_id: run.run_id } }, { autonomous: false });
+        const state = rf.parseRunState(r && r.text);
+        if (state) run.state = state;
+      } catch { /* next tick retries */ }
+    }
+    db.setMeta('review.fanout', JSON.stringify(st));
+    const allDone = st.runs.every((r) => rf.isTerminal(r.state));
+    const expired = now - (st.started_at || 0) > REVIEW_FANOUT_DEADLINE_MS;
+    if (!allDone && !expired) return;
+    _fanoutCompiling = true;
+    // Collect what finished; a run still going at the deadline is reported as such, never waited
+    // on silently and never papered over (no silent caps).
+    const reports = [];
+    for (const run of st.runs) {
+      let output = '';
+      if (run.state === 'succeeded') {
+        try {
+          const r = await echoSuit.dispatch({ kind: 'do', name: 'get_agent_output', args: { run_id: run.run_id } }, { autonomous: false });
+          output = rf.parseRunOutput(r && r.text);
+        } catch {}
+      }
+      reports.push({ label: run.label, state: rf.isTerminal(run.state) ? run.state : 'still running at the deadline', output });
+    }
+    const compiled = await condenseComplete(rf.buildCompilePrompt({ goal: st.goal, reports }), { numPredict: 2200 });
+    const review = (compiled && compiled.trim())
+      ? compiled.trim()
+      : `The delegate reviewers came back but the compile pass produced nothing — here are their raw shard reports:\n\n${reports.map((r) => `--- ${r.label} (${r.state}) ---\n${(r.output || '(no output)').slice(0, 4000)}`).join('\n\n')}`;
+    const sid = st.sessionId || currentSessionId;
+    if (sid) {
+      const msg = `The sharded review you asked for is compiled (${st.runs.filter((r) => r.state === 'succeeded').length}/${st.runs.length} delegates returned):\n\n${review}`;
+      const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'research', unprompted: 1 });
+      try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+      try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+    }
+    db.setMeta('review.fanout', '');
+    console.log(`[review-fanout] compiled + delivered (${st.runs.map((r) => `${r.label}:${r.state}`).join(', ')})`);
+  } catch (e) { console.error('[review-fanout] tick failed:', e.message); }
+  finally { _fanoutCompiling = false; }
+}
+setInterval(() => { _reviewFanoutTick().catch(() => {}); }, 60 * 1000).unref?.();
 
 function surfaceResearchPivot(focus, novel) {
   const qs = (Array.isArray(novel) ? novel : []).slice(0, 2)

@@ -56,7 +56,22 @@ const BASE = {
 // ── nothing to strip is not an error ────────────────────────────────────────────────────────────
 {
   const out = childEnv.forEcho({ PATH: '/bin' });
-  ok(out.PATH === '/bin' && Object.keys(out).length === 1, 'a clean env passes through unchanged');
+  ok(out.PATH === '/bin' && Object.keys(out).length === 2 && 'NX_ECHO_FS_ROOTS' in out,
+    'a clean env passes through with only the fs-roots addition');
+}
+
+// ── NX_ECHO_FS_ROOTS (O5 review fan-out): Echo may read Zoe's SOURCE, never her data/secrets ────
+{
+  const path = require('path');
+  const sqRoot = path.resolve(__dirname, '..');
+  const roots = String(childEnv.forEcho(BASE).NX_ECHO_FS_ROOTS || '').split(path.delimiter);
+  for (const d of ['lib', 'scripts', 'docs']) ok(roots.includes(path.join(sqRoot, d)), `fs roots include ${d}/ (delegates read source by path)`);
+  ok(!roots.includes(sqRoot), 'SAFETY: the app ROOT is not a root — data/ and .env stay unreadable');
+  ok(!roots.some((r) => /\bdata\b/i.test(r.slice(sqRoot.length))), 'SAFETY: no data/ root');
+  const withOp = childEnv.forEcho({ ...BASE, NX_ECHO_FS_ROOTS: 'C:\\operator\\extra' }).NX_ECHO_FS_ROOTS.split(path.delimiter);
+  ok(withOp[0] === 'C:\\operator\\extra' && withOp.includes(path.join(sqRoot, 'lib')), 'operator-set roots are kept and ours unioned in');
+  const doubled = childEnv.forEcho({ ...BASE, NX_ECHO_FS_ROOTS: path.join(sqRoot, 'lib') }).NX_ECHO_FS_ROOTS.split(path.delimiter);
+  ok(doubled.filter((r) => r.toLowerCase() === path.join(sqRoot, 'lib').toLowerCase()).length === 1, 'no duplicate roots');
 }
 
 // ── WIRING: every Echo spawn site actually uses it ──────────────────────────────────────────────
