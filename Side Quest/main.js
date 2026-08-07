@@ -2195,6 +2195,22 @@ app.whenReady().then(() => {
         const rq = require('./lib/recheck_queue');
         const _sw = rq.sweepAbsences({});
         if (_sw.queued) console.log(`[metabolism] swept ${_sw.queued} expired gap(s) into the queue`);
+        // M9.4 — THE TREND LINE (2026-08-08): one snapshot per day of the open-gap inventory, so
+        // "the backlog must DECLINE week over week" is a measurement, not a hope. Read the series
+        // back via meta keys metabolism.trend.YYYY-MM-DD.
+        try {
+          const day = new Date().toISOString().slice(0, 10);
+          if (db.getMeta('metabolism.trend.day') !== day) {
+            const st0 = rq.stats();
+            let gaps = 0; try { gaps = require('./lib/absence').openGaps({ limit: 100000 }).length; } catch {}
+            db.setMeta('metabolism.trend.day', day);
+            db.setMeta(`metabolism.trend.${day}`, JSON.stringify({ absenceOpen: gaps, queueOpen: st0.open, ts: Date.now() }));
+            const prevKeys = db.getDb().prepare(`SELECT key, value FROM meta WHERE key LIKE 'metabolism.trend.2%' ORDER BY key DESC LIMIT 2`).all();
+            const prev = prevKeys.find((r) => r.key !== `metabolism.trend.${day}`);
+            const prevN = prev ? (JSON.parse(prev.value).absenceOpen || 0) : null;
+            console.log(`[metabolism] trend ${day}: ${gaps} open gap(s), ${st0.open} queued${prevN != null ? ` (prev day ${prevN} — ${gaps <= prevN ? 'declining ✓' : 'GROWING'})` : ''}`);
+          }
+        } catch { /* the snapshot is best-effort; the drain never blocks on it */ }
         const capPerHour = parseInt(process.env.ZOE_RECHECK_PER_HOUR, 10) || 12;
         const hour = Math.floor(Date.now() / 3600000);
         if (parseInt(db.getMeta('recheck.hour') || '0', 10) !== hour) { db.setMeta('recheck.hour', String(hour)); db.setMeta('recheck.hour_n', '0'); }
