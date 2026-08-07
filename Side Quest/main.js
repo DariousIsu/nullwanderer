@@ -4745,8 +4745,60 @@ async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
     return;
   }
   const lines = md.split('\n').filter((l) => l.trim()).length;
+  _stampWorkingCanvasDoc({ slug, title, md });
   console.log(`[canvas-cmd] order executed → "${title}" landed on canvas (${md.length}ch, ${lines} line(s))`);
   await fireToolFollowup({ io, channel, sessionId, resultText: `[The canvas doc Lucas ordered IS LANDED — "${title}", ${lines} content line(s), on his Canvas now. Tell him it's there and what it holds in one sentence, and invite him to verify. Do NOT add extras he didn't ask for and do NOT offer follow-on work — he said slow, one step at a time.]` });
+}
+
+// The WORKING canvas doc — what "the document we're building" refers to. Stamped at every
+// create/edit landing; the edit net only fires while this is fresh. The markdown is the edit
+// executor's source of truth AND lands as a notes/ file so the product ledger can find the doc
+// later ("pull up that parish list we made" must not miss a canvas-born product).
+const WORKING_CANVAS_FRESH_MS = 2 * 3600 * 1000;
+function _stampWorkingCanvasDoc({ slug, title, md }) {
+  try {
+    db.setMeta('canvas.working_slug', slug);
+    db.setMeta('canvas.working_title', title);
+    db.setMeta('canvas.working_md', String(md).slice(0, 60000));
+    db.setMeta('canvas.working_at', String(Date.now()));
+  } catch {}
+  try { require('fs').writeFileSync(filesLib.resolvePath(`notes/canvas-${slug.replace(/^canvas-/, '')}.md`), `# ${title}\n\n${md}\n`, 'utf8'); } catch {}
+}
+function _workingCanvasFresh() {
+  try { return !!db.getMeta('canvas.working_slug') && (Date.now() - parseInt(db.getMeta('canvas.working_at') || '0', 10)) < WORKING_CANVAS_FRESH_MS; } catch { return false; }
+}
+
+// Apply an EDIT order to the working canvas doc: the current markdown + his instruction → the
+// COMPLETE updated doc → re-emit on the SAME slug (updates in place) → re-stamp. Pure reformats
+// need no tools; content additions get them — one bounded interactive-lane run covers both.
+async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
+  const slug = db.getMeta('canvas.working_slug'), title = db.getMeta('canvas.working_title') || 'Canvas doc';
+  const cur = db.getMeta('canvas.working_md') || '';
+  if (!slug || !cur) {
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas gave a canvas edit order ("${order.slice(0, 120)}") but no working doc content is stored. Say plainly you've lost the working copy and ask him to name what to rebuild — never claim an edit landed.]` });
+    return;
+  }
+  let md = '';
+  try {
+    const res = await runCloudOperator({
+      userMessage: `Lucas is editing the canvas doc "${title}" step by step. CURRENT CONTENT:\n"""\n${cur}\n"""\n\nHIS EDIT INSTRUCTION: "${order}"\n\nOutput the COMPLETE updated markdown for the whole doc after applying EXACTLY this instruction — change nothing he did not ask to change, add nothing extra, keep every existing entry unless he asked for its removal. Ground any NEW factual entries via your tools (echo / localdb / recall / web); NEVER invent entries. If the instruction cannot be applied or grounded, reply with ONE line starting "CANNOT:" naming why.`,
+      context: '', task: true,     // Lucas-directed → interactive lane; never quota-deferred
+    });
+    md = res && res.answer ? String(res.answer).trim() : '';
+  } catch (e) { console.error('[canvas-cmd] edit execute failed:', e.message); }
+  if (!md || /^CANNOT:/i.test(md)) {
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas's canvas edit did NOT apply${md ? `: "${md.slice(0, 200)}"` : ' (the edit run produced nothing)'}. Tell him exactly that — the doc on his canvas is UNCHANGED — and never claim the edit landed.]` });
+    return;
+  }
+  try { await promiseArtifactEmit({ slug, title, markdown: md }); } catch (e) {
+    console.error('[canvas-cmd] edit emit failed:', e.message);
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[The canvas update FAILED to land (${e.message}) — the doc on screen is UNCHANGED. Say so plainly.]` });
+    return;
+  }
+  _stampWorkingCanvasDoc({ slug, title, md });
+  const lines = md.split('\n').filter((l) => l.trim()).length;
+  console.log(`[canvas-cmd] edit applied → "${title}" updated in place (${md.length}ch, ${lines} line(s))`);
+  await fireToolFollowup({ io, channel, sessionId, resultText: `[The edit Lucas ordered IS APPLIED — "${title}" updated in place on his Canvas (${lines} line(s) now). Tell him in one sentence what changed and invite him to verify. No extras, no offers of next steps — he is driving step by step.]` });
 }
 
 // Land a HELD product (found by the pull-up gate) on the canvas and hand it over honestly: what it
@@ -9693,13 +9745,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // explicit "put/print X on the canvas" names its destination; it runs FIRST among the artifact
     // nets and lands deterministically. Kill switch ZOE_CANVAS_CMD=0.
     if (!followupFired && !/^(0|false|off)$/i.test(String(process.env.ZOE_CANVAS_CMD || '').trim())) {
-      let _ccmd = null;
-      try { _ccmd = require('./lib/canvas_command').detect(userMessage); } catch {}
-      if (_ccmd) {
+      const _cc = require('./lib/canvas_command');
+      // EDIT first: while a working doc is fresh, "convert the list to bullets in the same
+      // document" edits THAT doc; "a fresh canvas" always routes to create (detectEdit refuses it).
+      let _cedit = null, _ccmd = null;
+      try { _cedit = _cc.detectEdit(userMessage, { workingFresh: _workingCanvasFresh() }); } catch {}
+      if (_cedit) {
         followupFired = true;
-        console.log('[canvas-cmd] explicit canvas order → executing + landing deterministically');
-        buildCanvasFromOrder({ io, channel, sessionId, order: _ccmd.order })
-          .catch((e) => console.error('[canvas-cmd] failed:', e.message));
+        console.log('[canvas-cmd] edit order on the working doc → applying in place');
+        buildCanvasEditFromOrder({ io, channel, sessionId, order: _cedit.order })
+          .catch((e) => console.error('[canvas-cmd] edit failed:', e.message));
+      } else {
+        try { _ccmd = _cc.detect(userMessage); } catch {}
+        if (_ccmd) {
+          followupFired = true;
+          console.log('[canvas-cmd] explicit canvas order → executing + landing deterministically');
+          buildCanvasFromOrder({ io, channel, sessionId, order: _ccmd.order })
+            .catch((e) => console.error('[canvas-cmd] failed:', e.message));
+        }
       }
     }
 

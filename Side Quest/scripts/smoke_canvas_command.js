@@ -3,7 +3,7 @@
  * The live misses (#11104/#11108, 2026-08-07) are the load-bearing cases.
  * Run: node scripts/smoke_canvas_command.js */
 const path = require('path');
-const { detect } = require(path.join(__dirname, '..', 'lib', 'canvas_command'));
+const { detect, detectEdit } = require(path.join(__dirname, '..', 'lib', 'canvas_command'));
 
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; } else { fail++; console.error('  FAIL:', n); } };
@@ -21,6 +21,17 @@ ok('"can you see my canvas" does not fire', !detect('can you see my canvas?'));
 ok('canvas mention without an order does not fire', !detect('the canvas is looking cluttered'));
 ok('a report order without canvas stays with report-cmd', !detect('build the final report on the Hartfield Foundation'));
 ok('plain chat does not fire', !detect('every parish in Louisiana has a police jury'));
+
+// ── the EDIT half (live #11116-#11119: "convert the numbered list to bullets" got narration) ────
+const fresh = { workingFresh: true }, stale = { workingFresh: false };
+ok('edit: "convert the numbered list to bullets in the same document"', !!detectEdit('convert the numbered list to bullets in the same document', fresh));
+ok('edit: "now add the parish seat next to each parish in the doc"', !!detectEdit('now add the parish seat next to each parish in the doc', fresh));
+ok('edit: "step 2: number the list on the canvas"', !!detectEdit('step 2: number the list on the canvas', fresh));
+ok('edit: bare "reorder it alphabetically"', !!detectEdit('reorder it alphabetically... the doc I mean', fresh) || !!detectEdit('reorder the list alphabetically', fresh));
+ok('no working doc → edit NEVER fires', !detectEdit('convert the numbered list to bullets in the same document', stale));
+ok('"a fresh canvas" routes to create, not edit', !detectEdit('start a fresh canvas doc for the contacts list', fresh) && !!detect('start a fresh canvas doc for the contacts list'));
+ok('question about the doc does not edit', !detectEdit("what's on the canvas now?", fresh));
+ok('plain chat with an edit verb but no doc ref does not fire', !detectEdit('add Russ to the invite thread', fresh));
 
 console.log(`smoke_canvas_command: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
