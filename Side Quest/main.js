@@ -2095,6 +2095,10 @@ app.whenReady().then(() => {
         await new Promise((r) => setTimeout(r, 3500));   // client-side meters render after load
         const text = await win.webContents.executeJavaScript('document.body ? document.body.innerText : ""', true);
         const now = Date.now();
+        // The real /settings layout was never seen before this shipped (the /settings/usage page it
+        // was designed against 404'd). Log the parsed page text on EVERY outcome so the meter layout
+        // is visible — the first clean parse misread the session meter as weekly (2026-08-07).
+        console.log(`[quota] usage page text (${String(text || '').length}ch): "${String(text || '').replace(/\s+/g, ' ').trim().slice(0, 400)}"`);
         const p = require('./lib/quota_scrape').parseUsage(text, now);
         if (p.ok) {
           const prev = Number(db.getMeta('quota.mark_pct') || '0') || 0;

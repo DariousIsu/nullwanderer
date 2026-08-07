@@ -35,6 +35,14 @@ const bare = '36.1%\nResets in 1 hour\n\n67.1%\nResets in 2 days\n';
 const p2 = qs.parseUsage(bare, NOW);
 ok(p2.ok === true && p2.pct === 0.671 && p2.label === 'longest-horizon', 'unlabelled meters → longest horizon selected, and SAYS it guessed by horizon');
 
+// --- reset-horizon sanity: a meter LABELLED weekly but resetting in hours is REFUSED ---
+// (the live 2026-08-07 misparse: "2.6% weekly, resets in 3h" — the session meter mislabeled.)
+const mislabel = qs.parseUsage('Weekly\n2.6%\nResets in 3 hours\n', NOW);
+ok(mislabel.ok === false && mislabel.signedOut === false && /too soon to be the weekly pool/.test(mislabel.reason), 'a "weekly" meter with a <24h reset is REFUSED (session-mislabeled-as-weekly guard)');
+ok(qs.MIN_WEEKLY_RESET_MS === 24 * HOUR, 'the weekly-reset floor is 24h');
+// a genuine weekly (days out) still passes the guard
+ok(qs.parseUsage('Weekly\n67.1%\nResets in 2 days\n', NOW).ok === true, 'a real weekly (multi-day reset) still parses through the guard');
+
 // --- single unlabelled meter: multi-day accepted, short-reset REFUSED ---
 ok(qs.parseUsage('80%\nResets in 3 days', NOW).ok === true, 'a lone multi-day meter can only be the weekly pool → accepted');
 const p3 = qs.parseUsage('80%\nResets in 45 minutes', NOW);

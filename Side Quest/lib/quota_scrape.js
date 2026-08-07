@@ -18,6 +18,9 @@
 'use strict';
 
 const UNIT_MS = { second: 1000, minute: 60000, hour: 3600000, day: 86400000, week: 7 * 86400000 };
+// A WEEKLY pool's reset is always days out; anything sooner is a shorter-cycle meter mislabeled.
+// Refusing on a sub-day horizon is the SAFE failure — it keeps the last trusted mark.
+const MIN_WEEKLY_RESET_MS = 24 * 3600000;
 
 // "2 days", "1 hour", "1 day 3 hours", "45 minutes" → total ms (0 when nothing parses).
 function parseDuration(s) {
@@ -71,6 +74,17 @@ function parseUsage(text, now = Date.now()) {
       return { ok: false, signedOut: false, reason: 'only a short-reset meter visible — refusing to write it as the weekly mark' };
     }
   }
+  // ⚠ RESET-HORIZON SANITY (2026-08-07, caught live on the FIRST clean parse): the scrape wrote
+  // "2.6% weekly, resets in 3h", overwriting the trued-up 67.1% mark — impossible for a WEEKLY
+  // pool (it cannot reset in hours, and usage cannot fall mid-cycle). The parser had matched the
+  // short-cycle SESSION meter and mislabeled it weekly (the real /settings layout differs from the
+  // /settings/usage page this was designed against — never seen until now). A weekly mark whose
+  // reset is < 24h out is definitionally a misparse: REFUSE it. Refusing is the safe direction —
+  // it keeps the last trusted mark rather than opening the spend gate on a phantom-empty pool.
+  if (weekly.resetMs < MIN_WEEKLY_RESET_MS) {
+    return { ok: false, signedOut: false,
+      reason: `selected "${weekly.label || 'longest-horizon'}" meter resets in ${(weekly.resetMs / 3600000).toFixed(1)}h — too soon to be the weekly pool (likely the session meter mislabeled); refusing` };
+  }
   const session = meters.find((m) => m !== weekly && (m.label === 'session' || m.resetMs < weekly.resetMs)) || null;
   return {
     ok: true,
@@ -81,4 +95,4 @@ function parseUsage(text, now = Date.now()) {
   };
 }
 
-module.exports = { parseUsage, parseDuration, extractMeters };
+module.exports = { parseUsage, parseDuration, extractMeters, MIN_WEEKLY_RESET_MS };
