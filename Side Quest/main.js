@@ -4853,8 +4853,14 @@ async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
   }
   let md = '';
   try {
+    // Recent messages ride along (same as the create door): an anaphoric order ("prioritize the
+    // parish doc", "get on with it") usually points at a CONCRETE standing instruction he already
+    // gave a few turns back — live 08-08, "Prioritize editing…" CANNOTed twice while the real
+    // conversion order sat in the transcript.
+    const recent = (db.getRecentTurns(12) || []).filter((t) => t.speaker === 'user').sort((a, b) => (a.ts || 0) - (b.ts || 0)).slice(-5)
+      .map((t) => `- ${String(t.content).slice(0, 400)}`).join('\n');
     const res = await runCloudOperator({
-      userMessage: `Lucas is editing the canvas doc "${title}" step by step. CURRENT CONTENT:\n"""\n${cur}\n"""\n\nHIS EDIT INSTRUCTION: "${order}"\n\nOutput the COMPLETE updated markdown for the whole doc after applying EXACTLY this instruction — change nothing he did not ask to change, add nothing extra, keep every existing entry unless he asked for its removal. Ground any NEW factual entries via your tools (echo / localdb / recall / web); NEVER invent entries. If the instruction cannot be applied or grounded, reply with ONE line starting "CANNOT:" naming why.`,
+      userMessage: `Lucas is editing the canvas doc "${title}" step by step. CURRENT CONTENT:\n"""\n${cur}\n"""\n\nHIS EDIT INSTRUCTION: "${order}"\n\nHis recent messages (oldest first — when the instruction is vague or anaphoric, the CONCRETE standing instruction is usually here; apply THAT one):\n${recent}\n\nOutput the COMPLETE updated markdown for the whole doc after applying EXACTLY the concrete instruction — change nothing he did not ask to change, add nothing extra, keep every existing entry unless he asked for its removal. Ground any NEW factual entries via your tools (echo / localdb / recall / web); NEVER invent entries. If no concrete change can be found in the instruction OR his recent messages, reply with ONE line starting "CANNOT:" naming why.`,
       context: '', task: true,     // Lucas-directed → interactive lane; never quota-deferred
     });
     md = res && res.answer ? String(res.answer).trim() : '';
