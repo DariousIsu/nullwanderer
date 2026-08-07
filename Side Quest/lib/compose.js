@@ -25,6 +25,7 @@ RULES — these are absolute:
 • Keep a "## <Organization>" heading for EVERY organization you are given — never drop, merge, rename, or combine two organizations into one.
 • Ground ONLY in the provided sections — never add a person, title, email, phone number, or fact that is not already there. Keep "not found" wherever the source says so. NEVER turn initials or a placeholder ("R. Z.", "the VP") into a real name.
 • You MAY improve wording, structure each section consistently (focus / key people / contacts / positions / funding), and add brief connective prose — but you may NOT invent content or omit any organization.
+• NEVER strip a source: every inline "(source: …)" annotation in the input stays attached to its fact in the output — sources travel WITH their claims, never into a trailing list — and you NEVER mint a URL that is not in the input.
 • Drop any leaked JSON, tool calls, or control text.
 Output Markdown only — no preamble, no "here is".`;
 

@@ -20,6 +20,9 @@ const secs = [
 const single = cp.buildComposePrompt({ goal: 'right-wing think tanks', sections: secs, chunkIndex: 0, chunkTotal: 1 });
 ok(Array.isArray(single) && single.length === 2, 'compose prompt is a system+user message pair');
 ok(/never add a person|Ground ONLY/i.test(single[0].content) && /never drop, merge, rename/i.test(single[0].content), 'compose system cages grounding + no-drop');
+// Inline citation carrying (2026-08-06): the final composer must not strip what the whole pipeline
+// preserved — coverage climbs by carrying real sources, never by minting them.
+ok(/NEVER strip a source/.test(single[0].content) && /NEVER mint a URL/.test(single[0].content), 'compose system: sources travel WITH their claims — never stripped, never minted');
 ok(/executive summary/i.test(single[0].content) && /Do NOT write a "plan" section/i.test(single[0].content), 'single-doc: writes exec summary, skips the plan (prepended separately)');
 ok(/include all 3 of these organizations/i.test(single[1].content) && /Heritage Foundation/.test(single[1].content), 'compose user lists all orgs + carries the bodies');
 

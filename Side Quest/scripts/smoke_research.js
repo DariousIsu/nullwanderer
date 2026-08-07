@@ -26,6 +26,14 @@ ok(/initials|placeholder/i.test(r.buildOrganizeTargetPrompt({ target: 'X', raw: 
 ok(/\/contact|\/about/i.test(r.buildDeepenPrompt({ goal: 'g', target: 'X' })), 'deepen prompt steers to the org contact/about page (contact-retrieval fix)');
 ok(/open_page|EXHAUST|use the site/i.test(r.buildDeepenPrompt({ goal: 'g', target: 'X' })), 'deepen prompt tells her to EXHAUST a site (open_page) before re-searching (Concern 2)');
 
+// --- INLINE CITATION CARRYING (2026-08-06): sections carry sources NEXT TO claims, not only in a
+// trailing list — the deterministic coverage counter (compose.citationCoverage) can only tell the
+// truth if the organize/merge oracles stop stripping what the passes recorded.
+ok(/PRESERVE inline sources/.test(r.buildOrganizeTargetPrompt({ target: 'X', raw: 'n' })[0].content) && /NEVER mint a URL/.test(r.buildOrganizeTargetPrompt({ target: 'X', raw: 'n' })[0].content), 'organize prompt PRESERVES inline sources and never mints a URL');
+ok(/PRESERVE inline sources/.test(r.buildOrganizeEnrichPrompt({ org: 'X', facet: 'f', raw: 'n' })[0].content), 'enrich-organize prompt PRESERVES inline sources');
+ok(/PRESERVE inline sources/.test(r.buildMergeLanesPrompt({ org: 'X', facet: 'f' })[0].content) && /union of its sources/.test(r.buildMergeLanesPrompt({ org: 'X', facet: 'f' })[0].content), 'merge prompt keeps each fact\'s source through the dedupe (union, never strip)');
+ok(/\(source: <url>\)/.test(r.buildUnderstandTargetPrompt({ goal: 'g', target: 'X', raw: 'n' })[0].content), 'understand prompt still binds every load-bearing fact to an inline source (regression)');
+
 // --- STATUS request detection (Concern 1: frontier-gated progress updates) ---
 ok(r.isStatusRequest("how's the project going") === true, '"how\'s the project going" → status request');
 ok(r.isStatusRequest('How is the think tank project going?') === true, '"How IS the think tank project going" → status (the live miss)');

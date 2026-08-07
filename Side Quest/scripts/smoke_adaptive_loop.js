@@ -124,6 +124,9 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     // heading — a bold heading is invisible to assemble.parseSections, so the brief never composes.
     ok(/under the exact markdown heading "## \$\{nextFacet\}"/.test(m), 'topical sections use "## " headings — the condense oracle can see them (paper reaches briefings)');
     ok(!/under a bold heading "\$\{nextFacet\}"/.test(m), 'REGRESSION: the bold-heading organize prompt is gone');
+    // Inline citation carrying (2026-08-06): the topical organize leaf must pin each source NEXT TO
+    // its claim — a trailing SOURCES list scores 0 with the deterministic coverage counter.
+    ok(/carry its source INLINE next to the claim it supports/.test(m) && /NEVER mint a URL not present in the notes/.test(m), 'topical organize demands inline per-claim sources, never minted');
   }
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
