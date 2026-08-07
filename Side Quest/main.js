@@ -2193,7 +2193,8 @@ app.whenReady().then(() => {
       try {
         if (String(process.env.ZOE_RECHECK || '1') === '0') return;
         const rq = require('./lib/recheck_queue');
-        rq.sweepAbsences({});
+        const _sw = rq.sweepAbsences({});
+        if (_sw.queued) console.log(`[metabolism] swept ${_sw.queued} expired gap(s) into the queue`);
         const capPerHour = parseInt(process.env.ZOE_RECHECK_PER_HOUR, 10) || 12;
         const hour = Math.floor(Date.now() / 3600000);
         if (parseInt(db.getMeta('recheck.hour') || '0', 10) !== hour) { db.setMeta('recheck.hour', String(hour)); db.setMeta('recheck.hour_n', '0'); }
@@ -2201,6 +2202,9 @@ app.whenReady().then(() => {
         if (used >= capPerHour) return;
         const items = rq.due({ limit: Math.min(2, capPerHour - used) });
         if (!items.length) return;
+        // Silence is ambiguous (the first live watch couldn't tell "no work" from "not running") —
+        // announce the plate BEFORE the slow passes begin, and each pass as it starts.
+        console.log(`[metabolism] draining ${items.length} of ${rq.stats().dueNow} due (hour ${used}/${capPerHour})`);
         for (const item of items) {
           markActivity('metabolism');
           try {
@@ -4791,7 +4795,7 @@ async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
 // create/edit landing; the edit net only fires while this is fresh. The markdown is the edit
 // executor's source of truth AND lands as a notes/ file so the product ledger can find the doc
 // later ("pull up that parish list we made" must not miss a canvas-born product).
-const WORKING_CANVAS_FRESH_MS = 2 * 3600 * 1000;
+const WORKING_CANVAS_FRESH_MS = 8 * 3600 * 1000;   // a working DAY — Lucas builds docs "off and on"; 2h expired mid-evening and orphaned his edit
 function _stampWorkingCanvasDoc({ slug, title, md }) {
   try {
     db.setMeta('canvas.working_slug', slug);
