@@ -309,6 +309,8 @@ const smokes = [
   'smoke_report_command.js',
   'smoke_deferral_pause.js',
   'smoke_roster_refresh.js',
+  'smoke_product_ledger.js',
+  'smoke_roster_watch.js',
   'smoke_rehearsal.js',
   'smoke_inquiry.js',
   'smoke_dig.js',

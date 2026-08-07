@@ -2162,7 +2162,23 @@ app.whenReady().then(() => {
     };
     setTimeout(() => { runRosterRefresh(); }, 4 * 60 * 1000).unref?.();       // first due-check ~4m after boot
     setInterval(() => { runRosterRefresh(); }, 24 * 3600 * 1000).unref?.();   // daily chance; run() enforces the weekly cadence
-    console.log('[main] roster-refresh organ armed (weekly; official House/Senate rosters + cross-check)');
+    // ELECTION-NIGHT WATCH (lib/roster_watch, Lucas 2026-08-07: "monitoring election night news").
+    // Every 4h: scan recent news titles for officeholder-change signals (death/resignation/special
+    // election/seat won). A hit clears the organ's cadence stamp (≤1 force per ~day) and fires the
+    // refresh NOW instead of next week. Cheap (one titles SELECT + regex); official feeds stay the
+    // only roster truth. Kill switch ZOE_ROSTER_WATCH=0.
+    const runRosterWatch = () => {
+      try {
+        const w = require('./lib/roster_watch').maybeTrigger({ db });
+        if (w.hits && w.hits.length) {
+          console.log(`[roster-watch] ${w.hits.length} change signal(s): ${w.hits.slice(0, 3).map((h) => h.title.slice(0, 70)).join(' | ')}${w.forced ? ' → refresh forced' : ''}`);
+          if (w.forced) runRosterRefresh();
+        }
+      } catch (e) { console.error('[roster-watch] scan failed:', e.message); }
+    };
+    setTimeout(runRosterWatch, 10 * 60 * 1000).unref?.();
+    setInterval(runRosterWatch, 4 * 3600 * 1000).unref?.();
+    console.log('[main] roster-refresh organ armed (weekly + election-night watch; official House/Senate rosters + cross-check)');
   }
 
   // EMAIL INTAKE LANE — Zoe's own inbox is a subscription surface (newsletters + Gemini meeting-notes).
@@ -4682,6 +4698,37 @@ async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
 // document. This gathers the research docs she HOLDS on the topic, composes ONE report through the
 // caged composer, SAVES it to notes/, and lands it on the canvas — an artifact, not a promise. If she
 // genuinely holds nothing, it says so plainly (and does NOT fabricate a document).
+// Land a HELD product (found by the pull-up gate) on the canvas and hand it over honestly: what it
+// is, when it was made, where it came from — never a regenerated substitute. The sibling of
+// buildReportFromHeld: that one COMPOSES from held material; this one RETRIEVES a finished product.
+async function presentHeldProduct({ io, channel, sessionId, hit, alternates = [], subject }) {
+  let title = '', markdown = '', ref = '';
+  try {
+    if (hit.kind === 'doc') {
+      const row = db.getDb().prepare('SELECT id, title, body, source, created_ts FROM documents WHERE id = ?').get(hit.id);
+      if (!row) throw new Error(`doc #${hit.id} vanished`);
+      title = String(row.title || `Document #${row.id}`).slice(0, 90);
+      markdown = String(row.body || '').slice(0, 30000);
+      ref = `document #${row.id} (${row.source || 'held'})`;
+    } else {
+      const p = filesLib.resolvePath(hit.path);
+      markdown = String(require('fs').readFileSync(p, 'utf8')).slice(0, 30000);   // no module-level fs in main.js
+      title = hit.title.replace(/\.md$/i, '');
+      ref = hit.path;
+    }
+  } catch (e) {
+    console.error('[pull-up] load failed:', e.message);
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[You matched a held product for "${subject}" (${hit.label}) but could not load it: ${e.message}. Say so plainly and offer to rebuild — do NOT silently substitute a fresh query.]` });
+    return;
+  }
+  const when = new Date(hit.ts).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const slug = `pullup-${String(title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'product'}`;
+  try { await promiseArtifactEmit({ slug, title: title.slice(0, 60), markdown }); } catch {}
+  console.log(`[pull-up] held product landed on canvas: ${hit.label} (made ${when})`);
+  const altNote = alternates.length ? ` If that is not the one he means, the other matches were: ${alternates.map((a) => a.label).join(' · ')} — name them briefly.` : '';
+  await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked you to PULL UP a product you two already made ("${subject}"). The ACTUAL artifact — ${ref}, made ${when} ET — is now on his Canvas. Tell him that in your own voice: what it is and when it was made. Do NOT present freshly-queried data as this product, and do NOT offer new research unless he asks.${altNote}]` });
+}
+
 async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) {
   const t = String(topic || '').trim();
   const like = `%${t.replace(/[%_]/g, '')}%`;
@@ -4719,7 +4766,10 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   const slug = t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'report';
   const rel = `notes/report-${slug}.md`;
   let saved = false;
-  try { fs.writeFileSync(filesLib.resolvePath(rel), `# Report — ${t}\n\n${md}\n\n---\n_Composed from ${rows.length} held research document(s): ${rows.map((r) => '#' + r.id).join(', ')}._\n`, 'utf8'); saved = true; }
+  // LATENT BUG FIX (found 08-07 via lint): main.js has no module-level `fs` — this call threw
+  // ReferenceError into the catch on EVERY report, so the notes/ file never actually saved
+  // (the canvas copy masked it). require inline like every other main.js call site.
+  try { require('fs').writeFileSync(filesLib.resolvePath(rel), `# Report — ${t}\n\n${md}\n\n---\n_Composed from ${rows.length} held research document(s): ${rows.map((r) => '#' + r.id).join(', ')}._\n`, 'utf8'); saved = true; }
   catch (e) { console.error('[report-cmd] save failed:', e.message); }
   try { await promiseArtifactEmit({ slug: `report-${slug}`, title: `Report — ${t}`.slice(0, 60), markdown: md }); } catch {}
   console.log(`[report-cmd] report on "${t}" composed (${md.length}ch) → ${saved ? rel : '(save failed)'} + canvas`);
@@ -9570,6 +9620,32 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // already held), and the delivery-promise net only materializes a ROSTER (held_roster). Nothing
     // COMPOSED A REPORT FROM HELD RESEARCH DOCS. This net does exactly that, and runs FIRST so an
     // explicit order can never fall through to a placeholder again. Kill switch: ZOE_REPORT_CMD=0.
+    // PRODUCT PULL-UP GATE (2026-08-07, lib/product_ledger — the Louisiana list, #11102/#11103):
+    // "pull up that most recent list … we found contact information for" is a RETRIEVAL of a prior
+    // product — the artifact existed (inquiry #201's docs) and she regenerated a different list from
+    // the CRM instead. Retrieval-first: on a product-shaped ask, search the stores products land in
+    // and present the ACTUAL artifact; regeneration becomes an explicit offer, never a silent
+    // substitution. A miss falls through un-fired so the report-command net / operator can still
+    // build fresh, honestly. Runs BEFORE report-cmd: handing over an existing report beats
+    // recomposing it. Kill switch ZOE_PRODUCT_LEDGER=0.
+    if (!followupFired && !/^(0|false|off)$/i.test(String(process.env.ZOE_PRODUCT_LEDGER || '').trim())) {
+      let _pask = null;
+      try { _pask = require('./lib/product_ledger').detectAsk(userMessage); } catch {}
+      if (_pask && _pask.subject) {
+        let _phits = [];
+        try { _phits = require('./lib/product_ledger').searchProducts({ db, query: _pask.subject, notesDir: filesLib.resolvePath('notes'), limit: 3 }); }
+        catch (e) { console.error('[pull-up] search failed:', e.message); }
+        if (_phits.length) {
+          followupFired = true;
+          console.log(`[pull-up] product ask "${_pask.subject}" → ${_phits.length} held product(s), top: ${_phits[0].label}`);
+          presentHeldProduct({ io, channel, sessionId, hit: _phits[0], alternates: _phits.slice(1), subject: _pask.subject })
+            .catch((e) => console.error('[pull-up] present failed:', e.message));
+        } else {
+          console.log(`[pull-up] product ask "${_pask.subject}" → no held product matched — falling through (a fresh build must be offered, not substituted)`);
+        }
+      }
+    }
+
     if (!followupFired && !/^(0|false|off)$/i.test(String(process.env.ZOE_REPORT_CMD || '').trim())) {
       let _rcmd = null;
       try { _rcmd = require('./lib/report_command').detect(userMessage); } catch {}
