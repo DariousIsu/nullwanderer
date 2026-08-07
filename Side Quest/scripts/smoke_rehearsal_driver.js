@@ -361,6 +361,14 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
     ok(/"study":"<what you RESEARCHED/.test(TOOL_SPEC), 'the study param is documented in the tool signature');
   }
 
-  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+  // CODE-MODEL routing (Lucas 2026-08-06: "run all programming related calls through kimi 2.7 code")
+{
+  const cfg = require('../lib/config');
+  ok(cfg.codeModel() === 'kimi-k2.7-code' || process.env.ZOE_CODE_MODEL, 'config.codeModel defaults to kimi-k2.7-code (ZOE_CODE_MODEL overrides)');
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'rehearsal_driver.js'), 'utf8');
+  ok((src.match(/require\('\.\/config'\)\.codeModel\(\)/g) || []).length === 2, 'both driver asks (edit pick + refuter) route to the code model, deps-overridable');
+}
+
+console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

@@ -215,6 +215,13 @@ function subcConcurrentLanes() { return !/^(0|false|no|off)$/i.test(get('ZOE_SUB
 // this is NOT for high-volume tool-calling or utility extraction — only the calls where depth clearly wins.
 function deepReasonerModel() { return get('ZOE_DEEP_REASONER_MODEL').trim() || subconsciousModel() || 'gpt-oss:120b-cloud'; }
 
+// --- CODE MODEL (Lucas 2026-08-06: "run all programming related calls through kimi 2.7 code") —
+// programming-shaped work: the rehearsal loop's edit picks + refutes (writing and breaking code)
+// and any future code-gen door. Benched (scripts/bench_verify_judge.js, editor-verify): kimi-k2.7-code
+// was the only model that never missed a precision case on exact-edit judging — the same discipline
+// edit PICKING needs. NOT for general research/extraction. Override via ZOE_CODE_MODEL.
+function codeModel() { return get('ZOE_CODE_MODEL').trim() || 'kimi-k2.7-code'; }
+
 // --- PULLER PIPELINE (cloud-leverage Slice 3) — the DISCOVER→CONTACT→ENRICH producer/consumer pipeline
 // (lib/pipeline.js). ON by default; ZOE_PIPELINE=0 reverts the idle tick to the legacy coupled lanes
 // (runPullerMove enrich-then-discover + independent runSocialEnrichMove) with no behavior change.
@@ -281,4 +288,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, claimModel, graphModel, importanceModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, investigateHops, investigateHubCap, investigateBudget, deepNumCtx, deepNumPredict, sectionNumPredict, toolResultChars, followupResultChars, maxEchoHops, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, companionConfig, usageConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, claimModel, graphModel, importanceModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, investigateHops, investigateHubCap, investigateBudget, deepNumCtx, deepNumPredict, sectionNumPredict, toolResultChars, followupResultChars, maxEchoHops, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, codeModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, companionConfig, usageConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };

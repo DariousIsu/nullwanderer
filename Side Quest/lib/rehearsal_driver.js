@@ -197,6 +197,9 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
         diff_so_far: (() => { try { return str(R.diff({ slug: run.slug })).slice(0, 2500); } catch { return '(diff unavailable)'; } })(),
         last_test_output: _squeezeTestOutput(run.lastResult) || '(no test run yet)',
       },
+      // CODE MODEL (Lucas 2026-08-06): edit picking is programming work — route it to the code
+      // slot (benched: only kimi-k2.7-code never missed an exact-edit precision case).
+      model: (deps.model) || require('./config').codeModel(),
       want: EDIT_WANT, validate: validateEditPick, numPredict: 1400, think: false,
     });
   } catch (e) { _pickThrew = e; console.error('[rehearsal-driver] edit pick failed:', e.message); }
@@ -323,6 +326,7 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
     try {
       refuter = await ask({
         task: 'rehearsal_refute', v: 1, think: false,
+        model: (deps.model) || require('./config').codeModel(),   // breaking code IS code work
         input: { goal: run.goal, diff: diff.slice(0, 6000) },
         want: `You are a REFUTER. Your ONLY job is to BREAK this change: name the concrete input, state, or code path that makes the diff wrong or leaves the goal unmet. Do not praise it. Default to "refuted" when uncertain.
 Reply ONLY: {"verdict": "survives"|"refuted", "scenario": "<the concrete failure scenario — or, for survives, the hardest case you tried and why it held>"}`,
