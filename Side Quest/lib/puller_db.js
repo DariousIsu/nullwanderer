@@ -201,6 +201,31 @@ const pj = (s, dflt) => { if (s == null) return dflt; try { return JSON.parse(s)
 const _ORG_NAME_RE = /\b(?:center|centre|institute|institution|foundation|university|college|committee|association|council|coalition|federation|alliance|society|bureau|agency|department|ministry|corporation|corp|incorporated|inc|llc|llp|ltd|company|holdings|fund|pac|project|caucus|commission|authority|league|union|academy|museum|library|laboratory|labs|senate|legislature|assembly|office|board|county|parish|campaign|partners|group)\b/i;
 function orgShapedName(name) { return _ORG_NAME_RE.test(String(name || '')); }
 
+// M4.4 FOLLOW-UP (2026-08-07) — re-kind the PRE-DOOR stock. The org door below stops NEW org-shaped
+// names from enrolling as persons, but the rows enrolled before it existed (measured 271,334, 100%
+// kind='person') still degrade every org ask to a person walk. One bounded, idempotent sweep: each
+// person row whose name the door's OWN detector calls org-shaped becomes kind='org' — the same
+// conservative token list, so a name the door would refuse today is exactly a name this re-kinds.
+// Chunked with an event-loop yield so the full-table scan never wedges the main thread.
+async function backfillOrgKinds({ chunk = 20000, onProgress = null } = {}) {
+  const d = _db();
+  let scanned = 0, rekinded = 0, lastId = 0;
+  for (;;) {
+    const rows = d.prepare('SELECT id, name FROM targets WHERE kind = ? AND id > ? ORDER BY id LIMIT ?').all('person', lastId, chunk);
+    if (!rows.length) break;
+    const flip = [];
+    for (const r of rows) { scanned++; if (orgShapedName(r.name)) flip.push(r.id); lastId = r.id; }
+    if (flip.length) {
+      const tx = d.transaction((ids) => { const u = d.prepare(`UPDATE targets SET kind = 'org' WHERE id = ?`); for (const id of ids) u.run(id); });
+      tx(flip);
+      rekinded += flip.length;
+    }
+    if (onProgress) { try { onProgress({ scanned, rekinded }); } catch { /* progress is cosmetic */ } }
+    await new Promise((res) => setImmediate(res));
+  }
+  return { scanned, rekinded };
+}
+
 function createTarget({ kind = 'person', name, company = null, domain = null, function: fn = null,
                         priority = null, status = 'adhoc', crmId = null, notes = null } = {}) {
   if (!name) throw new Error('createTarget: name required');
@@ -617,7 +642,7 @@ function splitTarget(fromId, { obsIds = [], name, company = null, domain = null,
 
 module.exports = {
   init, close,
-  createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, bulkCompanies, eachTargetKey, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName,
+  createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, bulkCompanies, eachTargetKey, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName, backfillOrgKinds,
   addObservation, listObservations, observationCounts, failedAddresses,
   upsertBelief, getBelief, beliefValuesByType, listBeliefs, markSendState, listBeliefsBySendState,
   getPatternState, savePatternState,
