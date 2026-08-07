@@ -2222,6 +2222,12 @@ app.whenReady().then(() => {
     console.log(`[main] metabolism armed — recheck queue drains on gemma4:31b-cloud (cap ${parseInt(process.env.ZOE_RECHECK_PER_HOUR, 10) || 12}/h)`);
   }
 
+  // THE INSIDE ACCESS PORT (2026-08-08, Lucas) — localhost-only door that drives the REAL chat
+  // pipeline for full pathway tests (see lib/test_port.js). ZOE_TEST_PORT=0 disables.
+  if (process.env.ZOE_TEST_PORT !== '0') {
+    try { require('./lib/test_port').start({ runChatTurn }); } catch (e) { console.error('[test-port] failed to start:', e.message); }
+  }
+
   // PULLER ORG-KIND BACKFILL — one-shot organ, meta-gated (M4.4 follow-up, 2026-08-07). The org
   // door only guards NEW enrollments; the pre-door stock (271k person rows, org-shaped names among
   // them) still routed org asks to person walks. Runs once (~12m after boot, chunked + yielding),
