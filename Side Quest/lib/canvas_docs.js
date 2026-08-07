@@ -97,6 +97,15 @@ function recordBlock({ tabKey, blockId, blockType = 'paragraph', data = {} } = {
   return true;
 }
 
+// Drop every mirrored block of one tab (2026-08-08, the stacked parish tab): a whole-document
+// re-emit REPLACES the doc, and the durability mirror must match — otherwise the boot replay
+// resurrects every superseded revision as extra blocks under the current one.
+function clearTabBlocks(tabKey) {
+  const key = str(tabKey);
+  if (!key) return 0;
+  try { return _db().prepare(`DELETE FROM blocks WHERE tab_key = ?`).run(key).changes; } catch { return 0; }
+}
+
 // Every stored document, oldest-opened first, each with its blocks in stream order — the replay list.
 function all() {
   const d = _db();
@@ -137,4 +146,4 @@ function clear() {
 // actually happen this turn?" before trusting a reply's "…on your canvas" claim. 0 if none / on error.
 function lastWriteTs() { try { const r = _db().prepare('SELECT MAX(updated_at) AS m FROM docs').get(); return (r && r.m) || 0; } catch { return 0; } }
 
-module.exports = { init, _db, close, recordTab, recordBlock, all, forget, prune, clear, lastWriteTs, MAX_BLOCK_BYTES, KEEP_DOCS };
+module.exports = { init, _db, close, recordTab, recordBlock, clearTabBlocks, all, forget, prune, clear, lastWriteTs, MAX_BLOCK_BYTES, KEEP_DOCS };

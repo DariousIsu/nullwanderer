@@ -4968,6 +4968,14 @@ async function promiseArtifactEmit({ slug, title, markdown }) {
     if (!(await ensureEngine())) return false;
     const callTool = pollCallTool();
     const tabKey = `promise-${slug}`;
+    // REPLACE, never append (2026-08-08, the stacked parish tab): every caller here means "this
+    // doc's content IS this markdown" — but add_block on a re-emit APPENDED, so an "updated in
+    // place" doc stacked its old revisions above the new one (the ruined-edit narrations sat as
+    // blocks 1-2 under the intact parish list). Close the tab first (clears the engine's blocks;
+    // fail-soft — a not-open tab just no-ops), purge the durability mirror's blocks to match, then
+    // open fresh and land the one body block.
+    try { await callTool('saga_canvas_close_tab', { tab_key: tabKey }); } catch {}
+    try { require('./lib/canvas_docs').clearTabBlocks(tabKey); } catch {}
     await callTool('saga_canvas_open_tab', { mode: 'DOC', tab_key: tabKey, title: String(title || 'Promised document').slice(0, 60) });
     const r = await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'paragraph', data: { markdown: String(markdown || '') } });
     canvasMirror(tabKey, 'DOC', String(title || 'Promised document').slice(0, 60), (r && r.block_id) || null, 'paragraph', { markdown: String(markdown || '') });

@@ -61,6 +61,17 @@ for (let i = 0; i < 5; i++) {
 }
 ok('prune keeps N most recent', S.prune({ keep: 2 }) === 4 && S.all().length === 2);
 
+// clearTabBlocks: a whole-doc re-emit REPLACES — the mirror drops the tab's old blocks (and only
+// that tab's), so the boot replay can't resurrect superseded revisions (08-08, the stacked parish tab).
+S.recordTab({ tabKey: 'promise-parishes', mode: 'DOC', title: 'parishes' });
+S.recordBlock({ tabKey: 'promise-parishes', blockId: 'old-1', data: { markdown: 'original list' } });
+S.recordBlock({ tabKey: 'promise-parishes', blockId: 'old-2', data: { markdown: 'ruin narration' } });
+ok('clearTabBlocks drops only that tab\'s blocks', S.clearTabBlocks('promise-parishes') === 2
+  && S.all().find(d => d.tabKey === 'promise-parishes').blocks.length === 0
+  && S.all().some(d => d.tabKey !== 'promise-parishes' && d.blocks.length > 0));
+S.recordBlock({ tabKey: 'promise-parishes', blockId: 'new-1', data: { markdown: 'updated doc' } });
+ok('re-emit after clear lands as the only block', S.all().find(d => d.tabKey === 'promise-parishes').blocks.length === 1);
+
 ok('clear all', S.clear() >= 1 && S.all().length === 0);
 
 S.close();
