@@ -26,6 +26,14 @@ const LOCKED_RE = /(?:^|_)(send_email|email_send|send_mail|generate_image|image_
 // HEAVY — spawns background agents / workflows / heavy delegation. Off the AUTONOMOUS loop (usable
 // interactively when Lucas is present), because one tag can fan out into a fleet of cloud agents.
 const HEAVY_RE = /^(spawn_agent|spawn_agent_async|spawn_workflow|team_spawn|agent_fire|hire_card|propose_hire|run_pass|run_engagement_auto_promotion|delegate_to_)/i;
+// SHELL — the write→run→read→fix actuator (os_run_powershell captures stdout/stderr/returncode
+// from a real PowerShell run). Its OWN tier, deliberately distinct from desktop control: a shell
+// that runs arbitrary code is a strictly LARGER authority than clicking a known pixel, so it is
+// OPERATOR-PRESENT ONLY and is NEVER admitted on the autonomous loop — unlike the os_*/gui_do
+// carve (DESKTOP_CONTROL_RE), which WAS authorized for unattended desktop work. Excluded from that
+// carve below by an explicit negative lookahead. The Echo-side gate still runs underneath
+// (permissions.decide confirm + SENSITIVE_TARGETS backstop force an operator confirmation).
+const SHELL_RE = /^(?:os_)?run_powershell$/i;
 // PROPOSE — an ADDITIVE, auto-disambiguated, reversible write: propose_entity / propose_relation /
 // propose_link / propose_question_concept only ADD nodes/edges, and Echo auto-disambiguates against
 // existing entities (Levenshtein 0.85 → created / already_exists / merge_suggested, never a blind
@@ -100,13 +108,14 @@ const READ_FAMILY_RE = new RegExp('^(?:' + [
 // permissions.decide()'s SENSITIVE_TARGETS backstop (bank/login/credentials/regedit/…) still force
 // an operator confirmation even on the autonomous loop, so a sensitive action pauses rather than
 // firing unattended.
-const DESKTOP_CONTROL_RE = /^(?:os_(?!set_policy\b|approval_resolve\b)|gui_do)/i;
+const DESKTOP_CONTROL_RE = /^(?:os_(?!set_policy\b|approval_resolve\b|run_powershell\b)|gui_do)/i;
 
 // What kind of tool is this? Pure. Order: LOCKED → HEAVY → WRITE → READ → (unknown ⇒ write).
 function classifyTool(name) {
   const n = String(name || '').trim();
   if (!n) return 'locked';
   if (LOCKED_RE.test(n)) return 'locked';
+  if (SHELL_RE.test(n)) return 'shell';   // before WRITE: os_run_powershell matches the os_ prefix
   if (HEAVY_RE.test(n)) return 'heavy';
   if (PROPOSE_RE.test(n)) return 'propose';   // before WRITE: propose_* also matches WRITE_RE
   if (WRITE_RE.test(n)) return 'write';   // stays FIRST — an Echo-internal mutation always wins
@@ -153,6 +162,7 @@ function policyFor(name, { autonomous = false, maintain = false } = {}) {
   const tier = classifyTool(name);
   if (tier === 'locked') return { allow: false, tier, reason: 'hard-locked (email-send / image-gen are off by design)' };
   if (autonomous) {
+    if (tier === 'shell') return { allow: false, tier, reason: 'shell execution (os_run_powershell) is OPERATOR-PRESENT ONLY — it is not on the autonomous desktop-control carve; name what you need run and surface it to Lucas instead of running it unattended' };
     if (tier === 'read') return { allow: true, tier, reason: 'read tool — allowed on the autonomous loop' };
     if (tier === 'propose') return { allow: true, tier, reason: 'propose tool — allowed on the autonomous loop (non-committing; Echo gates promotion)' };
     if (DESKTOP_CONTROL_RE.test(name)) {

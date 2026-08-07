@@ -20,6 +20,12 @@ ok('seeds all defaults', rows.length === perms.DEFAULTS.length, `${rows.length} 
 ok('files_workspace granted', perms.status('files_workspace') === 'granted');
 ok('send_email is granted_with_judgment', perms.status('send_email') === 'granted_with_judgment');
 ok('unknown capability → null', perms.status('nope_not_real') === null);
+// M2.5.5 shell lane: she knows she HAS the run_script capability, and that it is operator-present only.
+ok('run_script seeded (granted_with_judgment)', perms.status('run_script') === 'granted_with_judgment');
+{
+  const b = perms.buildPromptBlock();
+  ok('run_script surfaces in her prompt as OPERATOR-PRESENT ONLY', /run_script/.test(b) && /OPERATOR-PRESENT ONLY/.test(b) && /os_run_powershell/.test(b));
+}
 
 console.log('\nInjection block:');
 const block = perms.buildPromptBlock();

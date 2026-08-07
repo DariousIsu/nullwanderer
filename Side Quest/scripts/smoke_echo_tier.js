@@ -49,6 +49,18 @@ ok(tier.policyFor('propose_entity', { autonomous: false }).allow === true, 'inte
 ok(tier.policyFor('spawn_agent_async', { autonomous: false }).allow === true, 'interactive + heavy → allow (Lucas present)');
 ok(tier.policyFor('send_email', { autonomous: false }).allow === false, 'interactive + locked → STILL block');
 
+// --- SHELL tier (M2.5.5): the write→run→read→fix actuator, operator-present ONLY ---
+ok(tier.classifyTool('os_run_powershell') === 'shell', 'os_run_powershell → shell (its OWN tier, not desktop-control write)');
+ok(tier.classifyTool('run_powershell') === 'shell', 'run_powershell (bare name) → shell too');
+ok(tier.allowedOnAuto('os_run_powershell') === false, 'shell is NOT admitted on the autonomous loop (unlike os_*/gui_do desktop control)');
+ok(tier.allowedOnAuto('os_click') === true, 'REGRESSION: os_click (desktop control) IS still admitted on auto — the shell carve-out did not narrow it');
+{
+  const autoShell = tier.policyFor('os_run_powershell', { autonomous: true });
+  ok(autoShell.allow === false && /operator-present only/i.test(autoShell.reason) && /surface it to Lucas/i.test(autoShell.reason), 'auto + shell → BLOCKED with a door-naming reason (autonomous-loop attempt refused, names the door)');
+  ok(tier.policyFor('os_run_powershell', { autonomous: false }).allow === true, 'interactive + shell → allow (Lucas present; the Echo-side confirm gate still runs underneath)');
+  ok(tier.policyFor('os_run_powershell', { autonomous: true, maintain: true }).allow === false, 'even a MAINTAIN pass cannot admit shell — it is not on the maintenance allowlist');
+}
+
 // --- the curated read menu surfaces in the operator's TOOL_SPEC ---
 const spec = operator.TOOL_SPEC;
 ok(/nonprofit_lookup/.test(spec), 'operator menu includes nonprofit_lookup');
