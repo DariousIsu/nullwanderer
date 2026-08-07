@@ -33,8 +33,14 @@ const CAPTIONS_JS = `(() => {
       document.querySelector('[data-tid="closed-caption-v2-container"]') ||
       document.querySelector('[data-tid="closed-caption-renderer"]') ||
       document.querySelector('[data-tid="closed-captions-renderer"]') ||
+      // 2026-08-07 live meeting: captions were ON (the "Hide live captions" toggle present) yet all
+      // four exact tids missed for the whole call — the light-meetings DOM names its container
+      // differently. Widen: any non-button closed-caption-tagged node with text, then any live
+      // region/log with text (captions are an aria-live surface by accessibility requirement).
+      Array.from(document.querySelectorAll('[data-tid*="closed-caption" i],[data-tid*="caption" i]')).find(e => e.tagName !== 'BUTTON' && !e.closest('button') && (e.textContent||'').trim().length > 0) ||
       document.querySelector('[class*="closedCaption" i]') ||
-      Array.from(document.querySelectorAll('[aria-label*="aption" i],[role="region"][aria-label*="aption" i]')).find(e => (e.textContent||'').trim().length > 0);
+      Array.from(document.querySelectorAll('[aria-label*="aption" i],[role="region"][aria-label*="aption" i]')).find(e => (e.textContent||'').trim().length > 0) ||
+      Array.from(document.querySelectorAll('[aria-live="polite"],[aria-live="assertive"],[role="log"]')).find(e => !e.closest('button') && (e.textContent||'').replace(/\\s+/g,' ').trim().length > 5);
     if (!region) return '';
     // Each caption line — data-tid on the chat message, else structural children.
     let rows = Array.from(region.querySelectorAll('[data-tid="closed-caption-message"], [class*="captionMessage" i], [class*="ccMessage" i]'));
@@ -102,8 +108,10 @@ const DOM_SNAPSHOT_JS = `(() => {
     const out = ['url: ' + location.href];
     // Interactive controls FIRST (buttons/switches/inputs) so the Join button + mic/cam toggles always
     // show; then other tagged elements. Include aria-checked so we can see the mic/cam on/off state.
-    const controls = Array.from(document.querySelectorAll('button,[role="button"],[role="switch"],input,a[href]')).slice(0, 45);
-    const tagged = Array.from(document.querySelectorAll('[data-tid]')).filter(e => controls.indexOf(e) < 0).slice(0, 20);
+    // Caps lifted 45/20 → 80/60 (2026-08-07): the in-call dump never reached the caption region —
+    // the one node the heal signal existed to find — because the tag budget ran out on stage tiles.
+    const controls = Array.from(document.querySelectorAll('button,[role="button"],[role="switch"],input,a[href]')).slice(0, 80);
+    const tagged = Array.from(document.querySelectorAll('[data-tid]')).filter(e => controls.indexOf(e) < 0).slice(0, 60);
     for (const e of controls.concat(tagged)) {
       const tid = e.getAttribute('data-tid') || '';
       const al = (e.getAttribute('aria-label') || '').replace(/\\s+/g,' ').trim().slice(0, 50);
@@ -113,6 +121,17 @@ const DOM_SNAPSHOT_JS = `(() => {
       if (!tid && !al && !tx) continue;
       out.push('· ' + e.tagName.toLowerCase() + (tid ? ' data-tid=' + tid : '') + (al ? ' aria="' + al + '"' : '') + (chk != null ? ' checked=' + chk : '') + (tx ? ' text="' + tx + '"' : ''));
     }
+    // CAPTION PROBE (2026-08-07): name what the caption surface actually IS — every non-button
+    // caption-tagged node and every live-region, with a text sample. This line is the heal signal
+    // the 08-07 meeting lacked: 101 empty scrapes with captions ON, and nothing said what to anchor.
+    try {
+      const capNodes = Array.from(document.querySelectorAll('[data-tid*="caption" i]')).filter(e => e.tagName !== 'BUTTON').slice(0, 4)
+        .concat(Array.from(document.querySelectorAll('[aria-live="polite"],[aria-live="assertive"],[role="log"]')).slice(0, 4));
+      for (const e of capNodes) {
+        out.push('cap· ' + e.tagName.toLowerCase() + ' tid=' + (e.getAttribute('data-tid') || '') + ' live=' + (e.getAttribute('aria-live') || '') + ' cls=' + String(e.className || '').slice(0, 50) + ' text="' + (e.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80) + '"');
+      }
+      if (!capNodes.length) out.push('cap· none found (no caption-tagged nodes, no live regions)');
+    } catch {}
     const body = (document.body.innerText || '').toLowerCase();
     out.push('signals: joinBtn=' + !!document.querySelector('[data-tid="prejoin-join-button"],button[aria-label*="Join now" i]')
       + ' hangup=' + !!document.querySelector('[data-tid="hangup-main-btn"],[data-tid="call-hangup"],#hangup-button')

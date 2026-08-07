@@ -269,7 +269,7 @@ async function runTick(ctx = {}) {
     // NOT confirmed in. DUMP the live controls + page state (heal signal) so the real Teams join DOM can
     // be mapped from the log — this is how Meet's selectors were healed. The dump tells us whether she's
     // stuck on a login page (auth/CSP), a "continue on browser" gate, or a prejoin with wrong selectors.
-    try { if (d.dumpDom) { const dom = await d.dumpDom(d.web); if (dom) console.log('[teams] JOIN DOM (heal signal) ↓\n' + String(dom).slice(0, 2500)); } } catch {}
+    try { if (d.dumpDom) { const dom = await d.dumpDom(d.web); if (dom) { console.log('[teams] JOIN DOM (heal signal) ↓\n' + String(dom).slice(0, 2500)); try { require('fs').writeFileSync(require('path').join(__dirname, '..', 'data', `teams_dom_join_${Date.now()}.txt`), String(dom)); } catch {} } } } catch {}
     const gv = _strike();
     if (gv) { try { ctx.onSurface && ctx.onSurface(`I couldn't get into the Teams meeting (${(r && r.reason) || "the join screen didn't cooperate — Teams may not accept the in-app browser, or I'm not signed in"}). ${ctx.userName || 'Lucas'}, could you check the link or let me in?`); } catch {} }
     return { stage, ok: false, note: `join not confirmed (recipe ${r && r.ok ? 'clicked but no in-call/lobby signal' : 'failed: ' + (r && r.reason)})${gv ? ' — asked Lucas' : ''}` };
@@ -322,7 +322,9 @@ async function runTick(ctx = {}) {
     // IN-CALL heal signal — she IS in the meeting now (past join + lobby + admit), so this dump shows the
     // real in-call DOM: the meeting chat button/composer AND the "More"/captions controls. This is how we
     // map the chat + caption clicks (the last unhealed piece), same as the prejoin dump mapped the join.
-    try { if (d.dumpDom) { const dom = await d.dumpDom(d.web); if (dom) console.log('[teams] IN-CALL DOM (heal signal — chat/captions) ↓\n' + String(dom).slice(0, 3000)); } } catch {}
+    // The log slice stays bounded; the FULL dump goes to a file — the 08-07 meeting's healing was
+    // blinded by this exact truncation (the caption region never made the 3,000-char window).
+    try { if (d.dumpDom) { const dom = await d.dumpDom(d.web); if (dom) { console.log('[teams] IN-CALL DOM (heal signal — chat/captions) ↓\n' + String(dom).slice(0, 3000)); try { const fp = require('path').join(__dirname, '..', 'data', `teams_dom_incall_${Date.now()}.txt`); require('fs').writeFileSync(fp, String(dom)); console.log(`[teams] full DOM dump → ${fp}`); } catch {} } } } catch {}
     // CHAT MAY BE BLOCKED FOR EXTERNALS (the doc's flagged risk). She could not post the MANDATORY
     // disclosure — surface it LOUDLY. She still observes (captions are her perception), but Lucas must
     // know the room was not told she's present, so he can disclose for her or reconsider.
