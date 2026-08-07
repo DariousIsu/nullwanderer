@@ -419,11 +419,23 @@ function sweepOrphanedTempDbs(label) {
     // directories behind on the first pass.
     const FILE_RE = /^(?:sq_|ss_)[\w-]*\.(?:db|json)(?:-wal|-shm)?$/;
     const DIR_RE = /^(?:sq_|ss_)[\w-]+$/;
+    // ⚠ CONCURRENCY-SAFE (2026-08-07). The tmpdir is SHARED across every gate run on the machine —
+    // including a rehearsal SANDBOX gate running at the same time as this one. Sweeping by name alone
+    // deleted a CONCURRENT run's in-flight temp DBs out from under it, so its suites failed when their
+    // database vanished mid-test — measured live: need #48's sandbox gate flaked on a rotating set
+    // (vision/operator/cognition) that all pass in isolation, which kept the R2 proposal card just out
+    // of reach. An ORPHAN is by definition from a process that already exited, so it is OLD; a live
+    // run's files are FRESH. Skip anything modified within the grace window — a concurrent gate's
+    // files are never younger-bounded away, and real orphans still age past it and get swept later.
+    const GRACE_MS = 5 * 60 * 1000;
+    const cutoff = Date.now() - GRACE_MS;
     let swept = 0;
     for (const e of fs.readdirSync(tmpDir, { withFileTypes: true })) {
       const isDir = e.isDirectory();
       if (!(isDir ? DIR_RE : FILE_RE).test(e.name)) continue;
-      try { fs.rmSync(path.join(tmpDir, e.name), { force: true, recursive: isDir }); swept++; } catch { /* still locked by a live run */ }
+      const full = path.join(tmpDir, e.name);
+      try { if (fs.statSync(full).mtimeMs > cutoff) continue; } catch { continue; }   // fresh (maybe a live run's) → leave it
+      try { fs.rmSync(full, { force: true, recursive: isDir }); swept++; } catch { /* still locked by a live run */ }
     }
     if (swept) console.log(`swept ${swept} orphaned smoke temp file(s) ${label}`);
   } catch { /* never let housekeeping block the gate */ }
