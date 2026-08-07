@@ -391,6 +391,41 @@ function respinHit(rawUrl, { autonomous = false, now = Date.now() } = {}) {
   return null;
 }
 
+// WHOLE-PAGE INGEST (2026-08-08, Lucas: "she should be ingesting whole pages … if she's ever going
+// back she shouldn't ever need the same page twice"). Measured before this: appj.org fetched 21×,
+// springfield.il.us 856×, and doc_id NULL on every site_visits row — the ledger counted visits but
+// held NOTHING to reuse, so every "skip" would have been blind and every return paid the network
+// again. Every successful read now lands the page text as ONE LIVING DOCUMENT per URL: first read
+// inserts, a TTL-earned re-read updates the same doc in place (never a duplicate), and the ledger
+// row carries the doc id — the pointer shouldSkip serves. SERPs are excluded (results pages are
+// not content — they keep their own kind + short TTL). The 200ch floor is not a content cap: below
+// it a "page" is navigation chrome or an error shell, and ingesting those as knowledge would let
+// junk docs outrank real ones in every downstream search.
+function _ingestReading(rawUrl, title, pageText, now = Date.now()) {
+  const sl = require('./site_ledger');
+  const url = sl.normalizeUrl(rawUrl);
+  const body = String(pageText || '').trim();
+  if (!url) return;
+  if (sl.isSerp(url) || body.length < 200) {
+    sl.record(rawUrl, { kind: sl.isSerp(url) ? 'serp' : 'page', chars: body.length });
+    return;
+  }
+  const db = require('./db');
+  let docId = null;
+  const row = sl.seen(url);
+  if (row && row.doc_id) {
+    try {
+      const r = db.getDb().prepare('UPDATE documents SET body = ?, title = COALESCE(?, title), updated_ts = ? WHERE id = ?')
+        .run(body, title || null, now, row.doc_id);
+      if (r.changes) docId = row.doc_id;                    // 0 changes = the doc was deleted → insert fresh below
+    } catch {}
+  }
+  if (!docId) {
+    try { const r = db.insertDocument({ title: title || url, body, source: 'web_page', origin: rawUrl, fetchUrl: rawUrl }); docId = r && r.id; } catch {}
+  }
+  sl.record(rawUrl, { kind: 'page', chars: body.length, docId });
+}
+
 async function open(target, { autonomous = false } = {}) {
   const url = toUrl(target);
   if (!url) return { ok: false, reason: 'empty target' };
@@ -401,6 +436,24 @@ async function open(target, { autonomous = false } = {}) {
     const mins = Math.round((Date.now() - _hit.ts) / 60000);
     console.log(`[web] re-spin brake — served cached read of ${url} (${mins}m old, no fetch)`);
     return { ok: true, url: _hit.url, title: _hit.title, dedup: true, reading: _hit.text, why: `already read ${mins}m ago` };
+  }
+  // DURABLE REUSE (2026-08-08): past the 15-min in-memory window, the LEDGER + the ingested page
+  // serve the same contract for the content TTL — the site map made real. Same opt-in flag as the
+  // brake (callers passing autonomous:true already handle o.dedup/o.reading; screen-dependent flows
+  // like seePage/excavate never opt in, so they always get a live page). Only fires when the held
+  // copy EXISTS (doc_id) — a visit count with no content would be a blind skip; a pointerless row
+  // re-fetches once and the ingest above heals it.
+  if (autonomous) {
+    try {
+      const sk = require('./site_ledger').shouldSkip(url);
+      if (sk.skip && sk.row && sk.row.doc_id) {
+        const doc = require('./db').getDb().prepare('SELECT title, body FROM documents WHERE id = ?').get(sk.row.doc_id);
+        if (doc && doc.body) {
+          console.log(`[web] ledger reuse — ${url} ${sk.why} → serving held doc #${sk.row.doc_id}, no fetch`);
+          return { ok: true, url, title: doc.title || '', dedup: true, reading: doc.body, why: sk.why };
+        }
+      }
+    } catch {}
   }
   console.log(`[web] open target=${JSON.stringify(target)} → goto ${JSON.stringify(url)}`);
   try {
@@ -606,8 +659,10 @@ async function read() {
     // DOWNLOADS_DIR watcher ingests them into her memory. Fire-and-forget so read() stays fast.
     if (process.env.ZOE_AUTO_GRAB_PDFS !== '0') { grabPdfs().catch(() => {}); }
     const _out = { ok: true, url: page.url(), title: await page.title().catch(() => ''), text: text + handleList };
-    // SITE LEDGER: every successful read records — the visited memory autonomous lanes consult.
-    try { require('./site_ledger').record(_out.url, { kind: 'page', chars: _out.text.length }); } catch {}
+    // SITE LEDGER + WHOLE-PAGE INGEST: every successful read records the visit AND lands the page
+    // text as a document the ledger points at (see _ingestReading — the reuse half of "never the
+    // same page twice").
+    try { _ingestReading(_out.url, _out.title, text); } catch { try { require('./site_ledger').record(_out.url, { kind: 'page', chars: _out.text.length }); } catch {} }
     // RE-SPIN CACHE: remember this reading so an autonomous re-open within the window is served
     // without another goto (see respinHit / open()).
     try { _cacheReading(_out.url, _out.title, _out.text); } catch {}

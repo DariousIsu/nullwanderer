@@ -52,6 +52,12 @@ ok('re-sweep dedupes', sw2.queued === 0);
 // ── prompts carry the verdict contract; verdicts parse ──────────────────────────────────────────
 const absItem = rq.due({ limit: 20, now: NOW }).find((r) => r.kind === 'absence');
 ok('absence prompt names subject + contract', /testville/i.test(rq.buildPrompt(absItem)) && /RESOLVED:/.test(rq.buildPrompt(absItem)));
+// ── DATABASE-FIRST (08-08: "all of this should already be in her database somewhere") ───────────
+ok('absence prompt orders database-first', /DATABASE-FIRST/.test(rq.buildPrompt(absItem)));
+db.insertDocument({ title: 'Ward 3 Alderman of Testville — contact sheet', body: 'Ward 3 Alderman of Testville: email alder@testville.gov', source: 'research' });
+const heldPrompt = rq.buildPrompt(absItem);
+ok('held docs on the subject are injected + named', /ALREADY HELD/.test(heldPrompt) && /doc#\d+/.test(heldPrompt) && /contact sheet/i.test(heldPrompt));
+ok('no held docs → no held section, prompt still whole', !/ALREADY HELD/.test(rq.buildPrompt({ kind: 'absence', subject: 'zq unheard-of subject xv', detail: {} })) && /RESOLVED:/.test(rq.buildPrompt({ kind: 'absence', subject: 'zq unheard-of subject xv', detail: {} })));
 ok('verdict: resolved parses', rq.parseVerdict('I checked.\nRESOLVED: email is x@y.gov (source: official site)').verdict === 'resolved');
 ok('verdict: still-unknown parses', rq.parseVerdict('Looked everywhere.\nSTILL-UNKNOWN: checked official + news').verdict === 'unknown');
 ok('verdict: rambling is inconclusive', rq.parseVerdict('I think it might be...').verdict === 'inconclusive');

@@ -108,19 +108,44 @@ function sweepAbsences({ limit = 20, now = Date.now() } = {}) {
 //   (anything else / no answer)                 → deferred with backoff
 const VERDICT_CONTRACT = `End your answer with EXACTLY ONE line starting "RESOLVED:" (you found and grounded it — state the fact and its source inline) or "STILL-UNKNOWN:" (a genuine attempt found nothing — name what you checked). A claim without a source is not RESOLVED.`;
 
+// What we ALREADY HOLD on a subject — injected into every verification prompt so the pass starts
+// from the database, not the open web (Lucas, 2026-08-08: "she has already done these searches
+// hundreds of times, all of this information should already be in her database somewhere").
+// Measured before this: the metabolism re-fetched appj.org (21 prior visits) for a subject with
+// 465 parish documents already in the store. Fail-soft: no hits → no section, the pass proceeds.
+function heldContext(subject, { limit = 3 } = {}) {
+  try {
+    const toks = (str(subject).toLowerCase().match(/[a-z][a-z0-9'-]{3,}/g) || []).slice(0, 5);
+    if (!toks.length) return '';
+    const like = toks.map(() => `(title LIKE ? OR body LIKE ?)`).join(' AND ');
+    const params = []; for (const w of toks) params.push(`%${w}%`, `%${w}%`);
+    const rows = db().getDb().prepare(
+      `SELECT id, title, source, created_ts FROM documents WHERE ${like} ORDER BY created_ts DESC LIMIT ?`
+    ).all(...params, limit);
+    if (!rows.length) return '';
+    const lines = rows.map((r) => `- doc#${r.id} [${r.source || 'held'}] "${str(r.title).slice(0, 90)}" (${Math.round((Date.now() - r.created_ts) / 86400000)}d old — read it with your localdb/doc tools)`);
+    return `\nALREADY HELD on this subject — CHECK THESE FIRST, they may already answer:\n${lines.join('\n')}\n`;
+  } catch { return ''; }
+}
+
+// The database-first order every pass follows: we have swept these subjects for weeks; the answer
+// is usually already landed. The web is the LAST resort, not the reflex.
+const LOCAL_FIRST = `Work DATABASE-FIRST: (1) the ALREADY-HELD docs above if any, (2) echo/localdb/recall searches of our own stores, (3) only if the held stores cannot answer, the web — and prefer pages our site map has not covered. A held document that answers IS a source: cite it as doc#N.`;
+
 function buildPrompt(item) {
   const d = item.detail || {};
+  const held = heldContext(item.subject);
   switch (item.kind) {
     case 'absence':
-      return `VERIFICATION PASS — a known gap, due for re-check. We previously looked for the ${d.predicate || 'missing fact'} of "${item.subject}" and did not find it (${d.attempts || 1} prior attempt(s)). Try again now with your tools (echo / localdb / web as needed) — sources may have changed since. ${VERDICT_CONTRACT}`;
+      return `VERIFICATION PASS — a known gap, due for re-check. We previously looked for the ${d.predicate || 'missing fact'} of "${item.subject}" and did not find it (${d.attempts || 1} prior attempt(s)).${held}${LOCAL_FIRST} ${VERDICT_CONTRACT}`;
     case 'discrepancy':
-      return `VERIFICATION PASS — a flagged discrepancy: ${item.subject}. Detail: ${JSON.stringify(d).slice(0, 400)}. Check the OFFICIAL source for this seat/body and one independent source; state what is actually true now. ${VERDICT_CONTRACT}`;
+      return `VERIFICATION PASS — a flagged discrepancy: ${item.subject}. Detail: ${JSON.stringify(d).slice(0, 400)}.${held}${LOCAL_FIRST} Then check the OFFICIAL source for this seat/body and one independent source; state what is actually true now. ${VERDICT_CONTRACT}`;
     case 'vacancy':
-      return `VERIFICATION PASS — a seat with no feed row (possible vacancy): ${item.subject}. Confirm against the official body roster + one news source: is the seat vacant, and if so since when / any special election scheduled? ${VERDICT_CONTRACT}`;
+      return `VERIFICATION PASS — a seat with no feed row (possible vacancy): ${item.subject}.${held}Confirm against the official body roster + one news source: is the seat vacant, and if so since when / any special election scheduled? ${VERDICT_CONTRACT}`;
     case 'cardinality-conflict':
-      return `VERIFICATION PASS — two sources disagree on the seat count of "${item.subject}": ${JSON.stringify(d).slice(0, 300)}. Determine the current correct count from the official source (a resize is possible). ${VERDICT_CONTRACT}`;
+      return `VERIFICATION PASS — two sources disagree on the seat count of "${item.subject}": ${JSON.stringify(d).slice(0, 300)}.${held}Determine the current correct count from the official source (a resize is possible). ${VERDICT_CONTRACT}`;
     default:
-      return `VERIFICATION PASS — re-verify: ${item.subject} (${item.kind}). ${JSON.stringify(d).slice(0, 300)}. ${VERDICT_CONTRACT}`;
+      return `VERIFICATION PASS — re-verify: ${item.subject} (${item.kind}). ${JSON.stringify(d).slice(0, 300)}.${held}${LOCAL_FIRST} ${VERDICT_CONTRACT}`;
   }
 }
 

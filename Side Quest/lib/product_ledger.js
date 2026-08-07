@@ -89,8 +89,9 @@ function tokensOf(subject) {
 
 /**
  * searchProducts({ db, query, notesDir?, limit?, now? }) → ranked hits over the product stores:
- *   documents table (non-news, non-conversation — the surfaces inquiry/autonomy/research products
- *   land in) and notes/*.md files. Score = token matches (title heavily, body lightly) with a
+ *   documents table (non-news, non-conversation, non-web_page — ingested pages are her READING,
+ *   not products she made; the surfaces inquiry/autonomy/research products land in) and
+ *   notes/*.md files. Score = token matches (title heavily, body lightly) with a
  *   recency decay — "that recent list" should prefer yesterday's product over last month's.
  * Hit: { kind:'doc'|'note', id?, path?, title, ts, score, label }.
  */
@@ -104,7 +105,7 @@ function searchProducts({ db, query, notesDir = null, limit = 3, now = Date.now(
     const params = []; for (const w of toks) { params.push(`%${w}%`, `%${w}%`); }
     const rows = db.getDb().prepare(
       `SELECT id, title, source, created_ts, substr(COALESCE(body,''),1,4000) body FROM documents
-       WHERE COALESCE(source,'') NOT IN ('news')
+       WHERE COALESCE(source,'') NOT IN ('news', 'web_page')
          AND COALESCE(title,'') NOT LIKE 'Conversation —%'
          AND created_ts > ?
          AND (${like})
