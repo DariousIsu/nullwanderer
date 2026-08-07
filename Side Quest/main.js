@@ -2058,6 +2058,72 @@ app.whenReady().then(() => {
     console.log(`[main] Truth Social poller started (every ${Math.round(TRUTH_POLL_MS / 60000)}m → reservoir, source_kind=social)`);
   }
 
+  // QUOTA SELF-TRUE-UP — tonight's operator workflow (read the ollama.com usage dashboard, write
+  // quota.mark_pct/mark_at/reset_at by hand) automated. Ollama exposes no usage API (see
+  // config.usageConfig), so this reads the DASHBOARD the way Lucas does: a hidden window on its own
+  // partition loads the usage page — cookies ported from her signed-in dedicated browser, the same
+  // donor trick as Meet/Teams — and the PURE parser (lib/quota_scrape) turns the page text into the
+  // WEEKLY mark the quota gate consumes. Writes ONLY on a clean parse; a failed scrape or signed-out
+  // page leaves the mark untouched and says so. Kill switch: ZOE_QUOTA_SCRAPE=0.
+  if (!/^(0|false|no|off)$/i.test(String(process.env.ZOE_QUOTA_SCRAPE || '').trim())) {
+    const SCRAPE_MS = parseInt(process.env.ZOE_QUOTA_SCRAPE_MS || '', 10) || 6 * 3600 * 1000;   // every 6h
+    const SCRAPE_URL = String(process.env.ZOE_QUOTA_SCRAPE_URL || '').trim() || 'https://ollama.com/settings/usage';
+    const runQuotaScrape = async () => {
+      let win = null;
+      try {
+        markActivity('quota-scrape');   // stall-attrib (diagnostic)
+        // Borrow her signed-in identity: copy live ollama.com cookies from the dedicated browser
+        // into the hidden partition. Best-effort — a signed-out page is reported, never guessed at.
+        try {
+          const cks = await require('./lib/web').cookies(['https://ollama.com', 'https://www.ollama.com']);
+          const sess = session.fromPartition('persist:zoe-ollama');
+          const SS = { None: 'no_restriction', Lax: 'lax', Strict: 'strict' };
+          for (const c of (cks || [])) {
+            const host = String(c.domain || '').replace(/^\./, '');
+            if (!/(^|\.)ollama\.com$/i.test(host)) continue;
+            const set = { url: `https://${host}${c.path || '/'}`, name: c.name, value: c.value, path: c.path || '/', secure: !!c.secure, httpOnly: !!c.httpOnly };
+            if (String(c.domain || '').startsWith('.')) set.domain = c.domain;
+            if (Number.isFinite(c.expires) && c.expires > 0) set.expirationDate = c.expires;
+            if (SS[c.sameSite]) set.sameSite = SS[c.sameSite];
+            try { await sess.cookies.set(set); } catch { /* skip a cookie Electron rejects */ }
+          }
+        } catch { /* no dedicated browser up — the partition's own persisted session may still work */ }
+        win = new BrowserWindow({ show: false, webPreferences: { partition: 'persist:zoe-ollama', sandbox: true, nodeIntegration: false, contextIsolation: true } });
+        await win.loadURL(SCRAPE_URL);
+        await new Promise((r) => setTimeout(r, 3500));   // client-side meters render after load
+        const text = await win.webContents.executeJavaScript('document.body ? document.body.innerText : ""', true);
+        const now = Date.now();
+        const p = require('./lib/quota_scrape').parseUsage(text, now);
+        if (p.ok) {
+          const prev = Number(db.getMeta('quota.mark_pct') || '0') || 0;
+          db.setMeta('quota.mark_pct', String(p.pct));
+          db.setMeta('quota.mark_at', String(now));
+          db.setMeta('quota.reset_at', String(p.resetAt));
+          console.log(`[quota] self-true-up: ${(p.pct * 100).toFixed(1)}% (${p.label}; was ${(prev * 100).toFixed(1)}%), resets ${new Date(p.resetAt).toISOString()}${p.session ? `; session ${(p.session.pct * 100).toFixed(1)}%` : ''}`);
+        } else if (p.signedOut) {
+          console.log('[quota] self-true-up: usage page is signed out — needs a one-time ollama.com sign-in in her dedicated browser');
+          // One throttled chat note (24h): the automation Lucas asked for is blocked on him, and a
+          // silent block reads as "working". Same emission shape as the external-needs ask.
+          const noteAt = parseInt(db.getMeta('quota.scrape_signin_note_at') || '0', 10) || 0;
+          const sid = currentSessionId;
+          if (sid && now - noteAt > 24 * 3600e3) {
+            db.setMeta('quota.scrape_signin_note_at', String(now));
+            const msg = 'Housekeeping note: I tried to read our ollama.com usage meter to keep my own spend governor honest, but the usage page needs a sign-in. If you log into ollama.com in my browser once, I can keep the quota mark trued up myself from then on.';
+            const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'research', unprompted: 1 });
+            try { db.setMeta('last_ai_utterance_at', String(now)); } catch {}
+            try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+          }
+        } else {
+          console.log(`[quota] self-true-up: could not parse the usage page (${String(text || '').length}ch: ${p.reason}) — mark left untouched`);
+        }
+      } catch (e) { console.error('[quota] self-true-up failed:', e.message); }
+      finally { try { if (win && !win.isDestroyed()) win.destroy(); } catch {} markActivity('idle'); }
+    };
+    setTimeout(() => { runQuotaScrape().catch(() => {}); }, 6 * 60 * 1000).unref?.();   // first read ~6m after boot
+    setInterval(() => { runQuotaScrape().catch(() => {}); }, SCRAPE_MS).unref?.();
+    console.log(`[main] quota self-true-up started (every ${Math.round(SCRAPE_MS / 3600000)}h — usage dashboard → quota.mark_*)`);
+  }
+
   // EMAIL INTAKE LANE — Zoe's own inbox is a subscription surface (newsletters + Gemini meeting-notes).
   // READ-ONLY (EXAMINE): this connection provably cannot mark-read/delete. Newsletters route into the
   // SAME isolated news bucket as RSS (source_kind='newsletter') → they ride the hourly briefing rail;
