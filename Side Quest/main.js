@@ -10575,7 +10575,13 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
       }
     }
     return res;
-  } catch (e) { console.error('[operator] run failed:', e.message); return null; }
+  } catch (e) {
+    // Typed quota deferral (lib/ollama choke gate → operator rethrow): return a marked result so
+    // pass drivers can PAUSE instead of reading the empty answer as "nothing new". Only autonomous
+    // lanes can defer (interactive is never gated), so no chat-path caller ever sees this shape.
+    if (e && e.deferred) { console.log(`[operator] run deferred — ${e.message}`); return { deferred: true, answer: '', steps: [], toolsUsed: [] }; }
+    console.error('[operator] run failed:', e.message); return null;
+  }
 }
 
 // === DIRECTED-FOCUS OVERNIGHT DRIVER =============================================================
@@ -14429,8 +14435,8 @@ async function runDirectedResearchPass(focus) {
         }
       } catch {}
       _toolUseBump(r && r.toolsUsed);   // measure DB-first vs web-first (echo/recall/localdb vs web_search/open_page)
-      return { ans: (r && r.answer ? String(r.answer).trim() : ''), usedTool: !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.some(t => ['web_search', 'browser_read', 'echo'].includes(t))), repeats, heldRefs: [...new Set(heldRefs)].slice(0, 4) };
-    } catch (e) { return { ans: '', usedTool: false, repeats: 0, heldRefs: [] }; }
+      return { ans: (r && r.answer ? String(r.answer).trim() : ''), usedTool: !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.some(t => ['web_search', 'browser_read', 'echo'].includes(t))), repeats, heldRefs: [...new Set(heldRefs)].slice(0, 4), deferred: !!(r && r.deferred) };
+    } catch (e) { return { ans: '', usedTool: false, repeats: 0, heldRefs: [], deferred: false }; }
   };
 
   let progressed = false, done = false, note = '', sig = '';
@@ -14469,7 +14475,10 @@ async function runDirectedResearchPass(focus) {
       // OPEN A NEW TARGET — discovery overview pass (open scope only). Ground the pick in Echo too.
       // `expected` gives the pass its DENOMINATOR — without it a run has no idea whether it is
       // 9-of-64 or finished, which is how a partial run got reported as complete.
-      const { ans, usedTool } = await runPass(rs.buildNewTargetPrompt({ goal, covered, guidance, expected: _expectedCount(focus.id), priorOrgs: _priorOrgs() }));
+      const { ans, usedTool, deferred: _defOpen } = await runPass(rs.buildNewTargetPrompt({ goal, covered, guidance, expected: _expectedCount(focus.id), priorOrgs: _priorOrgs() }));
+      // Quota-deferred = NO work happened. Pause the thread (no dry-streak credit, no outcome, no
+      // strike — same contract as the mid-pass focus-change return below); it resumes when pace recovers.
+      if (_defOpen) { console.log(`[directed] #${focus.id} discovery pass deferred by quota — thread paused this tick`); return; }
       const p = rs.parsePass(ans);
       if (p.allCovered && covered.length) { done = true; note = `all organizations covered (${covered.length})`; }
       else if (p.target && !covered.some(c => lc(c) === p.target.toLowerCase())) {
@@ -14500,7 +14509,13 @@ async function runDirectedResearchPass(focus) {
     // both delivered as GIVEN. #3643 asked for AISI's budget while a 43k-char deliverable covering
     // AISI — written by its own parent six minutes earlier — went unread by the research passes.
     const _knownForPass = [target.known || '', _priorOnTarget(target.name)].filter(Boolean).join('\n\n');
-    const { ans, usedTool, repeats, heldRefs } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: _knownForPass, visited, coveragePlan, uncovered, covered, expected: _expectedCount(focus.id) }));
+    const { ans, usedTool, repeats, heldRefs, deferred: _defDeepen } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: _knownForPass, visited, coveragePlan, uncovered, covered, expected: _expectedCount(focus.id) }));
+    // Quota-deferred = NO work happened. Without this guard every deferred pass read as a dry pass:
+    // passes/dryPasses climbed, decideAdvance fired, and the target was marked "validated (nothing
+    // new)" + covered + 4 false absence rows — with zero actual validation (measured live 08-07:
+    // 231/543 federal targets "covered", 0 civic_bodies rows, 500+ "empty reply" captures). Pause:
+    // target untouched, no outcome recorded, no strike; the thread resumes when pace recovers.
+    if (_defDeepen) { console.log(`[directed] #${focus.id} deepen pass deferred by quota — thread paused this tick (target "${target.name}" unchanged)`); return; }
     const p = rs.parsePass(ans);
     const newChars = rs.newContentChars(target.raw, p.body);
     target.passes = (target.passes || 1) + 1;
@@ -14704,16 +14719,21 @@ async function runDirectedResearchPass(focus) {
           const cardinality = require('./lib/cardinality');
           const cap = require('./lib/cardinality_capture');
           if (!cardinality.get(target.name)) {
-            const { ans: cAns } = await runPass(cap.buildPrompt(target.name));
-            let vis = []; try { vis = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); } catch {}
-            const got = cap.parseCapture(cAns, { visited: vis });
-            if (got.ok) {
-              const rec = cardinality.record(target.name, { seats: got.seats, sourceKind: got.sourceKind, sourceRef: got.sourceRef });
-              console.log(`[cardinality] ${target.name}: ${got.seats} seats (${got.sourceKind}) → ${rec.stored ? 'stored' : rec.reason}${rec.conflict ? ' [CONFLICT flagged]' : ''}`);
-            } else {
-              // Log the reason. A silent skip is indistinguishable from "this body has no seat count",
-              // which is exactly the ambiguity P5 exists to remove.
-              console.log(`[cardinality] ${target.name}: no count recorded — ${got.reason}`);
+            const { ans: cAns, deferred: _defCard } = await runPass(cap.buildPrompt(target.name));
+            // A deferred capture is NOT "empty reply" — no question was asked. Named so the log
+            // stays honest; the count stays absent and a future visit may still record it.
+            if (_defCard) { console.log(`[cardinality] ${target.name}: capture deferred by quota — not recorded`); }
+            else {
+              let vis = []; try { vis = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); } catch {}
+              const got = cap.parseCapture(cAns, { visited: vis });
+              if (got.ok) {
+                const rec = cardinality.record(target.name, { seats: got.seats, sourceKind: got.sourceKind, sourceRef: got.sourceRef });
+                console.log(`[cardinality] ${target.name}: ${got.seats} seats (${got.sourceKind}) → ${rec.stored ? 'stored' : rec.reason}${rec.conflict ? ' [CONFLICT flagged]' : ''}`);
+              } else {
+                // Log the reason. A silent skip is indistinguishable from "this body has no seat count",
+                // which is exactly the ambiguity P5 exists to remove.
+                console.log(`[cardinality] ${target.name}: no count recorded — ${got.reason}`);
+              }
             }
           }
         } catch (e) { console.error('[cardinality] capture failed:', e.message); }
@@ -14727,25 +14747,29 @@ async function runDirectedResearchPass(focus) {
           const civic = require('./lib/civic_store');
           const ccap = require('./lib/civic_capture');
           if (!civic.roster(target.name).length) {
-            const { ans: rAns } = await runPass(ccap.buildPrompt(target.name));
-            let vis2 = []; try { vis2 = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); } catch {}
-            const cap2 = ccap.parseCapture(rAns, { visited: vis2 });
-            if (cap2.ok) {
-              const ub = civic.upsertBody({ title: target.name, level: cap2.level, function: cap2.function });
-              let stored = 0;
-              if (ub.ok) {
-                for (const m of cap2.members) {
-                  const r = civic.recordMembership({ bodyKey: ub.bodyKey, ...m });
-                  if (r.ok && !r.skipped) stored++;
+            const { ans: rAns, deferred: _defCiv } = await runPass(ccap.buildPrompt(target.name));
+            // Same contract as the cardinality capture: deferred ≠ "empty reply" — nothing was asked.
+            if (_defCiv) { console.log(`[civic] ${target.name}: capture deferred by quota — not recorded`); }
+            else {
+              let vis2 = []; try { vis2 = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); } catch {}
+              const cap2 = ccap.parseCapture(rAns, { visited: vis2 });
+              if (cap2.ok) {
+                const ub = civic.upsertBody({ title: target.name, level: cap2.level, function: cap2.function });
+                let stored = 0;
+                if (ub.ok) {
+                  for (const m of cap2.members) {
+                    const r = civic.recordMembership({ bodyKey: ub.bodyKey, ...m });
+                    if (r.ok && !r.skipped) stored++;
+                  }
                 }
+                const comp = civic.completeness(ub.bodyKey || target.name);
+                console.log(`[civic] ${target.name}: ${stored} seat(s) stored${cap2.rejected && cap2.rejected.length ? `, ${cap2.rejected.length} line(s) refused` : ''}`
+                  + ` — ${comp.seats != null ? `${comp.filled}/${comp.seats} filled${comp.complete ? ' (COMPLETE)' : ''}` : `${comp.filled} filled, seat count unknown`}`);
+              } else {
+                // Same rule as cardinality: a silent skip is indistinguishable from "this body
+                // publishes no roster", which is the ambiguity the store exists to end.
+                console.log(`[civic] ${target.name}: no roster recorded — ${cap2.reason}`);
               }
-              const comp = civic.completeness(ub.bodyKey || target.name);
-              console.log(`[civic] ${target.name}: ${stored} seat(s) stored${cap2.rejected && cap2.rejected.length ? `, ${cap2.rejected.length} line(s) refused` : ''}`
-                + ` — ${comp.seats != null ? `${comp.filled}/${comp.seats} filled${comp.complete ? ' (COMPLETE)' : ''}` : `${comp.filled} filled, seat count unknown`}`);
-            } else {
-              // Same rule as cardinality: a silent skip is indistinguishable from "this body
-              // publishes no roster", which is the ambiguity the store exists to end.
-              console.log(`[civic] ${target.name}: no roster recorded — ${cap2.reason}`);
             }
           }
         } catch (e) { console.error('[civic] roster capture failed:', e.message); }

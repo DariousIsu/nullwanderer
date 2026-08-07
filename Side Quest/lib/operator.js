@@ -385,7 +385,10 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
     const history = _renderHistory();
     let res;
     try { res = await complete(_buildPrompt({ userMessage, context, history, stepsLeft: maxSteps - i, toolSpec }), cOpts); }
-    catch (e) { return steps.length ? _finalize(steps, null) : null; }
+    // A quota deferral is a PAUSE signal, not a failure — rethrow the typed error so the opt-in
+    // caller can distinguish "no work happened" from "nothing new" (the false-validated grinder:
+    // every deferred pass read as dry → target marked validated with zero actual work).
+    catch (e) { if (e && e.deferred) throw e; return steps.length ? _finalize(steps, null) : null; }
     if (res == null) return steps.length ? _finalize(steps, null) : null;   // no cloud configured
     let text = (typeof res === 'string') ? res : (res.text || '');
     let parsed = parseAction(text);
