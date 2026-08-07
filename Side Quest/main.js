@@ -9808,10 +9808,62 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // substitution. A miss falls through un-fired so the report-command net / operator can still
     // build fresh, honestly. Runs BEFORE report-cmd: handing over an existing report beats
     // recomposing it. Kill switch ZOE_PRODUCT_LEDGER=0.
+    // ═══ THE ARTIFACT-INTENT ROUTER (2026-08-07, lib/artifact_intent — the flip GENERALIZED) ═══
+    // ONE model judgment routes every artifact-shaped message: canvas create/edit, report compose,
+    // product pull-up, or none. The regexes below are DEMOTED to nomination (prefilter) + the
+    // cloud-down fallback; a confident intent — including "none" — is FINAL and the legacy nets
+    // are skipped. Only an infra-mute classifier lets the legacy detectors run. ZOE_ARTIFACT_ROUTER=0
+    // kills the router (legacy nets then decide as before).
+    let _artifactJudged = false;
+    if (!followupFired && !/^(0|false|off)$/i.test(String(process.env.ZOE_ARTIFACT_ROUTER || '').trim())) {
+      try {
+        const ai = require('./lib/artifact_intent');
+        const _fresh = _workingCanvasFresh();
+        if (ai.prefilter(userMessage, { workingFresh: _fresh })) {
+          const verdict = await require('./lib/cloud_logic').ask({
+            task: 'artifact_intent', v: 1,
+            input: { message: String(userMessage).slice(0, 400), workingDoc: _fresh ? (db.getMeta('canvas.working_title') || '') : '' },
+            want: ai.wantText({ workingFresh: _fresh, workingTitle: db.getMeta('canvas.working_title') || '' }),
+            validate: ai.validate, numPredict: 180, think: false,
+          });
+          if (verdict && verdict.intent) {
+            _artifactJudged = true;                                   // judgment is final either way
+            if (verdict.intent !== 'none') {
+              followupFired = true;
+              console.log(`[artifact-router] intent=${verdict.intent}${verdict.subject ? ` subject="${verdict.subject}"` : ''}${verdict.instruction ? ` instruction="${verdict.instruction.slice(0, 60)}"` : ''}`);
+              if (verdict.intent === 'canvas_edit' && _fresh) {
+                buildCanvasEditFromOrder({ io, channel, sessionId, order: verdict.instruction || userMessage })
+                  .catch((e) => console.error('[artifact-router] canvas edit failed:', e.message));
+              } else if (verdict.intent === 'canvas_edit' || verdict.intent === 'canvas_create') {
+                buildCanvasFromOrder({ io, channel, sessionId, order: verdict.instruction || userMessage })
+                  .catch((e) => console.error('[artifact-router] canvas create failed:', e.message));
+              } else if (verdict.intent === 'report') {
+                buildReportFromHeld({ io, channel, sessionId, userName, topic: verdict.subject || userMessage.slice(0, 120) })
+                  .catch((e) => console.error('[artifact-router] report failed:', e.message));
+              } else if (verdict.intent === 'pullup') {
+                let _phits = [];
+                try { _phits = require('./lib/product_ledger').searchProducts({ db, query: verdict.subject || userMessage, notesDir: filesLib.resolvePath('notes'), limit: 3 }); } catch {}
+                if (_phits.length) {
+                  presentHeldProduct({ io, channel, sessionId, hit: _phits[0], alternates: _phits.slice(1), subject: verdict.subject || userMessage.slice(0, 120) })
+                    .catch((e) => console.error('[artifact-router] pull-up failed:', e.message));
+                } else {
+                  // The model judged RETRIEVAL — an honest "we never made one" beats a silent rebuild.
+                  fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked you to pull up a product ("${(verdict.subject || userMessage).slice(0, 120)}") but NO such product exists in the stores — you two never made one, or it predates the ledger. Say that plainly and OFFER to build it fresh; do not silently substitute a new query's output as if it were the old product.]` })
+                    .catch(() => {});
+                }
+              }
+            }
+          }
+        }
+      } catch (e) { console.error('[artifact-router] failed (legacy nets will decide):', e.message); }
+    }
+
     // CANVAS ORDER NET (2026-08-07, lib/canvas_command — the parish list, #11104-#11110): an
     // explicit "put/print X on the canvas" names its destination; it runs FIRST among the artifact
-    // nets and lands deterministically. Kill switch ZOE_CANVAS_CMD=0.
-    if (!followupFired && !/^(0|false|off)$/i.test(String(process.env.ZOE_CANVAS_CMD || '').trim())) {
+    // nets and lands deterministically. LEGACY/FALLBACK since the artifact router: runs only when
+    // the router did not render a judgment (kill-switched off, prefilter miss, or classifier mute).
+    // Kill switch ZOE_CANVAS_CMD=0.
+    if (!followupFired && !_artifactJudged && !/^(0|false|off)$/i.test(String(process.env.ZOE_CANVAS_CMD || '').trim())) {
       const _cc = require('./lib/canvas_command');
       // MODEL-FIRST (the flip, Lucas 2026-08-07 "why is there a regex?"): while a working doc is
       // fresh, the CLASSIFIER decides — typo-proof, and its confident "not an edit" is FINAL (a
@@ -9845,7 +9897,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     }
 
-    if (!followupFired && !/^(0|false|off)$/i.test(String(process.env.ZOE_PRODUCT_LEDGER || '').trim())) {
+    if (!followupFired && !_artifactJudged && !/^(0|false|off)$/i.test(String(process.env.ZOE_PRODUCT_LEDGER || '').trim())) {
       let _pask = null;
       try { _pask = require('./lib/product_ledger').detectAsk(userMessage); } catch {}
       if (_pask && _pask.subject) {
@@ -9863,7 +9915,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     }
 
-    if (!followupFired && !/^(0|false|off)$/i.test(String(process.env.ZOE_REPORT_CMD || '').trim())) {
+    if (!followupFired && !_artifactJudged && !/^(0|false|off)$/i.test(String(process.env.ZOE_REPORT_CMD || '').trim())) {
       let _rcmd = null;
       try { _rcmd = require('./lib/report_command').detect(userMessage); } catch {}
       if (_rcmd && _rcmd.topic) {

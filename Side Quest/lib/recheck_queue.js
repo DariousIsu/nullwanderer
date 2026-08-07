@@ -140,6 +140,13 @@ function applyOutcome(item, ans, { now = Date.now() } = {}) {
       try { require('./absence').recordFound(item.subject, (item.detail || {}).predicate || ''); } catch {}
     }
     complete(item.id, { outcome: `RESOLVED: ${v.line}`, now });
+    // ALIVENESS: a closed doubt is worth a sentence to Lucas — the metabolism working is only felt
+    // if its wins surface. One line through the unprompted door (the heartbeat delivers when he's
+    // present); misses and deferrals stay quiet — restlessness should hum, not nag.
+    try {
+      db().insertInbound({ tabUrl: 'note://metabolism', speaker: 'system', source: 'metabolism',
+        text: `metabolism: re-checked ${item.kind} "${str(item.subject).slice(0, 80)}" — ${v.line.slice(0, 200)}` });
+    } catch { /* surfacing is best-effort */ }
     return { action: 'resolved', line: v.line };
   }
   if (v.verdict === 'unknown') {
