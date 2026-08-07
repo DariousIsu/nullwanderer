@@ -2132,6 +2132,29 @@ app.whenReady().then(() => {
     console.log(`[main] quota self-true-up started (every ${Math.round(SCRAPE_MS / 3600000)}h — usage dashboard → quota.mark_*)`);
   }
 
+  // ROSTER REFRESH (the curation organ, 2026-08-07): validating a finite elected roster with an
+  // authoritative machine-readable source is a fetch → diff → update → flag pass, NOT a research
+  // project — the validate-depth federal beat riding the research loop became the false-validated
+  // grinder (267/270 covered targets fabricated under quota deferral, repaired same day). The organ
+  // writes the same stores the sweep fed (civic_store seat-grain + cardinality 'official') and
+  // stamps the federal beat's coverage honestly. Weekly cadence + sanity floor + kill switch
+  // (ZOE_ROSTER_REFRESH=0) live inside run(); the daily interval just gives it chances to be due.
+  {
+    const runRosterRefresh = async () => {
+      try {
+        markActivity('roster-refresh');
+        const r = await require('./lib/roster_refresh').run({});
+        if (r && r.ok) console.log(`[roster] ${r.summary}${r.stamps && r.stamps.stamped && r.stamps.stamped.length ? ` | covered stamped: ${r.stamps.stamped.map((s) => `#${s.focusId}+${s.added}`).join(', ')}` : ''}`);
+        else if (r && r.reason) console.log(`[roster] refresh not applied — ${r.reason}`);
+        // skipped (not due / kill-switch) stays quiet — a weekly organ must not log daily noise
+      } catch (e) { console.error('[roster] refresh failed:', e.message); }
+      finally { markActivity('idle'); }
+    };
+    setTimeout(() => { runRosterRefresh(); }, 4 * 60 * 1000).unref?.();       // first due-check ~4m after boot
+    setInterval(() => { runRosterRefresh(); }, 24 * 3600 * 1000).unref?.();   // daily chance; run() enforces the weekly cadence
+    console.log('[main] roster-refresh organ armed (weekly; official House/Senate rosters + cross-check)');
+  }
+
   // EMAIL INTAKE LANE — Zoe's own inbox is a subscription surface (newsletters + Gemini meeting-notes).
   // READ-ONLY (EXAMINE): this connection provably cannot mark-read/delete. Newsletters route into the
   // SAME isolated news bucket as RSS (source_kind='newsletter') → they ride the hourly briefing rail;

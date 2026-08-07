@@ -122,6 +122,26 @@ function recordMembership(m = {}, { deps = {}, nowMs = Date.now() } = {}) {
   } catch (e) { return { ok: false, reason: e.message }; }
 }
 
+// SEAT-GRAIN recorder (roster-refresh organ, 2026-08-07): an elected SEAT has exactly one holder,
+// so recording the current officeholder supersedes every other live row of that body.
+// recordMembership deliberately lets different names coexist (right for multi-seat boards); only a
+// caller that KNOWS the body is single-seat may use this door.
+function recordSeatHolder(m = {}, { deps = {}, nowMs = Date.now() } = {}) {
+  const r = recordMembership(m, { deps, nowMs });
+  if (!r.ok || !r.id) return r;
+  const bodyKey = m.bodyKey ? str(m.bodyKey) : keyFor(m.bodyTitle);
+  const replaced = [];
+  try {
+    const d = _db(deps).getDb();
+    const others = d.prepare('SELECT id, person_name FROM civic_memberships WHERE body_key = ? AND superseded_by IS NULL AND id != ?').all(bodyKey, r.id);
+    for (const o of others) {
+      d.prepare('UPDATE civic_memberships SET superseded_by = ? WHERE id = ?').run(r.id, o.id);
+      replaced.push(o.person_name);
+    }
+  } catch (e) { return { ...r, replaced, replaceError: e.message }; }
+  return { ...r, replaced };
+}
+
 // The CURRENT roster (superseded rows excluded), best-graded first.
 function roster(bodyKeyOrTitle, { deps = {} } = {}) {
   const key = keyFor(bodyKeyOrTitle);
@@ -173,4 +193,4 @@ function incomplete({ state = null, level = null, limit = 200 } = {}, { deps = {
   } catch { return { incomplete: [], complete: 0, unknownDenominator: [] }; }
 }
 
-module.exports = { keyFor, upsertBody, getBody, recordMembership, roster, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };
+module.exports = { keyFor, upsertBody, getBody, recordMembership, recordSeatHolder, roster, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };
