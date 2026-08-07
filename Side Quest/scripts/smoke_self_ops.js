@@ -11,6 +11,14 @@ const so = require('../lib/self_ops');
 
 let pass = 0, fail = 0;
 const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++; console.log('  ✗', t); } };
+// ⭐ SANDBOX-AWARE (2026-08-07). A rehearsal sandbox is a COPY of the tree with no boot logs and no
+// git history of its own, so assertions about THE LIVE MACHINE's exhaust are unsatisfiable there by
+// construction. Failing them made the FULL GATE unpassable inside any sandbox — which silently made
+// the rehearsal loop's green exit (and the R2 proposal card) UNREACHABLE FOREVER: measured on need
+// #48, a pristine copy with zero edits went "suite green, full gate red" on every iteration. These
+// checks now SKIP with a visible note in a sandbox; the LOGIC above/below still runs everywhere.
+const IN_SANDBOX = fs.existsSync(path.join(so.ROOT, '.rehearsal.json'));
+const skip = (t) => console.log(`  ⏭ ${t} — skipped (rehearsal sandbox: no live boot logs / no own git history)`);
 
 (async () => {
   // --- THE LOG JAIL: names, never paths ---
@@ -30,6 +38,8 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     ok(/last \d+ line\(s\):/.test(t), 'tail names how many lines it shows');
     const g = so.logRead(anyLog, { grep: '\\[' });
     ok(/line\(s\) matching|no lines match/.test(g), 'grep mode answers with matches or an honest miss');
+  } else if (IN_SANDBOX) {
+    skip('a real boot log reads');
   } else {
     ok(false, 'no boot log found to read (expected at least one on this machine)');
   }
@@ -39,7 +49,8 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(/^[0-9a-f]{7,}\s+\d{4}-\d{2}-\d{2}\s+/m.test(log), 'git_log returns hash + date + subject lines');
   // paths are app-root-relative, same convention as source_read (git resolves them against cwd)
   const scoped = await so.gitLog({ limit: 3, path: 'lib/self_source.js' });
-  ok(/^[0-9a-f]{7,}\s+\d{4}-\d{2}-\d{2}\s+/m.test(scoped), 'git_log scopes to an app-relative path');
+  if (IN_SANDBOX) skip('git_log scopes to an app-relative path');
+  else ok(/^[0-9a-f]{7,}\s+\d{4}-\d{2}-\d{2}\s+/m.test(scoped), 'git_log scopes to an app-relative path');
   ok(/not readable/.test(await so.gitLog({ since: '--exec=evil' })), 'an option-shaped since is refused');
   ok(/not readable/.test(await so.gitLog({ path: '-output=x' })), 'an option-shaped path is refused');
   const show = await so.gitShow({ ref: 'HEAD', maxChars: 800 });
