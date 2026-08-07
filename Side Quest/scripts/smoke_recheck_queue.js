@@ -76,6 +76,19 @@ rq.enqueue({ kind: 'discrepancy', subject: 'mute-case', priority: 5, dueTs: NOW 
 const muteItem = rq.due({ limit: 20, now: NOW }).find((r) => r.subject === 'mute-case');
 ok('no verdict → deferred with backoff', rq.applyOutcome(muteItem, '', { now: NOW }).action === 'deferred' && !rq.due({ limit: 20, now: NOW }).some((r) => r.subject === 'mute-case'));
 
+// ── structured roster capture: a resolve GROWS the civic store (08-08, the plan for the blanks) ─
+const rosterItem = (() => {
+  rq.enqueue({ kind: 'absence', subject: 'Testville Parish', detail: { predicate: 'Current officeholders', doc: 'Test doc' }, priority: 5, dueTs: NOW - 1, now: NOW });
+  return rq.due({ limit: 30, now: NOW }).find((r) => r.subject === 'Testville Parish');
+})();
+ok('roster-shaped prompt carries the ROSTER contract + doc context', /ROSTER:/.test(rq.buildPrompt(rosterItem)) && /Test doc/.test(rq.buildPrompt(rosterItem)));
+ok('parseRoster reads member lines', JSON.stringify(rq.parseRoster('found it\nRESOLVED: via site\nROSTER: Ann Green | President\nROSTER: Bo Blue')) === JSON.stringify([{ personName: 'Ann Green', role: 'President' }, { personName: 'Bo Blue', role: 'Member' }]));
+ok('parseRoster ignores junk', rq.parseRoster('RESOLVED: prose only').length === 0);
+rq.applyOutcome(rosterItem, 'checked the site.\nRESOLVED: roster found via testville.gov\nROSTER: Ann Green | President\nROSTER: Bo Blue | Member', { now: NOW });
+const civ = require(path.join(__dirname, '..', 'lib', 'civic_store'));
+const stored = civ.roster('Testville Parish');
+ok('resolve recorded the roster structurally', stored.length === 2 && stored.some((r) => r.person_name === 'Ann Green' && r.role === 'President'));
+
 const st = rq.stats();
 ok('stats report open + kinds', st.open >= 1 && Array.isArray(st.byKind));
 

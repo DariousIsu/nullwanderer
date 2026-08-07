@@ -108,6 +108,28 @@ function sweepAbsences({ limit = 20, now = Date.now() } = {}) {
 //   (anything else / no answer)                 → deferred with backoff
 const VERDICT_CONTRACT = `End your answer with EXACTLY ONE line starting "RESOLVED:" (you found and grounded it — state the fact and its source inline) or "STILL-UNKNOWN:" (a genuine attempt found nothing — name what you checked). A claim without a source is not RESOLVED.`;
 
+// ── STRUCTURED ROSTER CAPTURE (2026-08-08, "a plan to fill in the blanks") ──────────────────────
+// A prose RESOLVED closes the gap but lands NOTHING structured — the doc's next fill would still
+// see an empty store. When the gap is roster-shaped, the pass also emits machine-readable member
+// lines and applyOutcome records them via civic_store.recordRoster, so a resolve GROWS the store
+// the next held-roster injection reads. Deterministic contract on model output — the sanctioned
+// place for parsing.
+const ROSTER_CONTRACT = `Because this gap is a roster/membership: AFTER the verdict line, also output ONE line per verified member, each starting "ROSTER: " — format "ROSTER: <full name> | <role or Member>". Only members verified from the source; no ROSTER lines if you could not verify names.`;
+function _rosterShaped(predicate) { return /\b(officeholders?|rosters?|members?(?:hip)?|jur(?:y|ors?)|council|commission(?:ers?)?|board)\b/i.test(str(predicate)); }
+
+/** parseRoster(ans) → [{personName, role}] — pure; empty when no ROSTER lines. */
+function parseRoster(ans) {
+  const out = [];
+  for (const line of str(ans).split('\n')) {
+    const m = line.match(/^\s*ROSTER:\s*([^|]{2,80}?)\s*(?:\|\s*(.{0,60}))?$/);
+    if (!m) continue;
+    const personName = m[1].trim();
+    if (!personName || /^(none|n\/a|unknown)$/i.test(personName)) continue;
+    out.push({ personName, role: (m[2] || 'Member').trim() || 'Member' });
+  }
+  return out;
+}
+
 // What we ALREADY HOLD on a subject — injected into every verification prompt so the pass starts
 // from the database, not the open web (Lucas, 2026-08-08: "she has already done these searches
 // hundreds of times, all of this information should already be in her database somewhere").
@@ -139,7 +161,8 @@ function buildPrompt(item) {
     case 'absence': {
       // doc-fill items carry their doc — "Acadia Parish" needs the doc's context to be findable.
       const docCtx = d.doc ? ` (a pending entry in the doc "${d.doc}")` : '';
-      return `VERIFICATION PASS — a known gap, due for re-check. We previously looked for the ${d.predicate || 'missing fact'} of "${item.subject}"${docCtx} and did not find it (${d.attempts || 1} prior attempt(s)).${held}${LOCAL_FIRST} ${VERDICT_CONTRACT}`;
+      const rosterCtx = _rosterShaped(d.predicate) ? ` ${ROSTER_CONTRACT}` : '';
+      return `VERIFICATION PASS — a known gap, due for re-check. We previously looked for the ${d.predicate || 'missing fact'} of "${item.subject}"${docCtx} and did not find it (${d.attempts || 1} prior attempt(s)).${held}${LOCAL_FIRST} ${VERDICT_CONTRACT}${rosterCtx}`;
     }
     case 'discrepancy':
       return `VERIFICATION PASS — a flagged discrepancy: ${item.subject}. Detail: ${JSON.stringify(d).slice(0, 400)}.${held}${LOCAL_FIRST} Then check the OFFICIAL source for this seat/body and one independent source; state what is actually true now. ${VERDICT_CONTRACT}`;
@@ -166,6 +189,16 @@ function applyOutcome(item, ans, { now = Date.now() } = {}) {
   if (v.verdict === 'resolved') {
     if (item.kind === 'absence') {
       try { require('./absence').recordFound(item.subject, (item.detail || {}).predicate || ''); } catch {}
+      // A roster-shaped resolve lands STRUCTURED — the store grows, the next doc fill sees it.
+      if (_rosterShaped((item.detail || {}).predicate)) {
+        try {
+          const members = parseRoster(ans);
+          if (members.length) {
+            const r = require('./civic_store').recordRoster({ bodyTitle: item.subject, members, sourceKind: 'operator' });
+            if (r.ok) v.line = `${v.line} [${r.stored + r.unchanged} member(s) recorded to the civic store]`;
+          }
+        } catch { /* structured capture is best-effort; the resolve itself stands */ }
+      }
     }
     complete(item.id, { outcome: `RESOLVED: ${v.line}`, now });
     // ALIVENESS: a closed doubt is worth a sentence to Lucas — the metabolism working is only felt
@@ -189,4 +222,4 @@ function applyOutcome(item, ans, { now = Date.now() } = {}) {
   return { action: 'deferred' };
 }
 
-module.exports = { enqueue, due, complete, defer, stats, sweepAbsences, buildPrompt, parseVerdict, applyOutcome, backoffMs };
+module.exports = { enqueue, due, complete, defer, stats, sweepAbsences, buildPrompt, parseVerdict, parseRoster, applyOutcome, backoffMs };
