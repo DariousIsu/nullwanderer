@@ -266,6 +266,7 @@ function revalidateWant() {
 - correct: does the plan still point at the right objective given the findings?
 - complete: does it now cover everything the findings show matters — people, orgs, money flows, the quantitative checks?
 - tools_sufficient: can the current toolkit answer the open questions (python analysis, probability models, structured DBs included)? A missing capability goes in tool_needs, named concretely.
+- tool_needs discipline: name ONLY capabilities the FINDINGS prove missing — a specific database, portal, filing type, or format the run could not access. NEVER generic infrastructure ("web access", "browsing", "search", "python") — the program already has all of those; you simply cannot see the toolkit from here. An empty array is the common, correct answer.
 - add_targets / drop_targets: CONCRETE target changes the findings justify (empty arrays if none).
 - approach_update: a REPLACEMENT approach paragraph ONLY if tactics should genuinely change; else null.
 - reason: one sentence on the verdict.

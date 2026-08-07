@@ -32,6 +32,9 @@ ok(/REQUESTER IS THE AUDIENCE/.test(rp.planWant('topical')) && /REQUESTER IS THE
 const rvIn = rp.revalidateInput({ plan: { objective: 'map the orgs', approach: 'depth-first', targets: ['A', 'B'], facets: ['f1'] }, synthesis: 'S'.repeat(9000), covered: ['A'], goal: 'the goal' });
 ok(rvIn.plan.targets.length === 2 && rvIn.latestSynthesis.length === 6000 && rvIn.covered[0] === 'A', 'revalidateInput bounds and carries the state');
 ok(/re-?validating/i.test(rp.revalidateWant()) && /tools_sufficient/.test(rp.revalidateWant()) && /conservative/i.test(rp.revalidateWant()), 'revalidateWant frames the scientific-method re-test, conservatively');
+// Phantom-need discipline (measured live: "web browsing" filed as a tool_need by a revalidator
+// that cannot see the toolkit — the program has web tools).
+ok(/NEVER generic infrastructure/.test(rp.revalidateWant()) && /you simply cannot see the toolkit/.test(rp.revalidateWant()), 'tool_needs forbids blind generic-infrastructure filings');
 ok(rp.revalidateValidator('{"correct":true,"complete":true,"tools_sufficient":true,"add_targets":[]}').valid === true, 'validator accepts a no-change verdict');
 ok(rp.revalidateValidator('<think>hm {x} tricky</think>{"correct":false,"add_targets":["C"]}').valid === true, 'validator strips reasoning blocks before locating the JSON');
 ok(rp.revalidateValidator('{"complete":true}').valid === false, 'a verdict without the boolean core is rejected');
