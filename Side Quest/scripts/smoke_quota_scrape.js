@@ -35,6 +35,19 @@ const bare = '36.1%\nResets in 1 hour\n\n67.1%\nResets in 2 days\n';
 const p2 = qs.parseUsage(bare, NOW);
 ok(p2.ok === true && p2.pct === 0.671 && p2.label === 'longest-horizon', 'unlabelled meters → longest horizon selected, and SAYS it guessed by horizon');
 
+// --- the REAL /settings page (captured live 2026-08-07) — the layout the parser is built for ---
+// The preamble "…contribute to session and weekly limits." sits right before the SESSION meter and
+// used to poison its label; the session duration "3 hours." used to bleed into the weekly meter.
+const REAL_PAGE = 'lucastoverby lucastoverby@gmail.com Usage Keys Billing Profile Cloud usage Pro Cloud models and capabilities such as web search contribute to session and weekly limits. Session usage 2.9% used Resets in 3 hours. Weekly usage 68% used Resets in 2 days. Models used this week mistral-large-3:675b 2 requests qwen3.5:397b 8 requests gemma4:31b 48428 requests kimi-k2.6 2920 requests kimi-k2.7-code 238 requests';
+{
+  const r = qs.parseUsage(REAL_PAGE, NOW);
+  ok(r.ok === true && r.pct === 0.68 && r.label === 'weekly', 'REAL PAGE: the WEEKLY meter (68%) is the mark — NOT the 2.9% session meter the preamble mislabeled');
+  ok(r.resetAt === NOW + 2 * DAY, 'REAL PAGE: weekly reset horizon is 2 days (session "3 hours" did not bleed in)');
+  ok(r.session && r.session.pct === 0.029, 'REAL PAGE: the 2.9% session meter is carried as session, correctly labeled');
+  const meters = qs.extractMeters(REAL_PAGE);
+  ok(meters.length === 2 && meters.find((m) => m.label === 'session').pct === 0.029 && meters.find((m) => m.label === 'weekly').pct === 0.68, 'REAL PAGE: both meters extracted with their OWN labels bound to "<label> usage"');
+}
+
 // --- reset-horizon sanity: a meter LABELLED weekly but resetting in hours is REFUSED ---
 // (the live 2026-08-07 misparse: "2.6% weekly, resets in 3h" — the session meter mislabeled.)
 const mislabel = qs.parseUsage('Weekly\n2.6%\nResets in 3 hours\n', NOW);

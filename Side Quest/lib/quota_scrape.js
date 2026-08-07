@@ -33,21 +33,41 @@ function parseDuration(s) {
   return total;
 }
 
+const _round4 = (pct) => Math.min(1, Math.round(pct * 1e4) / 1e4);   // 67.1/100 = 0.67099… in floats
+
 // All "<pct>% … resets in <duration>" tuples in the page text, each with the label word (if any)
-// that precedes it. The 80-char windows keep a meter's pieces bound to each other, so two meters
-// on one page never cross-wire.
+// bound to it. Two passes, structured first:
+//
+// PRIMARY — the REAL /settings layout (seen live 2026-08-07): a meter is
+//   "<label> usage <pct>% used. Resets in <duration>."
+// The label is the word DIRECTLY before "usage" (not a loose lookback), and each meter's duration
+// is captured up to the sentence PERIOD — both were the first-parse bugs: a 60-char lookback caught
+// the word "weekly" from the preamble ("…contribute to session and weekly limits.") sitting before
+// the SESSION percentage, and an unbounded duration let the 2.9% meter swallow "…3 hours. Weekly
+// usage 68%…". Binding the label to "usage" and stopping the duration at the period fixes both.
+//
+// FALLBACK — the older loose "<pct>% … resets in <dur>" shape (a differently-worded page), used
+// only when the structured pass finds nothing, so the preamble-label bug can't reach it here.
+const _STRUCTURED_RE = /(session|weekly|daily|monthly)\s+usage\s+(\d+(?:\.\d+)?)\s*%[^.\n]*?resets?\s+(?:in\s+)?([^.\n]{1,40})/gi;
+const _LOOSE_RE = /(\d+(?:\.\d+)?)\s*%[\s\S]{0,80}?resets?\s+(?:in\s+)?([^.\n]{1,60})/gi;
+
 function extractMeters(text) {
   const txt = String(text || '');
   const out = [];
-  for (const m of txt.matchAll(/(\d+(?:\.\d+)?)\s*%[\s\S]{0,80}?resets?\s+(?:in\s+)?([^\n]{1,60})/gi)) {
+  for (const m of txt.matchAll(_STRUCTURED_RE)) {
+    const pct = Number(m[2]) / 100;
+    const resetMs = parseDuration(m[3]);
+    if (!(pct >= 0 && pct <= 1.005) || resetMs <= 0) continue;
+    out.push({ pct: _round4(pct), resetMs, label: m[1].toLowerCase() });
+  }
+  if (out.length) return out;   // structured labels are authoritative — never fall through to the loose scan
+  for (const m of txt.matchAll(_LOOSE_RE)) {
     const pct = Number(m[1]) / 100;
     const resetMs = parseDuration(m[2]);
     if (!(pct >= 0 && pct <= 1.005) || resetMs <= 0) continue;   // a >100% or reset-less match is noise, not a meter
     const before = txt.slice(Math.max(0, m.index - 60), m.index);
     const label = /weekly/i.test(before) ? 'weekly' : /session/i.test(before) ? 'session' : /daily/i.test(before) ? 'daily' : '';
-    // Round to 4 decimals: 67.1/100 is 0.67099999… in floats, and the mark should read back as
-    // exactly what the dashboard displayed.
-    out.push({ pct: Math.min(1, Math.round(pct * 1e4) / 1e4), resetMs, label });
+    out.push({ pct: _round4(pct), resetMs, label });
   }
   return out;
 }
