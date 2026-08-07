@@ -4768,6 +4768,35 @@ function _workingCanvasFresh() {
   try { return !!db.getMeta('canvas.working_slug') && (Date.now() - parseInt(db.getMeta('canvas.working_at') || '0', 10)) < WORKING_CANVAS_FRESH_MS; } catch { return false; }
 }
 
+// COMPREHENSION FALLBACK for canvas edits (Lucas, 2026-08-07: "kimi can't read typos? this is
+// worse than a regex block"). He is right about the architecture: the model reads "pullet the
+// parish list" as "bullet…" effortlessly — but the regex ran BEFORE any model saw the message, and
+// on a miss the turn fell to a replier with no canvas hands. While a working doc is fresh, the
+// regex is only the zero-latency fast path; anything it misses gets ONE bounded classifier call —
+// typo-tolerant by nature — whose yes routes into the same edit door. No session → no call.
+function _validateEditIntent(raw) {
+  try {
+    const m = String(raw || '').match(/\{[\s\S]*\}/);
+    if (!m) return { valid: false, error: 'no JSON object' };
+    const o = JSON.parse(m[0]);
+    if (typeof o.edit !== 'boolean') return { valid: false, error: 'missing boolean "edit"' };
+    return { valid: true, value: { edit: o.edit, instruction: String(o.instruction || '').slice(0, 300) } };
+  } catch (e) { return { valid: false, error: e.message }; }
+}
+async function _classifyCanvasEditIntent(userMessage) {
+  try {
+    const title = db.getMeta('canvas.working_title') || 'the working doc';
+    const v = await require('./lib/cloud_logic').ask({
+      task: 'canvas_edit_intent', v: 1,
+      input: { workingDoc: title, message: String(userMessage || '').slice(0, 300) },
+      want: `Lucas and the assistant are building a canvas document step by step ("${title}"). Given his MESSAGE, decide: is it an instruction to modify, extend, reformat, or continue THAT document? Typos are common — read intent, not spelling ("pullet the list" means "bullet the list"). Conversation, questions about content, and unrelated asks are edit=false. Reply ONLY strict JSON: {"edit": true|false, "instruction": "<his instruction, normalized, typos corrected>"}.`,
+      validate: _validateEditIntent, numPredict: 150, think: false,
+    });
+    if (v && v.edit && v.instruction) { console.log(`[canvas-cmd] classifier read the intent: "${v.instruction}"`); return { order: v.instruction }; }
+    return null;
+  } catch { return null; }   // fail-soft: no classifier → the fast path was the only path
+}
+
 // Apply an EDIT order to the working canvas doc: the current markdown + his instruction → the
 // COMPLETE updated doc → re-emit on the SAME slug (updates in place) → re-stamp. Pure reformats
 // need no tools; content additions get them — one bounded interactive-lane run covers both.
@@ -9748,8 +9777,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const _cc = require('./lib/canvas_command');
       // EDIT first: while a working doc is fresh, "convert the list to bullets in the same
       // document" edits THAT doc; "a fresh canvas" always routes to create (detectEdit refuses it).
+      const _cwFresh = _workingCanvasFresh();
       let _cedit = null, _ccmd = null;
-      try { _cedit = _cc.detectEdit(userMessage, { workingFresh: _workingCanvasFresh() }); } catch {}
+      try { _cedit = _cc.detectEdit(userMessage, { workingFresh: _cwFresh }); } catch {}
+      // Regex missed but a canvas session is live → let a MODEL read the message (typo-proof).
+      if (!_cedit && _cwFresh && String(userMessage || '').trim().length <= 300) {
+        try { _cedit = await _classifyCanvasEditIntent(userMessage); } catch {}
+      }
       if (_cedit) {
         followupFired = true;
         console.log('[canvas-cmd] edit order on the working doc → applying in place');
