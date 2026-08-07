@@ -194,7 +194,9 @@ function applyOutcome(item, ans, { now = Date.now() } = {}) {
         try {
           const members = parseRoster(ans);
           if (members.length) {
-            const r = require('./civic_store').recordRoster({ bodyTitle: item.subject, members, sourceKind: 'operator' });
+            const civ = require('./civic_store');
+            civ.upsertBody({ title: item.subject, level: 'other' });   // memberships require the body row
+            const r = civ.recordRoster({ bodyTitle: item.subject, members, sourceKind: 'operator' });
             if (r.ok) v.line = `${v.line} [${r.stored + r.unchanged} member(s) recorded to the civic store]`;
           }
         } catch { /* structured capture is best-effort; the resolve itself stands */ }
