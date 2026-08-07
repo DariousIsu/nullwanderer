@@ -4829,7 +4829,7 @@ async function _classifyCanvasEditIntent(userMessage) {
     const title = db.getMeta('canvas.working_title') || 'the working doc';
     const v = await require('./lib/cloud_logic').ask({
       task: 'canvas_edit_intent', v: 1,
-      input: { workingDoc: title, message: String(userMessage || '').slice(0, 300) },
+      input: { workingDoc: title, message: String(userMessage || '').slice(0, 4000) },   // no artificial cap — a detailed edit order is the point
       want: `Lucas and the assistant are building a canvas document step by step ("${title}"). Given his MESSAGE, decide: is it an instruction to modify, extend, reformat, or continue THAT document? Typos are common — read intent, not spelling ("pullet the list" means "bullet the list"). Conversation, questions about content, and unrelated asks are edit=false. Reply ONLY strict JSON: {"edit": true|false, "instruction": "<his instruction, normalized, typos corrected>"}.`,
       validate: _validateEditIntent, numPredict: 150, think: false,
     });
@@ -9826,7 +9826,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         if (ai.prefilter(userMessage, { workingFresh: _fresh })) {
           const verdict = await require('./lib/cloud_logic').ask({
             task: 'artifact_intent', v: 1,
-            input: { message: String(userMessage).slice(0, 400), workingDoc: _fresh ? (db.getMeta('canvas.working_title') || '') : '' },
+            input: { message: String(userMessage).slice(0, 4000), workingDoc: _fresh ? (db.getMeta('canvas.working_title') || '') : '' },   // sized to the window, not a constant — cloud_logic packs input to its own budget
             want: ai.wantText({ workingFresh: _fresh, workingTitle: db.getMeta('canvas.working_title') || '' }),
             validate: ai.validate, numPredict: 180, think: false,
           });
@@ -9878,9 +9878,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       let _cedit = null, _ccmd = null;
       if (_cwFresh) {
         let _verdict = null;
-        if (String(userMessage || '').trim().length <= 300) {
-          try { _verdict = await _classifyCanvasEditIntent(userMessage); } catch {}
-        }
+        try { _verdict = await _classifyCanvasEditIntent(userMessage); } catch {}
         if (_verdict && _verdict.order) _cedit = { order: _verdict.order };
         else if (!_verdict) { try { _cedit = _cc.detectEdit(userMessage, { workingFresh: true }); } catch {} }
         // _verdict.notEdit → the model said no; the regex stays out of it.

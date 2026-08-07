@@ -18,7 +18,7 @@ ok('ordinary chat does not nominate', !ai.prefilter('how did the meeting with Ru
 ok('"listen"/"reportedly" do not nominate (word bounds)', !ai.prefilter('listen, they reportedly agreed'));
 ok('working session nominates everything short', ai.prefilter('now make them bold', { workingFresh: true }));
 ok('without a session the same message does not', !ai.prefilter('now make them bold'));
-ok('long messages never nominate', !ai.prefilter('x'.repeat(450), { workingFresh: true }));
+ok('long messages DO nominate (no artificial cap)', ai.prefilter('please build the report on ' + 'x'.repeat(450), { workingFresh: false }) && ai.prefilter('y'.repeat(450), { workingFresh: true }));
 
 // ── validate: strict intent set, sizes clamped ──────────────────────────────────────────────────
 ok('valid verdict passes', ai.validate('{"intent":"pullup","subject":"parish list","instruction":""}').valid);

@@ -34,7 +34,7 @@ const ABOUT = /\b(?:what(?:'s| is| are)\s+on|can you see|do you see|look at|is (
  */
 function detect(text) {
   const t = str(text).trim();
-  if (!t || t.length > 600) return null;
+  if (!t) return null;                        // no length cap — a detailed order is the point
   if (!CANVAS_DEST.test(t)) return null;
   if (ABOUT.test(t)) return null;
   if (!ORDER.test(t)) return null;
@@ -66,7 +66,7 @@ const WANTS_FRESH = /\b(?:a\s+)?(?:fresh|new|another|separate)\s+canvas\b|\bcanv
 function detectEdit(text, { workingFresh = false } = {}) {
   const t = str(text).trim();
   if (!workingFresh) return null;
-  if (!t || t.length > 600) return null;
+  if (!t) return null;                        // no length cap (same doctrine as detect)
   if (WANTS_FRESH.test(t)) return null;                       // explicit new doc → the create net's job
   if (ABOUT.test(t)) return null;
   if (!EDIT_VERB.test(t)) return null;

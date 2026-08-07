@@ -21,10 +21,13 @@ const str = (v) => (v == null ? '' : String(v));
 const NOMINATE = /\b(?:canvas|report|brief(?:ing)?|dossier|write-?ups?|summary|memo|profiles?|one-?pagers?|lists?|docs?|documents?|files?|notes?|tables?|spreadsheets?|rosters?|papers?|deliverables?|bullets?|bulleted)\b/i;
 
 /** prefilter(text, {workingFresh}) — should this message pay for a judgment call? While a canvas
- * session is live, every short message is a candidate (step-at-a-time edits rarely name nouns). */
+ * session is live, every message is a candidate (step-at-a-time edits rarely name nouns).
+ * NO length gate (Lucas 2026-08-07: "what 400 char window?" — the artificial-caps disease, caught
+ * same-day): a long, detailed order is when comprehension matters MOST; the vocabulary prefilter
+ * bounds the classifier's cost, and the caller sizes the input slice to the model's window. */
 function prefilter(text, { workingFresh = false } = {}) {
   const t = str(text).trim();
-  if (!t || t.length > 400) return false;
+  if (!t) return false;
   if (workingFresh) return true;
   return NOMINATE.test(t);
 }

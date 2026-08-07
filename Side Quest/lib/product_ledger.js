@@ -54,7 +54,7 @@ function _hasAnchor(t) {
  */
 function detectAsk(text) {
   const t = str(text).trim();
-  if (!t || t.length > 400) return null;
+  if (!t) return null;                        // no length cap — a detailed ask is still an ask
   const nounRe = new RegExp(`\\b(?:${NOUN})\\b`, 'i');
   if (!nounRe.test(t)) return null;
   if (LEADS_BUILD.test(t)) return null;
