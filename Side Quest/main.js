@@ -4807,6 +4807,15 @@ async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
     await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas ordered content onto his canvas but it could not be grounded: "${md.slice(0, 200)}". Tell him exactly that — what is missing — and do NOT claim anything landed.]` });
     return;
   }
+  // PAYLOAD CONTRACT (M6, 2026-08-08 audit): the EDIT door ran rejectEditOutput twice while this
+  // CREATE door ran it zero times — the same operator finalize that narrated three edit runs can
+  // narrate a create. Empty cur disarms the shrink guard; the narration checks are the contract.
+  const _createReject = require('./lib/canvas_command').rejectEditOutput(md, '', order);
+  if (_createReject) {
+    console.log(`[canvas-cmd] create output REJECTED (${_createReject}) — nothing landed`);
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas's canvas order produced INVALID output (${_createReject}) and NOTHING landed on the canvas. Tell him plainly the create failed its output check and he can re-order it — never claim a doc exists.]` });
+    return;
+  }
   const title = order.replace(/\b(?:please|can you|could you)\b/gi, '').replace(/\b(?:on|onto|to|into)\s+(?:a\s+fresh\s+|a\s+new\s+|a\s+|the\s+|my\s+|your\s+)?canvas(?:\s+doc(?:ument)?|\s+tab)?\b/gi, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'Canvas doc';
   const slug = `canvas-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'doc'}`;
   try { await promiseArtifactEmit({ slug, title, markdown: md }); } catch (e) {

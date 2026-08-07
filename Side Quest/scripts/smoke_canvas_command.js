@@ -44,6 +44,9 @@ ok('"clean up" counts as a shrink instruction', !rejectEditOutput(parishDoc.spli
 ok('a real converted doc is accepted', !rejectEditOutput(parishDoc.split('\n').map((l) => `- ${l}\n  - police jury government`).join('\n'), parishDoc, 'Convert the document into a bulleted list'));
 ok('empty output rejected', !!rejectEditOutput('', parishDoc, 'bullet the list'));
 ok('growth is always fine', !rejectEditOutput(parishDoc + '\nZavalla Parish', parishDoc, 'add the missing parish'));
+// CREATE-door use (M6, 08-08 audit): empty cur disarms the shrink guard; narration still rejects.
+ok('create: fresh doc with empty cur accepted', !rejectEditOutput('- Acadia Parish\n- Allen Parish', '', 'list the parishes'));
+ok('create: narration with empty cur rejected', !!rejectEditOutput('Let me check the parish list first.', '', 'list the parishes'));
 
 // ── pendingSubjects: the blanks BECOME the plan (08-08) ─────────────────────────────────────────
 const { pendingSubjects } = require(path.join(__dirname, '..', 'lib', 'canvas_command'));
