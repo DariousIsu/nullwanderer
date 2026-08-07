@@ -4860,6 +4860,9 @@ async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
     md = res && res.answer ? String(res.answer).trim() : '';
   } catch (e) { console.error('[canvas-cmd] edit execute failed:', e.message); }
   if (!md || /^CANNOT:/i.test(md)) {
+    // Every outcome path logs (08-08: this branch relayed honestly but logged NOTHING — the live
+    // watch was blind to a completed edit for 20 minutes; silence must never be an outcome).
+    console.log(`[canvas-cmd] edit NOT applied — ${md ? md.slice(0, 160) : 'run produced nothing'}`);
     await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas's canvas edit did NOT apply${md ? `: "${md.slice(0, 200)}"` : ' (the edit run produced nothing)'}. Tell him exactly that — the doc on his canvas is UNCHANGED — and never claim the edit landed.]` });
     return;
   }
