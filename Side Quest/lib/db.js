@@ -806,6 +806,29 @@ const MIGRATIONS = [
     conflict_ts INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS idx_cardinality_conflict ON cardinality(conflict_ts)`,
+
+  // RECHECK QUEUE (the metabolism, 2026-08-07 — [[program-end-state]]): ONE prioritized queue that
+  // every doubt-producer feeds (stale absences, roster discrepancies, cardinality conflicts, …) and
+  // the always-on verify loop DRAINS — the autonomic worklist doctrine applied to epistemics,
+  // replacing the idle-lottery where "verify" competed with everything and lost. One OPEN row per
+  // (kind, subject); resolution re-arms the producer's own cycle (an absence re-recorded as a miss
+  // re-enqueues when its TTL next expires). See lib/recheck_queue.js.
+  `CREATE TABLE IF NOT EXISTS recheck_queue (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    detail TEXT,
+    priority INTEGER NOT NULL DEFAULT 5,
+    due_ts INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_attempt_ts INTEGER,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','done','parked')),
+    outcome TEXT,
+    born_from TEXT,
+    created_ts INTEGER NOT NULL
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_recheck_open ON recheck_queue(kind, subject) WHERE status = 'open'`,
+  `CREATE INDEX IF NOT EXISTS idx_recheck_due ON recheck_queue(status, due_ts, priority)`,
   // civic_bodies / civic_memberships — THE STRUCTURED HOME for researched governing bodies
   // (docs/CIVIC_BODY_SCHEMA_DESIGN.md, Lucas-approved 2026-07-30). Measured before building: 120
   // open county threads and hundreds of researched boards had NO queryable store — prose

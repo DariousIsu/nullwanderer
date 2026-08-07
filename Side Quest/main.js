@@ -2181,6 +2181,43 @@ app.whenReady().then(() => {
     console.log('[main] roster-refresh organ armed (weekly + election-night watch; official House/Senate rosters + cross-check)');
   }
 
+  // THE METABOLISM (north star, [[program-end-state]] 2026-08-07): the always-on verify/reverify
+  // loop. Every 10 min: sweep expired absence TTLs into the RECHECK QUEUE, then drain 1-2 due
+  // items — each a bounded verification pass on gemma4:31b-cloud (Lucas: per-compute pricing makes
+  // the 31b nearly free; local is deliberately cold). lane:'interactive' = the governor never
+  // gates it (the FLOOR); the hourly cap bounds it instead — governance by construction. Verdicts
+  // are machine-read (RESOLVED / STILL-UNKNOWN); an honest miss re-arms the producer's own cycle.
+  // Kill switch ZOE_RECHECK=0; cap ZOE_RECHECK_PER_HOUR (default 12).
+  {
+    const runMetabolism = async () => {
+      try {
+        if (String(process.env.ZOE_RECHECK || '1') === '0') return;
+        const rq = require('./lib/recheck_queue');
+        rq.sweepAbsences({});
+        const capPerHour = parseInt(process.env.ZOE_RECHECK_PER_HOUR, 10) || 12;
+        const hour = Math.floor(Date.now() / 3600000);
+        if (parseInt(db.getMeta('recheck.hour') || '0', 10) !== hour) { db.setMeta('recheck.hour', String(hour)); db.setMeta('recheck.hour_n', '0'); }
+        const used = parseInt(db.getMeta('recheck.hour_n') || '0', 10);
+        if (used >= capPerHour) return;
+        const items = rq.due({ limit: Math.min(2, capPerHour - used) });
+        if (!items.length) return;
+        for (const item of items) {
+          markActivity('metabolism');
+          try {
+            const res = await runCloudOperator({ userMessage: rq.buildPrompt(item), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'interactive', budgetMult: 0.75 });
+            const out = rq.applyOutcome(item, res && res.answer ? String(res.answer) : '');
+            db.setMeta('recheck.hour_n', String(parseInt(db.getMeta('recheck.hour_n') || '0', 10) + 1));
+            console.log(`[metabolism] ${item.kind} "${String(item.subject).slice(0, 60)}" → ${out.action}${out.line ? ` — ${out.line.slice(0, 100)}` : ''}`);
+          } catch (e) { console.error('[metabolism] pass failed:', e.message); try { rq.defer(item.id, {}); } catch {} }
+          finally { markActivity('idle'); }
+        }
+      } catch (e) { console.error('[metabolism] tick failed:', e.message); }
+    };
+    setTimeout(runMetabolism, 8 * 60 * 1000).unref?.();
+    setInterval(runMetabolism, 10 * 60 * 1000).unref?.();
+    console.log(`[main] metabolism armed — recheck queue drains on gemma4:31b-cloud (cap ${parseInt(process.env.ZOE_RECHECK_PER_HOUR, 10) || 12}/h)`);
+  }
+
   // PULLER ORG-KIND BACKFILL — one-shot organ, meta-gated (M4.4 follow-up, 2026-08-07). The org
   // door only guards NEW enrollments; the pre-door stock (271k person rows, org-shaped names among
   // them) still routed org asks to person walks. Runs once (~12m after boot, chunked + yielding),
@@ -10801,7 +10838,7 @@ async function runCloudOperator(opts) {
   return require('./lib/lane').run({ autonomous: !!(opts && opts.autonomous) }, () => _runCloudOperator(opts || {}));
 }
 
-async function _runCloudOperator({ userMessage, context, task = false, autonomous = false, maintain = false, toolNames = null, model = null, toolSpec = null, budgetMult = 1, review = false }) {
+async function _runCloudOperator({ userMessage, context, task = false, autonomous = false, maintain = false, toolNames = null, model = null, toolSpec = null, budgetMult = 1, review = false, lane = undefined }) {
   try {
     const operator = require('./lib/operator');
     // Per-tool timeout: a slow/hung capability (Echo down, a stalled page) can't block the turn —
@@ -10851,7 +10888,9 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
       // 'research' (45% of pace). In-turn user replies stay interactive (never throttled). This is
       // where the beats' 400k+/h ungated burn actually flowed; a deferral reads as a cloud-miss to
       // the fail-soft pass and the thread resumes when pace recovers.
-      lane: autonomous ? (_userDirectedActive() ? 'directed' : 'research') : undefined,
+      // An explicit lane wins (the metabolism floor passes 'interactive' — protected from the
+      // governor by construction, bounded by its own hourly cap); else the autonomous default.
+      lane: lane !== undefined ? lane : (autonomous ? (_userDirectedActive() ? 'directed' : 'research') : undefined),
     });
     // GROWTH — "Zoe" IS the memory, not the model: the operator only grows her if what it gathers
     // ACCRETES back into her knowledge. Capture the web findings it pulled as durable learnings, so
@@ -15019,6 +15058,7 @@ async function runDirectedResearchPass(focus) {
               if (got.ok) {
                 const rec = cardinality.record(target.name, { seats: got.seats, sourceKind: got.sourceKind, sourceRef: got.sourceRef });
                 console.log(`[cardinality] ${target.name}: ${got.seats} seats (${got.sourceKind}) → ${rec.stored ? 'stored' : rec.reason}${rec.conflict ? ' [CONFLICT flagged]' : ''}`);
+                if (rec.conflict) { try { require('./lib/recheck_queue').enqueue({ kind: 'cardinality-conflict', subject: target.name, detail: { incoming: got.seats, sourceKind: got.sourceKind }, priority: 6, bornFrom: 'cardinality' }); } catch {} }
               } else {
                 // Log the reason. A silent skip is indistinguishable from "this body has no seat count",
                 // which is exactly the ambiguity P5 exists to remove.

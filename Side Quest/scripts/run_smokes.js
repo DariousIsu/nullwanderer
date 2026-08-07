@@ -314,6 +314,7 @@ const smokes = [
   'smoke_meeting_leave.js',
   'smoke_canvas_command.js',
   'smoke_org_backfill.js',
+  'smoke_recheck_queue.js',
   'smoke_rehearsal.js',
   'smoke_inquiry.js',
   'smoke_dig.js',

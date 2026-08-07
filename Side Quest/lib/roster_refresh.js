@@ -523,6 +523,13 @@ async function run({ deps = {}, fetchImpl = null, echoDispatch = null, force = f
 
   const targets = (deps.targets) || federalTargetSet();
   const built = buildAssignments({ house, senate, cross, targets });
+  // DOUBT → THE RECHECK QUEUE (the metabolism): a vacancy or discrepancy is not a report line to
+  // forget — it's a verification the always-on loop owes. Fail-soft; dedup lives in the queue.
+  try {
+    const rq = require('./recheck_queue');
+    for (const v of built.vacancies) rq.enqueue({ kind: 'vacancy', subject: v, priority: 6, bornFrom: 'roster-refresh' });
+    for (const dd of built.discrepancies) rq.enqueue({ kind: 'discrepancy', subject: String(dd.detail || dd.kind).slice(0, 200), detail: dd, priority: 5, bornFrom: 'roster-refresh' });
+  } catch { /* the queue is an enhancement, never a blocker */ }
   const applied = apply({ assignments: built.assignments, deps });
   const stamps = stampCovered({ assignments: built.assignments, deps });
   let summary = _summary({ ...built, applied });
