@@ -45,5 +45,17 @@ ok('a real converted doc is accepted', !rejectEditOutput(parishDoc.split('\n').m
 ok('empty output rejected', !!rejectEditOutput('', parishDoc, 'bullet the list'));
 ok('growth is always fine', !rejectEditOutput(parishDoc + '\nZavalla Parish', parishDoc, 'add the missing parish'));
 
+// ── pendingSubjects: the blanks BECOME the plan (08-08) ─────────────────────────────────────────
+const { pendingSubjects } = require(path.join(__dirname, '..', 'lib', 'canvas_command'));
+const planDoc = [
+  '- **Acadia Parish**', '  - Police Jury form of government.', '  - Current officeholders: — (pending verification)',
+  '- **Ascension Parish**', '  - Council-President government.', '  - Current officeholders: Clint Cointment (Parish President); others',
+  '- **Allen Parish**', '  - Police Jury.', '  - Current officeholders: — (pending verification)',
+].join('\n');
+const pend = pendingSubjects(planDoc);
+ok('pending entries extracted with subject + label', pend.length === 2 && pend[0].subject === 'Acadia Parish' && pend[0].label === 'Current officeholders' && pend[1].subject === 'Allen Parish');
+ok('filled entries are NOT queued', !pend.some((p) => p.subject === 'Ascension Parish'));
+ok('no pending marks → empty plan', pendingSubjects('- **X**\n  - all: done').length === 0 && pendingSubjects('').length === 0);
+
 console.log(`smoke_canvas_command: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -136,8 +136,11 @@ function buildPrompt(item) {
   const d = item.detail || {};
   const held = heldContext(item.subject);
   switch (item.kind) {
-    case 'absence':
-      return `VERIFICATION PASS — a known gap, due for re-check. We previously looked for the ${d.predicate || 'missing fact'} of "${item.subject}" and did not find it (${d.attempts || 1} prior attempt(s)).${held}${LOCAL_FIRST} ${VERDICT_CONTRACT}`;
+    case 'absence': {
+      // doc-fill items carry their doc — "Acadia Parish" needs the doc's context to be findable.
+      const docCtx = d.doc ? ` (a pending entry in the doc "${d.doc}")` : '';
+      return `VERIFICATION PASS — a known gap, due for re-check. We previously looked for the ${d.predicate || 'missing fact'} of "${item.subject}"${docCtx} and did not find it (${d.attempts || 1} prior attempt(s)).${held}${LOCAL_FIRST} ${VERDICT_CONTRACT}`;
+    }
     case 'discrepancy':
       return `VERIFICATION PASS — a flagged discrepancy: ${item.subject}. Detail: ${JSON.stringify(d).slice(0, 400)}.${held}${LOCAL_FIRST} Then check the OFFICIAL source for this seat/body and one independent source; state what is actually true now. ${VERDICT_CONTRACT}`;
     case 'vacancy':

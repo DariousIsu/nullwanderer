@@ -4902,7 +4902,26 @@ async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
   _stampWorkingCanvasDoc({ slug, title, md });
   const lines = md.split('\n').filter((l) => l.trim()).length;
   console.log(`[canvas-cmd] edit applied → "${title}" updated in place (${md.length}ch, ${lines} line(s))`);
-  await fireToolFollowup({ io, channel, sessionId, resultText: `[The edit Lucas ordered IS APPLIED — "${title}" updated in place on his Canvas (${lines} line(s) now). Tell him in one sentence what changed and invite him to verify. No extras, no offers of next steps — he is driving step by step.]` });
+  // THE PLAN FOR THE BLANKS (2026-08-08, Lucas: "what was held should have been reviewed and then
+  // a plan made to fill in the blanks"): every pending mark the doc landed with is a KNOWN GAP —
+  // enqueue each to the recheck queue so the metabolism researches them on its own cadence, and
+  // STATE the plan in the relay instead of leaving blanks as dead ends.
+  let planNote = '';
+  try {
+    const pend = require('./lib/canvas_command').pendingSubjects(md);
+    if (pend.length) {
+      const rq = require('./lib/recheck_queue');
+      let queued = 0;
+      for (const p of pend) {
+        const r = rq.enqueue({ kind: 'absence', subject: p.subject, detail: { predicate: p.label, doc: title }, priority: 5, bornFrom: 'doc-fill' });
+        if (r.ok) queued++;
+      }
+      const perHour = parseInt(process.env.ZOE_RECHECK_PER_HOUR, 10) || 12;
+      console.log(`[canvas-cmd] ${queued} pending entr${queued === 1 ? 'y' : 'ies'} queued to the metabolism (≈${Math.ceil(queued / perHour)}h at ${perHour}/h)`);
+      planNote = ` ${queued} entr${queued === 1 ? 'y is' : 'ies are'} still marked pending — each is now QUEUED for autonomous research (about ${Math.ceil(queued / perHour)} hour(s) at the current pace); state that plan plainly.`;
+    }
+  } catch (e) { console.error('[canvas-cmd] pending-plan enqueue failed:', e.message); }
+  await fireToolFollowup({ io, channel, sessionId, resultText: `[The edit Lucas ordered IS APPLIED — "${title}" updated in place on his Canvas (${lines} line(s) now). Tell him in one sentence what changed and invite him to verify.${planNote} No extras beyond that — he is driving step by step.]` });
 }
 
 // Land a HELD product (found by the pull-up gate) on the canvas and hand it over honestly: what it

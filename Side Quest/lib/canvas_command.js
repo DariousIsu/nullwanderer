@@ -110,4 +110,30 @@ function rejectEditOutput(md, cur, order) {
   return null;
 }
 
-module.exports = { detect, detectEdit, rejectEditOutput };
+// ── PENDING ENTRIES → A PLAN (2026-08-08, Lucas: "what was held should have been reviewed and
+// then a plan made to fill in the blanks") ──────────────────────────────────────────────────────
+// A landed doc's "(pending verification)" marks are known gaps — and known gaps belong in the
+// recheck queue, not just on the page. This parses the doc's main-bullet subjects whose sub-lines
+// carry a pending mark, so the caller can enqueue each one: the blanks BECOME the plan.
+const MAIN_BULLET = /^\s*[-*]\s+\*\*(.+?)\*\*/;
+const PENDING_LINE = /^\s+[-*]?\s*([^:\n]{2,60}):.*\(pending\b/i;
+
+/** pendingSubjects(md) → [{subject, label}] — one row per main bullet with a pending sub-line;
+ * label = the sub-line's field name ("Current officeholders"). Pure; empty on no matches. */
+function pendingSubjects(md) {
+  const out = [];
+  let current = null;
+  for (const line of str(md).split('\n')) {
+    const mb = line.match(MAIN_BULLET);
+    if (mb) { current = mb[1].trim(); continue; }
+    if (!current) continue;
+    const pl = line.match(PENDING_LINE);
+    if (pl) {
+      const label = pl[1].trim();
+      if (!out.some((o) => o.subject === current && o.label === label)) out.push({ subject: current, label });
+    }
+  }
+  return out;
+}
+
+module.exports = { detect, detectEdit, rejectEditOutput, pendingSubjects };
