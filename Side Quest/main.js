@@ -10398,7 +10398,13 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
       maxSteps: _maxSteps,
       maxMs: _maxMs,
       numPredict: task ? config.sectionNumPredict() : undefined,   // a list/write-up can be long — don't truncate it at generation (cloud-leverage: deeper write-ups)
-      model, toolSpec                         // per-lane model + tool menu (null = single-lane defaults)
+      model, toolSpec,                        // per-lane model + tool menu (null = single-lane defaults)
+      // SPEND TIER (dial-in 2026-08-06): autonomous operator work opts into the choke-point quota
+      // gate — Lucas's directed runs on the big-share 'directed' tier, background/beat work on
+      // 'research' (45% of pace). In-turn user replies stay interactive (never throttled). This is
+      // where the beats' 400k+/h ungated burn actually flowed; a deferral reads as a cloud-miss to
+      // the fail-soft pass and the thread resumes when pace recovers.
+      lane: autonomous ? (_userDirectedActive() ? 'directed' : 'research') : undefined,
     });
     // GROWTH — "Zoe" IS the memory, not the model: the operator only grows her if what it gathers
     // ACCRETES back into her knowledge. Capture the web findings it pulled as durable learnings, so

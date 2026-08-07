@@ -51,6 +51,7 @@ async function _operatorComplete(messages, opts = {}) {
   }
   return completeDetailed({
     model, messages, base: src.base,
+    lane: opts.lane || undefined,   // spend tier for the choke-point quota gate; unset = interactive (ungated)
     headers: src.token ? { Authorization: `Bearer ${src.token}` } : {},
     // think:false UNCONDITIONALLY — the step contract is ONE clean JSON object (or plain prose for
     // the final answer); without it the model buries the step in message.thinking and the parsed
@@ -321,7 +322,7 @@ const FREE_CLOCK = new Set(['self_test']);
  * Run the agent loop. deps.complete(messages)->{text}|string ; deps.tools = { web_search, echo,
  * browser_read, recall, file } each (args)->string. Returns { answer, steps, toolsUsed } or null.
  */
-async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DEFAULT_MAX_STEPS, maxMs = DEFAULT_MAX_MS, numPredict = 900, model = null, toolSpec = null } = {}) {
+async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DEFAULT_MAX_STEPS, maxMs = DEFAULT_MAX_MS, numPredict = 900, model = null, toolSpec = null, lane = null } = {}) {
   const complete = deps.complete || _operatorComplete;
   const tools = deps.tools || {};
   const nowFn = deps.now || Date.now;
@@ -336,7 +337,10 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
   // numPredict governs how big the model's response (incl. the {final:…} deliverable) can be — large
   // for directed tasks so a long list/write-up isn't truncated at generation. model = optional cloud
   // model override (per-lane); toolSpec = optional lane-scoped tool menu.
-  const cOpts = { num_predict: numPredict, ...(model ? { model } : {}) };
+  // lane = the SPEND TIER for the quota gate at the ollama choke point (M1.1b). Autonomous callers
+  // opt in ('research'/'directed'); unset stays 'interactive' (never throttled) so the reply path
+  // and every legacy caller are untouched. A deferral surfaces as the caller's normal cloud-miss.
+  const cOpts = { num_predict: numPredict, ...(model ? { model } : {}), ...(lane ? { lane } : {}) };
   const capChars = _contextCap();
   // The history budget is a FRACTION OF THE RESOLVED WINDOW (O1 — never a constant): ~45% of
   // num_ctx at ~3.2 chars/token leaves the rest for identity/context/user message/generation.

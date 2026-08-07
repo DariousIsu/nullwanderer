@@ -186,9 +186,23 @@ function _noteThinkingSalvage(model) {
 const _REASONING_RE = /(?:^|[\/:_-])(?:gpt-oss|qwen3|qwq|kimi|deepseek-r1|magistral|o1|o3)\b|:think\b/i;
 function isReasoningModel(name) { return _REASONING_RE.test(String(name || '')); }
 
-async function completeDetailed({ model, messages, options = {}, base = OLLAMA_BASE, headers = {}, signal, timeoutMs = 180000, think }) {
+async function completeDetailed({ model, messages, options = {}, base = OLLAMA_BASE, headers = {}, signal, timeoutMs = 180000, think, lane = 'interactive' }) {
   base = base || OLLAMA_BASE;          // coalesce explicit null (default params only fill undefined)
   headers = headers || {};
+  // M1.1b SPEND GATE — the non-streaming twin of streamChat's choke-point gate (this door was
+  // fully ungated: the operator loop + every condense/organize call ride completeDetailed, which
+  // is where the beat lane's 400k+/h burn actually flowed). Same mute-safety invariant: only
+  // CLOUD calls on an OPT-IN deferrable lane are ever gated; lane defaults to 'interactive'
+  // (never deferred) so every legacy caller is untouched. Gate infra failure → FAIL OPEN.
+  const _cloudCallCD = !!(base && base !== OLLAMA_BASE);
+  if (_cloudCallCD && lane && lane !== 'interactive') {
+    try {
+      const _chars = (messages || []).reduce((n, m) => n + String((m && m.content) || '').length, 0);
+      const _est = require('./quota').costOf({ model, tokens: Math.round(_chars / 3.2) + 500 });
+      const _r = require('./quota_gate').allow(lane, { estimate: _est });
+      if (!_r.allow) { const e = new Error(`quota: ${lane} deferred — ${_r.reason}`); e.deferred = true; e.lane = lane; throw e; }
+    } catch (e) { if (e && e.deferred) throw e; /* fail open */ }
+  }
   // Non-streaming: there's no per-token activity to watch, so cap the WHOLE call. Generous
   // (frontier/cloud models over a big context are slow) but bounded, so a hung request can't
   // block a caller forever the way the streaming path did. Composes with an external signal.
