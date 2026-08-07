@@ -445,9 +445,9 @@ function sweepOrphanedTempDbs(label) {
 // start would leave a full run's residue (~1,000 files) sitting on the machine until next time.
 sweepOrphanedTempDbs('before the run\n');
 
-let passed = 0, failed = 0;
-const failures = [];
-for (const s of smokes) {
+// Run ONE suite and classify its result → true (pass) | false (fail). `quiet` suppresses the
+// per-suite PASS/FAIL line (used on the retry pass, which prints its own labels).
+function runSuite(s, { quiet = false } = {}) {
   let out = '', childOk = true;   // childOk = the child exited 0 (execFileSync throws on nonzero/timeout)
   try {
     out = execFileSync(electron, [path.join(dir, s)], {
@@ -460,23 +460,56 @@ for (const s of smokes) {
   // silently outside the gate for want of a matching regex, so the whole verification spine could be
   // refactored without one gated test running.
   const m = out.match(/(ALL PASS|FAILURES|PASS|FAIL) — (\d+) (?:ok|passed), (\d+) failed/);
-  if (m && /^(ALL )?PASS$/.test(m[1])) { passed++; console.log(`PASS  ${s.padEnd(30)} (${m[2]} ok)`); }
+  let ok, label;
+  if (m && /^(ALL )?PASS$/.test(m[1])) { ok = true; label = `(${m[2]} ok)`; }
   // THIRD dialect: a suite that prints a bare "SMOKE PASSED"/"SMOKE FAILED" with no counts (e.g.
   // smoke_activity_coverage). It was reported as a FAILURE for want of a matching regex — the same
   // bug the comment above describes, one dialect later. A green suite counted as red is not the safe
   // direction it looks like: it trains everyone to read past a red gate.
-  else if (!m && /^\s*SMOKE PASSED\s*$/m.test(out)) { passed++; console.log(`PASS  ${s.padEnd(30)} (no count reported)`); }
+  else if (!m && /^\s*SMOKE PASSED\s*$/m.test(out)) { ok = true; label = '(no count reported)'; }
   // FOURTH dialect (measured 2026-08-06): Electron's piped stdout can DROP the final console.log
   // when process.exit fires before the pipe drains — a suite whose ok() is success-silent
   // (smoke_self_question) then produces ZERO output on a clean pass, and three others lose only
   // their tail "PASS —" line. The EXIT CODE is the suite's own verdict (every suite ends
   // process.exit(fail ? 1 : 0)), so exit 0 with no failure marker in what DID arrive is a pass.
   // A crash/timeout still throws (childOk=false) and a lost-line FAILING suite still exits 1.
-  else if (!m && childOk && !/✗|FAIL/.test(out)) { passed++; console.log(`PASS  ${s.padEnd(30)} (exit 0 — result line lost to the stdout pipe race)`); }
-  else { failed++; failures.push(s); console.log(`FAIL  ${s.padEnd(30)} ${m ? `(${m[3]} failed)` : '(no result line — crashed?)'}`); }
+  else if (!m && childOk && !/✗|FAIL/.test(out)) { ok = true; label = '(exit 0 — result line lost to the stdout pipe race)'; }
+  else { ok = false; label = m ? `(${m[3]} failed)` : '(no result line — crashed?)'; }
+  if (!quiet) console.log(`${ok ? 'PASS' : 'FAIL'}  ${s.padEnd(30)} ${label}`);
+  return ok;
+}
+
+let passed = 0;
+let failures = [];
+for (const s of smokes) { if (runSuite(s)) passed++; else failures.push(s); }
+
+// FLAKE-TOLERANT EXIT (2026-08-07). This 360+-suite gate spawns one Electron child per suite, back to
+// back, and when it runs as a REHEARSAL SANDBOX gate it competes with the whole live app for CPU/IO —
+// so a timing-sensitive suite occasionally misses under load (measured: an isolated sandbox run went
+// 349/1 with a DIFFERENT single suite each time — deep_budgets one run, none the next). Requiring all
+// N green in ONE shot made the rehearsal's green exit — and the R2 proposal card — hostage to a ~1/N
+// load flake with nothing wrong in the code. A load flake passes when re-run alone; a REAL failure
+// (a broken edit) fails deterministically every time. So: re-run each failure ONCE, alone. A suite
+// that now passes was a flake (absolved, named); one that fails again is real and keeps the gate red.
+// Only retried when the failure set is SMALL (a pile of failures is real breakage, not flakes) — this
+// never masks a genuinely broken build and never more than doubles the cost of a handful of suites.
+const RETRY_MAX = parseInt(process.env.SMOKE_FLAKE_RETRY_MAX || '', 10) || 5;
+const flakes = [];
+if (failures.length && failures.length <= RETRY_MAX) {
+  console.log(`\n↻ ${failures.length} suite(s) failed — re-running each ONCE alone to tell a load-flake from a real failure:`);
+  const stillFailed = [];
+  for (const s of failures) {
+    if (runSuite(s, { quiet: true })) { flakes.push(s); passed++; console.log(`  ✓ ${s.padEnd(30)} passed on retry → FLAKE (absolved)`); }
+    else { stillFailed.push(s); console.log(`  ✗ ${s.padEnd(30)} failed again → REAL failure`); }
+  }
+  failures = stillFailed;
+} else if (failures.length > RETRY_MAX) {
+  console.log(`\n${failures.length} failures (> ${RETRY_MAX}) — NOT a flake pattern; reporting as a real breakage without retry.`);
 }
 
 sweepOrphanedTempDbs('after the run');
-console.log(`\n${failed === 0 ? '✅ ALL GREEN' : '❌ FAILURES'} — ${passed} suites passed, ${failed} failed`);
+const failed = failures.length;
+if (flakes.length) console.log(`\n⚠ ${flakes.length} flaky suite(s) passed only on retry (absolved, gate stays green): ${flakes.join(', ')}`);
+console.log(`${failed === 0 ? '✅ ALL GREEN' : '❌ FAILURES'} — ${passed} suites passed, ${failed} failed${flakes.length ? ` (${flakes.length} recovered on retry)` : ''}`);
 if (failures.length) console.log('   failed:', failures.join(', '));
 process.exit(failed === 0 ? 0 : 1);
