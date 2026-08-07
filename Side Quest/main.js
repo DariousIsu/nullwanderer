@@ -2143,7 +2143,12 @@ app.whenReady().then(() => {
     const runRosterRefresh = async () => {
       try {
         markActivity('roster-refresh');
-        const r = await require('./lib/roster_refresh').run({});
+        // CRM write-through rides the Echo suit when attached (fill-only-empty via update_contact);
+        // without the suit the store passes still run and the CRM leg reports itself skipped.
+        const echoDispatch = (echoSuit && echoSuit.connected)
+          ? (name, args) => echoSuit.dispatch({ kind: 'do', name, args })
+          : null;
+        const r = await require('./lib/roster_refresh').run({ echoDispatch });
         if (r && r.ok) console.log(`[roster] ${r.summary}${r.stamps && r.stamps.stamped && r.stamps.stamped.length ? ` | covered stamped: ${r.stamps.stamped.map((s) => `#${s.focusId}+${s.added}`).join(', ')}` : ''}`);
         else if (r && r.reason) console.log(`[roster] refresh not applied — ${r.reason}`);
         // skipped (not due / kill-switch) stays quiet — a weekly organ must not log daily noise

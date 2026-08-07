@@ -109,8 +109,97 @@ ok('federal focus stamped + prior kept', cov101.length === 1 + built.assignments
 ok('other beats untouched', cov202.length === 1);
 ok('stamp report names the focus', st.stamped.some((s) => String(s.focusId) === '101'));
 
+// ── STATE TIER: csv parse, chamber mapping, roster replace-set, per-state pass ──────────────────
+const csvFix = 'a,b,c\n"x, y",plain,"say ""hi"""\nlast,row,';
+const csvRows = rr.parseCsv(csvFix);
+ok('csv quoted comma + doubled quote', csvRows.length === 2 && csvRows[0].a === 'x, y' && csvRows[0].c === 'say "hi"');
+
+const akBeat = rr.stateLegBeats().find((b) => b.stateCode === 'AK');
+const neBeat = rr.stateLegBeats().find((b) => b.stateCode === 'NE');
+ok('state beats enumerate (AK bicameral, NE unicameral)', akBeat && akBeat.enumerate().length === 2 && neBeat && neBeat.enumerate().length === 1);
+
+const osRow = (name, chamber, extra = {}) => ({ name, current_party: 'Independent', current_district: '1', current_chamber: chamber, email: '', capitol_voice: '907-555-0000', sources: 'https://ballotpedia.org/x;https://www.akleg.gov/member/x', ...extra });
+const akBuilt = rr.buildStateRosters({ rows: [osRow('Up One', 'upper'), osRow('Low One', 'lower'), osRow('Ghost', 'middle')], beat: akBeat });
+const akSen = akBuilt.chambers.find((c) => /State Senate$/.test(c.target));
+const akHouse = akBuilt.chambers.find((c) => !/State Senate$/.test(c.target));
+ok('upper/lower land on their chambers with roles', akSen.members[0].personName === 'Up One' && akSen.members[0].role === 'State Senator' && akHouse.members[0].role === 'State Representative');
+ok('member sourceUrl prefers the official page over aggregators', /akleg\.gov/.test(akSen.members[0].sourceUrl));
+ok('unknown chamber is a discrepancy, not a guess', akBuilt.discrepancies.some((d) => d.kind === 'chamber-unknown'));
+const neBuilt = rr.buildStateRosters({ rows: [osRow('Uni One', 'legislature')], beat: neBeat });
+ok('unicameral takes every member as a State Senator', neBuilt.chambers[0].members.length === 1 && neBuilt.chambers[0].members[0].role === 'State Senator');
+
+// recordRoster: replace-set — departures superseded, stub rosters never mass-retire
+const mkMembers = (names) => names.map((n) => ({ personName: n, role: 'State Senator', sourceKind: 'aggregator' }));
+const twelve = Array.from({ length: 12 }, (_, i) => `Sen Number${i}`);
+const ub1 = civic.upsertBody({ title: 'Testland State Senate', level: 'state', function: 'governing' });
+const rr1 = civic.recordRoster({ bodyKey: ub1.bodyKey, members: mkMembers(twelve) });
+ok('chamber roster records all members', rr1.stored === 12 && rr1.departed.length === 0);
+const rr2 = civic.recordRoster({ bodyKey: ub1.bodyKey, members: mkMembers(twelve.slice(1)) });
+ok('a departed member is superseded and reported', rr2.departed.length === 1 && rr2.departed[0] === 'Sen Number0');
+ok('roster shows only current members', civic.roster('Testland State Senate').length === 11);
+const rr3 = civic.recordRoster({ bodyKey: ub1.bodyKey, members: mkMembers(['Sen Number1', 'Sen Number2']) });
+ok('a stub roster (<10) never mass-retires the chamber', rr3.departed.length === 0 && civic.roster('Testland State Senate').length === 11);
+
+// runStatePass: synthetic full state via injected fetchGet + covered stamping on the state beat
+db.setMeta('focus.303.beat', akBeat.id);
+db.setMeta('focus.303.covered', JSON.stringify([]));
+const akCsvHead = 'id,name,current_party,current_district,current_chamber,given_name,family_name,gender,email,biography,birth_date,death_date,image,links,sources,capitol_address,capitol_voice,capitol_fax,district_address,district_voice,district_fax,twitter,youtube,instagram,facebook,wikidata';
+const akCsvRows = [];
+for (let i = 0; i < 20; i++) akCsvRows.push(`ocd-person/ak-u-${i},AK Upper${i},Republican,${i},upper,,,,,,,,,,https://www.akleg.gov/u${i},,907-555-1000,,,,,,,,,`);
+for (let i = 0; i < 40; i++) akCsvRows.push(`ocd-person/ak-l-${i},AK Lower${i},Democratic,${i},lower,,,,,,,,,,https://www.akleg.gov/l${i},,907-555-2000,,,,,,,,,`);
+const akCsv = [akCsvHead, ...akCsvRows].join('\n');
+async function stateAndCrmTests() {
+  const sp = await rr.runStatePass({ fetchGet: async (url) => { if (/\/ak\.csv$/.test(url)) return akCsv; throw new Error('down'); }, beats: [akBeat, neBeat] });
+  ok('state pass refreshes the good state and skips the broken one', sp.states === 1 && sp.skipped.length === 1 && /NE/.test(sp.skipped[0]));
+  ok('state pass counts members + exposes people for CRM', sp.members === 60 && sp.people.length === 60 && sp.people[0].ocdId);
+  const cov303 = JSON.parse(db.getMeta('focus.303.covered'));
+  ok('state chamber targets stamped covered on the state beat focus', cov303.length === 2);
+  ok('AK senate roster live in store', civic.roster('Alaska State Senate').length === 20);
+
+  // ── CRM WRITE-THROUGH: mock dispatch, id/name match, fill-only-empty, id stamping ─────────────
+  const crmRows = [
+    { id: 1, FirstName: 'AK', LastName: 'Upper1', Title: 'Existing Title', Email: '', Phone: '', Party__c: '', District__c: '', Jurisdiction__c: '', MailingState: 'AK', Active_Elected__c: null, Bioguide_Id__c: '', OCD_Person_Id__c: 'ocd-person/ak-u-1' },
+    { id: 2, FirstName: 'AK', LastName: 'Upper2', Title: '', Email: 'kept@x.gov', Phone: '', Party__c: '', District__c: '', Jurisdiction__c: '', MailingState: 'AK', Active_Elected__c: null, Bioguide_Id__c: '', OCD_Person_Id__c: '' },
+    { id: 3, FirstName: 'AK', LastName: 'Upper3', Title: '', Email: '', Phone: '', Party__c: '', District__c: '', Jurisdiction__c: '', MailingState: 'AK', Active_Elected__c: null, Bioguide_Id__c: '', OCD_Person_Id__c: '' },
+    { id: 4, FirstName: 'AK', LastName: 'Upper3', Title: '', Email: '', Phone: '', Party__c: '', District__c: '', Jurisdiction__c: '', MailingState: 'TX', Active_Elected__c: null, Bioguide_Id__c: '', OCD_Person_Id__c: '' },
+  ];
+  const updates = [];
+  const mockDispatch = async (name, args) => {
+    if (name === 'db_query') {
+      const sql = String(args.sql);
+      if (/Bioguide_Id__c IN|OCD_Person_Id__c IN/.test(sql)) return { ok: true, text: JSON.stringify({ rows: crmRows.filter((r) => sql.includes(r.OCD_Person_Id__c) && r.OCD_Person_Id__c) }) };
+      return { ok: true, text: JSON.stringify({ rows: crmRows.filter((r) => sql.includes(`'${String(r.LastName).toLowerCase()}'`)) }) };
+    }
+    if (name === 'update_contact') { updates.push(args); return { ok: true, text: JSON.stringify({ contact_id: args.contact_id, updated_fields: Object.keys(args.fields) }) }; }
+    throw new Error(`unexpected tool ${name}`);
+  };
+  // Middle initials/suffixes in personName must not break the match — the split fields carry the keys.
+  const crmPeople = [
+    { personName: 'AK J. Upper1 III', firstName: 'AK', lastName: 'Upper1', role: 'State Senator', party: 'Republican', phone: '907-555-1000', kind: 'state', stateCode: 'AK', ocdId: 'ocd-person/ak-u-1', sourceUrl: 'https://www.akleg.gov/u1' },   // ID match; Title full → NOT overwritten
+    { personName: 'AK Upper2', firstName: 'AK D.', lastName: 'Upper2', role: 'State Senator', party: 'Republican', phone: '907-555-1000', email: 'new@x.gov', kind: 'state', stateCode: 'AK', ocdId: 'ocd-person/ak-u-2', sourceUrl: 'https://www.akleg.gov/u2' }, // name match (first-token) → id stamped; Email kept
+    { personName: 'AK Upper3', firstName: 'AK', lastName: 'Upper3', role: 'State Senator', party: 'Republican', phone: '907-555-1000', kind: 'state', stateCode: 'AK', ocdId: 'ocd-person/ak-u-3', sourceUrl: 'https://www.akleg.gov/u3' },  // 2 name rows, state filter → unique AK winner
+    { personName: 'AK Nobody', firstName: 'AK', lastName: 'Nobody', role: 'State Senator', party: 'Republican', kind: 'state', stateCode: 'AK', ocdId: 'ocd-person/ak-u-99', sourceUrl: 'https://www.akleg.gov/u99' },                        // unmatched
+  ];
+  const c1 = await rr.crmPass({ dispatch: mockDispatch, people: crmPeople, limit: 100 });
+  ok('CRM: id + name matches resolved', c1.matchedById === 1 && c1.matchedByName === 2);
+  ok('CRM: unmatched reported', c1.unmatched.length === 1 && c1.unmatched[0] === 'AK Nobody');
+  const u1 = updates.find((u) => u.contact_id === 1);
+  ok('CRM: existing Title never overwritten', u1 && !('Title' in u1.fields));
+  ok('CRM: empty fields filled with provenance', u1 && u1.fields.Phone === '907-555-1000' && u1.fields.Party__c === 'R' && u1.source_url);
+  const u2 = updates.find((u) => u.contact_id === 2);
+  ok('CRM: kept Email untouched, OCD id stamped on name match', u2 && !('Email' in u2.fields) && u2.fields.OCD_Person_Id__c === 'ocd-person/ak-u-2');
+  const u3 = updates.find((u) => u.contact_id === 3);
+  ok('CRM: state hint disambiguates same-named contacts', !!u3 && !updates.find((u) => u.contact_id === 4));
+  ok('CRM: cursor wrapped after covering the list', db.getMeta(rr.CRM_CURSOR) === '0');
+  process.env.ZOE_ROSTER_CRM = '0';
+  ok('CRM: kill switch skips', (await rr.crmPass({ dispatch: mockDispatch, people: crmPeople })).skipped === 'kill-switch');
+  process.env.ZOE_ROSTER_CRM = '1';
+  ok('CRM: no dispatch → honest skip', (await rr.crmPass({ dispatch: null, people: crmPeople })).skipped === 'no echo dispatch');
+}
+
 // ── run(): kill switch, cadence, sanity floor, full circuit with injected fetch ─────────────────
 (async () => {
+  await stateAndCrmTests();
   process.env.ZOE_ROSTER_REFRESH = '0';
   ok('kill switch skips', (await rr.run({})).skipped === 'kill-switch');
   process.env.ZOE_ROSTER_REFRESH = '1';

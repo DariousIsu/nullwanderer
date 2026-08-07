@@ -31,6 +31,11 @@ const SOURCES = {
   senate: 'https://www.senate.gov/general/contact_information/senators_cfm.xml',
   cross: 'https://unitedstates.github.io/congress-legislators/legislators-current.json',
 };
+// STATE TIER (2026-08-07): Openstates current-people bulk CSVs — a maintained aggregation of each
+// legislature's official site, keyless, one fetch per state. Recorded as sourceKind 'aggregator'
+// (honest: one aggregator, not the official page itself); each member row carries its own official
+// source URL from the feed's `sources` column when present.
+const OS_STATE_URL = (code) => `https://data.openstates.org/people/current/${String(code).toLowerCase()}.csv`;
 const CADENCE_MS = 6.5 * 24 * 3600 * 1000;   // "weekly" with slack so a daily tick lands it
 const META_LAST = 'roster_refresh.last_ts';
 const BEAT_ID = 'federal-officials';
@@ -70,6 +75,8 @@ function parseHouseXml(xml) {
       stateCode: code,
       districtNum: parseInt(sd.slice(2), 10),                  // 0 = At-Large or territory delegate
       name: _tag(b, 'official-name') || _tag(b, 'namelist'),
+      firstName: _tag(b, 'firstname'),                         // clean split fields for CRM matching
+      lastName: _tag(b, 'lastname'),                           // (official-name carries middles/suffixes)
       party: _tag(b, 'party'),
       phone: _tag(b, 'phone'),
       bioguide: _tag(b, 'bioguideID'),
@@ -87,6 +94,7 @@ function parseSenateXml(xml) {
     out.push({
       stateCode: state,
       name: `${_tag(b, 'first_name')} ${_tag(b, 'last_name')}`.replace(/\s+/g, ' ').trim(),
+      firstName: _tag(b, 'first_name'),
       lastName: _tag(b, 'last_name'),
       party: _tag(b, 'party'),
       phone: _tag(b, 'phone'),
@@ -128,6 +136,103 @@ function federalTargetSet() {
   const beats = require('./beats');
   const fed = (beats.electedOfficialsSubBeats() || []).find((b) => b.id === BEAT_ID);
   return fed ? fed.enumerate() : [];
+}
+
+// The state-legislature beats (one per state; id `state-legislature-<code>`, 1-2 chamber targets).
+function stateLegBeats() {
+  const beats = require('./beats');
+  return (beats.electedOfficialsSubBeats() || []).filter((b) => /^state-legislature-/.test(b.id));
+}
+
+// ── minimal correct CSV (RFC-4180 quoting: quoted fields, doubled quotes, commas/newlines inside) ─
+function parseCsv(text) {
+  const rows = []; let row = [], field = '', q = false;
+  const s = String(text || '');
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) {
+      if (c === '"') { if (s[i + 1] === '"') { field += '"'; i++; } else q = false; }
+      else field += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && s[i + 1] === '\n') i++;
+      row.push(field); field = '';
+      if (row.length > 1 || row[0] !== '') rows.push(row);
+      row = [];
+    } else field += c;
+  }
+  if (field !== '' || row.length) { row.push(field); if (row.length > 1 || row[0] !== '') rows.push(row); }
+  if (!rows.length) return [];
+  const head = rows[0];
+  return rows.slice(1).map((r) => { const o = {}; head.forEach((h, i) => { o[h] = r[i] == null ? '' : r[i]; }); return o; });
+}
+
+// Openstates rows → the beat's chamber targets. Unicameral (one target) takes every member as a
+// State Senator (Nebraska's members are senators). The member's own official page (first non-
+// aggregator URL in `sources`) rides as sourceUrl when present.
+function buildStateRosters({ rows = [], beat } = {}) {
+  const targets = beat.enumerate();
+  const uni = targets.length === 1;
+  const chambers = new Map(targets.map((t) => [t, []]));
+  const discrepancies = [];
+  const officialUrl = (r) => {
+    const first = String(r.sources || '').split(';').map((x) => x.trim())
+      .find((u) => /^https?:/.test(u) && !/openstates|ballotpedia|wikipedia|votesmart|justfacts/i.test(u));
+    return first || OS_STATE_URL(beat.stateCode);
+  };
+  for (const r of rows) {
+    if (!r.name) continue;
+    const ch = String(r.current_chamber || '').toLowerCase();
+    const target = uni ? targets[0] : (ch === 'upper' ? targets[0] : ch === 'lower' ? targets[1] : null);
+    if (!target) { discrepancies.push({ kind: 'chamber-unknown', detail: `${beat.stateCode}: ${r.name} chamber="${r.current_chamber}"` }); continue; }
+    chambers.get(target).push({
+      personName: r.name,
+      firstName: r.given_name || String(r.name).split(/\s+/)[0] || null,
+      lastName: r.family_name || String(r.name).split(/\s+/).pop() || null,
+      role: (uni || ch === 'upper') ? 'State Senator' : 'State Representative',
+      party: r.current_party || null,
+      district: r.current_district || null,
+      email: r.email || null,
+      phone: r.capitol_voice || r.district_voice || null,
+      sourceUrl: officialUrl(r),
+      ocdId: r.id || null,
+    });
+  }
+  for (const [t, list] of chambers) if (!list.length) discrepancies.push({ kind: 'empty-chamber', detail: `${t}: feed produced no members` });
+  return { chambers: [...chambers].map(([target, members]) => ({ target, members })), discrepancies };
+}
+
+// One state's pass: fetch → build → upsert chamber bodies → recordRoster (departures = the change
+// flag) → stamp the state's beat coverage. Per-state fail-soft; a broken state never blocks the rest.
+async function runStatePass({ deps = {}, fetchGet, beats = null } = {}) {
+  const civic = (deps && deps.civic) || require('./civic_store');
+  const list = beats || stateLegBeats();
+  const out = { states: 0, members: 0, departed: [], skipped: [], discrepancies: [], people: [] };
+  for (const beat of list) {
+    try {
+      const rows = parseCsv(await fetchGet(OS_STATE_URL(beat.stateCode)));
+      // sanity floor: the smallest legislature (Alaska) seats 60; half a feed writes nothing.
+      if (rows.length < 40) { out.skipped.push(`${beat.stateCode}: ${rows.length} rows (floor)`); continue; }
+      const built = buildStateRosters({ rows, beat });
+      out.discrepancies.push(...built.discrepancies);
+      const stamped = [];
+      for (const { target, members } of built.chambers) {
+        if (!members.length) continue;
+        const ub = civic.upsertBody({ title: target, level: 'state', function: 'governing', state: beat.stateCode, officialUrl: OS_STATE_URL(beat.stateCode) }, { deps });
+        if (!ub.ok) { out.discrepancies.push({ kind: 'body-write', detail: `${target}: ${ub.reason || 'failed'}` }); continue; }
+        const rr = civic.recordRoster({ bodyKey: ub.bodyKey, members, sourceKind: 'aggregator' }, { deps });
+        out.members += members.length;
+        for (const dep of rr.departed) out.departed.push({ target, person: dep });
+        if (rr.failures.length) out.discrepancies.push({ kind: 'member-write', detail: `${target}: ${rr.failures.length} failure(s)` });
+        stamped.push({ target });
+        for (const m of members) out.people.push({ ...m, kind: 'state', stateCode: beat.stateCode, chamber: target });
+      }
+      if (stamped.length) stampCovered({ assignments: stamped, beatId: beat.id, deps });
+      out.states++;
+    } catch (e) { out.skipped.push(`${beat.stateCode}: ${e.message}`); }
+  }
+  return out;
 }
 
 // Compose seat assignments in the beat's exact target-name grammar, verified against `targets`.
@@ -173,7 +278,8 @@ function buildAssignments({ house = [], senate = [], cross = new Map(), targets 
       const target = `${roles[i]} United States Senator from ${stateName}`;
       if (!tset.has(target)) { discrepancies.push({ kind: 'name-mismatch', detail: `built "${target}" — not a beat target` }); return; }
       assignments.push({
-        target, personName: s.name, role: `${roles[i]} United States Senator`, party: s.party || null,
+        target, personName: s.name, firstName: s.firstName || null, lastName: s.lastName || null,
+        role: `${roles[i]} United States Senator`, party: s.party || null,
         phone: s.phone || null, sourceUrl: SOURCES.senate, bioguide: s.bioguide || null,
         crossChecked: _nameAgrees(cross.get(s.bioguide), s.lastName),
       });
@@ -198,9 +304,10 @@ function buildAssignments({ house = [], senate = [], cross = new Map(), targets 
     }
     if (!tset.has(target)) { discrepancies.push({ kind: 'name-mismatch', detail: `built "${target}" — not a beat target` }); continue; }
     assignments.push({
-      target, personName: h.name, role, party: h.party || null, phone: h.phone || null,
+      target, personName: h.name, firstName: h.firstName || null, lastName: h.lastName || null,
+      role, party: h.party || null, phone: h.phone || null,
       sourceUrl: SOURCES.house, bioguide: h.bioguide || null,
-      crossChecked: _nameAgrees(cross.get(h.bioguide), h.name.split(/\s+/).pop()),
+      crossChecked: _nameAgrees(cross.get(h.bioguide), h.lastName || h.name.split(/\s+/).pop()),
     });
   }
 
@@ -268,15 +375,15 @@ function apply({ assignments = [], deps = {} } = {}) {
   return res;
 }
 
-// Stamp validated targets as covered on every focus running the federal beat — honest coverage
-// this time: each stamped name carries an official-source membership row written above.
-function stampCovered({ assignments = [], deps = {} } = {}) {
+// Stamp validated targets as covered on every focus running the given beat — honest coverage
+// this time: each stamped name carries a store membership row written above.
+function stampCovered({ assignments = [], beatId = BEAT_ID, deps = {} } = {}) {
   const db = _db(deps);
   const stamped = [];
   try {
     for (const key of db.getMetaKeysLike('focus.%.covered')) {
       const focusId = key.split('.')[1];
-      if (db.getMeta(`focus.${focusId}.beat`) !== BEAT_ID) continue;
+      if (db.getMeta(`focus.${focusId}.beat`) !== beatId) continue;
       let covered = []; try { covered = JSON.parse(db.getMeta(key) || '[]') || []; } catch { covered = []; }
       const have = new Set(covered.map((c) => String(c).toLowerCase()));
       let added = 0;
@@ -289,6 +396,95 @@ function stampCovered({ assignments = [], deps = {} } = {}) {
   return { stamped };
 }
 
+// ── CRM WRITE-THROUGH (2026-08-07, Lucas: "not all dbs were integrated") ─────────────────────────
+// The CRM (electoral.contact, the ultimate person store) has dedicated join keys for exactly what
+// the feeds carry: Bioguide_Id__c (federal) and OCD_Person_Id__c (Openstates). Batch probes (two
+// set-queries per run, never per-person scans) → per-person resolution → update_contact with
+// FILL-ONLY-EMPTY discipline: an existing CRM value is never overwritten; the one exception is
+// stamping the empty ID column on a confident name match — that stamp IS the durable integration,
+// making every future run an O(1) ID join. Bounded per run with a resumable cursor (weekly wrap).
+// All writes go through Echo's update_contact door (whitelist + per-field provenance findings).
+const CRM_CURSOR = 'roster_refresh.crm_cursor';
+const _PARTY_CODE = { democratic: 'D', democrat: 'D', republican: 'R', independent: 'I', libertarian: 'L', green: 'G' };
+const _esc = (s) => String(s == null ? '' : s).replace(/'/g, "''");
+
+async function crmPass({ deps = {}, dispatch, people = [], limit = 250, now = Date.now() } = {}) {
+  if (String(process.env.ZOE_ROSTER_CRM || '1') === '0') return { skipped: 'kill-switch' };
+  if (typeof dispatch !== 'function') return { skipped: 'no echo dispatch' };
+  const db = _db(deps);
+  const ordered = [...people].sort((a, b) => String(a.personName).localeCompare(String(b.personName)));
+  let cursor = parseInt(db.getMeta(CRM_CURSOR) || '0', 10) || 0;
+  if (cursor >= ordered.length) cursor = 0;
+  const batch = ordered.slice(cursor, cursor + Math.max(1, limit));
+  const q = async (sql) => {
+    const r = await dispatch('db_query', { sql, params: [] });
+    const j = JSON.parse((r && r.text) || '{}');
+    return j.rows || [];
+  };
+  const out = { processed: 0, matchedById: 0, matchedByName: 0, updated: 0, fieldsWritten: 0, idStamped: 0, unmatched: [], ambiguous: [], failures: [], cursor: { from: cursor, of: ordered.length } };
+  // Name key = FIRST TOKEN of the first name + the clean last name (the feeds carry split fields;
+  // official-name strings embed middles/suffixes — "Nicholas J. Begich III" — that exact-equality
+  // against CRM FirstName+LastName would miss). Probe the CRM by LAST NAME set, resolve client-side.
+  const _ft = (s) => String(s || '').trim().split(/\s+/)[0] || '';
+  const keyOf = (first, last) => `${_ft(first)} ${String(last || '').trim()}`.replace(/\s+/g, ' ').trim().toLowerCase();
+  const personKey = (p) => keyOf(p.firstName || p.personName, p.lastName || String(p.personName).trim().split(/\s+/).pop());
+  try {
+    const ids = batch.map((p) => p.bioguide || p.ocdId).filter(Boolean);
+    const lasts = [...new Set(batch.map((p) => String(p.lastName || String(p.personName).trim().split(/\s+/).pop() || '').trim().toLowerCase()).filter(Boolean))];
+    const COLS = 'id, FirstName, LastName, Title, Email, Phone, Party__c, District__c, Jurisdiction__c, MailingState, Active_Elected__c, Bioguide_Id__c, OCD_Person_Id__c';
+    const idRows = ids.length ? await q(
+      `SELECT ${COLS} FROM electoral.contact WHERE deleted = 0 AND (Bioguide_Id__c IN (${ids.map((i) => `'${_esc(i)}'`).join(',')}) OR OCD_Person_Id__c IN (${ids.map((i) => `'${_esc(i)}'`).join(',')}))`) : [];
+    const nameRows = lasts.length ? await q(
+      `SELECT ${COLS} FROM electoral.contact WHERE deleted = 0 AND lower(COALESCE(LastName,'')) IN (${lasts.map((n) => `'${_esc(n)}'`).join(',')})`) : [];
+    const byBio = new Map(), byOcd = new Map(), byName = new Map();
+    for (const r of idRows) { if (r.Bioguide_Id__c) byBio.set(r.Bioguide_Id__c, r); if (r.OCD_Person_Id__c) byOcd.set(r.OCD_Person_Id__c, r); }
+    for (const r of nameRows) {
+      const k = keyOf(r.FirstName, r.LastName);
+      if (!byName.has(k)) byName.set(k, []);
+      byName.get(k).push(r);
+    }
+    for (const p of batch) {
+      out.processed++;
+      let row = (p.bioguide && byBio.get(p.bioguide)) || (p.ocdId && byOcd.get(p.ocdId)) || null;
+      let via = row ? 'id' : null;
+      if (!row) {
+        const cands = byName.get(personKey(p)) || [];
+        // A state hint disambiguates same-named contacts; without a unique winner, report — never guess.
+        const filtered = cands.length > 1 && p.stateCode ? cands.filter((c) => c.MailingState === p.stateCode || String(c.Jurisdiction__c || '').endsWith(`-${p.stateCode}`)) : cands;
+        if (filtered.length === 1) { row = filtered[0]; via = 'name'; }
+        else if (cands.length > 1) { out.ambiguous.push(`${p.personName} (${cands.length} candidates)`); continue; }
+      }
+      if (!row) { out.unmatched.push(p.personName); continue; }
+      if (via === 'id') out.matchedById++; else out.matchedByName++;
+      const empty = (v) => v == null || String(v).trim() === '';
+      const fields = {};
+      if (empty(row.Title) && p.role) fields.Title = p.role;
+      if (empty(row.Phone) && p.phone) fields.Phone = p.phone;
+      if (empty(row.Email) && p.email) fields.Email = p.email;
+      if (empty(row.Party__c) && p.party && _PARTY_CODE[String(p.party).toLowerCase()]) fields.Party__c = _PARTY_CODE[String(p.party).toLowerCase()];
+      if (empty(row.District__c) && p.district) fields.District__c = String(p.district);
+      if (empty(row.Jurisdiction__c)) fields.Jurisdiction__c = p.kind === 'federal' ? 'US' : (p.stateCode ? `US-${p.stateCode}` : undefined);
+      if (fields.Jurisdiction__c === undefined) delete fields.Jurisdiction__c;
+      if (empty(row.Active_Elected__c)) fields.Active_Elected__c = 1;
+      // the durable join: stamp the empty ID column on a name-matched row
+      if (via === 'name') {
+        if (p.bioguide && empty(row.Bioguide_Id__c)) { fields.Bioguide_Id__c = p.bioguide; out.idStamped++; }
+        if (p.ocdId && empty(row.OCD_Person_Id__c)) { fields.OCD_Person_Id__c = p.ocdId; out.idStamped++; }
+      }
+      if (!Object.keys(fields).length) continue;
+      const ur = await dispatch('update_contact', {
+        contact_id: row.id, fields, source_url: p.sourceUrl || null, stage: 'complete',
+        finding_notes: 'roster-refresh: validated against the official/aggregator roster feed',
+      });
+      let rep = null; try { rep = JSON.parse((ur && ur.text) || '{}'); } catch { rep = null; }
+      if (rep && !rep.error) { out.updated++; out.fieldsWritten += Object.keys(fields).length; }
+      else out.failures.push(`${p.personName}: ${rep && rep.error ? rep.error : 'update failed'}`);
+    }
+    try { db.setMeta(CRM_CURSOR, String(cursor + batch.length >= ordered.length ? 0 : cursor + batch.length)); } catch {}
+  } catch (e) { out.error = e.message; }
+  return out;
+}
+
 function _summary({ assignments, discrepancies, vacancies, applied }) {
   const x = assignments.filter((a) => a.crossChecked).length;
   return `roster-refresh (federal): ${assignments.length} seats validated against the official rosters `
@@ -298,7 +494,7 @@ function _summary({ assignments, discrepancies, vacancies, applied }) {
 }
 
 // ── the runnable pass ────────────────────────────────────────────────────────────────────────────
-async function run({ deps = {}, fetchImpl = null, force = false, now = Date.now() } = {}) {
+async function run({ deps = {}, fetchImpl = null, echoDispatch = null, force = false, now = Date.now() } = {}) {
   if (String(process.env.ZOE_ROSTER_REFRESH || '1') === '0') return { skipped: 'kill-switch' };
   const db = _db(deps);
   if (!force) {
@@ -329,7 +525,24 @@ async function run({ deps = {}, fetchImpl = null, force = false, now = Date.now(
   const built = buildAssignments({ house, senate, cross, targets });
   const applied = apply({ assignments: built.assignments, deps });
   const stamps = stampCovered({ assignments: built.assignments, deps });
-  const summary = _summary({ ...built, applied });
+  let summary = _summary({ ...built, applied });
+
+  // STATE TIER — per-state fail-soft; a broken feed skips its state, never the run.
+  let statePass = null;
+  try { statePass = await runStatePass({ deps, fetchGet: get, beats: deps.stateBeats || null }); }
+  catch (e) { statePass = { states: 0, members: 0, departed: [], skipped: [`state pass failed: ${e.message}`], discrepancies: [], people: [] }; }
+  summary += ` | states: ${statePass.states} refreshed, ${statePass.members} member(s), ${statePass.departed.length} departure(s), ${statePass.skipped.length} skipped`;
+
+  // CRM WRITE-THROUGH — both tiers' people through the fill-only-empty door, bounded + resumable.
+  let crm = null;
+  const people = [
+    ...built.assignments.map((a) => ({ personName: a.personName, role: a.role, party: a.party, phone: a.phone, sourceUrl: a.sourceUrl, bioguide: a.bioguide, kind: 'federal' })),
+    ...(statePass.people || []),
+  ];
+  try { crm = await crmPass({ deps, dispatch: echoDispatch, people, limit: parseInt(process.env.ZOE_ROSTER_CRM_BATCH, 10) || 1000, now }); }
+  catch (e) { crm = { error: e.message }; }
+  if (crm && !crm.skipped && !crm.error) summary += ` | CRM: ${crm.matchedById + crm.matchedByName}/${crm.processed} matched (${crm.matchedById} by id), ${crm.updated} updated, ${crm.fieldsWritten} field(s) filled, ${crm.idStamped} id(s) stamped, ${crm.unmatched.length} unmatched`;
+  else if (crm) summary += ` | CRM: ${crm.skipped || crm.error}`;
 
   // Report: a note file + the unprompted-delivery door (same door interweave leverage notes ride).
   try {
@@ -337,19 +550,30 @@ async function run({ deps = {}, fetchImpl = null, force = false, now = Date.now(
     const dir = path.join(__dirname, '..', 'data', 'zoe_workspace', 'notes');
     fs.mkdirSync(dir, { recursive: true });
     const lines = [
-      `# Roster refresh — federal — ${new Date(now).toISOString()}`, '',
-      `Sources: official House Clerk (${SOURCES.house}), official Senate (${SOURCES.senate}), cross-check @unitedstates (${SOURCES.cross})`, '',
+      `# Roster refresh — ${new Date(now).toISOString()}`, '',
+      `Sources: official House Clerk (${SOURCES.house}), official Senate (${SOURCES.senate}), cross-check @unitedstates (${SOURCES.cross}), states via Openstates bulk CSVs`, '',
       summary, '',
       built.vacancies.length ? `## No feed row (follow up — possible vacancy)\n${built.vacancies.map((v) => `- ${v}`).join('\n')}` : '',
-      built.discrepancies.length ? `## Discrepancies\n${built.discrepancies.map((d) => `- [${d.kind}] ${d.detail}`).join('\n')}` : '',
-      applied.changes.length ? `## Changes (superseded rows)\n${applied.changes.map((c) => `- ${c.target}: now ${c.now}`).join('\n')}` : '',
-      applied.failures.length ? `## Write failures\n${applied.failures.map((x) => `- ${x}`).join('\n')}` : '',
+      built.discrepancies.length ? `## Federal discrepancies\n${built.discrepancies.map((d) => `- [${d.kind}] ${d.detail}`).join('\n')}` : '',
+      applied.changes.length ? `## Federal changes (superseded rows)\n${applied.changes.map((c) => `- ${c.target}: now ${c.now}`).join('\n')}` : '',
+      statePass.departed.length ? `## State departures (superseded)\n${statePass.departed.slice(0, 60).map((d) => `- ${d.target}: ${d.person}`).join('\n')}${statePass.departed.length > 60 ? `\n- … +${statePass.departed.length - 60} more` : ''}` : '',
+      statePass.skipped.length ? `## States skipped\n${statePass.skipped.map((s) => `- ${s}`).join('\n')}` : '',
+      statePass.discrepancies.length ? `## State discrepancies\n${statePass.discrepancies.slice(0, 40).map((d) => `- [${d.kind}] ${d.detail}`).join('\n')}${statePass.discrepancies.length > 40 ? `\n- … +${statePass.discrepancies.length - 40} more` : ''}` : '',
+      (crm && crm.unmatched && crm.unmatched.length) ? `## CRM unmatched (no contact found — completion candidates)\n${crm.unmatched.slice(0, 60).map((u) => `- ${u}`).join('\n')}${crm.unmatched.length > 60 ? `\n- … +${crm.unmatched.length - 60} more` : ''}` : '',
+      (crm && crm.ambiguous && crm.ambiguous.length) ? `## CRM ambiguous (multiple candidates — needs a human/deeper key)\n${crm.ambiguous.slice(0, 40).map((u) => `- ${u}`).join('\n')}` : '',
+      (crm && crm.failures && crm.failures.length) ? `## CRM write failures\n${crm.failures.slice(0, 40).map((u) => `- ${u}`).join('\n')}` : '',
+      applied.failures.length ? `## Store write failures\n${applied.failures.map((x) => `- ${x}`).join('\n')}` : '',
     ].filter(Boolean);
     fs.writeFileSync(path.join(dir, `roster-refresh-${new Date(now).toISOString().slice(0, 10)}.md`), lines.join('\n'));
   } catch { /* the report is best-effort; the stores already hold the data */ }
   try { db.insertInbound({ tabUrl: 'note://roster-refresh', speaker: 'system', text: summary, source: 'roster-refresh' }); } catch {}
   try { db.setMeta(META_LAST, String(now)); } catch {}
-  return { ok: true, summary, counts: { seats: built.assignments.length, changes: applied.changes.length, vacancies: built.vacancies.length, discrepancies: built.discrepancies.length }, stamps };
+  return {
+    ok: true, summary, stamps,
+    counts: { seats: built.assignments.length, changes: applied.changes.length, vacancies: built.vacancies.length, discrepancies: built.discrepancies.length },
+    state: { states: statePass.states, members: statePass.members, departed: statePass.departed.length, skipped: statePass.skipped.length },
+    crm,
+  };
 }
 
-module.exports = { run, parseHouseXml, parseSenateXml, parseCross, buildAssignments, apply, stampCovered, federalTargetSet, SOURCES, CADENCE_MS, META_LAST, BEAT_ID };
+module.exports = { run, parseHouseXml, parseSenateXml, parseCross, parseCsv, buildAssignments, buildStateRosters, runStatePass, crmPass, apply, stampCovered, federalTargetSet, stateLegBeats, SOURCES, OS_STATE_URL, CADENCE_MS, META_LAST, CRM_CURSOR, BEAT_ID };

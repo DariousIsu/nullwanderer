@@ -31,7 +31,10 @@ function _db(deps) { return (deps && deps.db) || require('./db'); }
 const LEVELS = new Set(['county', 'municipal', 'township', 'school_district', 'state', 'special_district', 'other']);
 const FUNCTIONS = new Set(['governing', 'elections', 'school', 'judicial', 'planning', 'other']);
 // Researched sources outrank backfill: a prose-extracted row may never supersede a researched one.
-const RESEARCHED_KINDS = new Set(['official', 'news', 'wiki', 'held_doc', 'operator']);
+// 'aggregator' (2026-08-07, roster-refresh state tier): a maintained machine-readable aggregation
+// of official sources (Openstates people data). Researched-grade — it may supersede prior rows —
+// but labeled honestly as one aggregator, not 'official'; confidence carries the difference.
+const RESEARCHED_KINDS = new Set(['official', 'news', 'wiki', 'held_doc', 'operator', 'aggregator']);
 
 // A body's stable identity — the SAME key cardinality and absence use, so a roster, its seat
 // denominator and its gap record all line up without a translation layer.
@@ -142,6 +145,39 @@ function recordSeatHolder(m = {}, { deps = {}, nowMs = Date.now() } = {}) {
   return { ...r, replaced };
 }
 
+// CHAMBER-GRAIN recorder (roster-refresh state tier, 2026-08-07): a FULL-membership refresh.
+// Fresh members are recorded (coexisting — recordMembership's normal multi-seat semantics); live
+// rows whose person the fresh roster no longer contains are superseded — the DEPARTURE is the
+// change-flag. Guard: a roster under 10 members never supersedes anything (a stub or truncated
+// feed must not mass-retire a chamber).
+function recordRoster({ bodyKey, bodyTitle, members = [], sourceKind, sourceUrl } = {}, { deps = {}, nowMs = Date.now() } = {}) {
+  const key = bodyKey ? str(bodyKey) : keyFor(bodyTitle);
+  if (!key) return { ok: false, reason: 'no body' };
+  const out = { ok: true, stored: 0, unchanged: 0, departed: [], failures: [] };
+  const fresh = new Set();
+  let markerId = null;                       // newest row of this refresh — departures point here
+  for (const m of members) {
+    const r = recordMembership({ ...m, bodyKey: key, sourceKind: m.sourceKind || sourceKind, sourceUrl: m.sourceUrl || sourceUrl }, { deps, nowMs });
+    if (!r.ok) { out.failures.push(`${m.personName}: ${r.reason}`); continue; }
+    fresh.add(str(m.personName).replace(/\s+/g, ' ').trim().toLowerCase());
+    if (r.id) markerId = r.id;
+    if (r.unchanged || r.regraded) out.unchanged++; else out.stored++;
+  }
+  if (fresh.size >= 10 && markerId) {
+    try {
+      const d = _db(deps).getDb();
+      const others = d.prepare('SELECT id, person_name FROM civic_memberships WHERE body_key = ? AND superseded_by IS NULL').all(key);
+      for (const o of others) {
+        if (!fresh.has(str(o.person_name).replace(/\s+/g, ' ').trim().toLowerCase())) {
+          d.prepare('UPDATE civic_memberships SET superseded_by = ? WHERE id = ?').run(markerId, o.id);
+          out.departed.push(o.person_name);
+        }
+      }
+    } catch (e) { out.departError = e.message; }
+  }
+  return out;
+}
+
 // The CURRENT roster (superseded rows excluded), best-graded first.
 function roster(bodyKeyOrTitle, { deps = {} } = {}) {
   const key = keyFor(bodyKeyOrTitle);
@@ -193,4 +229,4 @@ function incomplete({ state = null, level = null, limit = 200 } = {}, { deps = {
   } catch { return { incomplete: [], complete: 0, unknownDenominator: [] }; }
 }
 
-module.exports = { keyFor, upsertBody, getBody, recordMembership, recordSeatHolder, roster, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };
+module.exports = { keyFor, upsertBody, getBody, recordMembership, recordSeatHolder, recordRoster, roster, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };
