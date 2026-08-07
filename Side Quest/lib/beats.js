@@ -504,13 +504,18 @@ const HOUSE_SEATS = {
 };
 // Non-voting House members for DC + the territories (their one elected federal legislator).
 const HOUSE_DELEGATES = { DC: 'Delegate', PR: 'Resident Commissioner', AS: 'Delegate', GU: 'Delegate', MP: 'Delegate', VI: 'Delegate' };
+// Names for the jurisdictions NO gazetteer carries (no counties, no place list): last-resort
+// fallback so a federal target never embeds a bare postal code. (Found 2026-08-07: federalTargets
+// emitted "Senator from CT" / "Delegate … from DC" — the boot115 US_PLACES fallback fixed the
+// state-legislature tier but federal never got it.)
+const FEDERAL_NAME_FALLBACK = { DC: 'District of Columbia', GU: 'Guam', VI: 'U.S. Virgin Islands' };
 
 // Enumerate every elected FEDERAL office as a dossier target: the executive, all 100 senators (senior/junior
 // per state), and all 435 representatives (by district; single-district states are "At-Large") + delegates.
 function federalTargets() {
   const targets = ['President of the United States', 'Vice President of the United States'];
   for (const code of Object.keys(HOUSE_SEATS).sort()) {
-    const stateName = STATE_NAMES[code] || code;
+    const stateName = STATE_NAMES[code] || (US_PLACES[code] && US_PLACES[code].name) || FEDERAL_NAME_FALLBACK[code] || code;
     targets.push(`Senior United States Senator from ${stateName}`);
     targets.push(`Junior United States Senator from ${stateName}`);
     const seats = HOUSE_SEATS[code];
@@ -518,7 +523,7 @@ function federalTargets() {
     else for (let d = 1; d <= seats; d++) targets.push(`United States Representative for ${stateName}'s ${d}${_ord(d)} Congressional District`);
   }
   for (const code of Object.keys(HOUSE_DELEGATES).sort()) {
-    const stateName = STATE_NAMES[code] || code;
+    const stateName = STATE_NAMES[code] || (US_PLACES[code] && US_PLACES[code].name) || FEDERAL_NAME_FALLBACK[code] || code;
     targets.push(`${HOUSE_DELEGATES[code]} to the United States House of Representatives from ${stateName}`);
   }
   return targets;
