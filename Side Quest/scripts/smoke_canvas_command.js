@@ -3,7 +3,7 @@
  * The live misses (#11104/#11108, 2026-08-07) are the load-bearing cases.
  * Run: node scripts/smoke_canvas_command.js */
 const path = require('path');
-const { detect, detectEdit } = require(path.join(__dirname, '..', 'lib', 'canvas_command'));
+const { detect, detectEdit, rejectEditOutput } = require(path.join(__dirname, '..', 'lib', 'canvas_command'));
 
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; } else { fail++; console.error('  FAIL:', n); } };
@@ -32,6 +32,18 @@ ok('no working doc → edit NEVER fires', !detectEdit('convert the numbered list
 ok('"a fresh canvas" routes to create, not edit', !detectEdit('start a fresh canvas doc for the contacts list', fresh) && !!detect('start a fresh canvas doc for the contacts list'));
 ok('question about the doc does not edit', !detectEdit("what's on the canvas now?", fresh));
 ok('plain chat with an edit verb but no doc ref does not fire', !detectEdit('add Russ to the invite thread', fresh));
+
+// ── the PAYLOAD CONTRACT (live 08-08: narration stamped OVER the parish list, twice) ────────────
+const parishDoc = Array.from({ length: 64 }, (_, i) => `Parish ${i + 1}`).join('\n');
+ok('live ruin #1: narration paragraph rejected', !!rejectEditOutput('I need to understand what Lucas is asking for. His edit instruction is "Clean up the project" — but the current canvas content is just a paragraph. Let me check the pipeline documents.', parishDoc, 'Clean up the project we have been working on'));
+ok('live ruin #2: "Let me…" deliberation rejected', !!rejectEditOutput('Let me check what the actual project document is before making changes.', parishDoc, 'Convert the document into a bulleted list'));
+ok('"I\'ll gather…" process talk rejected', !!rejectEditOutput("I'll gather the parish government data first and then update the doc.", parishDoc, 'add government types'));
+ok('unexplained 60%+ shrink rejected', !!rejectEditOutput('- Acadia Parish\n- Allen Parish', parishDoc, 'Convert the list into bullets'));
+ok('shrink WITH a shrink instruction accepted', !rejectEditOutput('- Acadia Parish\n- Allen Parish', parishDoc, 'remove every parish except the first two'));
+ok('"clean up" counts as a shrink instruction', !rejectEditOutput(parishDoc.split('\n').slice(0, 20).join('\n'), parishDoc, 'clean up the list'));
+ok('a real converted doc is accepted', !rejectEditOutput(parishDoc.split('\n').map((l) => `- ${l}\n  - police jury government`).join('\n'), parishDoc, 'Convert the document into a bulleted list'));
+ok('empty output rejected', !!rejectEditOutput('', parishDoc, 'bullet the list'));
+ok('growth is always fine', !rejectEditOutput(parishDoc + '\nZavalla Parish', parishDoc, 'add the missing parish'));
 
 console.log(`smoke_canvas_command: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

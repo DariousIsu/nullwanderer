@@ -74,4 +74,40 @@ function detectEdit(text, { workingFresh = false } = {}) {
   return { order: t };
 }
 
-module.exports = { detect, detectEdit };
+// ── the PAYLOAD CONTRACT (2026-08-08, the ruined parish list) ───────────────────────────────────
+// The edit door's delivery is true by construction — but the PAYLOAD had no contract, and the
+// operator's conversational finalize leaked through it twice live: a 340ch "here's what I'm
+// gathering" narration, then 676ch of raw deliberation ("I need to understand what Lucas is
+// asking for… Let me check…"), each stamped OVER the real 64-parish document. Delivery honesty
+// without payload honesty destroyed the very artifact it existed to protect. This validator is
+// deterministic ON PURPOSE: it judges a MODEL's output (the sanctioned place for a regex — a
+// contract check, not a comprehension gate); rejection means the doc stays UNTOUCHED and the
+// relay says so.
+
+// First-person process talk — a document never opens by describing the work of making itself.
+const NARRATION_OPEN = /^(?:i\s+(?:need|want|should|will|'ll|am\s+going)\b|let\s+me\b|okay|alright|first,?\s+(?:i|let)\b|looking\s+at\b|to\s+(?:apply|do)\s+this\b|sure\b|got\s+it\b)/i;
+// Deliberation markers anywhere — "let me check the pipeline documents" is reasoning, not content.
+const NARRATION_BODY = /\blet\s+me\s+(?:check|look|see|verify|find|start)\b|\bi(?:'ll| will)\s+(?:check|look|need|start|gather)\b/i;
+// Instructions that legitimately make a doc smaller.
+const SHRINK_VERB = /\b(?:remove|delete|drop|trim|cut|shorten|condense|summari[sz]e|prune|strip|collapse|dedupe|merge|clean)\b/i;
+
+/**
+ * rejectEditOutput(md, cur, order) → a one-line reason string when the model's "updated doc"
+ * must NOT replace the working copy, else null (accept). cur = the current doc, order = the
+ * edit instruction (its verbs decide whether shrinking is plausible).
+ */
+function rejectEditOutput(md, cur, order) {
+  const out = str(md).trim();
+  if (!out) return 'empty output';
+  if (NARRATION_OPEN.test(out)) return 'output opens as narration, not a document';
+  if (NARRATION_BODY.test(out)) return 'output contains deliberation, not a document';
+  const curLen = str(cur).trim().length;
+  // 0.4: converting/reformatting roughly preserves size; losing >60% of a doc no one asked to
+  // shrink means entries were dropped or replaced by prose.
+  if (curLen > 200 && out.length < curLen * 0.4 && !SHRINK_VERB.test(str(order))) {
+    return `output is ${out.length}ch vs the doc's ${curLen}ch with no shrink instruction`;
+  }
+  return null;
+}
+
+module.exports = { detect, detectEdit, rejectEditOutput };

@@ -4798,6 +4798,8 @@ async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
 const WORKING_CANVAS_FRESH_MS = 8 * 3600 * 1000;   // a working DAY — Lucas builds docs "off and on"; 2h expired mid-evening and orphaned his edit
 function _stampWorkingCanvasDoc({ slug, title, md }) {
   try {
+    const prev = db.getMeta('canvas.working_md');
+    if (prev) db.setMeta('canvas.working_prev_md', prev);   // one-level undo — a bad stamp must never be the only copy
     db.setMeta('canvas.working_slug', slug);
     db.setMeta('canvas.working_title', title);
     db.setMeta('canvas.working_md', String(md).slice(0, 60000));
@@ -4859,6 +4861,14 @@ async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
   } catch (e) { console.error('[canvas-cmd] edit execute failed:', e.message); }
   if (!md || /^CANNOT:/i.test(md)) {
     await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas's canvas edit did NOT apply${md ? `: "${md.slice(0, 200)}"` : ' (the edit run produced nothing)'}. Tell him exactly that — the doc on his canvas is UNCHANGED — and never claim the edit landed.]` });
+    return;
+  }
+  // PAYLOAD CONTRACT (2026-08-08): the operator's conversational finalize leaked narration through
+  // here twice and stamped it OVER the parish list. A rejected payload leaves the doc UNTOUCHED.
+  const reject = require('./lib/canvas_command').rejectEditOutput(md, cur, order);
+  if (reject) {
+    console.log(`[canvas-cmd] edit output REJECTED (${reject}) — doc untouched`);
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas's canvas edit produced INVALID output (${reject}) and was NOT applied — the doc on his canvas is UNCHANGED. Tell him plainly the edit failed its output check and he can re-order it; never claim it landed.]` });
     return;
   }
   try { await promiseArtifactEmit({ slug, title, markdown: md }); } catch (e) {
