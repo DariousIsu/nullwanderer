@@ -306,6 +306,7 @@ const smokes = [
   'smoke_research_preflight.js',
   'smoke_adaptive_loop.js',
   'smoke_need_triage.js',
+  'smoke_report_command.js',
   'smoke_rehearsal.js',
   'smoke_inquiry.js',
   'smoke_dig.js',

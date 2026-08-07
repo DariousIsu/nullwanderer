@@ -4643,6 +4643,55 @@ async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
 // DELIVERY-PROMISE artifact (Slice P3, PLAN_MAP §2): a conversation promise materializes as its own
 // doc-mode tab (tab_key promise-<slug>, stable across turns — later promises on the same topic land
 // in the SAME tab). Separate from canvasEmit because there is no focus id: the promise is the anchor.
+// ⭐ BUILD A REPORT FROM WHAT SHE ALREADY HOLDS (2026-08-07). The missing path behind "she refuses or
+// stalls on the report": an explicit order routed to chat-answer surfaces instead of composing a
+// document. This gathers the research docs she HOLDS on the topic, composes ONE report through the
+// caged composer, SAVES it to notes/, and lands it on the canvas — an artifact, not a promise. If she
+// genuinely holds nothing, it says so plainly (and does NOT fabricate a document).
+async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) {
+  const t = String(topic || '').trim();
+  const like = `%${t.replace(/[%_]/g, '')}%`;
+  let rows = [];
+  try {
+    // Prefer REAL research material over chat transcripts: a "Conversation — …" doc that merely
+    // mentions the topic is not evidence, and letting those fill the 8 slots starves the composer of
+    // the actual dossiers (measured on Hartfield: 3 of 8 slots were transcripts of him ASKING for
+    // the report). Rank research/dossier docs first, then longest — thin stubs last.
+    rows = db.getDb().prepare(
+      `SELECT id, title, body FROM documents
+       WHERE (title LIKE ? OR body LIKE ?)
+         AND COALESCE(source,'') != 'news'
+         AND COALESCE(title,'') NOT LIKE 'Conversation —%'
+       ORDER BY (title LIKE ?) DESC, LENGTH(COALESCE(body,'')) DESC LIMIT 8`
+    ).all(like, like, like);
+  } catch (e) { console.error('[report-cmd] doc query failed:', e.message); }
+  if (!rows.length) {
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[You were asked to BUILD A REPORT on "${t}" but you hold NO research documents about it — nothing in the document store matches. Say so plainly in one or two sentences, name what you'd need to go gather, and offer to run the research. Do NOT invent a document.]` });
+    return;
+  }
+  const material = rows.map((r) => `--- DOC #${r.id}: ${String(r.title || '').slice(0, 120)} ---\n${String(r.body || '').slice(0, 9000)}`).join('\n\n');
+  console.log(`[report-cmd] composing from ${rows.length} held doc(s): ${rows.map((r) => '#' + r.id).join(', ')}`);
+  const msgs = [
+    { role: 'system', content: `You are composing ONE finished, professional report from research documents the assistant ALREADY HOLDS. Rules — absolute:\n• Ground ONLY in the provided documents. Never add a fact, name, number, or URL that is not in them.\n• Every source annotation already present — "(source: …)" — stays attached to its claim. Never strip one, never invent one.\n• Structure: a title line, a 2-4 sentence executive summary, then "## " sections organized by what the material actually supports, then "## Open questions" naming what the documents do NOT answer.\n• Where the documents are thin or contradict each other, SAY SO in the text rather than papering over it. An honest gap is part of the report.\nOutput Markdown only — no preamble, no "here is".` },
+    { role: 'user', content: `REPORT SUBJECT: ${t}\n\nTHE DOCUMENTS YOU HOLD:\n"""\n${material.slice(0, 60000)}\n"""\n\nCompose the finished report on ${t} now.` },
+  ];
+  let md = '';
+  try { md = await condenseComplete(msgs, { numPredict: 2600 }); } catch (e) { console.error('[report-cmd] compose call failed:', e.message); }
+  if (!md || !md.trim()) {
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[You tried to compose the "${t}" report from ${rows.length} held document(s) but the composer returned nothing. Tell Lucas plainly that the compose step failed and the material is still there to retry — do NOT claim a document exists.]` });
+    return;
+  }
+  md = md.trim();
+  const slug = t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'report';
+  const rel = `notes/report-${slug}.md`;
+  let saved = false;
+  try { fs.writeFileSync(filesLib.resolvePath(rel), `# Report — ${t}\n\n${md}\n\n---\n_Composed from ${rows.length} held research document(s): ${rows.map((r) => '#' + r.id).join(', ')}._\n`, 'utf8'); saved = true; }
+  catch (e) { console.error('[report-cmd] save failed:', e.message); }
+  try { await promiseArtifactEmit({ slug: `report-${slug}`, title: `Report — ${t}`.slice(0, 60), markdown: md }); } catch {}
+  console.log(`[report-cmd] report on "${t}" composed (${md.length}ch) → ${saved ? rel : '(save failed)'} + canvas`);
+  await fireToolFollowup({ io, channel, sessionId, resultText: `[The report Lucas asked for is BUILT and delivered — it is on his Canvas${saved ? ` and saved at ${rel}` : ''}, composed from ${rows.length} document(s) you already held (${rows.map((r) => '#' + r.id).join(', ')}). Tell him it's ready, where it is, and give the ONE most substantive finding in it — in your own voice, two or three sentences. Do not re-paste the whole report.]` });
+}
+
 async function promiseArtifactEmit({ slug, title, markdown }) {
   try {
     if (!(await ensureEngine())) return false;
@@ -9476,6 +9525,27 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const curiosityLib = require('./lib/curiosity');
     const noRetrievalTag = webTagsToRun.length === 0 && browserTagsToRun.length === 0
       && aiUrlsToFetch.length === 0 && echoTagsToRun.length === 0;
+
+    // ⭐ REPORT COMMAND (2026-08-07, Lucas: "she still isn't able to follow instructions and print out
+    // a document — she's refused or stalled on the last several attempts to get a unified report").
+    // Measured from the DB: "I want you to build the final report on the Hartfield Foundation" (#11056)
+    // and "Can I have the final report on Hartfield Foundation please" (#11090) produced ONLY chat
+    // placeholders ("I'm on it — pulling everything now", "let me search our actual vault") and then a
+    // 3-sentence summary — never a document, and no directed focus was ever created. The nets below
+    // could not save it: the promised-lookup net runs a LIVE WEB lookup (wrong surface — the material is
+    // already held), and the delivery-promise net only materializes a ROSTER (held_roster). Nothing
+    // COMPOSED A REPORT FROM HELD RESEARCH DOCS. This net does exactly that, and runs FIRST so an
+    // explicit order can never fall through to a placeholder again. Kill switch: ZOE_REPORT_CMD=0.
+    if (!followupFired && !/^(0|false|off)$/i.test(String(process.env.ZOE_REPORT_CMD || '').trim())) {
+      let _rcmd = null;
+      try { _rcmd = require('./lib/report_command').detect(userMessage); } catch {}
+      if (_rcmd && _rcmd.topic) {
+        followupFired = true;
+        console.log(`[report-cmd] explicit report order → composing "${_rcmd.topic}" from held research`);
+        buildReportFromHeld({ io, channel, sessionId, userName, topic: _rcmd.topic })
+          .catch((e) => console.error('[report-cmd] compose failed:', e.message));
+      }
+    }
 
     // RESEARCH COMMAND — "do some research / look into it / dig into that": an explicit order to GO
     // FIND OUT, with the SUBJECT in the PRIOR conversation (not this message). She narrates intent
@@ -14560,7 +14630,20 @@ async function runDirectedResearchPass(focus) {
             const _scKey = `focus.${focus.id}.synth_count`;
             const _sc = (parseInt(db.getMeta(_scKey) || '0', 10) || 0) + 1;
             db.setMeta(_scKey, String(_sc));
-            if (_sc % 2 === 0) {
+            // ⚠ REVALIDATION CONVERGENCE CAP (2026-08-07). Revalidation had NO ceiling: for an unbounded
+            // goal (measured: focus #3663 "validate the elected officials of the FEDERAL government") the
+            // plan is never "complete", so every pass returned changed=true, re-added "all 435 Reps", bumped
+            // the rev, and surfaced a "Tactics update" to chat — 33 of 97 AI turns in 24h, all the way to
+            // rev 102. A plan that has revised this many times without converging will not converge by
+            // revising again; stop revalidating (and stop surfacing) past the cap. Env: ZOE_MAX_PLAN_REV.
+            const _revNow = parseInt(db.getMeta(`focus.${focus.id}.plan_rev`) || '1', 10) || 1;
+            const _maxRev = parseInt(process.env.ZOE_MAX_PLAN_REV || '', 10) || 8;
+            if (_sc % 2 === 0 && _revNow >= _maxRev) {
+              if (db.getMeta(`focus.${focus.id}.reval_capped`) !== '1') {
+                db.setMeta(`focus.${focus.id}.reval_capped`, '1');
+                console.log(`[user-work] plan revalidation CAPPED at rev ${_revNow} (≥ ${_maxRev}) — not converging; stopping revalidation + tactics notes for focus #${focus.id}`);
+              }
+            } else if (_sc % 2 === 0) {
               (async () => {
                 const plan0 = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || '{}');
                 const rpm = require('./lib/research_plan');
@@ -15148,7 +15231,16 @@ Reply ONLY: {"verdict": "survives"|"refuted", "attack": "<the strongest single a
         const _scKey = `focus.${focus.id}.synth_count`;
         const _sc = (parseInt(db.getMeta(_scKey) || '0', 10) || 0) + 1;
         db.setMeta(_scKey, String(_sc));
-        if (_sc % 2 === 0) {
+        // REVALIDATION CONVERGENCE CAP (2026-08-07) — see the user-work lane for the full rationale
+        // (focus #3663 ran to rev 102 on an unbounded goal, flooding chat). Same cap here on the topical lane.
+        const _revNowT = parseInt(db.getMeta(`focus.${focus.id}.plan_rev`) || '1', 10) || 1;
+        const _maxRevT = parseInt(process.env.ZOE_MAX_PLAN_REV || '', 10) || 8;
+        if (_sc % 2 === 0 && _revNowT >= _maxRevT) {
+          if (db.getMeta(`focus.${focus.id}.reval_capped`) !== '1') {
+            db.setMeta(`focus.${focus.id}.reval_capped`, '1');
+            console.log(`[topical] plan revalidation CAPPED at rev ${_revNowT} (≥ ${_maxRevT}) — not converging; stopping revalidation + tactics notes for focus #${focus.id}`);
+          }
+        } else if (_sc % 2 === 0) {
           (async () => {
             const plan0 = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || '{}');
             const rpm = require('./lib/research_plan');
