@@ -39,8 +39,16 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(v.stripGenTags('keep <draw>x</draw> this') === 'keep this', 'strips gen tags from display text');
 
   // --- generate: KILL-SWITCH off by default ---
+  // HERMETIC (2026-08-07): the kill-switch reads process.env.ZOE_IMAGE_GEN_ENABLED, and the LIVE .env
+  // sets it to '1'. A rehearsal-sandbox gate inherits the live app's env, so this "off by default"
+  // check saw generation ENABLED and failed there — while passing in a bare shell that never loaded
+  // .env. A unit test of the CODE default must not depend on the ambient env: clear the var so we test
+  // the true default (no genFn, no env) in every context. Restored after, so nothing else is perturbed.
+  const _prevGenEnv = process.env.ZOE_IMAGE_GEN_ENABLED;
+  delete process.env.ZOE_IMAGE_GEN_ENABLED;
   const off = await v.generate({ prompt: 'a red barn' });   // no genFn, no env → disabled
   ok(off.ok === false && off.disabled === true && /OFF by design/i.test(off.reason), 'generation OFF by default (kill-switch)');
+  if (_prevGenEnv !== undefined) process.env.ZOE_IMAGE_GEN_ENABLED = _prevGenEnv;
   ok((await v.generate({ prompt: '' })).reason === 'empty prompt', 'empty prompt → reason');
 
   // --- generate: works when a provider (genFn) + save are supplied ---
