@@ -485,22 +485,32 @@ for (const s of smokes) { if (runSuite(s)) passed++; else failures.push(s); }
 
 // FLAKE-TOLERANT EXIT (2026-08-07). This 360+-suite gate spawns one Electron child per suite, back to
 // back, and when it runs as a REHEARSAL SANDBOX gate it competes with the whole live app for CPU/IO —
-// so a timing-sensitive suite occasionally misses under load (measured: an isolated sandbox run went
-// 349/1 with a DIFFERENT single suite each time — deep_budgets one run, none the next). Requiring all
-// N green in ONE shot made the rehearsal's green exit — and the R2 proposal card — hostage to a ~1/N
-// load flake with nothing wrong in the code. A load flake passes when re-run alone; a REAL failure
-// (a broken edit) fails deterministically every time. So: re-run each failure ONCE, alone. A suite
-// that now passes was a flake (absolved, named); one that fails again is real and keeps the gate red.
-// Only retried when the failure set is SMALL (a pile of failures is real breakage, not flakes) — this
-// never masks a genuinely broken build and never more than doubles the cost of a handful of suites.
+// so a timing-sensitive suite occasionally misses under load (measured: vision/operator pass solo
+// every time but flake inside the full sandbox gate). Requiring all N green in ONE shot made the
+// rehearsal's green exit — and the R2 proposal card — hostage to a load flake with nothing wrong in
+// the code. A load flake passes when re-run alone in a quieter moment; a REAL failure (a broken edit)
+// fails every time. So: re-run each failure ALONE, up to a few times with a short settle between —
+// the machine is still hot right after the main pass, so a single immediate retry can itself flake;
+// extra attempts (spaced) catch a clear window. A suite that passes on ANY attempt was a flake
+// (absolved, named); one that fails EVERY attempt is real and keeps the gate red. Only retried when
+// the failure set is SMALL (a pile of failures is real breakage, not flakes).
 const RETRY_MAX = parseInt(process.env.SMOKE_FLAKE_RETRY_MAX || '', 10) || 5;
+const RETRY_ATTEMPTS = parseInt(process.env.SMOKE_FLAKE_RETRY_ATTEMPTS || '', 10) || 3;
+const RETRY_SETTLE_MS = parseInt(process.env.SMOKE_FLAKE_RETRY_SETTLE_MS || '', 10) || 750;
+const sleepSync = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* SAB unavailable → no delay */ } };
 const flakes = [];
 if (failures.length && failures.length <= RETRY_MAX) {
-  console.log(`\n↻ ${failures.length} suite(s) failed — re-running each ONCE alone to tell a load-flake from a real failure:`);
+  console.log(`\n↻ ${failures.length} suite(s) failed — re-running each ALONE up to ${RETRY_ATTEMPTS}× (a load flake recovers in a quieter window; a real failure fails every time):`);
   const stillFailed = [];
   for (const s of failures) {
-    if (runSuite(s, { quiet: true })) { flakes.push(s); passed++; console.log(`  ✓ ${s.padEnd(30)} passed on retry → FLAKE (absolved)`); }
-    else { stillFailed.push(s); console.log(`  ✗ ${s.padEnd(30)} failed again → REAL failure`); }
+    let recovered = false, tries = 0;
+    for (let a = 1; a <= RETRY_ATTEMPTS && !recovered; a++) {
+      tries = a;
+      if (a > 1) sleepSync(RETRY_SETTLE_MS);   // let a transient load spike subside before the next try
+      if (runSuite(s, { quiet: true })) recovered = true;
+    }
+    if (recovered) { flakes.push(s); passed++; console.log(`  ✓ ${s.padEnd(30)} passed on retry (attempt ${tries}/${RETRY_ATTEMPTS}) → FLAKE (absolved)`); }
+    else { stillFailed.push(s); console.log(`  ✗ ${s.padEnd(30)} failed all ${RETRY_ATTEMPTS} retries → REAL failure`); }
   }
   failures = stillFailed;
 } else if (failures.length > RETRY_MAX) {
