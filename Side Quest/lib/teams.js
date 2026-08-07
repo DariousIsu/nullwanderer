@@ -95,6 +95,7 @@ function start(teamsUrl) {
   db.setMeta('teams_left_ticks', '0');
   db.setMeta('teams_pending', ''); db.setMeta('teams_pending_lines', '0'); db.setMeta('teams_pending_since', ''); db.setMeta('teams_understanding', '');
   db.setMeta('teams_signoff_seen', ''); db.setMeta('teams_last_caption_at', '');
+  db.setMeta('teams_leave_requested', '');   // fresh chat-leave flag per meeting (Meet parity)
   db.setMeta('teams_understanding_log', ''); db.setMeta('teams_last_recap', '');
   db.setMeta('teams_present', '[]'); db.setMeta('teams_directives', '[]');
   db.setMeta('teams_started_at', String(Date.now()));
@@ -341,6 +342,18 @@ async function runTick(ctx = {}) {
   }
 
   if (stage === 'observing') {
+    // LEAVE TRIGGER — CHAT (2026-08-07, Meet parity): Lucas ordered the leave / declared the
+    // meeting over in chat; the flag is set by main.js through the polarity-safe detector
+    // (lib/meeting_leave) and consumed HERE because this tick owns the call surface.
+    if (db.getMeta('teams_leave_requested') === '1') {
+      db.setMeta('teams_leave_requested', '');
+      try { await d.leaveMeeting(d.web); } catch {}
+      const recap = await synthesizeMeeting(d, ctx).catch(() => '');
+      set('done');
+      db.setMeta('teams_ended_at', String(Date.now()));
+      surface(`Got it — you said the meeting's done, so I've left the Teams call.${recap ? ` Here's what I took from it — ${recap}` : ''}`, '(teams) left on request');
+      return { stage, ok: true, note: `left on request → done${recap ? ' + recap' : ''}` };
+    }
     if (!(await d.inMeeting(d.web))) {
       const n = parseInt(db.getMeta('teams_left_ticks') || '0', 10) + 1;
       db.setMeta('teams_left_ticks', String(n));
