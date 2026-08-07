@@ -10795,7 +10795,16 @@ const operatorTools = {
         console.log(`[site-access] breaker: ${_host} down (${_down.fails} door failures, 0 successes) — skipped, retry in ~${Math.max(1, Math.ceil((_down.retryAtTs - Date.now()) / 60000))} min`);
         return `${url} SKIPPED — host ${_host} is unreachable right now (${_down.fails} straight door failures, no door has ever worked; automatic re-probe in ~${Math.max(1, Math.ceil((_down.retryAtTs - Date.now()) / 60000))} min). Work a DIFFERENT lead until then.${learned ? `\n${learned}` : ''}`;
       }
-      const o = await webLib.open(String(url || ''));
+      // M5.4 — DURABLE REUSE ON THE OPERATOR LANE (2026-08-08, "never need the same page twice"):
+      // this tool consumes TEXT only (no clicks, no screenshots), so an AUTONOMOUS run whose target
+      // was ingested within the content TTL is served the held copy with zero network. The ambient
+      // lane decides (runCloudOperator wraps every run): metabolism/research → reuse; a
+      // Lucas-directed task → always navigates live.
+      const o = await webLib.open(String(url || ''), { autonomous: require('./lib/lane').isAutonomous(undefined) });
+      if (o && o.ok && o.dedup && o.reading) {
+        console.log(`[open_page] served held copy — ${String(url).slice(0, 100)} (${o.why || 'ledger reuse'})`);
+        return String(o.reading).replace(/\n{3,}/g, '\n\n').slice(0, 4000);
+      }
       // BLOCKER ESCALATION (2026-07-23, Lucas: "very few websites she shouldn't be able to fully
       // access"): a blocked/dead page no longer concedes — the ladder tries plain fetch → archive
       // snapshot → her vision, and the result is LABELED with which door worked.
