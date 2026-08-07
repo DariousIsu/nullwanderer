@@ -47,6 +47,15 @@ const REAL_PAGE = 'lucastoverby lucastoverby@gmail.com Usage Keys Billing Profil
   const meters = qs.extractMeters(REAL_PAGE);
   ok(meters.length === 2 && meters.find((m) => m.label === 'session').pct === 0.029 && meters.find((m) => m.label === 'weekly').pct === 0.68, 'REAL PAGE: both meters extracted with their OWN labels bound to "<label> usage"');
 }
+// The SAME page as real innerText renders it — each UI element on its OWN LINE. This is the form
+// the running app actually feeds parseUsage; the space-joined fixture above is only the log's view.
+// (Live boot21: the space-fixture passed but this newline form refused — the regex excluded \n.)
+{
+  const NL_PAGE = 'lucastoverby\nlucastoverby@gmail.com\nUsage\nKeys\nBilling\nProfile\nCloud usage\nPro\nCloud models and capabilities such as web search contribute to session and weekly limits.\nSession usage\n2.9% used\nResets in 3 hours.\nWeekly usage\n68% used\nResets in 2 days.\nModels used this week';
+  const r = qs.parseUsage(NL_PAGE, NOW);
+  ok(r.ok === true && r.pct === 0.68 && r.label === 'weekly', 'REAL PAGE (newline innerText): still reads weekly 68% — the structured pass spans newlines, bounded by the period');
+  ok(r.resetAt === NOW + 2 * DAY && r.session && r.session.pct === 0.029, 'REAL PAGE (newline): weekly reset 2d, session 2.9% separate — no bleed across the newline-separated meters');
+}
 
 // --- reset-horizon sanity: a meter LABELLED weekly but resetting in hours is REFUSED ---
 // (the live 2026-08-07 misparse: "2.6% weekly, resets in 3h" — the session meter mislabeled.)

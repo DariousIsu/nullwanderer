@@ -48,7 +48,13 @@ const _round4 = (pct) => Math.min(1, Math.round(pct * 1e4) / 1e4);   // 67.1/100
 //
 // FALLBACK — the older loose "<pct>% … resets in <dur>" shape (a differently-worded page), used
 // only when the structured pass finds nothing, so the preamble-label bug can't reach it here.
-const _STRUCTURED_RE = /(session|weekly|daily|monthly)\s+usage\s+(\d+(?:\.\d+)?)\s*%[^.\n]*?resets?\s+(?:in\s+)?([^.\n]{1,40})/gi;
+// Bound each meter by the sentence PERIOD (`[^.]`), NOT by newline: real innerText puts each UI
+// element on its OWN LINE — "Weekly usage\n68% used\nResets in 2 days." — so a newline-excluding
+// gap ([^.\n]) can't bridge "68% used\nResets" and the whole structured pass silently fails, falling
+// back to the preamble-mislabelling loose scan (measured live boot21: refused a real 68% page). The
+// period is the true meter boundary here; `[^.]` spans the newlines inside one meter but never
+// crosses into the next.
+const _STRUCTURED_RE = /(session|weekly|daily|monthly)\s+usage\s+(\d+(?:\.\d+)?)\s*%[^.]*?resets?\s+(?:in\s+)?([^.]{1,40})/gi;
 const _LOOSE_RE = /(\d+(?:\.\d+)?)\s*%[\s\S]{0,80}?resets?\s+(?:in\s+)?([^.\n]{1,60})/gi;
 
 function extractMeters(text) {
