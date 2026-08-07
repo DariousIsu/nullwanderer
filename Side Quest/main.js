@@ -4792,9 +4792,10 @@ async function _classifyCanvasEditIntent(userMessage) {
       want: `Lucas and the assistant are building a canvas document step by step ("${title}"). Given his MESSAGE, decide: is it an instruction to modify, extend, reformat, or continue THAT document? Typos are common — read intent, not spelling ("pullet the list" means "bullet the list"). Conversation, questions about content, and unrelated asks are edit=false. Reply ONLY strict JSON: {"edit": true|false, "instruction": "<his instruction, normalized, typos corrected>"}.`,
       validate: _validateEditIntent, numPredict: 150, think: false,
     });
-    if (v && v.edit && v.instruction) { console.log(`[canvas-cmd] classifier read the intent: "${v.instruction}"`); return { order: v.instruction }; }
-    return null;
-  } catch { return null; }   // fail-soft: no classifier → the fast path was the only path
+    if (!v) return null;                                   // infra/parse failure — caller may fall back to the offline path
+    if (v.edit && v.instruction) { console.log(`[canvas-cmd] classifier read the intent: "${v.instruction}"`); return { order: v.instruction }; }
+    return { notEdit: true };                              // a confident NO — judgment is final, no regex override
+  } catch { return null; }
 }
 
 // Apply an EDIT order to the working canvas doc: the current markdown + his instruction → the
@@ -9775,14 +9776,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // nets and lands deterministically. Kill switch ZOE_CANVAS_CMD=0.
     if (!followupFired && !/^(0|false|off)$/i.test(String(process.env.ZOE_CANVAS_CMD || '').trim())) {
       const _cc = require('./lib/canvas_command');
-      // EDIT first: while a working doc is fresh, "convert the list to bullets in the same
-      // document" edits THAT doc; "a fresh canvas" always routes to create (detectEdit refuses it).
+      // MODEL-FIRST (the flip, Lucas 2026-08-07 "why is there a regex?"): while a working doc is
+      // fresh, the CLASSIFIER decides — typo-proof, and its confident "not an edit" is FINAL (a
+      // regex false-positive can never override judgment). The regex serves only two residual
+      // duties: the door stays alive when the cloud/classifier is down, and long messages (>300ch)
+      // skip the classifier. This door is the template for retrofitting report/pull-up.
       const _cwFresh = _workingCanvasFresh();
       let _cedit = null, _ccmd = null;
-      try { _cedit = _cc.detectEdit(userMessage, { workingFresh: _cwFresh }); } catch {}
-      // Regex missed but a canvas session is live → let a MODEL read the message (typo-proof).
-      if (!_cedit && _cwFresh && String(userMessage || '').trim().length <= 300) {
-        try { _cedit = await _classifyCanvasEditIntent(userMessage); } catch {}
+      if (_cwFresh) {
+        let _verdict = null;
+        if (String(userMessage || '').trim().length <= 300) {
+          try { _verdict = await _classifyCanvasEditIntent(userMessage); } catch {}
+        }
+        if (_verdict && _verdict.order) _cedit = { order: _verdict.order };
+        else if (!_verdict) { try { _cedit = _cc.detectEdit(userMessage, { workingFresh: true }); } catch {} }
+        // _verdict.notEdit → the model said no; the regex stays out of it.
       }
       if (_cedit) {
         followupFired = true;
