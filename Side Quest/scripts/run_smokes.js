@@ -149,6 +149,18 @@ const smokes = [
   'smoke_puller_name_gate.js',
   'smoke_puller_revise.js',
   'smoke_puller_migration.js',
+  // Puller core (2026-08-07: were on disk but never gated — Standing Debt "the real number is
+  // unverifiable"; each verified passing offline before adding. puller_ingest's 2 vaporware
+  // size-seed asserts neutralized to a visible PENDING note).
+  'smoke_puller.js',
+  'smoke_puller_ingest.js',
+  'smoke_puller_confidence.js',
+  'smoke_puller_export.js',
+  'smoke_puller_ipc.js',
+  'smoke_puller_negatives.js',
+  'smoke_puller_org_door.js',
+  'smoke_puller_priors.js',
+  'smoke_puller_variants.js',
   'smoke_owner_identity.js',
   'smoke_vocative_self.js',
   'smoke_identity_dedup.js',
@@ -372,6 +384,12 @@ const smokes = [
   'smoke_backtest.js',
   'smoke_congress_backtest.js',
   'smoke_forecast_loop.js',
+  // Scenario lane (2026-08-07: on disk, never gated — now verified passing offline and brought in).
+  'smoke_scenario_analogs.js',
+  'smoke_scenario_engine.js',
+  'smoke_scenario_estimate.js',
+  'smoke_scenario_workmove.js',
+  'smoke_forecast_scenario_ipc.js',
   // API management stream — catalog + authenticated client + management layer (pure, offline; mocked fetch/clock)
   'smoke_api_client.js',
   'smoke_api_manager.js',
