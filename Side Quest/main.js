@@ -11208,7 +11208,17 @@ async function autonomyTick() {
                   console.log(`[autonomy] need #${need.id} study pass came back empty — opening unstudied (named as such to the picker)`);
                 }
               }
-              const st = driver.start({ slug, goal, suite: useSuite, files, study, nowMs: now });
+              let st = driver.start({ slug, goal, suite: useSuite, files, study, nowMs: now });
+              // STALE-SANDBOX RECOVERY (measured live, need #13's first P0b open): a PRIOR stuck
+              // attempt left its sandbox behind, so the fresh open collided ("already exists").
+              // A stuck run's lesson is already crystallized at stuck-exit; the copy is disposable
+              // by design — discard it and retry the open ONCE with the new study/sketch.
+              if (!st.ok && /already exists/i.test(String(st.reason))) {
+                try {
+                  console.log(`[autonomy] need #${need.id}: discarding the stale sandbox from a prior attempt → ${require('./lib/rehearsal').discard({ slug })}`);
+                  st = driver.start({ slug, goal, suite: useSuite, files, study, nowMs: now });
+                } catch (e) { console.error('[autonomy] stale-sandbox recovery failed:', e.message); }
+              }
               if (st.ok) {
                 capn.setStatus(need.id, 'rehearsing', { nowMs: now });
                 autonomy.historyPush(H, { ts: now, move: 'rehearse', target: `need #${need.id}`, outcome: `OPENED run "${st.run.slug}" (suite ${useSuite}${bornHarness ? ', test-first harness birth' : ''})` });
