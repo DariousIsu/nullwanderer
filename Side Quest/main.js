@@ -4873,11 +4873,26 @@ async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
       const held = require('./lib/civic_store').heldRostersFor(`${cur}\n${order}`);
       if (held.length) heldBlock = `\nROSTERS WE ALREADY HOLD (verified store data — USE these names for the matching entries; only entries absent here may be marked pending):\n${held.map((h) => `- ${h.line}`).join('\n')}\n`;
     } catch {}
-    const res = await runCloudOperator({
-      userMessage: `Lucas is editing the canvas doc "${title}" step by step. CURRENT CONTENT:\n"""\n${cur}\n"""\n\nHIS EDIT INSTRUCTION: "${order}"\n\nHis recent messages (oldest first — when the instruction is vague or anaphoric, the CONCRETE standing instruction is usually here; apply THAT one):\n${recent}\n${heldBlock}\nOutput the COMPLETE updated markdown for the whole doc after applying the concrete instruction — change nothing he did not ask to change, add nothing extra, keep every existing entry unless he asked for its removal. Ground any NEW factual entries via your tools (echo / localdb / recall / web; officeholder rosters also live in sq.db civic_memberships via analyze_data); NEVER invent entries. If the instruction asks for MORE than one bounded run can ground (a large fill across many entries), apply the part you CAN ground now — the held rosters above first — and mark each unfilled entry "— (pending verification)" — a partially-filled document is the CORRECT output and the pending marks are honest; the metabolism completes them later. Your reply must BE the document itself: never a plan, never narration, never a description of what you will do. Only if NO concrete change can be found in the instruction or his recent messages, reply with ONE line starting "CANNOT:" naming why.`,
-      context: '', task: true,     // Lucas-directed → interactive lane; never quota-deferred
-    });
-    md = res && res.answer ? String(res.answer).trim() : '';
+    // CAGED COMPOSE FIRST (2026-08-08, the third narration rejection): the operator's finalize is
+    // built to ANSWER conversationally — asked to BE a document it narrated 3 of 5 live runs, even
+    // with held data injected. Reformats and held-data fills (most edits) need no tools at all:
+    // one plain completion (the report door's condenseComplete pattern) with cur + instruction +
+    // held rosters in hand. The operator runs only as the FALLBACK when the caged pass says it
+    // needs research it cannot do — and its output faces the same payload contract.
+    const _editRules = `Output the COMPLETE updated markdown for the whole doc after applying the concrete instruction — change nothing he did not ask to change, add nothing extra, keep every existing entry unless he asked for its removal. NEVER invent factual entries: use the held data provided; any entry the held data cannot fill is marked "— (pending verification)" (a partially-filled document is CORRECT and the pending marks are honest). Your reply must BE the document itself — never a plan, never narration. If NO concrete change can be found in the instruction or his recent messages, reply with ONE line "CANNOT:" naming why.`;
+    const _editBody = `Lucas is editing the canvas doc "${title}" step by step. CURRENT CONTENT:\n"""\n${cur}\n"""\n\nHIS EDIT INSTRUCTION: "${order}"\n\nHis recent messages (oldest first — when the instruction is vague or anaphoric, the CONCRETE standing instruction is usually here; apply THAT one):\n${recent}\n${heldBlock}`;
+    try {
+      md = String(await condenseComplete([{ role: 'user', content: `${_editBody}\n${_editRules}` }], { numPredict: 4000 }) || '').trim();
+    } catch (e) { console.error('[canvas-cmd] caged compose failed:', e.message); md = ''; }
+    const _cagedReject = md ? require('./lib/canvas_command').rejectEditOutput(md, cur, order) : 'empty output';
+    if (_cagedReject && !/^CANNOT:/i.test(md)) {
+      console.log(`[canvas-cmd] caged compose ${md ? `rejected (${_cagedReject})` : 'empty'} → operator fallback (research path)`);
+      const res = await runCloudOperator({
+        userMessage: `${_editBody}\nGround any NEW factual entries via your tools (echo / localdb / recall / web; officeholder rosters also live in sq.db civic_memberships via analyze_data). ${_editRules}`,
+        context: '', task: true,     // Lucas-directed → interactive lane; never quota-deferred
+      });
+      md = res && res.answer ? String(res.answer).trim() : '';
+    }
   } catch (e) { console.error('[canvas-cmd] edit execute failed:', e.message); }
   if (!md || /^CANNOT:/i.test(md)) {
     // Every outcome path logs (08-08: this branch relayed honestly but logged NOTHING — the live
