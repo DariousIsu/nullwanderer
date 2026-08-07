@@ -7036,6 +7036,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     } catch (e) { console.error('[turn-router] artifact-precedence check failed (contacts route unchanged):', e.message); }
   }
+  // A confident artifact intent during a live canvas session OWNS the turn — every early intercept
+  // below (draw, roster-canvas, social-enrich; contacts already yielded above) must stand down, or
+  // it consumes the turn with a session-blind judgment (M7.2 — the hijack class, generalized).
+  const _artifactSessionOwns = !!(_artifactVerdictEarly && _artifactVerdictEarly.intent && _artifactVerdictEarly.intent !== 'none');
   let turnRoute = require('./lib/turn_router').computeTurnRoute({
     socialTurn, activityQ, deliverableAggQ,
     factual: _factualR, personalFactQ, devQ, stateQ,
@@ -7102,7 +7106,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
     return null;
   })();
-  if (!followupFired && !socialTurn && _drawReq && _drawReq.prompt) {
+  if (_artifactSessionOwns && !followupFired && _drawReq && _drawReq.prompt) console.log(`[draw] YIELDED — the artifact session owns this turn (intent=${_artifactVerdictEarly.intent})`);
+  if (!followupFired && !socialTurn && !_artifactSessionOwns && _drawReq && _drawReq.prompt) {
     followupFired = true;
     const _dp = _drawReq.prompt, _dn = _drawReq.count;
     console.log(`[draw] intercept → generating ${_dn} image(s) of "${_dp.slice(0, 80)}"${_drawReq.continuation ? ' (continuation)' : ''}${_drawReq.refine ? ' (refine)' : ''}`);
@@ -7141,7 +7146,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // one row per pass) — then ACK honestly. Fires BEFORE contacts-routing + the operator so a named list can
   // never be misread as a category dump or blob-searched. Non-blocking: the fill runs on the idle tick.
   let rosterHandled = false;
-  if (!followupFired && !socialTurn) {
+  if (!followupFired && !socialTurn && !_artifactSessionOwns) {
     try {
       const _ros = _rosterAsk;   // parsed once above (also guards the ambiguity gate from hijacking this)
       if (_ros.ok && Array.isArray(_ros.people) && _ros.people.length >= 2) {
@@ -7286,7 +7291,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // run is slow (network to N sites), so we ACK now and run it fire-and-forget, reporting on completion.
   // Consume-only: corroborated survivors stage as grade-E Puller observations (verify-before-promote).
   let socialEnrichHandled = false;
-  if (!followupFired && !contactsHandled) {
+  if (!followupFired && !contactsHandled && !_artifactSessionOwns) {
     let _se = { isEnrich: false };
     try { _se = require('./lib/enrich_maigret').detectSocialEnrich(userMessage); } catch {}
     if (_se.isEnrich && _se.target) {

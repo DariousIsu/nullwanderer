@@ -87,9 +87,15 @@ async function _runInjectedTurn(runChatTurn, { text, settleMs, maxMs }) {
   } catch (e) { error = e.message; }
 
   // The doors run detached AFTER the turn resolves — hold until the console goes quiet (or cap).
+  // v1.1 (08-08): a ROUTED door queues behind cloud-slot contention and can start MINUTES after
+  // the reply — twice the port settled on quiet console while the edit still ran. When the router
+  // dispatched a door, quiet is not enough: hold until that door's OUTCOME line appears (or cap,
+  // reported honestly via settled:false).
+  const routedDoor = () => logLines.some((l) => /\[artifact-router\] intent=(?!none)/.test(l));
+  const doorOutcome = () => logLines.some((l) => /\[canvas-cmd\] (?:edit applied|edit NOT applied|edit output REJECTED|order executed)|\[pull-up\] |\[report-cmd\] |canvas (?:edit|create|report|pull-up)? ?failed/.test(l));
   let settled = false;
   while (Date.now() - started < maxMs) {
-    if (turnDone && Date.now() - lastLineTs >= settleMs) { settled = true; break; }
+    if (turnDone && Date.now() - lastLineTs >= settleMs && (!routedDoor() || doorOutcome())) { settled = true; break; }
     await new Promise((res) => setTimeout(res, 500));
   }
   console.log = origLog;
