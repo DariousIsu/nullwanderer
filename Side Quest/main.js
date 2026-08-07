@@ -13604,7 +13604,10 @@ function _surfaceSteeringNote(focus, msg, label, { force = false } = {}) {
 const NEEDS_REHEARSE_GAP_MS = 30 * 60 * 1000;   // needs-work paces itself — at most one forced move per gap
 async function _needsPressure(now = Date.now()) {
   if (_userDirectedActive()) return null;                                              // his work owns the bandwidth
-  try { if (!require('./lib/quota_gate').allow('idle', { quiet: true }).allow) return null; } catch {}
+  // RESEARCH lane, not idle (Lucas 2026-08-06: learning/building is "a much better use of compute
+  // than the states constantly being scrubbed for contacts") — on the idle lane the beats' spend
+  // RATE starved needs-work perpetually: an inversion of his stated priority, not a safety.
+  try { if (!require('./lib/quota_gate').allow('research', { quiet: true }).allow) return null; } catch {}
   const nt = require('./lib/need_triage');
   const capn = require('./lib/capability_need');
   let run = null; try { run = require('./lib/rehearsal_driver').load(); } catch {}

@@ -56,7 +56,7 @@ ok(nt.renderExternalAsk([]) === '' && nt.renderExternalAsk(null) === '', 'nothin
   const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/_forced = await _needsPressure\(now\)/.test(m) && /_forced \|\| await autonomy\.decide/.test(m), 'the tick consults needs-pressure BEFORE the idle lottery, and a forced move wins');
   ok(/if \(_userDirectedActive\(\)\) return null;\s*\/\/ his work owns the bandwidth/.test(m), 'pressure yields to directed work (preemption)');
-  ok(/quota_gate'\)\.allow\('idle', \{ quiet: true \}\)/.test(m), 'pressure respects the idle quota gate');
+  ok(/quota_gate'\)\.allow\('research', \{ quiet: true \}\)/.test(m), 'pressure runs on the RESEARCH quota lane (idle-lane rate starvation inverted the stated priority)');
   ok(/blocked_external/.test(m) && /routed_research/.test(m) && /parked as junk/.test(m), 'all three non-buildable routes exist (external / research / junk)');
   ok(/needs\.external_surfaced_at/.test(m) && /24 \* 3600e3/.test(m), 'the external ask is consolidated + throttled to once a day');
   ok(/TRIAGE SKETCH:/.test(m), 'a buildable verdict seeds the study block for the rehearsal open');
