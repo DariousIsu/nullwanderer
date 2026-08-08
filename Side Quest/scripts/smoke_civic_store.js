@@ -110,6 +110,15 @@ const T = 1785400000000;
   ok(cs.staleRostersFor('tell me about parish government generally', { now: NOWX }).length === 0, 'generic civic nouns never match (no distinctive word, no hit)');
   ok(cs.staleRostersFor('', { now: NOWX }).length === 0 && cs.staleRostersFor('Ouachita Parish', { now: NOWX, maxAgeMs: 90 * 86400000 }).length === 0, 'empty text is empty; a longer maxAge window keeps it fresh');
 
+  // --- civicDigestFor: the report door's window into the store (08-08, the LA leadership ask) ---
+  const digAll = cs.civicDigestFor('a simple report on the Parish leadership of Louisiana');
+  ok(/CIVIC STORE/.test(digAll) && /ouachita parish/i.test(digAll) && /Old Ollie \(President\)/.test(digAll), 'a CLASS word ("parish") selects every parish body with named members');
+  ok(/tangipahoa/i.test(digAll) === false || /tangipahoa parish council/i.test(digAll), 'other parish bodies ride the same digest');
+  const digOne = cs.civicDigestFor('who runs the Tangipahoa council?');
+  ok(/tangipahoa/i.test(digOne) && !/ouachita/i.test(digOne), 'a specific body name selects only its bodies');
+  ok(cs.civicDigestFor('the positive benefits of data centers to power grids') === '', 'an unrelated topic digests EMPTY — zero noise');
+  ok(cs.civicDigestFor('') === '' && cs.civicDigestFor('the of and for') === '', 'empty/stopword-only topics are empty, never a throw');
+
   // --- fail-soft everywhere ---
   ok(cs.roster('nothing here').length === 0 && cs.history('x', 'y').length === 0, 'unknown bodies read back empty, never throw');
 

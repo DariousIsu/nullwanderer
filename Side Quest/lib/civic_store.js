@@ -214,6 +214,32 @@ function heldRostersFor(text, { limit = 40, deps = {} } = {}) {
   return out;
 }
 
+// CIVIC DIGEST FOR THE REPORT DOOR (2026-08-08, Lucas: "a simple report on the Parish leadership
+// of LA" — the store held all 64 parish rosters and the report door could not see them; it
+// composes from documents only). Token-match body_keys against the TOPIC — and unlike
+// heldRostersFor, CLASS words count: 'parish' in a topic legitimately selects every parish body
+// (a state-wide leadership report is exactly the class ask). An unrelated topic shares no tokens
+// and gets an empty digest — zero noise. Rendered bounded; the composer cites or ignores.
+const _DIGEST_STOP = new Set(['the', 'of', 'and', 'for', 'a', 'an', 'on', 'in', 'to', 'all', 'every', 'report', 'about', 'la']);
+function civicDigestFor(topic, { limit = 80, deps = {} } = {}) {
+  const toks = str(topic).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !_DIGEST_STOP.has(w));
+  if (!toks.length) return '';
+  let bodies = [];
+  try { bodies = _db(deps).getDb().prepare(`SELECT DISTINCT body_key FROM civic_memberships WHERE superseded_by IS NULL`).all(); } catch { return ''; }
+  const lines = [];
+  for (const b of bodies) {
+    const key = String(b.body_key);
+    if (!toks.some((t) => key.includes(t))) continue;
+    const rows = roster(key, { deps });
+    if (!rows.length) continue;
+    const named = rows.map((r) => `${r.person_name}${r.role && !/^member$/i.test(r.role) ? ` (${r.role})` : ''}`);
+    lines.push(`- ${key} — ${rows.length} member(s): ${named.join('; ')}`);
+    if (lines.length >= limit) break;
+  }
+  if (!lines.length) return '';
+  return `--- CIVIC STORE (live verified rosters held in civic_memberships — cite as "civic store"; these are CURRENT, verified officeholders) ---\n${lines.join('\n')}`.slice(0, 16000);
+}
+
 // FRESH-HOT DEPTH (2026-08-08, the law's second half): a mention doesn't only warm the GAPS —
 // what we HOLD on the neighborhood gets staleness-checked too. Bodies matching the text whose
 // NEWEST live observation is older than maxAgeMs are re-verify candidates (not gaps: we hold a
@@ -277,4 +303,4 @@ function incomplete({ state = null, level = null, limit = 200 } = {}, { deps = {
   } catch { return { incomplete: [], complete: 0, unknownDenominator: [] }; }
 }
 
-module.exports = { keyFor, upsertBody, getBody, recordMembership, recordSeatHolder, recordRoster, roster, heldRostersFor, staleRostersFor, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };
+module.exports = { keyFor, upsertBody, getBody, recordMembership, recordSeatHolder, recordRoster, roster, heldRostersFor, staleRostersFor, civicDigestFor, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };

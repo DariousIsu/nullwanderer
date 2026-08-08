@@ -5065,13 +5065,20 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
       }
     } catch (e) { console.error('[report-cmd] token search failed:', e.message); }
   }
-  if (!rows.length) {
-    console.log(`[report-cmd] "${t.slice(0, 80)}" — no held material (phrase + token search both empty), honest miss relayed`);
+  // THE CIVIC STORE RIDES THE REPORT (2026-08-08, Lucas: "a simple report on the Parish
+  // leadership of LA" — 64 verified parish rosters sat in civic_memberships and this door could
+  // not see them; it composed from documents only, so a leadership ask re-derived or missed).
+  // Class tokens count ('parish' selects every parish body); an unrelated topic digests empty.
+  let civicBlock = '';
+  try { civicBlock = require('./lib/civic_store').civicDigestFor(t); } catch (e) { console.error('[report-cmd] civic digest failed:', e.message); }
+  if (civicBlock) console.log(`[report-cmd] civic store digest riding the material (${civicBlock.split('\n').length - 1} body line(s))`);
+  if (!rows.length && !civicBlock) {
+    console.log(`[report-cmd] "${t.slice(0, 80)}" — no held material (docs + civic store all empty), honest miss relayed`);
     await fireToolFollowup({ io, channel, sessionId, resultText: `[You were asked to BUILD A REPORT on "${t}" but you hold NO research documents about it — nothing in the document store matches. Say so plainly in one or two sentences, name what you'd need to go gather, and offer to run the research. Do NOT invent a document.]` });
     return;
   }
-  const material = rows.map((r) => `--- DOC #${r.id}: ${String(r.title || '').slice(0, 120)} ---\n${String(r.body || '').slice(0, 9000)}`).join('\n\n');
-  console.log(`[report-cmd] composing from ${rows.length} held doc(s): ${rows.map((r) => '#' + r.id).join(', ')}`);
+  const material = [civicBlock, ...rows.map((r) => `--- DOC #${r.id}: ${String(r.title || '').slice(0, 120)} ---\n${String(r.body || '').slice(0, 9000)}`)].filter(Boolean).join('\n\n');
+  console.log(`[report-cmd] composing from ${rows.length} held doc(s)${civicBlock ? ' + the civic store' : ''}: ${rows.map((r) => '#' + r.id).join(', ') || '(store only)'}`);
   const msgs = [
     { role: 'system', content: `You are composing ONE finished, professional report from research documents the assistant ALREADY HOLDS. Rules — absolute:\n• Ground ONLY in the provided documents. Never add a fact, name, number, or URL that is not in them.\n• Every source annotation already present — "(source: …)" — stays attached to its claim. Never strip one, never invent one.\n• Structure: a title line, a 2-4 sentence executive summary, then "## " sections organized by what the material actually supports, then "## Open questions" naming what the documents do NOT answer.\n• Where the documents are thin or contradict each other, SAY SO in the text rather than papering over it. An honest gap is part of the report.\nOutput Markdown only — no preamble, no "here is".` },
     { role: 'user', content: `REPORT SUBJECT: ${t}\n\nTHE DOCUMENTS YOU HOLD:\n"""\n${material.slice(0, 60000)}\n"""\n\nCompose the finished report on ${t} now.` },
@@ -5096,7 +5103,7 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   // LATENT BUG FIX (found 08-07 via lint): main.js has no module-level `fs` — this call threw
   // ReferenceError into the catch on EVERY report, so the notes/ file never actually saved
   // (the canvas copy masked it). require inline like every other main.js call site.
-  try { require('fs').writeFileSync(filesLib.resolvePath(rel), `# Report — ${t}\n\n${md}\n\n---\n_Composed from ${rows.length} held research document(s): ${rows.map((r) => '#' + r.id).join(', ')}._\n`, 'utf8'); saved = true; }
+  try { require('fs').writeFileSync(filesLib.resolvePath(rel), `# Report — ${t}\n\n${md}\n\n---\n_Composed from ${rows.length ? `${rows.length} held research document(s): ${rows.map((r) => '#' + r.id).join(', ')}` : 'the civic store'}${rows.length && civicBlock ? ' + the civic store' : ''}._\n`, 'utf8'); saved = true; }
   catch (e) { console.error('[report-cmd] save failed:', e.message); }
   try { await promiseArtifactEmit({ slug: `report-${slug}`, title: `Report — ${t}`.slice(0, 60), markdown: md }); } catch {}
   console.log(`[report-cmd] report on "${t}" composed (${md.length}ch) → ${saved ? rel : '(save failed)'} + canvas`);
