@@ -2183,6 +2183,8 @@ app.whenReady().then(() => {
 
   // THE METABOLISM (north star, [[program-end-state]] 2026-08-07): the always-on verify/reverify
   // loop. Every 10 min: sweep expired absence TTLs into the RECHECK QUEUE, then drain 1-2 due
+  // (+ CONVERSATION WARMING can kick a drain between ticks via global.__kickMetabolism — the
+  // codebase's cross-scope carrier pattern, same as global.__researchUsage; cap still governs)
   // items — each a bounded verification pass on gemma4:31b-cloud (Lucas: per-compute pricing makes
   // the 31b nearly free; local is deliberately cold). lane:'interactive' = the governor never
   // gates it (the FLOOR); the hourly cap bounds it instead — governance by construction. Verdicts
@@ -2233,6 +2235,7 @@ app.whenReady().then(() => {
         }
       } catch (e) { console.error('[metabolism] tick failed:', e.message); }
     };
+    global.__kickMetabolism = runMetabolism;   // conversation warming kicks a drain between ticks (cap still governs)
     setTimeout(runMetabolism, 8 * 60 * 1000).unref?.();
     setInterval(runMetabolism, 10 * 60 * 1000).unref?.();
     console.log(`[main] metabolism armed — recheck queue drains on gemma4:31b-cloud (cap ${parseInt(process.env.ZOE_RECHECK_PER_HOUR, 10) || 12}/h)`);
@@ -8830,6 +8833,28 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             references = _mani.render(_man);
             const _held = (_man.objects || []).filter((o) => o.status === 'held' || o.status === 'self').length;
             if (references) console.log(`[manifest] ${(_man.objects || []).length} coord(s), ${_held} held, ${(_man.gaps || []).length} gap(s)`);
+            // CONVERSATION-DRIVEN WARMING (Lucas 2026-08-08: "if we are talking through a concept
+            // the program already knows the neighborhood… and should already be gap filling the
+            // neighborhood the user is talking about — every action"). The manifest COMPUTED these
+            // gaps on every turn and dropped them; now each one queues HOT (priority 8 beats the
+            // backlog's 4-5) and a drain kicks shortly after the turn — so by the time a report/
+            // op-ed/forecast is ordered, the neighborhood is fresh and the model rapid-fires
+            // through addresses instead of searching. Rides the governed metabolism floor
+            // (gemma-cheap, hourly cap unchanged).
+            try {
+              const _rq = require('./lib/recheck_queue');
+              let _warmed = 0;
+              for (const g of (_man.gaps || []).slice(0, 5)) {
+                const _subj = String(g.surface || '').trim().slice(0, 200);
+                if (_subj.length < 3) continue;
+                const r = _rq.enqueue({ kind: 'absence', subject: _subj, detail: { predicate: 'identity and current facts', doc: 'conversation neighborhood' }, priority: 8, bornFrom: 'conversation-gap' });
+                if (r.ok && !r.existing) _warmed++;
+              }
+              if (_warmed) {
+                console.log(`[warm-neighborhood] ${_warmed} conversation gap(s) queued HOT`);
+                if (global.__kickMetabolism) setTimeout(() => { try { global.__kickMetabolism().catch(() => {}); } catch {} }, 20000).unref?.();
+              }
+            } catch (e) { console.error('[warm-neighborhood] enqueue failed:', e.message); }
             // MEETING SIDECAR — the recurring-series + roster block the coordinate manifest does not
             // build: encounter-grade "who I've sat with", labelled from the calendar (gcalOpts carries
             // Echo's venv bridge). Meeting turns only; any failure costs the sidecar, never the turn.
