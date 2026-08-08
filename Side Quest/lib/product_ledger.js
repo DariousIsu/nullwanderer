@@ -138,6 +138,12 @@ function searchProducts({ db, query, notesDir = null, limit = 3, now = Date.now(
     ).all(now - 45 * 86400000, ...params);
     for (const r of rows) {
       const title = str(r.title).toLowerCase(), body = str(r.body).toLowerCase();
+      // A FAILURE RECORD is not a product (08-08 audit, defect 4: doc #14529 — an inquiry closure
+      // whose body says "list could not be obtained" — was pulled up and presented as "the ACTUAL
+      // artifact"). An inquiry doc whose head records a miss documents the ABSENCE of the product;
+      // it must never rank as the product itself.
+      if (str(r.source) === 'inquiry'
+        && /could not be (?:obtained|found|verified|located)|unable to (?:obtain|find|locate)|no (?:such|matching|results?)|nothing (?:was )?found|came up empty/.test(body.slice(0, 400))) continue;
       let score = 0;
       for (const w of toks) { if (title.includes(w)) score += 3; else if (body.includes(w)) score += 1; }
       if (score <= 2) continue;                                    // one weak body token is not a match

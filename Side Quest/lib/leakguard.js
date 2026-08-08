@@ -101,9 +101,15 @@ function stripPlanningLeak(text) {
 // and the chain ended on the last promise. This detects a short, content-free status-say so the
 // followup driver can force one final answer-or-honest-miss pass when no further work will run.
 const _PROMISE_RE = /\b(fetch|gather|grab|pull|retriev|check|look)(?:ing)?\b.{0,60}$|\bwait(?:ing)?\b|\bone (?:moment|sec(?:ond)?)\b|\bhold on\b|\bworking on it\b|\bbe right back\b/i;
+// A verify-INVITATION is the OPPOSITE of an unkept promise: "Take a look", "check it out", "have a
+// look at the canvas" address LUCAS about work already delivered. The bare check|look stems above
+// matched them (08-08 audit, the double-relay: a door relay ending in its own "Take a look"
+// invitation read as a promise-say and re-fired the followup — two near-identical relays in chat).
+const _INVITATION_RE = /\b(?:take|have|give)\s+(?:a\s+|another\s+)?look\b|\bcheck\s+(?:it|that|them|those|your)\b|\bgive\s+it\s+a\s+(?:read|scan|once-?over)\b|\bsee\s+for\s+yourself\b/i;
 function isUnkeptPromiseSay(text) {
   const s = String(text || '').trim();
   if (!s || s.length > 160) return false;   // a real answer has substance; promises are short
+  if (_INVITATION_RE.test(s)) return false; // delivered-work invitation, not a pending promise
   return _PROMISE_RE.test(s);
 }
 

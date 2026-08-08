@@ -102,6 +102,30 @@ const ok = (n, c) => { (c ? pass++ : fail++); console.log(`  ${c ? '✓' : '✗'
   ok('newest assistant KEEPS its <think>', /THOUGHT_NEWEST/.test(asst[2].content));
   ok('every assistant still carries its <say>', asst.every((m, k) => m.content.includes(`say${k + 1}`)));
 
+  console.log('\nsame-exchange thought pairing (08-08 audit defect 2):');
+  // A suppressed-say thought persisted by continuity sits ADJACENT to a LATER, unrelated ai_said —
+  // 10 minutes apart. Pairing them replayed the stale interior as the replier's freshest <think>.
+  const T0 = 1700000000000;
+  const staleTurns = [
+    { speaker: 'user', content: 'u1', ts: T0 },
+    { speaker: 'ai_thought', content: 'STALE_SUPPRESSED_THOUGHT', ts: T0 + 1000 },      // suppressed say: no said followed
+    { speaker: 'ai_said', content: 'later unrelated reply', ts: T0 + 10 * 60 * 1000 }, // a DIFFERENT exchange, 10 min later
+    { speaker: 'user', content: 'u2', ts: T0 + 11 * 60 * 1000 },
+    { speaker: 'ai_thought', content: 'FRESH_THOUGHT', ts: T0 + 12 * 60 * 1000 },
+    { speaker: 'ai_said', content: 'fresh say', ts: T0 + 12 * 60 * 1000 + 3000 },       // same exchange: 3s apart
+  ];
+  const msgs2 = ctx.buildChatPrompt({
+    userName: 'Lucas', recentReflections: [], recentTurns: staleTurns, recentMonologue: [], recentReadings: [],
+    heldCommitments: [], openThreads: [], awareness: null, protocols: [], browserBlock: null,
+    pendingInbounds: [], retrievedKnowledgeBlock: null, capabilityProposalBlock: null,
+    selfModelBlock: null, personalBlock: null, relevantPastTurns: [], openQuestionBlock: null,
+    socialTurn: false, convoStateBlock: null, echoSuitBlock: null, newUserMessage: 'u3'
+  });
+  const asst2 = msgs2.filter(m => m.role === 'assistant');
+  ok('stale thought is NOT paired with the later say', !asst2.some(m => /STALE_SUPPRESSED_THOUGHT/.test(m.content)));
+  ok('the later say still renders (unpaired)', asst2.some(m => /later unrelated reply/.test(m.content)));
+  ok('a genuine same-exchange pair keeps its <think>', asst2.some(m => /FRESH_THOUGHT/.test(m.content) && /fresh say/.test(m.content)));
+
   db.getDb().close();
   try { for (const e of ['', '-wal', '-shm']) fs.existsSync(process.env.SQ_DB_PATH + e) && fs.unlinkSync(process.env.SQ_DB_PATH + e); } catch {}
   // Standard runner format ("PASS — N ok, M failed") — the previous wording did not match

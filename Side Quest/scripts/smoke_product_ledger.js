@@ -57,6 +57,17 @@ ok('notes files are found', hHits.some((h) => h.kind === 'note' && /hartfield/.t
 const miss = pl.searchProducts({ db, query: 'quarterly kraken sightings ledger', notesDir, limit: 3, now });
 ok('an unmade product honestly misses', miss.length === 0);
 
+// ── FAILURE RECORDS are not products (08-08 audit defect 4: doc #14529 verbatim shape) ─────────
+// An inquiry closure that RECORDS A MISS documents the product's absence — presenting it as "the
+// ACTUAL artifact" hands Lucas a failure note wearing the product's name.
+db.insertDocument({ title: 'Inquiry #205 — the Gulf pipeline operators contact list Lucas asked about',
+  body: 'The list could not be obtained: every registry search came up empty and the operator site was down.', source: 'inquiry' });
+const failHits = pl.searchProducts({ db, query: 'Gulf pipeline operators contact list', notesDir, limit: 3, now });
+ok('an inquiry FAILURE record never ranks as the product', !failHits.some((h) => /Gulf pipeline/.test(h.title)));
+// ...but a SUCCESSFUL inquiry product still ranks (the doc #201-style real artifact from above)
+ok('a successful inquiry product still ranks', pl.searchProducts({ db, query: live.subject, notesDir, limit: 3, now })
+  .some((h) => h.kind === 'doc' && h.id === idProduct));
+
 // ── SUPERSESSION (08-08 census): the finished product outranks its own earlier draft ────────────
 // Live shape verbatim: the 9:01 AM "report-parish-leadership-of-louisiana" (whose body carried the
 // extra weak token "list") outscored the complete "louisiana-parishes-leadership" made at 1:57 PM.

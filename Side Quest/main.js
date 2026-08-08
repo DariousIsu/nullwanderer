@@ -5080,10 +5080,17 @@ async function presentHeldProduct({ io, channel, sessionId, hit, alternates = []
   }
   const when = new Date(hit.ts).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   const slug = `pullup-${String(title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'product'}`;
-  try { await promiseArtifactEmit({ slug, title: title.slice(0, 60), markdown }); } catch {}
-  console.log(`[pull-up] held product landed on canvas: ${hit.label} (made ${when})`);
+  // NEVER claim delivery the emit didn't make (08-08 audit, defect 4): this return was thrown away,
+  // so "is now on his Canvas" went out even when the emit failed — the false-canvas-claim class
+  // Lucas graded as a fail. The relay states what ACTUALLY happened, both ways.
+  let landed = false;
+  try { landed = (await promiseArtifactEmit({ slug, title: title.slice(0, 60), markdown })) === true; } catch {}
+  console.log(`[pull-up] held product ${landed ? 'landed on canvas' : 'FAILED to land on canvas'}: ${hit.label} (made ${when})`);
   const altNote = alternates.length ? ` If that is not the one he means, the other matches were: ${alternates.map((a) => a.label).join(' · ')} — name them briefly.` : '';
-  await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked you to PULL UP a product you two already made ("${subject}"). The ACTUAL artifact — ${ref}, made ${when} ET — is now on his Canvas. Tell him that in your own voice: what it is and when it was made. Do NOT present freshly-queried data as this product, and do NOT offer new research unless he asks.${altNote}]` });
+  const whereNote = landed
+    ? `The ACTUAL artifact — ${ref}, made ${when} ET — is now on his Canvas. Tell him that in your own voice: what it is and when it was made.`
+    : `You FOUND the actual artifact (${ref}, made ${when} ET) but the canvas emit FAILED — it is NOT on his Canvas right now. Say that plainly: name the artifact and where it lives (${ref}), and that the canvas landing failed so he isn't left looking for a tab that isn't there.`;
+  await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked you to PULL UP a product you two already made ("${subject}"). ${whereNote} Do NOT present freshly-queried data as this product, and do NOT offer new research unless he asks.${altNote}]` });
 }
 
 async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) {
@@ -10840,6 +10847,23 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     sayOut = sayOut.replace(/<[^>]+>/g, '').trim();
     sayOut = require('./lib/leakguard').stripLeakedDirectives(sayOut);   // final-text backstop (this path bypassed the main strip)
     sayOut = require('./lib/leakguard').stripPlanningLeak(sayOut);
+    // ANTIFAB, file slice (08-08 audit: fireToolFollowup never verified its claims — the false-
+    // canvas-claim replies rode THIS path). The canvas/db/image checks need the turn-start anchor
+    // this function doesn't carry, and a wrong anchor mints FALSE corrections on true references to
+    // older artifacts — so only the objectively checkable class runs here: a followup naming a
+    // "saved" file that does not exist gets the correction appended. Canvas truth is now stated by
+    // the door relays themselves (landed vs failed), source-side.
+    try {
+      const _mc = require('./lib/metacognition');
+      const _av = _mc.verifyArtifactClaims(sayOut, {
+        fileExists: (p) => { try { const _p = require('path'); const abs = _p.isAbsolute(p) ? p : _p.join(__dirname, p); return require('fs').existsSync(abs); } catch { return true; } },
+        canvasWroteThisTurn: () => true, imageGenThisTurn: () => true, dbWroteThisTurn: () => true,
+      });
+      if (!_av.ok) {
+        const _corr = _mc.artifactCorrection(_av.violations);
+        if (_corr) { console.warn(`[antifab] followup claimed a file that isn't there → corrected: ${_av.violations.map((v) => v.kind + ':' + v.claim).join(', ').slice(0, 160)}`); sayOut += _corr; }
+      }
+    } catch (e) { console.error('[antifab] followup verification failed:', e.message); }
     // Deliver her words (the visible step — "I'll run db_query…" or the final answer). May be
     // empty when she emitted only a tag — that's fine; the Echo chain below still runs.
     // SUBSTANCE, not truthiness. "…" is truthy, and that is exactly what Lucas got for a reply on

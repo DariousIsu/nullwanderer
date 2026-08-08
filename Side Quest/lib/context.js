@@ -418,8 +418,16 @@ Examples:
     const t = recentTurns[i];
     if (t.speaker === 'user') { entries.push({ role: 'user', content: t.content }); i++; }
     else if (t.speaker === 'ai_thought') {
-      if (i + 1 < recentTurns.length && recentTurns[i + 1].speaker === 'ai_said') {
-        entries.push({ role: 'assistant', thought: t.content, say: recentTurns[i + 1].content }); i += 2;
+      // SAME-EXCHANGE ONLY (08-08 audit, defect 2): a thought and its say are inserted together at
+      // reply delivery — seconds apart. A suppressed-say thought that continuity persisted can sit
+      // ADJACENT in the rows to a LATER, unrelated ai_said (minutes apart), and pairing them replayed
+      // the stale interior as the replier's freshest <think> (the "censures wrist-slap" reply). Pair
+      // only within a tight window; rows without ts (synthetic/test turns) keep the adjacency rule.
+      const nxt = i + 1 < recentTurns.length ? recentTurns[i + 1] : null;
+      const sameExchange = nxt && nxt.speaker === 'ai_said'
+        && (!(Number.isFinite(t.ts) && Number.isFinite(nxt.ts)) || Math.abs(nxt.ts - t.ts) <= 120000);
+      if (sameExchange) {
+        entries.push({ role: 'assistant', thought: t.content, say: nxt.content }); i += 2;
       } else {
         // ORPHAN THOUGHT DEMOTION (conversational-coherence B): an ai_thought with no paired ai_said is
         // idle/autonomous interior — between-turn wandering or a tool-followup musing, NOT a dialogue

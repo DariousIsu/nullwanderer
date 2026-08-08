@@ -162,5 +162,18 @@ ok(lg._INTERNAL_TAG_RE.test('<think>') && lg._INTERNAL_TAG_RE.test('</web-open>'
   ok(!lg.isStyleFeedback('what do you know about my kids?'), 'a normal question is not a style request');
 }
 
+// isUnkeptPromiseSay — the double-relay fix (08-08 audit defect 3): a verify-INVITATION about
+// delivered work must NOT read as a pending promise, or the followup driver re-fires on the door
+// relay's own closing line and Lucas gets two near-identical relays.
+{
+  ok(lg.isUnkeptPromiseSay('Fetching the latest reports now...'), 'a real promise-say still detects');
+  ok(lg.isUnkeptPromiseSay('One moment — pulling that up'), 'one-moment promise still detects');
+  ok(!lg.isUnkeptPromiseSay('The parish list is on your canvas — take a look.'),
+    '"take a look" (delivered-work invitation) is NOT an unkept promise');
+  ok(!lg.isUnkeptPromiseSay('It landed on the canvas, check it out.'), '"check it out" is an invitation, not a promise');
+  ok(!lg.isUnkeptPromiseSay('Have a look at the table when you get a chance.'), '"have a look" is an invitation');
+  ok(lg.isUnkeptPromiseSay('Checking the records...'), 'bare "checking..." (her own pending work) still detects');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
