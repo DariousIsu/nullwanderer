@@ -175,6 +175,45 @@ function buildPrompt(item) {
   }
 }
 
+// ── M9.3 — BATCHED SMALL VERIFIES (2026-08-08): several one-fact gaps share ONE operator pass ───
+// Throughput is bounded by PASSES (the spend unit), not gaps — so batching raises gap throughput
+// without touching the hourly cap. Only kinds whose outcome is a bare verdict batch safely:
+// open-questions and NON-roster absences. Roster absences (structured member capture), plus
+// discrepancy/vacancy/cardinality (per-subject instructions), stay solo.
+const BATCH_MAX = 3;   // one 31b pass grounds ~3 independent one-fact lookups before quality dilutes
+
+function isBatchable(item) {
+  if (!item) return false;
+  if (item.kind === 'open-question') return true;
+  if (item.kind === 'absence') return !_rosterShaped((item.detail || {}).predicate);
+  return false;
+}
+
+function buildBatchPrompt(items) {
+  const parts = items.map((item, i) => {
+    const d = item.detail || {};
+    const held = heldContext(item.subject, { limit: 2 });
+    const what = item.kind === 'absence'
+      ? `the ${d.predicate || 'missing fact'} of "${item.subject}" (${d.attempts || 1} prior attempt(s))`
+      : `${item.kind}: ${item.subject}`;
+    return `GAP ${i + 1} — ${what}${d.doc ? ` (a pending entry in the doc "${d.doc}")` : ''}${held}`;
+  });
+  return `VERIFICATION PASS — ${items.length} small known gaps batched into one run. Verify each INDEPENDENTLY; never let one gap's finding bleed into another's verdict.\n\n${parts.join('\n')}\n${LOCAL_FIRST}\nFor EACH gap, end your answer with EXACTLY ONE line: "GAP <n> RESOLVED: <the fact + its source inline>" or "GAP <n> STILL-UNKNOWN: <what you checked>". A claim without a source is not RESOLVED. A gap you did not get to gets NO line (it will be retried).`;
+}
+
+/** parseBatchVerdicts(ans, count) → per-index {verdict, line}; a missing GAP line stays
+ * inconclusive, which the consumer routes to defer-with-backoff — an honest retry, never a guess. */
+function parseBatchVerdicts(ans, count) {
+  const out = Array.from({ length: Math.max(0, count) }, () => ({ verdict: 'inconclusive', line: '' }));
+  for (const line of str(ans).split('\n')) {
+    const m = line.match(/^\s*GAP\s*(\d+)\s*[—:–-]*\s*(RESOLVED|STILL-UNKNOWN)\s*:\s*(.*)$/i);
+    if (!m) continue;
+    const i = Number(m[1]) - 1;
+    if (i >= 0 && i < out.length) out[i] = { verdict: m[2].toUpperCase() === 'RESOLVED' ? 'resolved' : 'unknown', line: m[3].slice(0, 400) };
+  }
+  return out;
+}
+
 /** parseVerdict(ans) → {verdict:'resolved'|'unknown'|'inconclusive', line} — pure. */
 function parseVerdict(ans) {
   const t = str(ans);
@@ -224,4 +263,4 @@ function applyOutcome(item, ans, { now = Date.now() } = {}) {
   return { action: 'deferred' };
 }
 
-module.exports = { enqueue, due, complete, defer, stats, sweepAbsences, buildPrompt, parseVerdict, parseRoster, applyOutcome, backoffMs };
+module.exports = { enqueue, due, complete, defer, stats, sweepAbsences, buildPrompt, parseVerdict, parseRoster, applyOutcome, backoffMs, isBatchable, buildBatchPrompt, parseBatchVerdicts, BATCH_MAX };

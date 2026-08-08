@@ -89,6 +89,24 @@ const civ = require(path.join(__dirname, '..', 'lib', 'civic_store'));
 const stored = civ.roster('Testville Parish');
 ok('resolve recorded the roster structurally', stored.length === 2 && stored.some((r) => r.person_name === 'Ann Green' && r.role === 'President'));
 
+// ── M9.3 batched small verifies: batchability, prompt, per-index verdicts ───────────────────────
+ok('open-question is batchable', rq.isBatchable({ kind: 'open-question', subject: 'q', detail: {} }));
+ok('non-roster absence is batchable', rq.isBatchable({ kind: 'absence', subject: 's', detail: { predicate: 'email' } }));
+ok('roster absence is NOT batchable', !rq.isBatchable({ kind: 'absence', subject: 's', detail: { predicate: 'Current officeholders' } }));
+ok('discrepancy/vacancy are NOT batchable', !rq.isBatchable({ kind: 'discrepancy', subject: 's' }) && !rq.isBatchable({ kind: 'vacancy', subject: 's' }));
+const batchItems = [
+  { kind: 'absence', subject: 'Clerk of Alpha County', detail: { predicate: 'email', attempts: 2 } },
+  { kind: 'open-question', subject: 'Does Beta Parish levy a data center tax?', detail: {} },
+];
+const bp = rq.buildBatchPrompt(batchItems);
+ok('batch prompt numbers each gap + carries both subjects', /GAP 1/.test(bp) && /GAP 2/.test(bp) && /Alpha County/.test(bp) && /Beta Parish/.test(bp));
+ok('batch prompt demands per-gap verdict lines + database-first', /GAP <n> RESOLVED:/.test(bp) && /DATABASE-FIRST/.test(bp));
+const bv = rq.parseBatchVerdicts('worked both.\nGAP 1 RESOLVED: clerk@alpha.gov (source: alpha.gov)\nGAP 2 STILL-UNKNOWN: checked assessor + news', 2);
+ok('per-index verdicts parse', bv[0].verdict === 'resolved' && /alpha\.gov/.test(bv[0].line) && bv[1].verdict === 'unknown');
+ok('a gap with no line stays inconclusive (→ defer path)', rq.parseBatchVerdicts('GAP 1 RESOLVED: x (source: y)', 3)[2].verdict === 'inconclusive');
+ok('em-dash and case tolerated', rq.parseBatchVerdicts('gap 2 — resolved: fact (source: z)', 2)[1].verdict === 'resolved');
+ok('out-of-range GAP index ignored', rq.parseBatchVerdicts('GAP 9 RESOLVED: x', 2).every((v) => v.verdict === 'inconclusive'));
+
 const st = rq.stats();
 ok('stats report open + kinds', st.open >= 1 && Array.isArray(st.byKind));
 

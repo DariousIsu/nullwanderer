@@ -2221,19 +2221,44 @@ app.whenReady().then(() => {
         if (parseInt(db.getMeta('recheck.hour') || '0', 10) !== hour) { db.setMeta('recheck.hour', String(hour)); db.setMeta('recheck.hour_n', '0'); }
         const used = parseInt(db.getMeta('recheck.hour_n') || '0', 10);
         if (used >= capPerHour) return;
-        const items = rq.due({ limit: Math.min(2, capPerHour - used) });
-        if (!items.length) return;
+        // M9.3 — BATCHED SMALL VERIFIES: the cap counts PASSES (the spend unit); one-fact gaps
+        // (open questions, non-roster absences) share a pass up to BATCH_MAX, so gap throughput
+        // rises while spend does not. Roster/discrepancy/vacancy stay solo (per-subject contracts).
+        const passBudget = Math.min(2, capPerHour - used);
+        const plate = rq.due({ limit: 8 });
+        if (!plate.length) return;
+        const batchable = plate.filter((it) => rq.isBatchable(it));
+        const heavy = plate.filter((it) => !rq.isBatchable(it));
+        const passes = [];
+        if (batchable.length >= 2) passes.push({ batch: batchable.slice(0, rq.BATCH_MAX) });
+        for (const h of heavy) { if (passes.length >= passBudget) break; passes.push({ item: h }); }
+        if (batchable.length === 1 && passes.length < passBudget) passes.push({ item: batchable[0] });
+        if (!passes.length) return;
+        const nGaps = passes.reduce((a, p) => a + (p.batch ? p.batch.length : 1), 0);
         // Silence is ambiguous (the first live watch couldn't tell "no work" from "not running") —
         // announce the plate BEFORE the slow passes begin, and each pass as it starts.
-        console.log(`[metabolism] draining ${items.length} of ${rq.stats().dueNow} due (hour ${used}/${capPerHour})`);
-        for (const item of items) {
+        console.log(`[metabolism] draining ${nGaps} of ${rq.stats().dueNow} due in ${passes.length} pass(es) (hour ${used}/${capPerHour})`);
+        for (const p of passes.slice(0, passBudget)) {
           markActivity('metabolism');
           try {
-            const res = await runCloudOperator({ userMessage: rq.buildPrompt(item), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'interactive', budgetMult: 0.75 });
-            const out = rq.applyOutcome(item, res && res.answer ? String(res.answer) : '');
+            if (p.batch) {
+              const res = await runCloudOperator({ userMessage: rq.buildBatchPrompt(p.batch), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'interactive', budgetMult: 0.75 });
+              const verdicts = rq.parseBatchVerdicts(res && res.answer ? String(res.answer) : '', p.batch.length);
+              p.batch.forEach((item, i) => {
+                const v = verdicts[i];
+                // Reuse the single-item outcome router — a missing GAP line stays '' → deferred.
+                const single = v.verdict === 'resolved' ? `RESOLVED: ${v.line}` : v.verdict === 'unknown' ? `STILL-UNKNOWN: ${v.line}` : '';
+                const out = rq.applyOutcome(item, single);
+                console.log(`[metabolism] ${item.kind} "${String(item.subject).slice(0, 60)}" → ${out.action}${out.line ? ` — ${out.line.slice(0, 100)}` : ''} (batched ${i + 1}/${p.batch.length})`);
+              });
+            } else {
+              const item = p.item;
+              const res = await runCloudOperator({ userMessage: rq.buildPrompt(item), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'interactive', budgetMult: 0.75 });
+              const out = rq.applyOutcome(item, res && res.answer ? String(res.answer) : '');
+              console.log(`[metabolism] ${item.kind} "${String(item.subject).slice(0, 60)}" → ${out.action}${out.line ? ` — ${out.line.slice(0, 100)}` : ''}`);
+            }
             db.setMeta('recheck.hour_n', String(parseInt(db.getMeta('recheck.hour_n') || '0', 10) + 1));
-            console.log(`[metabolism] ${item.kind} "${String(item.subject).slice(0, 60)}" → ${out.action}${out.line ? ` — ${out.line.slice(0, 100)}` : ''}`);
-          } catch (e) { console.error('[metabolism] pass failed:', e.message); try { rq.defer(item.id, {}); } catch {} }
+          } catch (e) { console.error('[metabolism] pass failed:', e.message); try { for (const it of (p.batch || [p.item])) rq.defer(it.id, {}); } catch {} }
           finally { markActivity('idle'); }
         }
       } catch (e) { console.error('[metabolism] tick failed:', e.message); }
