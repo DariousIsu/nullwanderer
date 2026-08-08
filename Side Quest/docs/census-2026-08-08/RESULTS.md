@@ -135,6 +135,28 @@ Nearly every defect above reduces to three shared mechanisms — the same three 
 3. **Finished products are invisible** — no supersession in the ledger (B4), held deliverable not
    consulted (A5, A1's web detour). The work-contract spine's artifact registry is the cure.
 
+## Autonomous lanes — observation-window preliminary grades (2026-08-08, fresh45 session)
+
+Graded from directly observed behavior during the batch-1 window (not from assertions):
+- **F1 metabolism: WORKS-observed (drain cadence).** Due gaps drained repeatedly on cadence
+  ("draining 3 of 48/49/50 due", hour counter advancing 0→10/12), expired gaps swept into the
+  queue, absences resolved with content. Whether the TREND declines vs the 1,908 baseline needs the
+  daily trend line — partial grade.
+- **F6 news lane: WORKS-observed.** Feed polls every ~10min with real fetches (+1..+12 new over
+  120 fetched), hourly compression (+48/15 stories over 63 items), 2/2 worthy articles read,
+  topics classified. The 39-day staleness note from 08-03 is no longer current — feeds fetch live.
+- **F9 quota governance: WORKS-observed.** Tier gates fired exactly at their documented boundaries
+  all session (idle stops at 85%, directed stops at 97%; both observed deferring at 97-98% with
+  named reasons), and the self-true-up scrape refreshed the mark mid-window (98%→97% with new
+  compute-left numbers). Deferral PAUSED work (topical thread "not consumed") rather than faking
+  completion.
+- **F2 autonomy tick: partial.** Idle-tick cadence yielded to live conversation correctly (BUSY
+  30s), a rumination resolved without focus escalation. The move-mix (explore steps=0 defect,
+  engage grounding) needs a longer idle observation window.
+- Side observation for F-lane grading: at 97% quota the county-commissions web sweep (Kauai/Hawaii,
+  Sussex, Arapahoe PDFs + doc-cards + CRM writes) continued running during turns — verify which
+  tier bills that lane; if it rides "conversation" it evades the idle gate.
+
 ## Open scenario queue (Phase 2 remainder)
 
 - Conversation-tier (runnable now, 120s port cooldown between turns): A8 correction (design the
