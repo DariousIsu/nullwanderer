@@ -33,10 +33,11 @@ const IDLE_MS = 185000;          // past the port's 120s guard with margin
 const CASES = [
   {
     name: 'contacts-precedence',
-    born: '08-08 "Now identify every person…" → 849-row CRM dump (the massive failure)',
+    born: '08-08 "Now identify every person…" → 849-row CRM dump (the massive failure). 08-08 late: also proves ONE VOICE — the ack directive must reach the reply writer pre-reply (M5.6 was dead code; a cloud-muted early judgment fails this assertion, which is itself a real defect to see)',
     text: 'Add the contact people we hold for each parish council into the doc under their parish',
-    every: [/contacts route YIELDED|\[artifact-router\] intent=canvas_edit/, /\[canvas-cmd\] edit (applied|NOT applied|output REJECTED)/],
-    never: [/\[contacts-query\] .*on canvas/],
+    every: [/contacts route YIELDED|\[artifact-router\] intent=canvas_edit/, /\[canvas-cmd\] edit (applied|NOT applied|output REJECTED)/, /\[one-voice\] ack directive reached/],
+    never: [/\[contacts-query\] .*on canvas/, /\[one-voice\] verdict arrived post-reply/],
+    sayNever: [/i'?ll (?:pull|fetch|grab|get) (?:the|that|it) from|wikipedia|let me (?:search|look up)/i],   // the ack, not a narrated plan
   },
   {
     name: 'vague-edit-honesty',

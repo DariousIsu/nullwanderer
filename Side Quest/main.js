@@ -7228,19 +7228,26 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // product ledger exists to prevent. The judgment runs ONCE here; the router block below reuses
   // it instead of re-asking. A 'none' verdict, a prefilter miss, or a cloud mute leaves the
   // contacts route exactly as it was — precedence only ever yields to a CONFIDENT artifact intent.
+  // ONE VOICE, PART 1 (08-08 audit defect: M5.6 was DEAD CODE FROM BIRTH — the ack directive was
+  // appended by the late router ~1500 lines AFTER the reply was already written, so the reply
+  // writer never saw it and narrated its own promises over the door's work). The judgment now runs
+  // HERE — pre-reply — for EVERY prefilter-nominated turn, not only canvas-fresh ones; the ack
+  // directive itself is appended further down, once the status/stop/correction precedence flags are
+  // known (see ONE VOICE, PART 2), and the late router reuses this verdict to fire the doors.
   let _artifactVerdictEarly = null;
-  if (_workingCanvasFresh()) {
+  if (!/^(0|false|off)$/i.test(String(process.env.ZOE_ARTIFACT_ROUTER || '').trim())) {
     try {
       const ai = require('./lib/artifact_intent');
-      if (ai.prefilter(userMessage, { workingFresh: true })) {
+      const _freshEarly = _workingCanvasFresh();
+      if (ai.prefilter(userMessage, { workingFresh: _freshEarly })) {
         _artifactVerdictEarly = await require('./lib/cloud_logic').ask({
           task: 'artifact_intent', v: 1,
-          input: { message: String(userMessage).slice(0, 4000), workingDoc: db.getMeta('canvas.working_title') || '' },
-          want: ai.wantText({ workingFresh: true, workingTitle: db.getMeta('canvas.working_title') || '' }),
+          input: { message: String(userMessage).slice(0, 4000), workingDoc: _freshEarly ? (db.getMeta('canvas.working_title') || '') : '' },
+          want: ai.wantText({ workingFresh: _freshEarly, workingTitle: db.getMeta('canvas.working_title') || '' }),
           validate: ai.validate, numPredict: 180, think: false,
         });
         if (_artifactVerdictEarly && _artifactVerdictEarly.intent && _artifactVerdictEarly.intent !== 'none' && _contactsQ.isQuery) {
-          console.log(`[turn-router] contacts route YIELDED — the artifact session owns this turn (intent=${_artifactVerdictEarly.intent})`);
+          console.log(`[turn-router] contacts route YIELDED — the artifact intent owns this turn (intent=${_artifactVerdictEarly.intent})`);
           _contactsQ = { isQuery: false };
         }
       }
@@ -8703,6 +8710,19 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       speechHandled = true;
     }
   } catch (e) { console.error('[speech] lane failed:', e.message); }
+
+  // ONE VOICE, PART 2 (08-08): the ack directive for a confident artifact verdict, appended HERE —
+  // after the status/stop/expand/correction precedence flags are resolved and BEFORE the prompt is
+  // consumed — with gates IDENTICAL to the late router's door-firing guards, so the reply promises
+  // a door if and only if a door will actually fire. (Appending at judgment time raced the status
+  // gate: "status report" would have promised a report the statusHandled gate then blocked.)
+  let _artifactAckAppended = false;
+  if (_artifactVerdictEarly && _artifactVerdictEarly.intent && _artifactVerdictEarly.intent !== 'none'
+    && !followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled) {
+    composedUserMessage = `${composedUserMessage}\n\n[A deterministic door (${_artifactVerdictEarly.intent}) is handling this order and will report its own outcome — landed, rejected, or failed — in a separate message. Your reply: ONE short sentence acknowledging you're on it. Do NOT describe steps or sources, do NOT promise specifics, and do NOT claim anything landed — the door's report is the only truth about the outcome.]`;
+    _artifactAckAppended = true;
+    console.log(`[one-voice] ack directive reached the reply writer (intent=${_artifactVerdictEarly.intent})`);
+  }
 
   // BRAINSTORM LANE (active collaborator) — the middle gear. On a topical/`explore` turn, pull ONE grounded
   // bit into the reply as fuel for the riff, and (on `explore`) float a low-key project OFFER she can commit
@@ -10209,7 +10229,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // this turn's answer (statusHandled), no artifact door may ALSO fire — "status report" is a status
     // ask, and the router's model read the word "report" as an order and landed a "Report — status"
     // tab built from 8 arbitrary docs. A status-answered turn is by definition not an artifact order.
-    if (!followupFired && !statusHandled && !/^(0|false|off)$/i.test(String(process.env.ZOE_ARTIFACT_ROUTER || '').trim())) {
+    // Gates ALIGNED with the ONE VOICE PART 2 ack append (08-08): a door fires if and only if the
+    // reply promised it. stop/expand/correction-handled turns are owned by THOSE doors — an artifact
+    // door firing on top of them is the hijack class (census C2: a STOP order's "it is on your
+    // canvas" clause spawned an unordered create attempt).
+    if (!followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled
+      && !/^(0|false|off)$/i.test(String(process.env.ZOE_ARTIFACT_ROUTER || '').trim())) {
       try {
         const ai = require('./lib/artifact_intent');
         const _fresh = _workingCanvasFresh();
@@ -10237,11 +10262,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                 buildReportFromHeld({ io, channel, sessionId, userName, topic: verdict.subject || userMessage.slice(0, 120) })
                   .catch((e) => console.error('[artifact-router] report failed:', e.message));
               }
-              // M5.6 (2026-08-08, the promise-narration divergence): the replier answered "I'll pull
-              // the parish list from the Wikipedia page…" while the door was already executing with
-              // held data — two voices, one wrong. When a door owns the turn, the reply is an ACK,
-              // and the door's own relay is the only report of what happened.
-              composedUserMessage = `${composedUserMessage}\n\n[A deterministic door (${verdict.intent}) is EXECUTING this order right now and will report its own outcome — landed, rejected, or failed — in a separate message. Your reply: ONE short sentence acknowledging you're on it. Do NOT describe steps or sources, do NOT promise specifics, and do NOT claim anything landed — the door's report is the only truth about the outcome.]`;
+              // M5.6 RELOCATED (08-08 audit: appending the ack directive HERE was dead code from
+              // birth — composedUserMessage's last consumer runs ~1500 lines earlier and the reply
+              // is already written. The directive now reaches the reply writer via ONE VOICE PART 2
+              // (pre-consumer, same gates as this block). If the verdict was judged LATE (early
+              // judgment cloud-muted), the ack couldn't have been appended — log the gap honestly
+              // instead of pretending.)
+              if (!_artifactAckAppended) console.log(`[one-voice] verdict arrived post-reply (early judgment missed) — the reply did not carry the ack for intent=${verdict.intent}`);
               if (verdict.intent === 'pullup') {
                 let _phits = [];
                 try { _phits = require('./lib/product_ledger').searchProducts({ db, query: verdict.subject || userMessage, notesDir: filesLib.resolvePath('notes'), limit: 3 }); } catch {}
