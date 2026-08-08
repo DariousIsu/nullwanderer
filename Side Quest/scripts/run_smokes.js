@@ -317,6 +317,7 @@ const smokes = [
   'smoke_recheck_queue.js',
   'smoke_test_port.js',
   'smoke_work_coords.js',
+  'smoke_pathway_cadence.js',
   'smoke_artifact_intent.js',
   'smoke_rehearsal.js',
   'smoke_inquiry.js',

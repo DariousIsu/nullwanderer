@@ -59,6 +59,13 @@ const CASES = [
     every: [],
     never: [/\[canvas-cmd\]|\[pull-up\]|\[contacts-query\] .*on canvas|\[draw\] intercept/],
   },
+  {
+    name: 'contacts-no-session',
+    born: 'M7.3 second direction — a contacts ask must still reach the contacts judgment when no artifact session owns the turn (state-tolerant: a live session yielding is also correct)',
+    text: 'How many contacts do we hold with a phone number in Louisiana?',
+    every: [/\[contacts-query\]|contacts route YIELDED/],
+    never: [/\[canvas-cmd\] (edit applied|order executed)/],
+  },
 ];
 
 const get = (path) => new Promise((res, rej) => {

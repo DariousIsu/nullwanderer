@@ -13372,6 +13372,23 @@ function startAutonomicScheduler() {
     })().catch((e) => console.error('[graph-integrity] tick failed:', e && e.message));
   }, GRAPH_INTEGRITY_TICK_MS).unref?.();
   console.log('[graph-integrity] scheduler started (idle-tier, daily cap via meta graph_integrity.daily_cap)');
+  // M8.4 — THE SELF-TEST CADENCE (lib/pathway_cadence): the pathway suite runs itself nightly
+  // through the inside access port (02-06h ET, ≥30m idle, idle-tier quota clear, once per day);
+  // failures file capability_need rows (born_from pathway:<case> folds repeats). The child process
+  // drives POST /turn like any outside caller — what is tested is what runs.
+  const PATHWAY_TICK_MS = 60 * 60 * 1000;
+  setInterval(() => {
+    (async () => {
+      await require('./lib/pathway_cadence').tick({
+        getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v),
+        userIdleMs: () => Date.now() - (lastUserTurnTs || 0),
+        quotaAllow: () => require('./lib/quota_gate').allow('idle', { quiet: true }),
+        appDir: __dirname,
+        recordNeed: (need, o) => require('./lib/capability_need').record(need, o),
+      });
+    })().catch((e) => console.error('[pathway] tick failed:', e.message));
+  }, PATHWAY_TICK_MS).unref?.();
+  console.log('[pathway] nightly self-test cadence armed (02-06h ET, quota-governed, idle-gated; ZOE_PATHWAY_CADENCE=0 disables)');
 }
 try { global.__autonomicTick = () => autonomicSchedulerTick(); } catch {}           // inspector-driven validation
 
