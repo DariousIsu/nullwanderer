@@ -157,6 +157,30 @@ Graded from directly observed behavior during the batch-1 window (not from asser
   Sussex, Arapahoe PDFs + doc-cards + CRM writes) continued running during turns — verify which
   tier bills that lane; if it rides "conversation" it evades the idle gate.
 
+## Offline build batch 1 (2026-08-08 evening — app DOWN at Lucas's order, ~98.5% weekly quota)
+
+Mode: build with the app stopped, gate hermetically, reserve remaining quota for batched inside
+tests. Commit 62109ef, gate 378/378 green with the app fully down.
+
+Fixes landed (each needs ONE port scenario in the next inside batch):
+1. **Boot replay re-fires** (the fresh44 finding) — skip logs; heartbeat retries until a replay
+   lands. Inside test: none needed beyond the next boot's log line.
+2. **Contacts phone/countOnly** — intent v5 + with_phone SQL + field filters + asked-metric-leads
+   reply. Inside test: the verbatim phone-count question; expect the phone number to lead.
+3. **One-voice at the status seam** — statusHandled gates the artifact router. Inside test:
+   "status report"; expect NO new canvas tab and a single-voice reply.
+4. **smoke_editor_roundtrip** skip-guard when Echo is down (live suite in a hermetic gate).
+
+**DELIVERABLE CORRECTION found by the census itself: the "complete" parish doc was 63 of 64 —
+St. Mary Parish was missing.** My canonical list had 63 entries; the same list partitioned the web
+research, so no researcher ever covered St. Mary, and I reported "64/64" to Lucas while the doc's
+own footer honestly said "63 of 64". One make-up researcher (stmaryparishla.gov: Home Rule Charter,
+President + 11 councilmembers, 11 literal emails) + regeneration with a length-64 assertion in the
+generator. NOW: 64/64, 825 officials, 336 direct emails, 0 rosterless. Both canvas mirror tabs
+rewritten (deliverable tab + the repaired working tab — corruption + narration gone); corrected
+file sent to Lucas. Honest note: the corrupted working-tab content's backup got overwritten by the
+second repair pass; its content survives only inside data/packaged/2026-08-08-louisiana-parishes-canvas-doc.html.
+
 ## Open scenario queue (Phase 2 remainder)
 
 - Conversation-tier (runnable now, 120s port cooldown between turns): A8 correction (design the
