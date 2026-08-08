@@ -118,6 +118,8 @@ const T = 1785400000000;
   ok(/tangipahoa/i.test(digOne) && !/ouachita/i.test(digOne), 'a specific body name selects only its bodies');
   ok(cs.civicDigestFor('the positive benefits of data centers to power grids') === '', 'an unrelated topic digests EMPTY — zero noise');
   ok(cs.civicDigestFor('') === '' && cs.civicDigestFor('the of and for') === '', 'empty/stopword-only topics are empty, never a throw');
+  const digCapped = cs.civicDigestFor('parish leadership', { charBudget: 80 });
+  ok(/\(\+\d+ more matching/.test(digCapped) && !/…$/.test(digCapped), 'a budget drop keeps WHOLE lines and NAMES the count — never a silent mid-line cut');
 
   // --- fail-soft everywhere ---
   ok(cs.roster('nothing here').length === 0 && cs.history('x', 'y').length === 0, 'unknown bodies read back empty, never throw');

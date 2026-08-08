@@ -221,23 +221,31 @@ function heldRostersFor(text, { limit = 40, deps = {} } = {}) {
 // (a state-wide leadership report is exactly the class ask). An unrelated topic shares no tokens
 // and gets an empty digest — zero noise. Rendered bounded; the composer cites or ignores.
 const _DIGEST_STOP = new Set(['the', 'of', 'and', 'for', 'a', 'an', 'on', 'in', 'to', 'all', 'every', 'report', 'about', 'la']);
-function civicDigestFor(topic, { limit = 80, deps = {} } = {}) {
+// charBudget 40000: the report prompt's material window is 60000 and the digest rides FIRST — a
+// 61-parish class ask (~25k) must fit whole. The first cap (16k, a bare .slice) cut 61 bodies to
+// 28 MID-LINE and the composed report honestly reported the store as one-third its real size —
+// the silent-cap disease, caught on the first live drive. Now whole lines only, and a drop is
+// NAMED in the digest itself.
+function civicDigestFor(topic, { limit = 120, charBudget = 40000, deps = {} } = {}) {
   const toks = str(topic).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !_DIGEST_STOP.has(w));
   if (!toks.length) return '';
   let bodies = [];
   try { bodies = _db(deps).getDb().prepare(`SELECT DISTINCT body_key FROM civic_memberships WHERE superseded_by IS NULL`).all(); } catch { return ''; }
   const lines = [];
+  let used = 0, dropped = 0;
   for (const b of bodies) {
     const key = String(b.body_key);
     if (!toks.some((t) => key.includes(t))) continue;
     const rows = roster(key, { deps });
     if (!rows.length) continue;
     const named = rows.map((r) => `${r.person_name}${r.role && !/^member$/i.test(r.role) ? ` (${r.role})` : ''}`);
-    lines.push(`- ${key} — ${rows.length} member(s): ${named.join('; ')}`);
-    if (lines.length >= limit) break;
+    const line = `- ${key} — ${rows.length} member(s): ${named.join('; ')}`;
+    if (lines.length >= limit || used + line.length > charBudget) { dropped++; continue; }
+    lines.push(line); used += line.length + 1;
   }
   if (!lines.length) return '';
-  return `--- CIVIC STORE (live verified rosters held in civic_memberships — cite as "civic store"; these are CURRENT, verified officeholders) ---\n${lines.join('\n')}`.slice(0, 16000);
+  const dropNote = dropped ? `\n(+${dropped} more matching bod${dropped === 1 ? 'y' : 'ies'} held in the store but not shown — narrow the topic or query civic_memberships directly)` : '';
+  return `--- CIVIC STORE (live verified rosters held in civic_memberships — cite as "civic store"; these are CURRENT, verified officeholders) ---\n${lines.join('\n')}${dropNote}`;
 }
 
 // FRESH-HOT DEPTH (2026-08-08, the law's second half): a mention doesn't only warm the GAPS —
