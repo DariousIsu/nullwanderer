@@ -7980,9 +7980,26 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         orgs: (() => { try { return JSON.parse(db.getMeta(`focus.${fid}.enrich_orgs`) || '[]'); } catch { return []; } })(),
         deep: db.getMeta(`focus.${fid}.deep`) === '1'
       };
+      // RETRIEVAL-FIRST GUARD (08-08 census, A5 verbatim): "Give me the parish contact list" — with
+      // the finished list sitting on the canvas — was read by this net as a scope correction: the
+      // facet mutated and the reply announced a 6-8h research pivot on DONE work. A retrieve-verb +
+      // product-noun ask that matches a product we HOLD belongs to the pull-up door; the correction
+      // net may only judge when the stores hold nothing shaped like the ask.
+      let _heldProductAsk = false;
+      try {
+        const pl = require('./lib/product_ledger');
+        const loose = pl.detectAskLoose(userMessage);
+        if (loose) {
+          const phits = pl.searchProducts({ db, query: loose.subject, notesDir: filesLib.resolvePath('notes'), limit: 1 });
+          if (phits.length) {
+            _heldProductAsk = true;
+            console.log(`[correction] stood down — retrieval-shaped ask matches a HELD product (${phits[0].label}); the pull-up owns it, not a run mutation`);
+          }
+        }
+      } catch (e) { console.error('[correction] retrieval guard failed (net proceeds):', e.message); }
       const corr = require('./lib/correction');
-      const decision = await corr.classify(userMessage, { activeRun });
-      const plan = corr.applyPlan(decision, activeRun);
+      const decision = _heldProductAsk ? null : await corr.classify(userMessage, { activeRun });
+      const plan = decision ? corr.applyPlan(decision, activeRun) : { changed: false };
       if (plan.changed) {
         try {
           if (plan.changes.facet) db.setMeta(`focus.${fid}.enrich_facet`, plan.changes.facet);

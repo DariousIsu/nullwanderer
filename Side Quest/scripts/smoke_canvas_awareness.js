@@ -34,15 +34,32 @@ const mockDocs = (n) => [
   { source: 'canvas_drop', title: 'Borosilicate foam NTR', understanding: '' },                 // no gloss → title only
 ].slice(0, n);
 
-const block = CW.buildBlock({ deps: { recentDocuments: mockDocs }, userName: 'Lucas' });
+// hermetic: BOTH surfaces injected (the default canvasTabs reads the real durable mirror)
+const noTabs = () => [];
+const block = CW.buildBlock({ deps: { recentDocuments: mockDocs, canvasTabs: noTabs }, userName: 'Lucas' });
 ok(block && /ON YOUR CANVAS/.test(block), 'block: header present');
 ok(/dac23-pruek/.test(block) && /glass interposer/.test(block), 'block: a drop with its understanding gloss');
 ok(!/some-roster/.test(block), 'block: non-canvas_drop docs are excluded (only the canvas)');
 ok(/Borosilicate foam NTR/.test(block), 'block: a drop with no gloss still lists by title');
 ok(/do not say you don't have them/.test(block), 'block: carries the anti-refusal instruction');
 
-// ── empty state → null (nothing dropped) ─────────────────────────────────────────────────────────
-ok(CW.buildBlock({ deps: { recentDocuments: () => [] } }) === null, 'block: null when nothing is on the canvas');
+// ── THE BOARD ITSELF (08-08 census A6: 60 tabs live, she answered "couldn't pin down documents") ──
+// buildBlock must name the open tabs even when nothing was recently DROPPED.
+const mockTabs = () => [
+  { tabKey: 'promise-a', title: 'Louisiana Parishes — Government & Leadership', blocks: [{}] },
+  { tabKey: 'promise-b', title: 'Report — parish leadership of Louisiana', blocks: [{}] },
+  { tabKey: 'empty-shell', title: 'Empty shell tab', blocks: [] },   // no blocks → not a document
+];
+const tabBlock = CW.buildBlock({ deps: { recentDocuments: () => [], canvasTabs: mockTabs }, userName: 'Lucas' });
+ok(!!tabBlock && /TABS ON YOUR CANVAS/.test(tabBlock), 'tabs: board surfaced with no recent drops');
+ok(/Louisiana Parishes — Government & Leadership/.test(tabBlock), 'tabs: tab titles named');
+ok(!/Empty shell tab/.test(tabBlock), 'tabs: blockless shells excluded');
+ok(/never say you can't see your own board/.test(tabBlock), 'tabs: anti-blindness instruction carried');
+const bothBlock = CW.buildBlock({ deps: { recentDocuments: mockDocs, canvasTabs: mockTabs }, userName: 'Lucas' });
+ok(/TABS ON YOUR CANVAS/.test(bothBlock) && /dac23-pruek/.test(bothBlock), 'tabs+drops: both surfaces in one block');
+
+// ── empty state → null (nothing dropped, no tabs) ────────────────────────────────────────────────
+ok(CW.buildBlock({ deps: { recentDocuments: () => [], canvasTabs: noTabs } }) === null, 'block: null when nothing is on the canvas');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

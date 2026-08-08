@@ -76,6 +76,31 @@ function detectAsk(text) {
   return { subject };
 }
 
+/**
+ * detectAskLoose(text) → { subject } for a retrieve-verb + product-noun ask WITHOUT requiring the
+ * episodic anchor ("that/my/our…"). detectAsk's anchor keeps generic asks ("show me a list of good
+ * restaurants") from hijacking the pull-up door; but for GUARDS — "may this other net mutate state?"
+ * — the bar is different: "Give me the parish contact list" (08-08 census, A5) carried no anchor,
+ * matched a product we held, and still got read as a run-scope correction that pivoted the research.
+ * A guard pairs this with a store search: loose-detect + a real hit → the ask is about a held
+ * product, stand down. Loose-detect + no hit → proceed as before.
+ */
+function detectAskLoose(text) {
+  const t = str(text).trim();
+  if (!t) return null;
+  const nounRe = new RegExp(`\\b(?:${NOUN})\\b`, 'i');
+  if (!nounRe.test(t)) return null;
+  if (LEADS_BUILD.test(t)) return null;
+  if (ABOUT.test(t)) return null;
+  if (!RETRIEVE.test(t)) return null;
+  const m = t.match(new RegExp(`\\b(${NOUN})\\b\\s*(.*)$`, 'i'));
+  const lead = t.slice(0, m ? m.index : 0);
+  const subject = `${lead} ${m ? m[1] : ''} ${m ? m[2] : ''}`
+    .replace(/\b(?:can|could|would|you|please|give|me|show|pull|up|out|bring|open|display|find|get|the|a|an|that|this|my|our|of|for|on|about|with)\b/gi, ' ')
+    .replace(/[?.!]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return subject.length >= 4 ? { subject } : null;
+}
+
 // Significant search tokens from a subject phrase.
 function tokensOf(subject) {
   const STOP = new Set(['list', 'report', 'brief', 'briefing', 'dossier', 'document', 'documents', 'doc', 'docs', 'file', 'files', 'note', 'notes', 'table', 'tables', 'spreadsheet', 'spreadsheets', 'summary', 'memo', 'paper', 'papers', 'deliverable', 'deliverables', 'profile', 'profiles', 'roster', 'rosters', 'write-up', 'writeup', 'people', 'person', 'info', 'information', 'most', 'recent', 'latest', 'last', 'ten', 'top']);
@@ -138,7 +163,34 @@ function searchProducts({ db, query, notesDir = null, limit = 3, now = Date.now(
     }
   } catch { /* notes read is fail-soft */ }
   hits.sort((a, b) => b.score - a.score || b.ts - a.ts);
-  return hits.slice(0, Math.max(1, limit));
+  // SUPERSESSION (08-08 census, three stale-sibling wins in one batch): a finished product and its
+  // earlier draft carry near-identical titles, and token scoring let the DRAFT outrank the finished
+  // version ("report-parish-leadership-of-louisiana" beat the complete "louisiana-parishes-leadership"
+  // made 5 hours later — its head contained one extra weak token). Among hits whose significant title
+  // tokens substantially overlap, the NEWEST is the current version; older siblings become alternates
+  // behind it, never ahead of it. Clustering is title-based and conservative (stemmed Jaccard ≥ 0.6);
+  // genuinely different products keep their distinguishing tokens and stay unclustered.
+  const _stem = (w) => String(w).replace(/(?:es|s)$/, '');
+  const _titleToks = (h) => new Set(tokensOf(h.title || h.path || '').map(_stem).filter(Boolean));
+  const _jaccard = (a, b) => {
+    if (!a.size || !b.size) return 0;
+    let inter = 0; for (const x of a) if (b.has(x)) inter++;
+    return inter / (a.size + b.size - inter);
+  };
+  const top = hits.slice(0, 10).map((h) => ({ h, toks: _titleToks(h) }));
+  const clustered = [];
+  for (const cur of top) {
+    const home = clustered.find((c) => _jaccard(c.toks, cur.toks) >= 0.6);
+    if (home) home.members.push(cur.h);
+    else clustered.push({ toks: cur.toks, members: [cur.h] });
+  }
+  const reordered = [];
+  for (const c of clustered) {
+    c.members.sort((a, b) => b.ts - a.ts);   // newest sibling leads; drafts trail as alternates
+    reordered.push(...c.members);
+  }
+  reordered.push(...hits.slice(10));
+  return reordered.slice(0, Math.max(1, limit));
 }
 
-module.exports = { detectAsk, searchProducts, tokensOf };
+module.exports = { detectAsk, detectAskLoose, searchProducts, tokensOf };

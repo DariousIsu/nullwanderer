@@ -57,6 +57,26 @@ ok('notes files are found', hHits.some((h) => h.kind === 'note' && /hartfield/.t
 const miss = pl.searchProducts({ db, query: 'quarterly kraken sightings ledger', notesDir, limit: 3, now });
 ok('an unmade product honestly misses', miss.length === 0);
 
+// ── SUPERSESSION (08-08 census): the finished product outranks its own earlier draft ────────────
+// Live shape verbatim: the 9:01 AM "report-parish-leadership-of-louisiana" (whose body carried the
+// extra weak token "list") outscored the complete "louisiana-parishes-leadership" made at 1:57 PM.
+// Near-identical titles = one product line; the NEWEST version must lead, the draft trails.
+fs.writeFileSync(path.join(notesDir, 'report-parish-leadership-of-louisiana.md'),
+  '# Report — parish leadership of Louisiana\nA gap-analysis list of parish leadership…');
+fs.writeFileSync(path.join(notesDir, 'louisiana-parishes-leadership.md'),
+  '# Louisiana Parishes — Government & Leadership\nComplete rosters for all 64 parishes…');
+const early = now - 5 * 3600000, late = now - 300000;
+fs.utimesSync(path.join(notesDir, 'report-parish-leadership-of-louisiana.md'), early / 1000, early / 1000);
+fs.utimesSync(path.join(notesDir, 'louisiana-parishes-leadership.md'), late / 1000, late / 1000);
+const sib = pl.searchProducts({ db: { getDb: () => { throw new Error('notes only'); } }, query: 'Louisiana parish leadership list', notesDir, limit: 3, now });
+ok('sibling versions both found', sib.filter((h) => /parish/i.test(h.title)).length >= 2);
+ok('the NEWEST sibling leads (supersession)', sib.length && /louisiana-parishes-leadership\.md/.test(sib[0].path || ''));
+ok('the draft trails as an alternate, not ahead', sib.findIndex((h) => /report-parish-leadership/.test(h.path || '')) > 0);
+// different products with distinguishing tokens must NOT cluster (order still score-driven)
+fs.writeFileSync(path.join(notesDir, 'louisiana-energy-companies.md'), '# Louisiana energy companies\ncorporate list…');
+const dif = pl.searchProducts({ db: { getDb: () => { throw new Error('notes only'); } }, query: 'louisiana', notesDir, limit: 5, now });
+ok('distinct products stay unclustered', dif.some((h) => /energy/.test(h.path || '')) && dif.some((h) => /parishes-leadership/.test(h.path || '')));
+
 console.log(`smoke_product_ledger: ${pass} passed, ${fail} failed`);
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 process.exit(fail ? 1 : 0);

@@ -30,22 +30,43 @@ function recognize(userMessage) {
   return CANVAS_Q_RE.test(String(userMessage || ''));
 }
 
-// Build the grounding block from recent canvas drops. deps.recentDocuments(n) → doc rows (default lib/db).
-// Returns null when there's nothing to surface. Never throws.
-function buildBlock({ deps = {}, limit = 8, userName = 'Lucas' } = {}) {
+// Build the grounding block from recent canvas drops AND the board itself. deps.recentDocuments(n)
+// → doc rows (default lib/db); deps.canvasTabs() → durable-mirror tabs (default lib/canvas_docs).
+// Returns null only when BOTH surfaces are empty. Never throws.
+//
+// 08-08 census (A6): with 60 tabs live on the canvas, "what documents are sitting on your canvas
+// right now?" got "I couldn't pin down documents currently on the canvas" — recognize() fired, but
+// this builder only knew Lucas-DROPPED docs and returned null when no recent drop existed. The
+// board is not the drops: the durable mirror knows every tab by title, so surface it.
+function buildBlock({ deps = {}, limit = 8, tabLimit = 20, userName = 'Lucas' } = {}) {
   const recent = deps.recentDocuments || ((n) => { try { return require('./db').recentDocuments(n); } catch { return []; } });
   let rows = [];
-  try { rows = recent(60) || []; } catch { return null; }
+  try { rows = recent(60) || []; } catch { rows = []; }
   const drops = rows.filter((d) => d && d.source === 'canvas_drop').slice(0, Math.max(1, limit | 0));
-  if (!drops.length) return null;
-  const lines = drops.map((d) => {
+  const dropLines = drops.map((d) => {
     const title = String(d.title || 'untitled').replace(/\s+/g, ' ').trim().slice(0, 80);
     const gloss = String(d.understanding || '').replace(/\s+/g, ' ').trim().slice(0, 160);
     return gloss ? `  • "${title}" — ${gloss}` : `  • "${title}"`;
   });
-  return `ON YOUR CANVAS — documents ${userName} recently dropped for you (you have already read and`
-    + ` decomposed these into your memory; speak about them directly, do not say you don't have them):\n`
-    + lines.join('\n');
+  let tabs = [];
+  try {
+    const all = (deps.canvasTabs || (() => { const cd = require('./canvas_docs'); cd.init(); return cd.all(); }))() || [];
+    tabs = all.filter((t) => t && (t.blocks || []).length).slice(-Math.max(1, tabLimit | 0)).reverse()
+      .map((t) => String(t.title || t.tabKey || 'untitled').replace(/\s+/g, ' ').trim().slice(0, 90));
+  } catch { tabs = []; }
+  if (!dropLines.length && !tabs.length) return null;
+  const parts = [];
+  if (tabs.length) {
+    parts.push(`TABS ON YOUR CANVAS right now (most recent first, from your durable board — name them`
+      + ` directly when ${userName} asks what's on the canvas; never say you can't see your own board):\n`
+      + tabs.map((t) => `  • ${t}`).join('\n'));
+  }
+  if (dropLines.length) {
+    parts.push(`ON YOUR CANVAS — documents ${userName} recently dropped for you (you have already read and`
+      + ` decomposed these into your memory; speak about them directly, do not say you don't have them):\n`
+      + dropLines.join('\n'));
+  }
+  return parts.join('\n\n');
 }
 
 module.exports = { recognize, buildBlock, CANVAS_Q_RE };
