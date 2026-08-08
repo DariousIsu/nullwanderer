@@ -11398,8 +11398,12 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
       // 'research' (45% of pace). In-turn user replies stay interactive (never throttled). This is
       // where the beats' 400k+/h ungated burn actually flowed; a deferral reads as a cloud-miss to
       // the fail-soft pass and the thread resumes when pace recovers.
-      // An explicit lane wins (the metabolism floor passes 'interactive' — protected from the
-      // governor by construction, bounded by its own hourly cap); else the autonomous default.
+      // An explicit lane wins; else the autonomous default (directed if a user task is live, else
+      // research). NOTE (08-08): metabolism used to pass 'interactive' here to sit above the gate —
+      // that was the quota-tier hole (it crawled counties + wrote CRM rows at 99% of an empty pool
+      // while every governed tier deferred). It now passes 'research' (stops at 90%, above idle),
+      // so NO autonomous caller reaches this with 'interactive'. Interactive stays reserved for
+      // Lucas typing; an autonomous lane is never ungated.
       lane: lane !== undefined ? lane : (autonomous ? (_userDirectedActive() ? 'directed' : 'research') : undefined),
     });
     // GROWTH — "Zoe" IS the memory, not the model: the operator only grows her if what it gathers
