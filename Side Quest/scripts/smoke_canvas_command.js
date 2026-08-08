@@ -51,6 +51,11 @@ ok('create: narration with empty cur rejected', !!rejectEditOutput('Let me check
 ok('isNarration: process talk true', isNarration("I'll gather the sources and then write the section."));
 ok('isNarration: a real section false', !isNarration('## Acadia Parish\nThe police jury has 8 members (source: appj.org).'));
 ok('isNarration: empty false', !isNarration('') && !isNarration(null));
+// isDeliberation — the narrow half, for legitimately first-person surfaces (the byline essay).
+const { isDeliberation } = require(path.join(__dirname, '..', 'lib', 'canvas_command'));
+ok('isDeliberation: "let me check" true', isDeliberation('The argument stands. Let me check the notes before finishing.'));
+ok('isDeliberation: first-person essay opener false', !isDeliberation('I want to talk about why housing policy fails renters. The evidence is everywhere.'));
+ok('isDeliberation: empty false', !isDeliberation('') && !isDeliberation(null));
 
 // ── pendingSubjects: the blanks BECOME the plan (08-08) ─────────────────────────────────────────
 const { pendingSubjects } = require(path.join(__dirname, '..', 'lib', 'canvas_command'));

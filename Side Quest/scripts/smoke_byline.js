@@ -60,6 +60,14 @@ function mockDeps(over = {}) {
   ok('fallback first line', (() => { const r = byline.parseDraft('Just a line\nand more'); return r.title === 'Just a line' && /and more/.test(r.body); })());
   ok('strips stray tags', !/[<>]/.test(byline.parseDraft('<think>x</think>Title: Clean\n\nbody').title));
 
+  console.log('\nrejectDraft (payload contract — the PUBLIC door, M6.3):');
+  const essay = 'I want to talk about why housing policy fails renters. The evidence is everywhere, and the argument is simple: supply is policy.';
+  ok('a real first-person essay passes', byline.rejectDraft('A Real Title', essay) === null);
+  ok('thin body rejected', /thin/.test(byline.rejectDraft('T', 'too short') || ''));
+  ok('mid-work deliberation rejected', /deliberation/.test(byline.rejectDraft('T', 'This piece matters. Let me check the notes and gather more sources before I finish.') || ''));
+  ok('AI boilerplate rejected', /as an AI/i.test(byline.rejectDraft('T', 'As an AI language model, I think housing policy is complicated and multifaceted in many ways.') || ''));
+  ok('prompt-scaffolding echo rejected', /scaffold/.test(byline.rejectDraft('T', 'Here is my piece on the topic. (no notes gathered) But the argument still stands on its own merits.') || ''));
+
   console.log('\nnextDraftPath (versioning, injected existsFn):');
   ok('no existing → base', byline.nextDraftPath('my-slug', () => false) === 'drafts/my-slug.md');
   ok('base exists → -v2', byline.nextDraftPath('my-slug', p => p === 'drafts/my-slug.md') === 'drafts/my-slug-v2.md');
@@ -92,7 +100,7 @@ function mockDeps(over = {}) {
   byline.set('publish');
   db.setMeta('byline_title', 'Piece Two');
   db.setMeta('byline_draft_path', 'drafts/topic-two.md');
-  m2.files._fs['drafts/topic-two.md'] = '# Piece Two\n\nthe body of piece two here.';
+  m2.files._fs['drafts/topic-two.md'] = '# Piece Two\n\nthe body of piece two here, long enough to clear the payload contract minimum.';
   let surfaced = null;
   r = await byline.runTick({ deps: m2.deps, onReading: (c) => { surfaced = c; } });
   ok('publish blocked → stays publish', r.stage === 'publish' && !r.ok && r.blocker === 'login' && byline.active() && byline.get() === 'publish');
@@ -105,6 +113,28 @@ function mockDeps(over = {}) {
   await byline.runTick({ deps: m3.deps });                 // research → read
   r = await byline.runTick({ deps: m3.deps });             // read source 0 → blocked
   ok('blocked source skipped, read_idx advances', r.stage === 'read' && r.ok && r.blocker === 'cloudflare' && parseInt(db.getMeta('byline_read_idx'), 10) === 1);
+  byline.reset();
+
+  console.log('\nwrite-stage contract (deliberation draft never lands):');
+  const m5 = mockDeps({ streamChat: async ({ onToken }) => { onToken('Title: A Piece\n\nLet me check my research notes and gather a few more sources before I write this properly.'); } });
+  byline.start('topic five');
+  byline.set('write');
+  m5.files._fs['notes/byline_topic-five.md'] = '# Notes\nsome notes';
+  db.setMeta('byline_notes_path', 'notes/byline_topic-five.md');
+  r = await byline.runTick({ deps: m5.deps });
+  ok('deliberation draft rejected, stays write', r.stage === 'write' && !r.ok && /deliberation/.test(r.note) && byline.get() === 'write');
+  ok('no draft file written', !Object.keys(m5.files._fs).some(p => /^drafts\//.test(p)));
+  byline.reset();
+
+  console.log('\npublish-stage recheck (bad draft FILE goes back to write, never to Substack):');
+  const m6 = mockDeps();
+  byline.start('topic six');
+  byline.set('publish');
+  db.setMeta('byline_title', 'Piece Six');
+  db.setMeta('byline_draft_path', 'drafts/topic-six.md');
+  m6.files._fs['drafts/topic-six.md'] = '# Piece Six\n\nAs an AI language model, I will now check the sources and gather what I need for this piece.';
+  r = await byline.runTick({ deps: m6.deps });
+  ok('bad draft file → back to write, recipe NOT run', r.stage === 'publish' && !r.ok && byline.get() === 'write' && m6.calls.recipes.length === 0);
   byline.reset();
 
   console.log('\nstrikes (no sources 3x → pipeline resets):');

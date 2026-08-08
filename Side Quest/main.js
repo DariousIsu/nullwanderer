@@ -1805,6 +1805,9 @@ app.whenReady().then(() => {
             // grounded cloud UNDERSTANDING (fail-safe to the raw doc if the cloud is down)
             let understanding = '';
             try { understanding = await condenseComplete(ci.buildUnderstandingPrompt({ title: label, markdown }), { numPredict: 600 }); } catch {}
+            // M6.3 payload contract: recall consumes the understanding as grounded — process talk
+            // falls back to the raw doc (the same path as cloud-down).
+            try { if (understanding && require('./lib/canvas_command').isNarration(understanding)) { console.warn(`[canvas-ingest] "${label}" understanding REJECTED (narration) — raw doc stands`); understanding = ''; } } catch {}
             const note = ci.ingestNote({ title: label, understanding, markdown });
             // LAND the FULL document durably in the short-term store (survives engine/app restart, unlike
             // the in-memory canvas) so doc-QA + recall work even after the canvas clears. Idempotent on tab.
@@ -11829,7 +11832,12 @@ async function autonomyTick() {
         // between touches because the run's answer text had no home. A substantial answer lands as
         // a doc: recallable, promotable, and the close can point at the real data.
         try {
-          if (String(res.answer).length > 800) {
+          // M6.3 payload contract: recall consumes landed docs as GROUNDED — a narrated run
+          // ("Let me check…") must not become a findings document. Write-back still proceeds;
+          // only the doc landing is withheld.
+          if (String(res.answer).length > 800 && require('./lib/canvas_command').isNarration(res.answer)) {
+            console.log(`[autonomy] inquiry #${inqId} touch findings NOT landed — answer is narration, not findings (${String(res.answer).length}ch)`);
+          } else if (String(res.answer).length > 800) {
             const tl = require('./lib/doc_store').land({
               title: `Inquiry #${inqId} touch ${row.touches + 1} — ${String(row.question).slice(0, 70)}`,
               body: String(res.answer), source: 'inquiry', ref: `inquiry-${inqId}-t${row.touches + 1}`,
@@ -11990,6 +11998,12 @@ async function autonomyTick() {
                     autonomous: true,
                   });
                   study = String((sp && sp.answer) || '').trim().slice(0, 2500);
+                  // M6.3 payload contract: the prompt demands sources; a study with no URL, or one
+                  // that is process narration, is not a study — the honest unstudied path stands.
+                  if (study && (require('./lib/canvas_command').isNarration(study) || !/https?:\/\//.test(study))) {
+                    console.log(`[autonomy] need #${need.id} study REJECTED (${/https?:\/\//.test(study) ? 'narration' : 'no source URLs'}) — opening unstudied`);
+                    study = '';
+                  }
                 } catch (e) { console.error('[autonomy] study pass failed:', e.message); }
                 finally { try { require('./lib/board').release(studySlot); } catch {} }
                 if (study) {
@@ -12041,7 +12055,12 @@ async function autonomyTick() {
       const _rehearseResearch = (q) => runCloudOperator({
         userMessage: `RESEARCH ONLY — do not build anything. ${String(q).slice(0, 200)}. Search the web / your own stores and READ what you find (never run it). Reply in at most 1000 chars: what you learned + source URLs.`,
         autonomous: true,
-      }).then((sp) => String((sp && sp.answer) || ''));
+      }).then((sp) => {
+        const a = String((sp && sp.answer) || '');
+        // M6.3: narration is not a finding — hand the driver an honest empty, not process talk.
+        if (a && require('./lib/canvas_command').isNarration(a)) { console.log('[autonomy] rehearse research answer REJECTED (narration) — treated as no finding'); return ''; }
+        return a;
+      });
       try { r = await driver.iterate({ deps: { research: _rehearseResearch } }); } catch (e) { console.error('[autonomy] rehearse iterate failed:', e.message); }
       try { require('./lib/board').finish(boardId, { status: r && r.ok ? 'done' : 'failed', note: String((r && r.note) || 'iterate threw').slice(0, 160) }); } catch {}
       try { require('./lib/board').release(slot); } catch {}
@@ -14228,6 +14247,14 @@ async function composeDocument(focus, { goal = '', sections = [], completed = 'd
         { numPredict: 1800 }
       );
     } catch (e) { console.error('[compose] paper front matter failed (dossier shape stands):', e.message); }
+    // M6.3 payload contract: front matter is a formal abstract — first-person process talk means
+    // the model narrated instead of composing. Reject → the honest dossier-shape fallback below.
+    try {
+      if (front && require('./lib/canvas_command').isNarration(front)) {
+        console.warn('[compose] paper front matter REJECTED (narration, not front matter) — dossier shape stands');
+        front = '';
+      }
+    } catch {}
     let finalMd = (front && front.trim().length > 80)
       ? cp.assemblePaper({ goal, front, planPage, composedBody, gaps: gapLines.join('\n'), completed, count: secs.length })
       : cp.assembleFinal({ goal, planPage, composedBody, gaps: gapLines.join('\n'), completed, count: secs.length });

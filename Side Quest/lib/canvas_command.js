@@ -104,6 +104,14 @@ function isNarration(text) {
   return !!out && (NARRATION_OPEN.test(out) || NARRATION_BODY.test(out));
 }
 
+/** isDeliberation(text) → the narrow half of isNarration, for surfaces whose VOICE is
+ * legitimately first-person (the byline essay): "I want to talk about X" is an essay opener,
+ * "let me check the notes" never is. Tests deliberation markers ANYWHERE, skips the opener net. */
+function isDeliberation(text) {
+  const out = str(text).trim();
+  return !!out && NARRATION_BODY.test(out);
+}
+
 function rejectEditOutput(md, cur, order) {
   const out = str(md).trim();
   if (!out) return 'empty output';
@@ -144,4 +152,4 @@ function pendingSubjects(md) {
   return out;
 }
 
-module.exports = { detect, detectEdit, rejectEditOutput, isNarration, pendingSubjects };
+module.exports = { detect, detectEdit, rejectEditOutput, isNarration, isDeliberation, pendingSubjects };

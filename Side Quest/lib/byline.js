@@ -107,6 +107,23 @@ function nextDraftPath(slugStr, existsFn) {
 
 function _sources() { try { return JSON.parse(db.getMeta('byline_sources') || '[]'); } catch { return []; } }
 
+// Draft payload contract (M6.3, 2026-08-08): this pipeline publishes PUBLIC under her byline
+// with no human gate, so a bad model output must die at write time, never on Substack. The full
+// canvas_command.isNarration would false-positive here — an essay legitimately opens first-person
+// ("I want to talk about…") — so we reject only what NEVER belongs in a finished essay:
+// mid-work deliberation, AI boilerplate, and prompt-scaffolding echo.
+const AI_BOILERPLATE = /\bas an? (?:ai|large language model|language model|assistant)\b/i;
+const PROMPT_ECHO = /\(no notes gathered\)|^your research notes\s*:/im;
+function rejectDraft(title, body) {
+  const b = String(body || '').trim();
+  if (!b || b.length < 40) return 'draft too thin';
+  const cc = require('./canvas_command');
+  if (cc.isDeliberation(b) || cc.isDeliberation(title)) return 'draft contains mid-work deliberation, not a finished essay';
+  if (AI_BOILERPLATE.test(b)) return 'draft speaks as an AI, not her byline';
+  if (PROMPT_ECHO.test(b)) return 'draft echoes the prompt scaffolding';
+  return null;
+}
+
 // --- default dependency wiring (real subsystems) ---
 function defaultDeps() {
   return {
@@ -177,7 +194,8 @@ async function stepWrite(d, ctx, surface) {
     await d.streamChat({ model: d.MODEL, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], options: { temperature: 0.8, top_p: 0.95, num_ctx: 8192, num_predict: 900 }, onToken: (t) => { out += t; } });
   } catch (e) { const g = _strike(); return { stage: 'write', ok: false, note: `model write failed: ${e.message}${g ? ' (pipeline reset)' : ''}` }; }
   const { title, body } = parseDraft(out);
-  if (!body || body.length < 40) { const g = _strike(); return { stage: 'write', ok: false, note: `draft too thin${g ? ' (pipeline reset)' : ''}` }; }
+  const rej = rejectDraft(title, body);
+  if (rej) { const g = _strike(); return { stage: 'write', ok: false, note: `draft rejected: ${rej}${g ? ' (pipeline reset)' : ''}` }; }
   const existsFn = (p) => { try { const r = d.files.fileRead(p); return !!(r && r.ok); } catch { return false; } };
   const path = nextDraftPath(slug(), existsFn);
   const full = `# ${title || tp}\n\n${body}\n`;
@@ -197,6 +215,14 @@ async function stepPublish(d, ctx, surface) {
   if (!draft) { const g = _strike(); return { stage: 'publish', ok: false, note: `draft missing at ${path}${g ? ' (pipeline reset)' : ''}` }; }
   // Strip a leading "# Title" line from the body we paste (the recipe fills title separately).
   const body = draft.replace(/^#\s+.+\n+/, '').trim();
+  // Last gate before the PUBLIC door: recheck the draft FILE (it may predate the contract or have
+  // been touched since write). A bad draft goes back to write for a regeneration, never to Substack.
+  const rej = rejectDraft(title, body);
+  if (rej) {
+    const g = _strike();
+    if (!g) set('write');
+    return { stage: 'publish', ok: false, note: `draft failed the payload contract (${rej}) — back to write${g ? ' (pipeline reset)' : ''}` };
+  }
   const res = await d.web.runRecipe('substack_publish', { title, body }, { expectLogin: true });
   if (res && res.blocker && res.blocker.needsHuman) {
     surface(`I'm ready to publish "${title}" but Substack wants a login (${res.blocker.type}). ${ctx.userName || 'Lucas'}, can you log me in? I'll publish the moment it's clear.`, `(byline: publish blocked) ${res.blocker.type}`, null);
@@ -224,7 +250,7 @@ async function runTick(ctx = {}) {
 module.exports = {
   STAGES, get, set, active, start, reset, topic, slug, draftPath, runTick,
   // pure helpers exported for tests
-  slugify, detectStart, parseDraft, nextDraftPath,
+  slugify, detectStart, parseDraft, nextDraftPath, rejectDraft,
   // stage runners exported for tests
   stepResearch, stepRead, stepWrite, stepPublish, defaultDeps
 };
