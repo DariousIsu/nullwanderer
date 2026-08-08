@@ -84,6 +84,49 @@ ok('serveArgs targets echo.main serve http', args.join(' ') === '-m echo.main se
   await s4.ensure();
   ok('ADOPT path starts NO sidecars', s4.status().adopted === true && Object.keys(s4.status().sidecars).length === 0);
 
+  // ── THE ZOMBIE-RESPAWN LOOP (08-08 fresh46: 11+ duplicate spawns around a healthy engine) ──────
+
+  // (a) child exits while the port is HEALTHY → adopt the holder, do NOT respawn
+  let zSpawns = 0, zExit = null;
+  const zSpawn = () => { zSpawns++; return { pid: 500 + zSpawns, on(ev, fn) { if (ev === 'exit') zExit = fn; }, kill() {}, killed: false }; };
+  global.fetch = async () => { throw new Error('down'); };            // port down → spawn path
+  const z1 = new E.EngineSupervisor({ cwd: 'x', spawnFn: zSpawn, startSidecars: false });
+  const zr = await z1.ensure({ bootTimeoutMs: 10 });                  // spawns, never healthy → 'failed'
+  ok('setup: spawn attempted while down', zSpawns === 1 && zr.state === 'failed');
+  global.fetch = async () => ({ ok: true });                          // NOW someone serves the port
+  zExit(1);                                                           // our child dies (bind-race loss)
+  await new Promise(r => setTimeout(r, 30));                          // let the async probe settle
+  ok('exit + port healthy → ADOPT, no respawn', z1.status().adopted === true && z1.status().owned === false && zSpawns === 1, `spawns=${zSpawns}`);
+
+  // (b) child exits while the port is DOWN → the respawn path still works (backoff ~1s)
+  let dSpawns = 0, dExit = null;
+  const dSpawn = () => { dSpawns++; return { pid: 600 + dSpawns, on(ev, fn) { if (ev === 'exit') dExit = fn; }, kill() {}, killed: false }; };
+  global.fetch = async () => { throw new Error('down'); };
+  const z2 = new E.EngineSupervisor({ cwd: 'x', spawnFn: dSpawn, startSidecars: false });
+  await z2.ensure({ bootTimeoutMs: 10 });
+  dExit(1);
+  await new Promise(r => setTimeout(r, 1200));                        // nextBackoff(0)=1000ms
+  ok('exit + port down → respawn proceeds', dSpawns >= 2, `spawns=${dSpawns}`);
+  z2._shuttingDown = true;                                            // stop further respawns
+
+  // (c) health passed but OUR child already died → the health is someone else's: adopt, no fleet
+  let cSpawns = 0;
+  const cSpawn = () => { cSpawns++; return { pid: 700, exitCode: 1, on() {}, kill() {}, killed: false }; };
+  let probes = 0;
+  global.fetch = async () => { probes++; if (probes === 1) throw new Error('down'); return { ok: true }; };
+  const z3 = new E.EngineSupervisor({ cwd: 'x', spawnFn: cSpawn });   // sidecars ON — must still not start
+  const cr = await z3.ensure();
+  ok('dead child at health-pass → adopted (not "spawned")', cr.state === 'adopted', cr.state);
+  ok('dead child at health-pass → no sidecar fleet', Object.keys(z3.status().sidecars).length === 0);
+
+  // (d) single-flight: concurrent ensure() calls share one probe/spawn
+  let fSpawns = 0;
+  const fSpawn = () => { fSpawns++; return { pid: 800, on() {}, kill() {}, killed: false }; };
+  global.fetch = async () => { await new Promise(r => setTimeout(r, 20)); throw new Error('down'); };
+  const z4 = new E.EngineSupervisor({ cwd: 'x', spawnFn: fSpawn, startSidecars: false });
+  const [r1, r2] = await Promise.all([z4.ensure({ bootTimeoutMs: 10 }), z4.ensure({ bootTimeoutMs: 10 })]);
+  ok('concurrent ensure() → ONE spawn (single-flight)', fSpawns === 1 && r1 === r2, `spawns=${fSpawns}`);
+
   global.fetch = realFetch;
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

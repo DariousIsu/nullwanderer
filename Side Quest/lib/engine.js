@@ -99,7 +99,16 @@ class EngineSupervisor {
   }
 
   // Adopt a running engine if present; else spawn + wait for health.
+  // SINGLE-FLIGHT (08-08 fresh46): two concurrent ensure() callers both probed a not-yet-up port
+  // and both spawned — the loser of the bind race exited code 1 and seeded the respawn loop below.
   async ensure({ spawnIfDown = true, bootTimeoutMs = 45000 } = {}) {
+    if (this._ensuring) return this._ensuring;
+    this._ensuring = this._ensureInner({ spawnIfDown, bootTimeoutMs })
+      .finally(() => { this._ensuring = null; });
+    return this._ensuring;
+  }
+
+  async _ensureInner({ spawnIfDown, bootTimeoutMs }) {
     const healthy = await probeHealth();
     const action = decideAction(healthy, { spawnIfDown });
     if (action === 'adopt') {
@@ -124,6 +133,17 @@ class EngineSupervisor {
     this.child.on('exit', (code) => this._onExit(code));
     const ok = await waitHealthy({ timeoutMs: bootTimeoutMs });
     if (!ok) { this.onLog('engine: spawned but never became healthy'); return { state: 'failed', pid: this.child && this.child.pid }; }
+    // WHO answered? (08-08 fresh46 zombie loop): a duplicate spawn lost the bind race and DIED,
+    // but the health probe passed because the OTHER engine answered — so this logged "spawned +
+    // healthy" for a dead child, and its exit re-triggered a respawn, 11+ cycles around a healthy
+    // service. If our child has already exited by the time health passes, the health is someone
+    // else's: ADOPT them instead of claiming the corpse. (exitCode: null while running; loose !=
+    // so an injected fake child without the field still reads as alive.)
+    if (this.child && this.child.exitCode != null) {
+      this.adopted = true; this.owned = false;
+      this.onLog(`engine: our spawn exited (code ${this.child.exitCode}) but :${this.port} is healthy — an existing engine holds the port; adopting it`);
+      return { state: 'adopted', pid: null };
+    }
     this.onLog(`engine: spawned + healthy (pid ${this.child.pid})`);
     if (this.startSidecars) this._startSidecars();   // owned engine → bring up the agent fleet
     return { state: 'spawned', pid: this.child.pid };
@@ -164,13 +184,24 @@ class EngineSupervisor {
 
   _onExit(code) {
     if (this._shuttingDown || !this.owned) return;
-    const now = Date.now();
-    this._restarts = this._restarts.filter(t => now - t < 60000);
-    this._restarts.push(now);
-    if (this._restarts.length > 5) { this.onLog('engine: >5 restarts in 60s — giving up (backoff window tripped)'); return; }
-    const delay = nextBackoff(this._restarts.length - 1);
-    this.onLog(`engine: exited (code ${code}) — restarting in ${delay}ms (attempt ${this._restarts.length})`);
-    setTimeout(() => { if (!this._shuttingDown) this._spawn(45000); }, delay);
+    // THE CYCLE-BREAKER (08-08 fresh46): before respawning, ask whether the port is ALREADY served.
+    // If it is, our exit was a bind-race loss (or the service was taken over) — respawning here just
+    // mints another loser and the loop never ends. Adopt the healthy holder and stand down.
+    probeHealth().then((healthy) => {
+      if (this._shuttingDown || !this.owned) return;
+      if (healthy) {
+        this.adopted = true; this.owned = false; this.child = null;
+        this.onLog(`engine: our child exited (code ${code}) but :${this.port} is HEALTHY — an existing engine holds the port; adopting, not respawning`);
+        return;
+      }
+      const now = Date.now();
+      this._restarts = this._restarts.filter(t => now - t < 60000);
+      this._restarts.push(now);
+      if (this._restarts.length > 5) { this.onLog('engine: >5 restarts in 60s — giving up (backoff window tripped)'); return; }
+      const delay = nextBackoff(this._restarts.length - 1);
+      this.onLog(`engine: exited (code ${code}) — restarting in ${delay}ms (attempt ${this._restarts.length})`);
+      setTimeout(() => { if (!this._shuttingDown) this._spawn(45000); }, delay);
+    }).catch(() => {});
   }
 
   // Tree-kill ONLY what we spawned (never an adopted external engine).

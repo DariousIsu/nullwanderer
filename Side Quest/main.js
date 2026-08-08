@@ -1387,11 +1387,25 @@ app.whenReady().then(() => {
     // this chain only ever ran once — a skipped replay must LOG, and the heartbeat below owns the
     // retry until one replay actually lands.
     let canvasReplayDone = false;
+    let replayEnginePid = null;   // WHICH engine holds the replayed board (fresh46: a respawned engine starts blank)
+    const engineHealthPid = async () => {
+      try {
+        const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 2500);
+        const r = await fetch(require('./lib/engine').HEALTH_URL, { signal: ac.signal }); clearTimeout(t);
+        if (!r.ok) return null;
+        const j = await r.json();
+        return (j && Number.isFinite(j.pid)) ? j.pid : null;
+      } catch { return null; }
+    };
     const replayBoardOnce = async (via) => {
       if (canvasReplayDone) return;
       try {
         const tabs = await replayCanvasFromStore();
-        if (tabs > 0) { canvasReplayDone = true; if (via) console.log(`[canvas] board replay landed via ${via}`); }
+        if (tabs > 0) {
+          canvasReplayDone = true;
+          replayEnginePid = await engineHealthPid();
+          if (via) console.log(`[canvas] board replay landed via ${via}${replayEnginePid ? ` (engine pid ${replayEnginePid})` : ''}`);
+        }
         else console.log(`[canvas] board replay pending (${via}) — engine not ready or mirror empty, heartbeat will retry`);
         rehydrateRecentCanvasDeliverables().catch(() => {});
       } catch (e) { console.error('[canvas] board replay failed:', e.message); }
@@ -1412,7 +1426,21 @@ app.whenReady().then(() => {
     // the next beat re-attaches and refreshes the status light) — and finishes the board replay if
     // boot never got one in.
     const iv = setInterval(() => {
-      if (!echoSuit || echoSuit.connected) { if (echoSuit && echoSuit.connected && !canvasReplayDone) replayBoardOnce('heartbeat').catch(() => {}); return; }
+      if (!echoSuit || echoSuit.connected) {
+        if (!echoSuit || !echoSuit.connected) return;
+        if (!canvasReplayDone) { replayBoardOnce('heartbeat').catch(() => {}); return; }
+        // RE-ARM on engine identity change (fresh46 finding): the replay latch outlived the engine —
+        // a respawned engine starts with a BLANK board and no one ever replayed it. Once a minute,
+        // compare the serving pid to the one we replayed into; a new pid = a new empty engine.
+        engineHealthPid().then((pid) => {
+          if (pid && replayEnginePid && pid !== replayEnginePid) {
+            console.log(`[canvas] engine identity changed (pid ${replayEnginePid} → ${pid}) — board replay re-armed`);
+            canvasReplayDone = false; replayEnginePid = null;
+            return replayBoardOnce('engine-respawn');
+          }
+        }).catch(() => {});
+        return;
+      }
       tryEchoAttach().then((ok) => { if (ok) return replayBoardOnce('reattach'); }).catch(() => {});
     }, 60 * 1000);
     iv.unref?.();
@@ -2207,8 +2235,10 @@ app.whenReady().then(() => {
   // (+ CONVERSATION WARMING can kick a drain between ticks via global.__kickMetabolism — the
   // codebase's cross-scope carrier pattern, same as global.__researchUsage; cap still governs)
   // items — each a bounded verification pass on gemma4:31b-cloud (Lucas: per-compute pricing makes
-  // the 31b nearly free; local is deliberately cold). lane:'interactive' = the governor never
-  // gates it (the FLOOR); the hourly cap bounds it instead — governance by construction. Verdicts
+  // the 31b nearly free; local is deliberately cold). lane:'research' (08-08): "the FLOOR" means
+  // protected ABOVE idle (research stops at 90%, idle at 85%) — never 'interactive', which the
+  // governor NEVER gates and which let these passes crawl county sites at 99% of an empty pool
+  // while every governed tier was deferred. The hourly cap bounds volume within the tier. Verdicts
   // are machine-read (RESOLVED / STILL-UNKNOWN); an honest miss re-arms the producer's own cycle.
   // Kill switch ZOE_RECHECK=0; cap ZOE_RECHECK_PER_HOUR (default 12).
   {
@@ -2260,7 +2290,12 @@ app.whenReady().then(() => {
           markActivity('metabolism');
           try {
             if (p.batch) {
-              const res = await runCloudOperator({ userMessage: rq.buildBatchPrompt(p.batch), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'interactive', budgetMult: 0.75 });
+              // lane 'research', NOT 'interactive' (08-08 fresh46: at 99% pool these absence passes
+              // were still crawling county sites + writing CRM rows while every governed tier was
+              // deferred — 'interactive' is never throttled and is reserved for Lucas typing. The
+              // metabolism floor means protected ABOVE idle (research stops at 90% vs idle's 85%),
+              // never exempt from the reserve.)
+              const res = await runCloudOperator({ userMessage: rq.buildBatchPrompt(p.batch), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'research', budgetMult: 0.75 });
               const verdicts = rq.parseBatchVerdicts(res && res.answer ? String(res.answer) : '', p.batch.length);
               p.batch.forEach((item, i) => {
                 const v = verdicts[i];
@@ -2271,7 +2306,7 @@ app.whenReady().then(() => {
               });
             } else {
               const item = p.item;
-              const res = await runCloudOperator({ userMessage: rq.buildPrompt(item), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'interactive', budgetMult: 0.75 });
+              const res = await runCloudOperator({ userMessage: rq.buildPrompt(item), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'research', budgetMult: 0.75 });
               const out = rq.applyOutcome(item, res && res.answer ? String(res.answer) : '');
               console.log(`[metabolism] ${item.kind} "${String(item.subject).slice(0, 60)}" → ${out.action}${out.line ? ` — ${out.line.slice(0, 100)}` : ''}`);
             }
@@ -6993,12 +7028,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // CANVAS AWARENESS — "what did I just drop on your canvas / did you process those papers?" Surface the
   // recent canvas drops (title + understanding) by RECENCY so she speaks about the documents in front of
   // her instead of going blind to them (semantic retrieval can't match "what's on my canvas" to a paper).
+  let canvasAwarenessFired = false;
   try {
     const _cw = require('./lib/canvas_awareness');
     if (_cw.recognize(userMessage)) {
       const block = _cw.buildBlock({ userName });
       if (block) {
         retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block;
+        canvasAwarenessFired = true;
         console.log('[canvas-awareness] surfaced recent canvas drops');
       }
     }
@@ -8226,7 +8263,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         { name: 'current-activity', kind: 'activity', tier: 'deterministic', match: (q) => act.isActivityQuestion(q) },
       ];
       const top = poll.pick(userMessage, sources);
+      // RETRIEVAL-FIRST at the poll seam (08-08 census ③ remainder): "Give me the parish contact
+      // list" matched the deliverable poll and got a "Canvas or chat?" medium question — while the
+      // finished product sat in the stores, and statusHandled then (correctly) blocked the artifact
+      // router from ever presenting it. A retrieve-shaped ask that matches a HELD product belongs
+      // to the pull-up door: skip the poll, leave statusHandled unset, and let the artifact router
+      // judge it. No hit → the poll proceeds exactly as before.
+      let _pollRetrievalYield = false;
       if (top && top.kind === 'deliverable') {
+        try {
+          const pl = require('./lib/product_ledger');
+          const loose = pl.detectAskLoose(userMessage);
+          if (loose && pl.searchProducts({ db, query: loose.subject, notesDir: filesLib.resolvePath('notes'), limit: 1 }).length) {
+            _pollRetrievalYield = true;
+            console.log(`[poll] yielded — retrieval-shaped ask matches a HELD product; the pull-up door owns this turn`);
+          }
+        } catch (e) { console.error('[poll] retrieval guard failed (poll proceeds):', e.message); }
+      }
+      if (top && top.kind === 'deliverable' && !_pollRetrievalYield) {
         const track = await buildQueryTrack(userMessage);
         const ans = tk.buildAnswer(track, userMessage);
         const skip = ans.kind === 'status' && track.kind !== 'active' && socialTurn;   // greeting, not a project query
@@ -8315,7 +8369,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // dossier he'd just been told about — was captured as guidance on the INDIANA TOWNSHIP sweep.
     // A user's mid-stream steering never targets an autonomic beat; let the turn fall through to
     // the normal reply/assignment path instead, where the referent can land on real work.
-    if (f && focusLib.isDirected(f) && focusLib.originOf(f) !== 'beat' && !directedStopHandled && !expandHandled && !statusHandled && !socialTurn && !followupFired) {
+    // ...and never a question about HER OWN BOARD (08-08 census ④): "What documents are sitting on
+    // your canvas right now?" landed here as run guidance (the prior assistant turn contained a '?',
+    // so the classifier read the question as an answer) and produced a stray "noted on the
+    // clarification" voice. When the canvas-awareness surface claimed the turn, it is a question TO
+    // her about her state — not steering for the running focus.
+    if (f && focusLib.isDirected(f) && focusLib.originOf(f) !== 'beat' && !directedStopHandled && !expandHandled && !statusHandled && !socialTurn && !followupFired && !canvasAwarenessFired) {
       const lastAssistant = [...recentTurns].reverse().find(t => t.speaker !== 'user');
       const askedQ = !!(lastAssistant && /\?/.test(String(lastAssistant.content || '')));
       // Her question TEXT rides along so the classifier can tell a social question's answer ("how was

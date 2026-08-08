@@ -398,6 +398,9 @@ const smokes = [
   'smoke_backtest.js',
   'smoke_congress_backtest.js',
   'smoke_forecast_loop.js',
+  // Engine supervisor (2026-08-08: on disk, never gated — hermetic: fetch monkeypatched, spawn
+  // injected. Carries the fresh46 zombie-respawn-loop regression cases.)
+  'smoke_engine.js',
   // Scenario lane (2026-08-07: on disk, never gated — now verified passing offline and brought in).
   'smoke_scenario_analogs.js',
   'smoke_scenario_engine.js',
