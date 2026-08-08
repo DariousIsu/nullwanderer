@@ -5897,7 +5897,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const _doc = db.insertDocument({ title: `Pasted: ${String(_subject).trim()}`.slice(0, 140), body: userMessage, source: 'pasted', ref: 'chat-paste' });
       if (_doc && _doc.id) {
         console.log(`[paste-intake] ${userMessage.length}ch paste ingested as doc#${_doc.id} "${String(_subject).slice(0, 60)}" — turn proceeds on framing + coordinate`);
-        userMessage = `${_framing ? _framing + '\n\n' : ''}[Lucas pasted a large document (${userMessage.length} chars) — it is INGESTED as doc#${_doc.id} "${String(_subject).slice(0, 80)}" and fully readable via localdb/doc tools. Opening excerpt:]\n${userMessage.slice(_framingEnd > 0 ? _framingEnd : 0, (_framingEnd > 0 ? _framingEnd : 0) + 1500)}`;
+        userMessage = `${_framing ? _framing + '\n\n' : ''}[Lucas pasted a large document (${userMessage.length} chars) — it is INGESTED as doc#${_doc.id} "${String(_subject).slice(0, 80)}" and fully readable via localdb/doc tools. Opening excerpt:]\n${userMessage.slice(_framingEnd > 0 ? _framingEnd : 0, (_framingEnd > 0 ? _framingEnd : 0) + 1500)}\n[Acknowledge the document plainly — say what it is and how you'll fold it into the current work (his framing above names the intent). A silent or one-word reply is a failure; he needs to know it landed.]`;
       }
     } catch (e) { console.error('[paste-intake] failed (turn proceeds on the raw paste):', e.message); }
   }
