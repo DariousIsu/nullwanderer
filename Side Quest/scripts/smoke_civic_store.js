@@ -98,6 +98,18 @@ const T = 1785400000000;
   ok(cs.heldRostersFor('- **Acadia Parish**\n  - Police Jury').length === 0, 'a doc naming only OTHER parishes matches nothing (generic civic nouns never match)');
   ok(cs.heldRostersFor('').length === 0, 'empty text is empty, never a throw');
 
+  // --- staleRostersFor: fresh-hot depth — held-but-aged rosters re-verify on mention (08-08) ---
+  const NOWX = Date.now();
+  cs.upsertBody({ title: 'Ouachita Parish Police Jury', level: 'county', state: 'LA' });
+  cs.recordRoster({ bodyTitle: 'Ouachita Parish Police Jury', members: [{ personName: 'Old Ollie', role: 'President' }], sourceKind: 'official' });
+  // age the observation directly (recordRoster stamps now; staleness is measured from observed_ts)
+  require('../lib/db').getDb().prepare(`UPDATE civic_memberships SET observed_ts = ? WHERE body_key = ?`).run(NOWX - 45 * 86400000, cs.keyFor('Ouachita Parish Police Jury'));
+  const staleHit = cs.staleRostersFor('what do we know about Ouachita Parish government?', { now: NOWX });
+  ok(staleHit.length === 1 && staleHit[0].ageDays >= 44 && staleHit[0].count === 1, 'a 45d-old held roster on a mentioned body is a re-verify candidate (with its age)');
+  ok(cs.staleRostersFor('what about Tangipahoa Parish?', { now: NOWX }).length === 0, 'a freshly-observed roster is NOT stale on mention');
+  ok(cs.staleRostersFor('tell me about parish government generally', { now: NOWX }).length === 0, 'generic civic nouns never match (no distinctive word, no hit)');
+  ok(cs.staleRostersFor('', { now: NOWX }).length === 0 && cs.staleRostersFor('Ouachita Parish', { now: NOWX, maxAgeMs: 90 * 86400000 }).length === 0, 'empty text is empty; a longer maxAge window keeps it fresh');
+
   // --- fail-soft everywhere ---
   ok(cs.roster('nothing here').length === 0 && cs.history('x', 'y').length === 0, 'unknown bodies read back empty, never throw');
 

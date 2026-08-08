@@ -214,6 +214,27 @@ function heldRostersFor(text, { limit = 40, deps = {} } = {}) {
   return out;
 }
 
+// FRESH-HOT DEPTH (2026-08-08, the law's second half): a mention doesn't only warm the GAPS —
+// what we HOLD on the neighborhood gets staleness-checked too. Bodies matching the text whose
+// NEWEST live observation is older than maxAgeMs are re-verify candidates (not gaps: we hold a
+// roster, it has just aged). Same distinctive-word matching as heldRostersFor. 30d default:
+// local rosters churn on elections/appointments; a month-old observation is worth one cheap pass.
+function staleRostersFor(text, { maxAgeMs = 30 * 24 * 3600 * 1000, limit = 5, now = Date.now(), deps = {} } = {}) {
+  const hay = str(text).toLowerCase();
+  if (!hay.trim()) return [];
+  let bodies = [];
+  try { bodies = _db(deps).getDb().prepare(`SELECT body_key, MAX(observed_ts) newest, COUNT(*) n FROM civic_memberships WHERE superseded_by IS NULL GROUP BY body_key`).all(); } catch { return []; }
+  const out = [];
+  for (const b of bodies) {
+    const words = String(b.body_key).split(/\s+/).filter((w) => w.length > 2 && !_GENERIC_BODY_WORDS.has(w));
+    if (!words.length || !words.every((w) => hay.includes(w))) continue;
+    if ((now - (b.newest || 0)) < maxAgeMs) continue;
+    out.push({ bodyKey: b.body_key, count: b.n, ageDays: Math.round((now - (b.newest || 0)) / 86400000) });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 // Every version of a seat, oldest first — what supersession preserves.
 function history(bodyKeyOrTitle, personName, { deps = {} } = {}) {
   try {
@@ -256,4 +277,4 @@ function incomplete({ state = null, level = null, limit = 200 } = {}, { deps = {
   } catch { return { incomplete: [], complete: 0, unknownDenominator: [] }; }
 }
 
-module.exports = { keyFor, upsertBody, getBody, recordMembership, recordSeatHolder, recordRoster, roster, heldRostersFor, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };
+module.exports = { keyFor, upsertBody, getBody, recordMembership, recordSeatHolder, recordRoster, roster, heldRostersFor, staleRostersFor, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };

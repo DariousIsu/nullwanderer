@@ -8898,8 +8898,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                 const r = _rq.enqueue({ kind: 'absence', subject: _subj, detail: { predicate: 'identity and current facts', doc: 'conversation neighborhood' }, priority: 8, bornFrom: 'conversation-gap' });
                 if (r.ok && !r.existing) _warmed++;
               }
-              if (_warmed) {
-                console.log(`[warm-neighborhood] ${_warmed} conversation gap(s) queued HOT`);
+              // FRESH-HOT DEPTH (the law's second half): what we HOLD on the mentioned
+              // neighborhood is staleness-checked too — a held roster >30d old on a body Lucas
+              // just named re-verifies warm (priority 6: above the backlog's 4-5, below explicit
+              // gaps' 8; roster-shaped predicate → the pass lands structured members). A FRESH
+              // honest miss on the same subject stands — never spin a failing body on every mention.
+              let _stale = 0;
+              try {
+                const _civ = require('./lib/civic_store');
+                const _abs = require('./lib/absence');
+                for (const s of _civ.staleRostersFor(userMessage, { limit: 3 })) {
+                  try { const g = _abs.get(s.bodyKey, 'Current officeholders'); if (g && _abs.isFresh(g)) continue; } catch {}
+                  const r = _rq.enqueue({ kind: 'absence', subject: s.bodyKey, detail: { predicate: 'Current officeholders', doc: `fresh-hot: held roster ${s.ageDays}d old on mention` }, priority: 6, bornFrom: 'mention-staleness' });
+                  if (r.ok && !r.existing) _stale++;
+                }
+              } catch (e) { console.error('[warm-neighborhood] staleness check failed:', e.message); }
+              if (_stale) console.log(`[warm-neighborhood] ${_stale} stale held roster(s) queued for re-verify`);
+              if (_warmed || _stale) {
+                if (_warmed) console.log(`[warm-neighborhood] ${_warmed} conversation gap(s) queued HOT`);
                 if (global.__kickMetabolism) setTimeout(() => { try { global.__kickMetabolism().catch(() => {}); } catch {} }, 20000).unref?.();
               }
             } catch (e) { console.error('[warm-neighborhood] enqueue failed:', e.message); }
