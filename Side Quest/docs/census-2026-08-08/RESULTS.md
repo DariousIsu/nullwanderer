@@ -107,6 +107,21 @@ title "Louisiana Parishes — Government & Leadership".
   tab: `promise-report-status` / "Report — status" (left in place as evidence). Lucas's most
   habitual two-word ask spawns surface pollution every time.
 
+### B5 — packaging ("Package the Louisiana parishes leadership document on your canvas as a policy brief")
+**Verdict: MIXED — pipeline works; source resolution hits the corrupted sibling; corruption propagates.**
+Run 2026-08-08 ~15:20 ET.
+- What worked: package verb detected; branded HTML+PDF landed in data/packaged/
+  (2026-08-08-louisiana-parishes-canvas-doc.html/.pdf); the self-check was HONEST — stamped
+  "Incomplete. 4 required sections are not written yet".
+- Defect 1 — WRONG SOURCE AGAIN: it packaged the OLD corrupted working tab "Louisiana parishes
+  (canvas doc)" instead of the complete deliverable tab "Louisiana Parishes — Government &
+  Leadership" sitting on the same canvas. Third confirmed instance of stale-sibling-wins.
+- Defect 2 — CORRUPTION PROPAGATES: the brief's Analysis section embeds the working doc's stray
+  narration line ("This is a pure text-editing task — no lookup needed..."). The known fix-list
+  item (repair the corrupted working parish doc) is now proven to leak into NEW branded artifacts.
+- Defect 3 — no shape-fit judgment: a roster packaged as a "policy brief" necessarily yields four
+  empty required sections; disclosed by the self-check but never questioned at intake.
+
 ---
 
 ## Cross-cutting verdict after batch 1
@@ -122,10 +137,11 @@ Nearly every defect above reduces to three shared mechanisms — the same three 
 
 ## Open scenario queue (Phase 2 remainder)
 
-- Conversation-tier (runnable now, 120s port cooldown between turns): A1 recall, A2 status, A5
-  held-roster, A8 correction, B1 canvas create, B2 canvas edit (AFTER the corrupted working-doc
-  repair — do not edit-test against the flagship deliverable), B3 report, B5 package, B6 drop-ingest
-  (live-ctx), G3 watch, G5 record, G6 open-web, H1 draw.
+- Conversation-tier (runnable now, 120s port cooldown between turns): A8 correction (design the
+  probe carefully — a contrived correction pollutes memory), B1 canvas create (full path; only the
+  reject path is confirmed), B2 canvas edit (AFTER the corrupted working-doc repair — do not
+  edit-test against the flagship deliverable), B3 report (explicit order; the phantom path already
+  exercised the compose), B6 drop-ingest (live-ctx), G3 watch, G5 record, G6 open-web, H1 draw.
 - DEFERRED-QUOTA until the 08-09 ~12:37 UTC reset: C1 directed research, C2 wrap/expand, C3
   roster-fill, C4 deep dive, C5 swarm, C6 social enrich, D1 renders (operator-path), F-lane
   observation windows.
