@@ -3,7 +3,7 @@
  * The live misses (#11104/#11108, 2026-08-07) are the load-bearing cases.
  * Run: node scripts/smoke_canvas_command.js */
 const path = require('path');
-const { detect, detectEdit, rejectEditOutput } = require(path.join(__dirname, '..', 'lib', 'canvas_command'));
+const { detect, detectEdit, rejectEditOutput, isNarration } = require(path.join(__dirname, '..', 'lib', 'canvas_command'));
 
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; } else { fail++; console.error('  FAIL:', n); } };
@@ -47,6 +47,10 @@ ok('growth is always fine', !rejectEditOutput(parishDoc + '\nZavalla Parish', pa
 // CREATE-door use (M6, 08-08 audit): empty cur disarms the shrink guard; narration still rejects.
 ok('create: fresh doc with empty cur accepted', !rejectEditOutput('- Acadia Parish\n- Allen Parish', '', 'list the parishes'));
 ok('create: narration with empty cur rejected', !!rejectEditOutput('Let me check the parish list first.', '', 'list the parishes'));
+// isNarration — the shared M6 primitive behind every composed-artifact contract.
+ok('isNarration: process talk true', isNarration("I'll gather the sources and then write the section."));
+ok('isNarration: a real section false', !isNarration('## Acadia Parish\nThe police jury has 8 members (source: appj.org).'));
+ok('isNarration: empty false', !isNarration('') && !isNarration(null));
 
 // ── pendingSubjects: the blanks BECOME the plan (08-08) ─────────────────────────────────────────
 const { pendingSubjects } = require(path.join(__dirname, '..', 'lib', 'canvas_command'));

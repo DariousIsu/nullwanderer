@@ -96,6 +96,14 @@ const SHRINK_VERB = /\b(?:remove|delete|drop|trim|cut|shorten|condense|summari[s
  * must NOT replace the working copy, else null (accept). cur = the current doc, order = the
  * edit instruction (its verbs decide whether shrinking is plausible).
  */
+/** isNarration(text) → true when a model's "document" is actually its own process talk. The
+ * shared primitive behind every composed-artifact contract (M6): edit/create doors, the report
+ * composer, section organizers. */
+function isNarration(text) {
+  const out = str(text).trim();
+  return !!out && (NARRATION_OPEN.test(out) || NARRATION_BODY.test(out));
+}
+
 function rejectEditOutput(md, cur, order) {
   const out = str(md).trim();
   if (!out) return 'empty output';
@@ -136,4 +144,4 @@ function pendingSubjects(md) {
   return out;
 }
 
-module.exports = { detect, detectEdit, rejectEditOutput, pendingSubjects };
+module.exports = { detect, detectEdit, rejectEditOutput, isNarration, pendingSubjects };

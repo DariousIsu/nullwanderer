@@ -5035,6 +5035,13 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
     await fireToolFollowup({ io, channel, sessionId, resultText: `[You tried to compose the "${t}" report from ${rows.length} held document(s) but the composer returned nothing. Tell Lucas plainly that the compose step failed and the material is still there to retry — do NOT claim a document exists.]` });
     return;
   }
+  // PAYLOAD CONTRACT (M6, 08-08 audit site #8): a "report" that opens as the composer's own
+  // process talk is not a report — refuse and say so, exactly like the canvas doors.
+  if (require('./lib/canvas_command').isNarration(md)) {
+    console.log(`[report-cmd] compose output REJECTED (narration, not a report) — nothing landed`);
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[The "${t}" report compose produced narration instead of a document and was NOT delivered — nothing is on the canvas or in notes. Tell Lucas plainly the compose failed its output check; the ${rows.length} held document(s) are still there to retry.]` });
+    return;
+  }
   md = md.trim();
   const slug = t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'report';
   const rel = `notes/report-${slug}.md`;
@@ -15147,6 +15154,12 @@ async function runDirectedResearchPass(focus) {
         section = _isBeatRun
           ? await condenseComplete(rs.buildOrganizeTargetPrompt({ target: target.name, raw: target.raw }), { numPredict: config.sectionNumPredict() })
           : await condenseComplete(rs.buildUnderstandTargetPrompt({ goal, target: target.name, raw: target.raw, known: target.known || '', priorDoc: _baseDoc, sources: visited.filter((u) => /^https?:/i.test(String(u))).slice(-20) }), { numPredict: Math.max(1200, config.sectionNumPredict()) });
+        // M6 (08-08 audit site #2): narration is not a section — drop to the raw-notes fallback
+        // below rather than append process talk to the deliverable.
+        if (section && require('./lib/canvas_command').isNarration(section)) {
+          console.log(`[directed] "${String(target.name).slice(0, 60)}" → organize produced narration, dropped (raw notes land instead)`);
+          section = '';
+        }
       } catch {}
       // Gate widened for the adaptive tree: beat-origin (background) runs join the question ledger
       // + living-plan loop ONLY behind _adaptiveBgOn() (default OFF — Lucas's "not running blind"
@@ -15470,6 +15483,8 @@ async function runDeepResearchTarget({ org, goal = '', facet = '', guidance = ''
   const deepRaw = (deep && deep.answer) ? String(deep.answer).trim() : '';
   let section = '';
   try { section = await condenseComplete(rs.buildMergeLanesPrompt({ org, facet, webRaw, deepRaw, known }), { numPredict: config.sectionNumPredict() }); } catch {}
+  // M6 (08-08 audit site #3): a narrated merge is not a section — the raw-lane fallback is honest.
+  if (section && require('./lib/canvas_command').isNarration(section)) { console.log(`[enrich] "${org}" merge produced narration, dropped — raw lane text lands`); section = ''; }
   section = (section && section.trim()) ? section.trim() : `## ${org}\n- **${rs.facetLabel(facet)}:** ${((webRaw || deepRaw) || '').slice(0, 800).trim() || 'not found'}`;
   const used = (r) => !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.length);
   return { section, webRaw, deepRaw, lanes: { web: used(web), deep: used(deep) } };
@@ -15530,6 +15545,8 @@ async function runEnrichResearchPass(focus) {
       const p = rs.parsePass(ans);
       // ORGANIZE this org's facet findings → one clean section, appended NOW (continuous, like discovery).
       try { section = await condenseComplete(rs.buildOrganizeEnrichPrompt({ org, facet, raw: p.body || ans }), { numPredict: config.sectionNumPredict() }); } catch {}
+      // M6 (08-08 audit site #4): narration → the raw-body fallback, never the deliverable.
+      if (section && require('./lib/canvas_command').isNarration(section)) { console.log(`[enrich] "${org}" organize produced narration, dropped — raw body lands`); section = ''; }
       section = (section && section.trim()) ? section.trim() : `## ${org}\n- **${rs.facetLabel(facet)}:** ${((p.body || ans) || '').slice(0, 800).trim() || 'not found'}`;
     }
     const header = enriched.length === 0 ? `# Enrichment deliverable\n\n**Task:** ${goal}\n\n**Facet:** ${facet}${deepMode ? ' (deep two-lane research)' : ''}\n\n---\n\n` : '';
@@ -15741,11 +15758,23 @@ async function runTopicalResearchPass(focus) {
     } catch (e) { console.error('[topical] section organize failed:', e.message); }
     // Falling back to raw notes is fine; falling back SILENTLY is how the string-vs-array bug above
     // survived. Say when the clean section was not produced.
+    // M6 (08-08 audit site #5): narration is not a section — same fallback as empty. And the
+    // heading contract stated in the prompt gets a deterministic PATCH-BACK: if the exact "## "
+    // heading drifted (the **Aspect** break at #3717), prepend it rather than let parseSections
+    // silently lose the whole section again.
+    if (section && require('./lib/canvas_command').isNarration(section)) {
+      console.log(`[topical] "${nextFacet}" → organize produced narration, landing raw notes instead`);
+      section = '';
+    }
     if (!section || !section.trim()) {
       console.log(`[topical] "${nextFacet}" → organize produced nothing, landing raw notes (${body.length}ch)`);
       section = `## ${nextFacet}\n${body.slice(0, 1200) || '_not found this pass_'}`;
     }
     section = section.trim();
+    if (!section.includes(`## ${nextFacet}`)) {
+      console.log(`[topical] "${nextFacet}" → heading drifted, patched back deterministically`);
+      section = `## ${nextFacet}\n${section.replace(/^#+\s*.*\n/, '')}`;
+    }
     // ⭐ S3 — ADVERSARIAL VERIFY on a research claim (methodology parity). The organ already existed
     // for her CODE work (rehearsal_driver O6) and had never been pointed at research: generation and
     // verification are different postures, and a model asked to check its own dossier will defend it.
