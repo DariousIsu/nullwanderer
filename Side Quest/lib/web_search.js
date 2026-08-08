@@ -81,9 +81,29 @@ function parseBingResults(html) {
  * Strips script/style/nav/footer/header/aside; collapses whitespace.
  * Returns { title, text, url, ok, error? }.
  */
-async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal } = {}) {
+async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal, reuse = false } = {}) {
   if (!url || typeof url !== 'string') return { ok: false, url, error: 'invalid url' };
   if (!/^https?:\/\//i.test(url)) return { ok: false, url, error: 'not http(s)' };
+
+  // NEVER-SAME-PAGE-TWICE, fetch lane (measured 2026-08-08: springfield.il.us CityCouncilHome at
+  // 139 visits with doc_id NULL — this lane counted visits but held nothing; 110 of 615 active
+  // urls carried a doc). reuse is OPT-IN (the idle lanes pass it; an escalation-ladder fetch after
+  // a browser failure stays live): within the ledger's content TTL a held copy answers with zero
+  // network. The ingest at the success path below is UNCONDITIONAL — every read heals the pointer.
+  if (reuse) {
+    try {
+      const sl = require('./site_ledger');
+      const sk = sl.shouldSkip(url);
+      if (sk.skip && sk.row && sk.row.doc_id) {
+        const doc = require('./db').getDb().prepare('SELECT title, body FROM documents WHERE id = ?').get(sk.row.doc_id);
+        if (doc && doc.body) {
+          console.log(`[web-fetch] ledger reuse — ${String(url).slice(0, 100)} (${sk.why}) → held doc #${sk.row.doc_id}, no fetch`);
+          const t = String(doc.body);
+          return { ok: true, url, title: doc.title || '', text: t.length > maxChars ? t.slice(0, maxChars) + '…' : t, truncated: t.length > maxChars, dedup: true };
+        }
+      }
+    } catch { /* reuse is an optimization — any failure falls through to the live fetch */ }
+  }
 
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -142,7 +162,10 @@ async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal } = {}
 
     const text = stripTags(content).replace(/\s+/g, ' ').trim();
     const truncated = text.length > maxChars;
-    try { require('./site_ledger').record(url, { kind: 'fetch', chars: text.length }); } catch {}
+    // land the FULL text (pre-truncation) as the URL's one living doc; ingest's own guards
+    // (SERP, <200ch shell) decide junk. Fallback keeps the bare visit count on any failure.
+    try { require('./web').ingestReading(url, title, text); }
+    catch { try { require('./site_ledger').record(url, { kind: 'fetch', chars: text.length }); } catch {} }
     return {
       ok: true,
       url,

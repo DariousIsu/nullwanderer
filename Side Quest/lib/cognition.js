@@ -304,7 +304,7 @@ async function _enrichExcavate(need, deps = {}) {
 // has no provider keys). The "let me find out" for anything not in our records. Returns text (or '').
 async function _enrichWeb(need, deps = {}) {
   const searchFn = deps.webSearch || ((q) => { try { return require('./web_search').search(q); } catch { return Promise.resolve(null); } });
-  const fetchFn = deps.fetchPage || ((u) => { try { return require('./web_search').fetchPage(u, { maxChars: 3000 }); } catch { return Promise.resolve(null); } });
+  const fetchFn = deps.fetchPage || ((u) => { try { return require('./web_search').fetchPage(u, { maxChars: 3000, reuse: true }); } catch { return Promise.resolve(null); } });
   let results = [];
   try { const r = await searchFn(need); results = (r && r.results) || (Array.isArray(r) ? r : []); } catch {}
   if (!results.length) return { text: '', url: null };

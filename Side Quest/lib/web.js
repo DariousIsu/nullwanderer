@@ -1440,5 +1440,9 @@ module.exports = {
   downloadPdf, grabPdfs, pdfLinksOnPage, isPdfUrl, sourceUrlForFile, provenanceForFile, _focusLeashTokens, _pdfMatchesLeash,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,
   DOWNLOADS_DIR, downloadDest,
-  respinHit, _cacheReading, _recentReads, RESPIN_WINDOW_MS
+  respinHit, _cacheReading, _recentReads, RESPIN_WINDOW_MS,
+  // the one-living-doc-per-URL ingest — exported so the FETCH lane (web_search.fetchPage) lands
+  // its reads through the same contract (2026-08-08: that lane counted 139 visits on one URL
+  // with doc_id NULL — visits without content are blind skips)
+  ingestReading: _ingestReading
 };

@@ -2866,7 +2866,7 @@ async function runSearchLegacy(query, source, focusId = null) {
 
     const topUrl = top[0]?.url;
     if (topUrl) {
-      const page = await fetchPage(topUrl, { maxChars: 2200, timeoutMs: 8000 });
+      const page = await fetchPage(topUrl, { maxChars: 2200, timeoutMs: 8000, reuse: true });
       if (page.ok && page.text && page.text.length > 100) {
         content += `\n\nI followed the first link (${page.title || topUrl}) and read this:\n${page.text}`;
       }
