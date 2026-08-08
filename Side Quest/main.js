@@ -1381,12 +1381,26 @@ app.whenReady().then(() => {
     // came online by another route — the heartbeat keeps retrying regardless.
     engineSupervisor.ensure({ spawnIfDown: true })
       .then(r => { console.log(`[main] engine ${r.state}${r.pid ? ' (pid ' + r.pid + ')' : ''}`); return tryEchoAttach(); })
-      // Restore the board after a restart: the durable mirror FIRST (rebuilds everything, including what the
-      // operator dropped), then the file sweep as a backstop for deliverables the mirror never saw.
-      .then(async (attached) => {
-        if (!attached) return;
-        try { await replayCanvasFromStore(); } catch (e) {}
+    // Restore the board after a restart: the durable mirror FIRST (rebuilds everything, including what the
+    // operator dropped), then the file sweep as a backstop for deliverables the mirror never saw.
+    // fresh44 ran a WHOLE SESSION with an unreplayed canvas because the engine was late at boot and
+    // this chain only ever ran once — a skipped replay must LOG, and the heartbeat below owns the
+    // retry until one replay actually lands.
+    let canvasReplayDone = false;
+    const replayBoardOnce = async (via) => {
+      if (canvasReplayDone) return;
+      try {
+        const tabs = await replayCanvasFromStore();
+        if (tabs > 0) { canvasReplayDone = true; if (via) console.log(`[canvas] board replay landed via ${via}`); }
+        else console.log(`[canvas] board replay pending (${via}) — engine not ready or mirror empty, heartbeat will retry`);
         rehydrateRecentCanvasDeliverables().catch(() => {});
+      } catch (e) { console.error('[canvas] board replay failed:', e.message); }
+    };
+    engineSupervisor.ensure({ spawnIfDown: true })
+      .then(r => { console.log(`[main] engine ${r.state}${r.pid ? ' (pid ' + r.pid + ')' : ''}`); return tryEchoAttach(); })
+      .then(async (attached) => {
+        if (!attached) { console.log('[canvas] board replay skipped — engine not attached at boot, heartbeat will retry'); return; }
+        await replayBoardOnce('boot');
       })
       .catch(e => { console.error('[main] engine ensure failed:', e.message); return tryEchoAttach(); })
       // STAGGER the Canvas behind the engine: only spawn it once the engine ensure+attach attempt has
@@ -1395,8 +1409,12 @@ app.whenReady().then(() => {
       .finally(() => { try { createCanvasWindow(); } catch (e) { console.error('[main] canvas auto-spawn failed:', e.message); } });
     // Permanent heartbeat: a cheap no-op while connected; reattaches within 60s whenever the engine
     // comes online or comes back (a dropped connection / supervisor restart flips connected=false,
-    // the next beat re-attaches and refreshes the status light).
-    const iv = setInterval(() => { if (!echoSuit || echoSuit.connected) return; tryEchoAttach(); }, 60 * 1000);
+    // the next beat re-attaches and refreshes the status light) — and finishes the board replay if
+    // boot never got one in.
+    const iv = setInterval(() => {
+      if (!echoSuit || echoSuit.connected) { if (echoSuit && echoSuit.connected && !canvasReplayDone) replayBoardOnce('heartbeat').catch(() => {}); return; }
+      tryEchoAttach().then((ok) => { if (ok) return replayBoardOnce('reattach'); }).catch(() => {});
+    }, 60 * 1000);
     iv.unref?.();
   }, 8 * 1000).unref?.();
   filesLib.ensureWorkspace();
@@ -7347,7 +7365,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const ask = _contactsQ && _contactsQ.isQuery ? _contactsQ : cq.detect(userMessage);
       const rows = await gatherHeldContacts(ask.state);   // state-aware: reach the CRM+Puller rows for that state
       const sel = cq.select(rows, { sectors: ask.sectors, company: ask.company, limit: ask.limit || 200,
-        grade: ask.grade, gradeDir: ask.gradeDir, type: ask.type, state: ask.state });
+        grade: ask.grade, gradeDir: ask.gradeDir, type: ask.type, state: ask.state,
+        hasPhone: !!ask.hasPhone, hasEmail: !!ask.hasEmail });
       const lbl = cq.label(ask);
       // HONESTY (now narrow): grade/type/sector/state/company ARE applied. Only county has no field to filter
       // on — disclose that if asked, instead of silently ignoring it.
@@ -7383,7 +7402,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             const _rr = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql: _cc.sql, params: [] } });
             if (_rr && _rr.ok) {
               const _j = JSON.parse(_rr.text); const _row = _j && _j.rows && _j.rows[0];
-              if (_row) { sel.total = Number(_row.total) || 0; sel.withEmail = Number(_row.with_email) || 0; sel.noLocation = Number(_row.no_location) || 0; _covFilters = _cc.filters || []; }
+              if (_row) { sel.total = Number(_row.total) || 0; sel.withEmail = Number(_row.with_email) || 0; sel.withPhone = Number(_row.with_phone) || 0; sel.noLocation = Number(_row.no_location) || 0; _covFilters = _cc.filters || []; }
             }
           }
         } catch (e) { console.error('[contacts-query] accurate coverage count failed:', e.message); }
@@ -7395,8 +7414,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // Lead with the real count; be honest that a held count is not a certified-complete roster.
         followupFired = true; contactsHandled = true;
         const _stateNm = ask.state ? (cq.stateNameOf(ask.state) || ask.state) : null;
-        console.log(`[contacts-query] COVERAGE "${lbl}" → hold ${sel.total} (${sel.withEmail} w/ email)`);
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked a COVERAGE/count question about ${lbl}. LEAD WITH THE NUMBER, first sentence: you hold ${sel.total} ${lbl}${_covFilters && _covFilters.length ? ` (scoped to ${_covFilters.join(', ')} — state that scope so the number isn't mistaken for a broader set)` : ''}${sel.withEmail ? ` (${sel.withEmail} with an email on file)` : ''}. ${sel.total} is a real, substantial holding — do NOT open with "I don't have" or hedge as if you have nothing. Then be honest about the BOUND: you can't certify it's EVERY ${_stateNm ? _stateNm + ' ' : ''}official (you have no authoritative master roster to check completeness against), so it's what you hold, not a guaranteed-complete set — and offer to keep filling gaps if he wants. Your voice, the number FIRST, one or two sentences.]` }); }
+        // THE ASKED METRIC LEADS (08-08 census: "how many … with a phone number" was answered with the
+        // total + email count — the number in the first sentence must be the number he asked about).
+        // Coverage-SQL path: sel.total = base-filter total, sel.withPhone/withEmail = the subsets.
+        // Gather path with hasPhone/hasEmail: select() already filtered, so sel.total IS the subset.
+        const _leadN = ask.hasPhone ? (Number.isFinite(sel.withPhone) ? sel.withPhone : sel.total)
+          : ask.hasEmail ? (Number.isFinite(sel.withEmail) ? sel.withEmail : sel.total)
+          : sel.total;
+        const _leadCtx = (ask.hasPhone || ask.hasEmail) && _leadN !== sel.total ? ` (of ${sel.total} total matching contacts)` : '';
+        console.log(`[contacts-query] COVERAGE "${lbl}" → hold ${_leadN}${_leadCtx} (${sel.withEmail} w/ email${Number.isFinite(sel.withPhone) ? `, ${sel.withPhone} w/ phone` : ''})`);
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked a COVERAGE/count question about ${lbl}. LEAD WITH THE NUMBER HE ASKED ABOUT, first sentence: you hold ${_leadN} ${lbl}${_leadCtx}${_covFilters && _covFilters.length ? ` (scoped to ${_covFilters.join(', ')} — state that scope so the number isn't mistaken for a broader set)` : ''}. ${_leadN} is the answer to his actual question — do NOT substitute a different metric (totals, email counts) for the one he asked, and do NOT open with "I don't have" or hedge as if you have nothing. Then be honest about the BOUND: you can't certify it's EVERY ${_stateNm ? _stateNm + ' ' : ''}official (you have no authoritative master roster to check completeness against), so it's what you hold, not a guaranteed-complete set — and offer to keep filling gaps if he wants. Your voice, the number FIRST, one or two sentences.]` }); }
         catch (e) { console.error('[contacts-query] coverage voice line failed:', e.message); }
       } else if (sel.total > 0) {
         // EVIDENCE (R1) — what the encounter log can actually support for each name. The Puller's own
@@ -10095,7 +10122,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // are skipped. Only an infra-mute classifier lets the legacy detectors run. ZOE_ARTIFACT_ROUTER=0
     // kills the router (legacy nets then decide as before).
     let _artifactJudged = false;
-    if (!followupFired && !/^(0|false|off)$/i.test(String(process.env.ZOE_ARTIFACT_ROUTER || '').trim())) {
+    // ONE VOICE (08-08 census, the "status report" phantom): when the status surface already composed
+    // this turn's answer (statusHandled), no artifact door may ALSO fire — "status report" is a status
+    // ask, and the router's model read the word "report" as an order and landed a "Report — status"
+    // tab built from 8 arbitrary docs. A status-answered turn is by definition not an artifact order.
+    if (!followupFired && !statusHandled && !/^(0|false|off)$/i.test(String(process.env.ZOE_ARTIFACT_ROUTER || '').trim())) {
       try {
         const ai = require('./lib/artifact_intent');
         const _fresh = _workingCanvasFresh();

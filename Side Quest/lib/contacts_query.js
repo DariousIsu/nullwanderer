@@ -113,6 +113,17 @@ function countFrom(message) {
   const n = m ? parseInt(m[1], 10) : null;
   return (n && n >= 1 && n <= 5000) ? n : null;
 }
+// FIELD-PRESENCE filters — "contacts WITH A PHONE NUMBER" / "with emails". The 08-08 census repro'd
+// Lucas's graded fail: "How many contacts do we hold with a phone number in Louisiana?" answered with
+// the total + email count because PHONE was representable nowhere in the ask shape — the door can only
+// answer questions its schema can carry. CRM columns: Phone (34.8k filled) + MobilePhone.
+function hasPhoneFrom(message) {
+  return /\b(?:with|have|has|having|carry(?:ing)?|hold(?:ing)?|includ\w+)\s+(?:a\s+)?(?:phone|mobile|cell)(?:\s*(?:numbers?|#s?))?\b|\b(?:phone|mobile|cell)\s*numbers?\b/i.test(String(message || ''));
+}
+function hasEmailFrom(message) {
+  return /\b(?:with|have|has|having|carry(?:ing)?|hold(?:ing)?|includ\w+)\s+(?:an?\s+)?e-?mails?(?:\s+address(?:es)?)?\b|\be-?mail address(?:es)?\b/i.test(String(message || ''));
+}
+
 // PARTY → the canonical code the CRM stores (Party_Canonical: 'R'/'D'). null = no party filter.
 function partyFrom(message) {
   const m = String(message || '');
@@ -175,6 +186,7 @@ function buildCoverageCountSql(ask = {}) {
   const where = w.join(' AND ');
   const sql = `SELECT COUNT(*) AS total, `
     + `SUM(CASE WHEN c.Email IS NOT NULL AND TRIM(c.Email)<>'' THEN 1 ELSE 0 END) AS with_email, `
+    + `SUM(CASE WHEN (c.Phone IS NOT NULL AND TRIM(c.Phone)<>'') OR (c.MobilePhone IS NOT NULL AND TRIM(c.MobilePhone)<>'') THEN 1 ELSE 0 END) AS with_phone, `
     + `SUM(CASE WHEN (c.State_Represented IS NULL OR TRIM(c.State_Represented)='') AND (c.MailingState IS NULL OR TRIM(c.MailingState)='') THEN 1 ELSE 0 END) AS no_location `
     + `FROM electoral.contact c LEFT JOIN electoral.account a ON a.id=c.AccountId WHERE ${where}`;
   return { applies: true, sql, filters };
@@ -207,6 +219,7 @@ function detect(message) {
   return { isQuery: true, sectors: sectorsFrom(m), company: companyFrom(m) || parishFilter, limit: countFrom(m),
            grade: g ? g.grade : null, gradeDir: g ? g.dir : 'gte', type: typeFrom(m), state: stateFrom(m),
            party: partyFrom(m), level: levelFrom(m),
+           hasPhone: hasPhoneFrom(m), hasEmail: hasEmailFrom(m),
            // "How many do we have?" wants a NUMBER, not 200 rows. Only when there is no retrieval verb
            // alongside it — "list how many we have" is still a list ask.
            countOnly: counting && !LIST_INTENT.test(m) };
@@ -346,7 +359,7 @@ function matchesSectors(company, sectors) {
 // Select + rank the held contacts for the request. `rows` = [{name, email, phone, company, title}] pulled
 // from the Puller/CRM. Filter by sector + company; PREFER rows with an email; dedup by name+company; cap.
 // Returns { rows, total, shown, headers }. Pure.
-function select(rows, { sectors = [], company = null, limit = 200, grade = null, gradeDir = 'gte', type = null, state = null } = {}) {
+function select(rows, { sectors = [], company = null, limit = 200, grade = null, gradeDir = 'gte', type = null, state = null, hasPhone = false, hasEmail = false } = {}) {
   const comp = company ? _norm(company) : null;
   const minC = grade && GRADE_CAP[grade] != null ? GRADE_CAP[grade] : null;
   const st = state ? String(state).toUpperCase() : null;
@@ -355,6 +368,9 @@ function select(rows, { sectors = [], company = null, limit = 200, grade = null,
   for (const r of (Array.isArray(rows) ? rows : [])) {
     const name = String((r && r.name) || '').trim();
     if (name.length < 2 || isInitialsOnly(name)) continue;   // drop malformed initials-only junk
+    // FIELD PRESENCE — "with a phone number" / "with emails" narrows to rows that CARRY the field.
+    if (hasPhone && !String((r && r.phone) || '').trim()) continue;
+    if (hasEmail && !String((r && r.email) || '').trim()) continue;
     const rc = String((r && r.company) || '');
     if (!matchesSectors(rc, sectors)) continue;
     if (comp && !_norm(rc).includes(comp)) continue;
@@ -416,7 +432,7 @@ function select(rows, { sectors = [], company = null, limit = 200, grade = null,
   // Headers must describe the SIX columns toTable() renders (name, email, company, title, puller
   // confidence, evidence). Returning five here left the final "Evidence" column headerless on the
   // canvas and mislabeled the puller-confidence column as the generic "Confidence".
-  return { rows: shown, total, shown: shown.length, withEmail: deduped.filter(r => r.email).length, geoGap, headers: ['Name', 'Email', 'Company', 'Title', 'Puller conf.', 'Evidence'] };
+  return { rows: shown, total, shown: shown.length, withEmail: deduped.filter(r => r.email).length, withPhone: deduped.filter(r => r.phone).length, geoGap, headers: ['Name', 'Email', 'Company', 'Title', 'Puller conf.', 'Evidence'] };
 }
 
 // ── EVIDENCE (R1) ────────────────────────────────────────────────────────────────────────────────
@@ -512,7 +528,7 @@ function toTable(sel) {
 
 // A short human title for the canvas tab + the chat line, from the request's sectors/company.
 const TYPE_LABELS = { corporate: 'corporate', elected: 'elected-official', gov: 'government' };
-function label({ sectors = [], company = null, grade = null, gradeDir = 'gte', type = null, state = null } = {}) {
+function label({ sectors = [], company = null, grade = null, gradeDir = 'gte', type = null, state = null, hasPhone = false, hasEmail = false } = {}) {
   const parts = [];
   if (grade) parts.push(`grade ${grade}${gradeDir === 'lte' ? ' or lower' : '+'}`);
   if (type) parts.push(TYPE_LABELS[type] || type);
@@ -520,7 +536,10 @@ function label({ sectors = [], company = null, grade = null, gradeDir = 'gte', t
   if (company) parts.push(company);
   if (state) parts.push(`in ${state}`);
   const noun = 'contacts';
-  return parts.length ? `${parts.join(' ')} ${noun}`.replace(/\s+/g, ' ').trim() : 'Contacts';
+  let out = parts.length ? `${parts.join(' ')} ${noun}`.replace(/\s+/g, ' ').trim() : 'Contacts';
+  if (hasPhone) out += ' with a phone number';
+  if (hasEmail) out += ' with an email';
+  return out;
 }
 
-module.exports = { detect, select, toTable, withEvidence, evidenceCell, evidenceSummary, label, unmetFilters, gradeFrom, typeFrom, stateFrom, stateNameOf, partyFrom, levelFrom, buildCoverageCountSql, isGovernmentCompany, isNonprofitCompany, domainKind, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };
+module.exports = { detect, select, toTable, withEvidence, evidenceCell, evidenceSummary, label, unmetFilters, gradeFrom, typeFrom, stateFrom, stateNameOf, partyFrom, levelFrom, hasPhoneFrom, hasEmailFrom, buildCoverageCountSql, isGovernmentCompany, isNonprofitCompany, domainKind, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };

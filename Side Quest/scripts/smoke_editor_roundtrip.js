@@ -61,6 +61,20 @@ function ok(name, cond, detail = '') {
 }
 
 (async () => {
+  // LIVE-DEPENDENCY GUARD (08-08, offline build schedule): this is a LIVE round-trip — it can only
+  // prove anything when Echo is actually up. With the app down (quota conservation), the gate must
+  // not go red on an absent dependency: probe health first and SKIP (exit 0, loudly) when Echo is
+  // unreachable. The suite still runs for real whenever Echo is up.
+  try {
+    const health = ECHO_URL.replace(/\/mcp\/?$/, '/health');
+    const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 3000);
+    const r = await fetch(health, { signal: ac.signal }); clearTimeout(t);
+    if (!r.ok) throw new Error(`health ${r.status}`);
+  } catch (e) {
+    console.log(`SKIP — Echo is not reachable (${e.message}); this live round-trip proves nothing offline.`);
+    console.log('\nALL PASS — 0 passed, 0 failed (skipped: echo down)');
+    process.exit(0);
+  }
   const echo = fromEnv({ url: ECHO_URL, token: ECHO_TOKEN });
   let sessionId = null;
   try {

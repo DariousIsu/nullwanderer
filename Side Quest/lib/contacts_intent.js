@@ -33,7 +33,13 @@ function _shape(raw) {
   const company = raw && typeof raw.company === 'string' && raw.company.trim().length >= 2 ? raw.company.trim() : null;
   const limit = raw && Number.isInteger(raw.limit) && raw.limit >= 1 && raw.limit <= 5000 ? raw.limit : null;
   const gradeDir = raw && raw.gradeDir === 'lte' ? 'lte' : 'gte';
-  return { isQuery: true, type, grade, gradeDir, state, sectors, company, limit };
+  // The 08-08 census repro of Lucas's graded fail: "How many contacts do we hold with a phone number
+  // in Louisiana?" — this shape carried neither the COUNT intent nor the PHONE filter, so the door
+  // dumped a list and counted emails. A door can only answer what its schema can represent.
+  const countOnly = !!(raw && raw.countOnly === true);
+  const hasPhone = !!(raw && raw.hasPhone === true);
+  const hasEmail = !!(raw && raw.hasEmail === true);
+  return { isQuery: true, type, grade, gradeDir, state, sectors, company, limit, countOnly, hasPhone, hasEmail };
 }
 
 async function classify(message, { recent = '', deps = {} } = {}) {
@@ -48,13 +54,20 @@ async function classify(message, { recent = '', deps = {} } = {}) {
       // Louisiana parish leadership?". Its own trace shows it understood the turn completely
       // (state:'LA', company:'Louisiana Perish') and answered isList:false because it was instructed
       // to. The bump also retires every cached v1 verdict.
-      task: 'contacts_intent', v: 4, model: fastModel, numPredict: 320,
+      // v5 — adds countOnly + hasPhone/hasEmail: a "how many … with a phone number" question must
+      // carry BOTH the count intent and the field filter, or the answer can't match the ask (08-08).
+      task: 'contacts_intent', v: 5, model: fastModel, numPredict: 320,
       input: { user: s.slice(0, 700), recent: String(recent).slice(0, 400) },
       want: 'You decide if the user is asking to LIST / compile / build a sheet of CONTACTS (people, companies, '
         + 'officials) we ALREADY HOLD — a pull of records we have on hand, NOT researching or finding NEW ones — '
         + 'and you extract the filters. '
         + 'Output ONLY JSON: {"isList":true|false,"type":"corporate"|"elected"|"gov"|null,"grade":"A"|"B"|"C"|"D"|"E"|null,'
-        + '"gradeDir":"gte"|"lte","state":"2-letter US state code or null","sectors":[],"company":"a specific company name or null","limit":<int or null>}. '
+        + '"gradeDir":"gte"|"lte","state":"2-letter US state code or null","sectors":[],"company":"a specific company name or null","limit":<int or null>,'
+        + '"countOnly":true|false,"hasPhone":true|false,"hasEmail":true|false}. '
+        + 'countOnly=true when the turn asks HOW MANY / a count / coverage ("how many contacts do we hold in LA?") '
+        + 'and does NOT also ask to see/print/list the rows — a count question wants a NUMBER, not a table. '
+        + 'hasPhone=true when the ask narrows to contacts that HAVE a phone number ("with a phone number", '
+        + '"that we have phones for"). hasEmail=true likewise for having an email address. Both default false. '
         + 'isList=true for ANY phrasing that asks FOR — or ABOUT — the contacts/people/companies/officials we '
         + 'HAVE or HOLD. That covers imperatives ("list / give me / show / pull / compile / export / build a '
         + 'sheet / create a spreadsheet / make a roster / draw up a table / who do we have") AND questions about '

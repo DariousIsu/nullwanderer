@@ -78,5 +78,37 @@ ok(both.applies === true && /jefferson parish/.test(both.sql) && /'LA'/.test(bot
 ok(/State_Represented IS NULL OR TRIM\(c\.State_Represented\)=''/.test(both.sql), 'company+state → stateless rows still ride the parish anchor');
 ok(both.filters.includes('LA') && both.filters.includes('Jefferson Parish'), 'company+state → both named in the scope note');
 
+// --- PHONE / EMAIL PRESENCE (08-08 census: Lucas's graded fail, repro'd verbatim) ---
+// "How many contacts do we hold with a phone number in Louisiana?" answered with total + email
+// count because PHONE was representable nowhere in the ask shape.
+const ph = cq.detect('How many contacts do we hold with a phone number in Louisiana?');
+ok(ph.isQuery && ph.countOnly === true, 'phone-count question → countOnly');
+ok(ph.hasPhone === true && ph.state === 'LA', 'detect: hasPhone threads through with state=LA');
+ok(cq.hasPhoneFrom('contacts with phone numbers') === true, 'hasPhoneFrom: "with phone numbers"');
+ok(cq.hasPhoneFrom('call them on the phone later') === false, 'hasPhoneFrom: mere phone mention → false');
+ok(cq.hasEmailFrom('everyone we have an email address for') === true, 'hasEmailFrom: "an email address"');
+const phSql = cq.buildCoverageCountSql({ state: 'LA' });
+ok(/with_phone/.test(phSql.sql) && /c\.Phone/.test(phSql.sql) && /c\.MobilePhone/.test(phSql.sql),
+  'coverage SQL counts with_phone (Phone OR MobilePhone)');
+
+// select(): hasPhone/hasEmail narrow to rows CARRYING the field; withPhone counted in the result
+const _rows = [
+  { name: 'Ada Lovelace', email: 'ada@example.gov', phone: '555-1', company: 'Parish A', title: 'Clerk' },
+  { name: 'Grace Hopper', email: '', phone: '555-2', company: 'Parish B', title: 'Juror' },
+  { name: 'Alan Turing', email: 'alan@example.gov', phone: '', company: 'Parish C', title: 'Sheriff' },
+];
+const selP = cq.select(_rows, { hasPhone: true });
+ok(selP.total === 2 && selP.rows.every((r) => r.phone), 'select hasPhone → only phone-carrying rows');
+const selE = cq.select(_rows, { hasEmail: true });
+ok(selE.total === 2 && selE.rows.every((r) => r.email), 'select hasEmail → only email-carrying rows');
+ok(cq.select(_rows, {}).withPhone === 2, 'select reports withPhone');
+ok(/with a phone number$/.test(cq.label({ state: 'LA', hasPhone: true })), 'label names the phone narrowing');
+
+// contacts_intent._shape carries countOnly/hasPhone/hasEmail (the LLM path dropped them before)
+const ci = require('../lib/contacts_intent');
+const shaped = ci._shape({ isList: true, state: 'la', countOnly: true, hasPhone: true });
+ok(shaped.countOnly === true && shaped.hasPhone === true && shaped.hasEmail === false && shaped.state === 'LA',
+  '_shape: countOnly + hasPhone survive validation, hasEmail defaults false');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
