@@ -20,9 +20,16 @@ const http = require('http');
 const PORT = parseInt(process.env.ZOE_TEST_PORT, 10) || 8767;
 const IDLE_MS = 185000;          // past the port's 120s guard with margin
 
-// Each case: the message, and expectations over the captured logLines (every), plus optional
-// forbidden patterns (never). `say` expectations are avoided — voice wording varies; LOG LINES
-// are the contract surface.
+// Each case: the message + expectations over FOUR surfaces:
+//   every/never       — captured logLines (mechanism: which door fired)
+//   sayEvery/sayNever — THE REPLY TEXT (what Lucas actually reads — THE grading surface. 08-08:
+//                       the suite asserted logLines only and passed 5 of 6 live failures Lucas
+//                       watched happen, including one whose test text was verbatim the failing
+//                       ask. Log lines prove a mechanism ran; only the say proves the answer.)
+//   canvasEmpty: true — r.body.canvasWrites must be EMPTY (no phantom artifacts landed)
+// sayNever patterns encode the FAILURE SHAPES (research restarts, blindness, hedges) — wording-
+// tolerant, surface-meaningful. sayEvery stays minimal (voice varies; absence of failure + the
+// right mechanism + the right artifact state is the contract).
 const CASES = [
   {
     name: 'contacts-precedence',
@@ -44,6 +51,7 @@ const CASES = [
     text: 'Can you pull up that most recent list of ten people in Louisiana that we found contact information for?',
     every: [/\[artifact-router\] intent=pullup|\[pull-up\]/],
     never: [/\[contacts-query\] .*on canvas/],
+    sayNever: [/pivot\w* to (?:deep )?research|start\w* (?:a |the )?(?:new )?research|estimate:?\s*\d+[-–]\d+\s*hours?|i'?ll (?:re)?build (?:it|the list) from scratch/i],
   },
   {
     name: 'draw-yield-in-session',
@@ -61,10 +69,36 @@ const CASES = [
   },
   {
     name: 'contacts-no-session',
-    born: 'M7.3 second direction — a contacts ask must still reach the contacts judgment when no artifact session owns the turn (state-tolerant: a live session yielding is also correct)',
+    born: 'M7.3 second direction — a contacts ask must still reach the contacts judgment when no artifact session owns the turn (state-tolerant: a live session yielding is also correct). 08-08: Lucas graded the live reply a FAIL because it answered with totals + emails, never the PHONE count — the say assertions are the actual contract.',
     text: 'How many contacts do we hold with a phone number in Louisiana?',
     every: [/\[contacts-query\]|contacts route YIELDED/],
     never: [/\[canvas-cmd\] (edit applied|order executed)/],
+    sayEvery: [/\d/, /phone/i],                                     // a NUMBER and the asked metric, in the reply he reads
+    sayNever: [/^i (?:don'?t|couldn'?t)|no (?:phone )?(?:data|numbers?) (?:on file|available)/i],
+  },
+  {
+    name: 'status-no-phantom',
+    born: '08-08 census ②: "status report" spawned a "Report — status" canvas tab composed from 8 arbitrary docs',
+    text: 'status report',
+    every: [/route=status/],
+    never: [/\[artifact-router\] intent=report|\[report-cmd\] composing/],
+    canvasEmpty: true,                                              // a status ask lands NOTHING on the canvas
+  },
+  {
+    name: 'held-list-no-restart',
+    born: '08-08 census ③ (the flagship): "Give me the parish contact list" restarted 6-8h research on the FINISHED deliverable; the correction net mutated focus #3747 from a retrieval ask',
+    text: 'Give me the parish contact list',
+    every: [/stood down|\[poll\] yielded|\[artifact-router\] intent=pullup|\[pull-up\]/],
+    never: [/\[correction\] applied/],
+    sayNever: [/pivot\w* to (?:deep )?research|estimate:?\s*\d+[-–]\d+\s*hours?|want me to .*build (?:a |the )?(?:proper|new|clean)/i],
+  },
+  {
+    name: 'canvas-not-blind',
+    born: '08-08 census ④: with 60 tabs live she said "couldn\'t pin down documents currently on the canvas"',
+    text: 'What documents are sitting on your canvas right now?',
+    every: [/\[canvas-awareness\] surfaced/],
+    never: [/\[clarify\] captured/],                                // her board is never run guidance
+    sayNever: [/couldn'?t pin down|can'?t (?:see|tell) what|don'?t (?:know|have) what'?s on/i],
   },
 ];
 
@@ -106,13 +140,22 @@ async function waitIdle() {
     catch (e) { console.log(`ERROR ${e.message}`); fail++; continue; }
     if (r.code !== 200 || !r.body) { console.log(`HTTP ${r.code}: ${(r.body && r.body.error) || '?'}`); fail++; continue; }
     const lines = (r.body.logLines || []).join('\n');
+    const say = String(r.body.say || '');
+    const cw = Array.isArray(r.body.canvasWrites) ? r.body.canvasWrites : [];
     const missing = c.every.filter((re) => !re.test(lines));
     const forbidden = c.never.filter((re) => re.test(lines));
-    if (!missing.length && !forbidden.length) { console.log(`PASS (${Math.round(r.body.tookMs / 1000)}s${r.body.settled ? '' : ', UNSETTLED'})`); pass++; }
-    else {
+    const sayMissing = (c.sayEvery || []).filter((re) => !re.test(say));
+    const sayForbidden = (c.sayNever || []).filter((re) => re.test(say));
+    const canvasBad = c.canvasEmpty === true && cw.length > 0;
+    if (!missing.length && !forbidden.length && !sayMissing.length && !sayForbidden.length && !canvasBad) {
+      console.log(`PASS (${Math.round(r.body.tookMs / 1000)}s${r.body.settled ? '' : ', UNSETTLED'})`); pass++;
+    } else {
       console.log('FAIL');
-      for (const re of missing) console.log(`    missing: ${re}`);
-      for (const re of forbidden) console.log(`    forbidden matched: ${re}`);
+      for (const re of missing) console.log(`    log missing: ${re}`);
+      for (const re of forbidden) console.log(`    log forbidden matched: ${re}`);
+      for (const re of sayMissing) console.log(`    SAY missing: ${re} — reply was: "${say.replace(/\s+/g, ' ').slice(0, 200)}"`);
+      for (const re of sayForbidden) console.log(`    SAY forbidden matched: ${re} — reply was: "${say.replace(/\s+/g, ' ').slice(0, 200)}"`);
+      if (canvasBad) console.log(`    CANVAS not empty: ${cw.length} write(s) — ${cw.map((w) => w.tab_key).join(', ').slice(0, 160)}`);
       fail++;
     }
   }
