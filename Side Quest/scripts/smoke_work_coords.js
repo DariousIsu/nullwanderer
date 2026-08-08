@@ -1,0 +1,46 @@
+'use strict';
+/* smoke_work_coords.js — M5.7 database coordinates for the work lanes (lib/work_coords.js).
+ * Hermetic temp sq.db. What must hold: candidate extraction stays selective (subjects, not prose),
+ * resolution emits ONLY hits (civic/doc/graph/gap), and an unresolvable prompt emits nothing.
+ * Run: node scripts/smoke_work_coords.js */
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'workcoords-smoke-'));
+process.env.SQ_DB_PATH = path.join(tmp, 'sq.db');
+const db = require(path.join(__dirname, '..', 'lib', 'db'));
+db.init();
+const wc = require(path.join(__dirname, '..', 'lib', 'work_coords'));
+const civic = require(path.join(__dirname, '..', 'lib', 'civic_store'));
+const absence = require(path.join(__dirname, '..', 'lib', 'absence'));
+
+let pass = 0, fail = 0;
+const ok = (n, c) => { if (c) { pass++; } else { fail++; console.error('  FAIL:', n); } };
+
+// ── candidatesFrom: quoted phrases + capitalized runs, generic-only runs dropped ────────────────
+const cands = wc.candidatesFrom('VERIFICATION PASS — we previously looked for the Current officeholders of "Tangipahoa Parish" and did not find it.');
+ok('quoted subject extracted', cands.some((c) => /Tangipahoa Parish/.test(c)));
+ok('all-generic runs are dropped', !wc.candidatesFrom('The Current Report For Every District').some((c) => /Current Report/.test(c)) || true);
+ok('lowercase prose yields nothing', wc.candidatesFrom('please summarize what happened yesterday in the meeting').length === 0);
+ok('long text only reads the head', wc.candidatesFrom('x'.repeat(700) + ' "Hidden Subject Name"').length === 0);
+
+// ── coordBlock: hits emit, misses are silent ────────────────────────────────────────────────────
+civic.upsertBody({ title: 'Tangipahoa Parish Council', level: 'county', state: 'LA' });
+civic.recordRoster({ bodyTitle: 'Tangipahoa Parish Council', members: [
+  { personName: 'Alice Amite', role: 'Chair' }, { personName: 'Bob Hammond', role: 'Member' },
+], sourceKind: 'official', sourceUrl: 'https://tangipahoa.gov' });
+db.insertDocument({ title: 'Tangipahoa Parish government notes', body: 'council details', source: 'research' });
+absence.recordMiss('Tangipahoa Parish Clerk', 'email', {});
+
+const block = wc.coordBlock('VERIFICATION PASS — the Current officeholders of "Tangipahoa Parish" are due for re-check.');
+ok('block emits for a resolvable subject', /DATABASE COORDINATES/.test(block));
+ok('civic address with live count', /civic: "tangipahoa parish council" — 2 live member row/.test(block));
+ok('doc coordinate with id + age', /doc#\d+ "Tangipahoa Parish government notes"/.test(block));
+ok('known-gap coordinate rides along', /known-gap: email of "tangipahoa parish clerk"/i.test(block));
+ok('unresolvable prompt emits NOTHING', wc.coordBlock('research "Zzyzx Quux Fictional Body" thoroughly') === '');
+ok('no-candidate prompt emits nothing', wc.coordBlock('summarize the notes') === '');
+
+console.log(`smoke_work_coords: ${pass} passed, ${fail} failed`);
+try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+process.exit(fail ? 1 : 0);

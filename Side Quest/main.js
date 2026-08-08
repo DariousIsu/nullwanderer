@@ -11153,7 +11153,10 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
     const _maxMs = task ? (review ? 300000 : Math.min(300000, Math.round(180000 * Math.max(Number(budgetMult) || 1, 0.75)))) : undefined;
     if (task) console.log(`[operator] ${review ? 'SELF-REVIEW' : 'directed TASK'} → in-turn completion mode (${_maxSteps} steps / ${Math.round(_maxMs / 1000)}s)`);
     const res = await operator.runOperator({
-      userMessage, context: (context || '') + taskNote,
+      // M5.7 — DATABASE COORDINATES at the choke point (every run, zero model calls): the stores'
+      // addresses for this run's subjects ride the context, so the pass rapid-fires by address
+      // instead of burning steps re-discovering what is already held (lib/work_coords).
+      userMessage, context: (context || '') + taskNote + (() => { try { return require('./lib/work_coords').coordBlock(userMessage); } catch { return ''; } })(),
       deps: { complete: operator._operatorComplete, tools },
       maxSteps: _maxSteps,
       maxMs: _maxMs,
