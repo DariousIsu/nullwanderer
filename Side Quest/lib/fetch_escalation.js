@@ -22,7 +22,9 @@
 const ARCHIVE_PREFIX = 'https://web.archive.org/web/2/';
 const MIN_TEXT = 180;   // below this a "success" is a shell/error page, not a read
 
-function _good(r) { return !!(r && r.ok && r.text && String(r.text).trim().length >= MIN_TEXT); }
+// r.chars (fetchPage's CONTENT length) beats text.length when present — the firewall frame's
+// header would otherwise let a near-empty shell pass as a read.
+function _good(r) { const n = r && r.chars != null ? r.chars : (r && r.text ? String(r.text).trim().length : 0); return !!(r && r.ok && n >= MIN_TEXT); }
 
 // preferDoor: the door that WORKED for this host last time (site_ledger.bestDoor) — studying the
 // process means leading with what the map already learned, not re-deriving the ladder every visit.

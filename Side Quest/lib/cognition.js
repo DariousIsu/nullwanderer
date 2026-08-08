@@ -313,7 +313,7 @@ async function _enrichWeb(need, deps = {}) {
   // (Wikipedia serves raw infobox wikitext); a cleaner source (Ballotpedia etc.) at #2 carries the answer.
   const urls = results.filter(x => x && x.url).slice(0, 2);
   for (const u of urls) {
-    try { const p = await fetchFn(u.url); if (p && p.ok && p.text && p.text.length > 120) parts.push(`From ${p.title || u.url}:\n${p.text.slice(0, 2400)}`); } catch {}
+    try { const p = await fetchFn(u.url); if (p && p.ok && p.text && (p.chars != null ? p.chars : p.text.length) > 120) parts.push(`From ${p.title || u.url}:\n${require('./content_firewall').truncateFramed(p.text, 2400)}`); } catch {}
   }
   const snip = results.slice(0, 5).map(x => {
     const t = String((x && x.title) || '').replace(/\s+/g, ' ').trim();

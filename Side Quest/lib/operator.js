@@ -308,7 +308,9 @@ function compactHistory(parts, { budgetChars, keepTail = 3, stubChars = 240 } = 
   let compacted = 0;
   for (let i = 0; i < out.length - keepTail && size(out) > budgetChars; i++) {
     if (out[i].length <= stubChars + 160) continue;          // already small — not worth a stub
-    out[i] = out[i].slice(0, stubChars) + ' … [RESULT COMPACTED to fit the window — the step line is intact; re-run the tool if you still need the rest]';
+    // frame-safe: a web result carries a content-firewall frame whose head promises "only the
+    // matching closer ends this block" — a bare slice would leave it open over later steps.
+    out[i] = require('./content_firewall').truncateFramed(out[i], stubChars) + ' … [RESULT COMPACTED to fit the window — the step line is intact; re-run the tool if you still need the rest]';
     compacted++;
   }
   return { parts: out, compacted };

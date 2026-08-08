@@ -36,6 +36,17 @@ const ok = (n, c) => { if (c) { pass++; } else { fail++; console.error('  FAIL:'
   web.ingestReading('https://smoke-reuse.invalid/thin', 'Thin', 'nav nav nav');
   const thin = sl.seen(sl.normalizeUrl('https://smoke-reuse.invalid/thin'));
   ok('a <200ch shell records the visit but lands NO doc', thin && !thin.doc_id);
+  // the junk floor measures the PAGE, not the wrapper (live-driven 08-08: an empty JS shell's
+  // ~300ch frame landed as a "document")
+  const fw = require(path.join(__dirname, '..', 'lib', 'content_firewall'));
+  const framedEmpty = fw.frame('', { url: 'https://smoke-reuse.invalid/shell' }).text;
+  web.ingestReading('https://smoke-reuse.invalid/shell', 'Shell', framedEmpty);
+  const shell = sl.seen(sl.normalizeUrl('https://smoke-reuse.invalid/shell'));
+  ok('a framed EMPTY shell lands NO doc — the frame header cannot defeat the floor', shell && !shell.doc_id);
+  const framedReal = fw.frame(BODY, { url: 'https://smoke-reuse.invalid/real' }).text;
+  web.ingestReading('https://smoke-reuse.invalid/real', 'Real', framedReal);
+  const realRow = sl.seen(sl.normalizeUrl('https://smoke-reuse.invalid/real'));
+  ok('framed REAL content still lands (floor measures the inner body)', realRow && realRow.doc_id > 0);
 
   // ── fetchPage reuse: a held copy within TTL answers with ZERO network ────────────────────────
   const hit = await ws.fetchPage(URL, { reuse: true, maxChars: 4000 });

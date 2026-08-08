@@ -406,8 +406,17 @@ function _ingestReading(rawUrl, title, pageText, now = Date.now()) {
   const url = sl.normalizeUrl(rawUrl);
   const body = String(pageText || '').trim();
   if (!url) return;
-  if (sl.isSerp(url) || body.length < 200) {
-    sl.record(rawUrl, { kind: sl.isSerp(url) ? 'serp' : 'page', chars: body.length });
+  // The junk floor must measure the PAGE, not the wrapper: a content-firewall frame is ~300ch of
+  // our own header, which let an EMPTY JS-shell read (gc.nh.gov, live-driven 08-08) land as a
+  // "document" and would let every shell defeat the floor. Framed text's content sits between the
+  // one-line head and the final closer line.
+  let contentLen = body.length;
+  try {
+    const fw = require('./content_firewall');
+    if (fw.isFramed(body)) contentLen = body.slice(body.indexOf('\n') + 1, body.lastIndexOf('\n') > 0 ? body.lastIndexOf('\n') : body.length).trim().length;
+  } catch {}
+  if (sl.isSerp(url) || contentLen < 200) {
+    sl.record(rawUrl, { kind: sl.isSerp(url) ? 'serp' : 'page', chars: contentLen });
     return;
   }
   const db = require('./db');

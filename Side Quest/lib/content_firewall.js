@@ -312,6 +312,34 @@ const FRAME_RE = /⟦EXTERNAL [0-9a-f]{6} ·/;
 const isFramed = (s) => FRAME_RE.test(String(s || ''));
 
 /**
+ * FRAME-SAFE TRUNCATION (2026-08-08, "sliceable" closed). The head promises "only the matching
+ * ⟦/EXTERNAL id⟧ marker ends this block" — so a downstream .slice() that eats the closer leaves
+ * the block OPEN and everything after it (later steps, the app's own instructions) reads as
+ * untrusted data. Any cap applied to text that may carry a frame goes through here: if the cut
+ * orphans an opening marker, the block is re-closed with the SAME id and an honest note INSIDE.
+ * Pure; a no-op for unframed or already-whole text.
+ */
+// Derived from FRAME_RE (the one proven matcher) with a capture added — a second hand-typed
+// literal drifted on the middle-dot codepoint the first time this was written.
+const _OPEN_G = new RegExp(FRAME_RE.source.replace('[0-9a-f]{6}', '([0-9a-f]{6})'), 'g');
+const _escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function truncateFramed(text, max) {
+  const s = String(text == null ? '' : text);
+  if (!(max > 0) || s.length <= max) return s;
+  const cut = s.slice(0, max);
+  let lastId = null, lastIdx = -1, m;
+  _OPEN_G.lastIndex = 0;
+  while ((m = _OPEN_G.exec(cut))) { lastId = m[1]; lastIdx = m.index; }
+  // The head SENTENCE itself mentions the closer ("Only the matching ⟦/EXTERNAL id⟧ marker ends
+  // this block") — so a bare includes() always "finds" it. The REAL closer stands on its own
+  // line; only that shape counts as closed.
+  if (lastId != null && !new RegExp(`(?:^|\\n)${_escRe(`⟦/EXTERNAL ${lastId}⟧`)}(?:\\n|$)`).test(cut.slice(lastIdx))) {
+    return `${cut}\n…[truncated here — the rest of this external content was cut for length]\n⟦/EXTERNAL ${lastId}⟧`;
+  }
+  return cut;
+}
+
+/**
  * LAYER 3 — the sink. Should this text be allowed to become a stored capability need?
  *
  * A capability need says "my program is missing a tool." That sentence is about HER, written by
@@ -348,4 +376,4 @@ function screenNeed(text) {
   return { ok: true };
 }
 
-module.exports = { frame, scan, screenNeed, isFramed, digest, hostOf, CATEGORIES, FRAME_RE, MAX_SCAN, MAX_FINDINGS };
+module.exports = { frame, scan, screenNeed, isFramed, truncateFramed, digest, hostOf, CATEGORIES, FRAME_RE, MAX_SCAN, MAX_FINDINGS };

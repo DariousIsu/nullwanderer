@@ -10960,7 +10960,9 @@ const operatorTools = {
       const o = await webLib.open(String(url || ''), { autonomous: require('./lib/lane').isAutonomous(undefined) });
       if (o && o.ok && o.dedup && o.reading) {
         console.log(`[open_page] served held copy — ${String(url).slice(0, 100)} (${o.why || 'ledger reuse'})`);
-        return String(o.reading).replace(/\n{3,}/g, '\n\n').slice(0, 4000);
+        // frame-safe cap: a bare slice orphans the firewall frame's closer on any long page,
+        // leaving the block open so later content reads as untrusted data
+        return require('./lib/content_firewall').truncateFramed(String(o.reading).replace(/\n{3,}/g, '\n\n'), 4000);
       }
       // BLOCKER ESCALATION (2026-07-23, Lucas: "very few websites she shouldn't be able to fully
       // access"): a blocked/dead page no longer concedes — the ladder tries plain fetch → archive
@@ -10977,7 +10979,7 @@ const operatorTools = {
           onAccess: (door, ok) => { try { _sl.recordAccess(String(url || ''), { door, ok }); } catch {} },
           log: (m) => console.log(m),
         });
-        if (esc.ok) return `[${why} — read via ${esc.via}${esc.note ? '; ' + esc.note : ''}]\n${String(esc.text).replace(/\n{3,}/g, '\n\n').slice(0, 4000)}`;
+        if (esc.ok) return `[${why} — read via ${esc.via}${esc.note ? '; ' + esc.note : ''}]\n${require('./lib/content_firewall').truncateFramed(String(esc.text).replace(/\n{3,}/g, '\n\n'), 4000)}`;
         const learned = (() => { try { return _sl.accessLine(_host); } catch { return null; } })();
         return `${url} ${why}, and ${esc.error}${learned ? `\n${learned}` : ''}`;
       };
@@ -10986,7 +10988,7 @@ const operatorTools = {
       const r = await webLib.read();
       if (r && r.ok && r.text && r.text.trim().length >= 180) {
         try { _sl.recordAccess(String(url || ''), { door: 'browser', ok: true }); } catch {}
-        return r.text.replace(/\n{3,}/g, '\n\n').slice(0, 4000);
+        return require('./lib/content_firewall').truncateFramed(r.text.replace(/\n{3,}/g, '\n\n'), 4000);
       }
       return _escalate('opened but served no readable text (likely a JS shell)');
     } catch (e) { return 'ERROR: ' + e.message; }

@@ -99,7 +99,9 @@ async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal, reuse
         if (doc && doc.body) {
           console.log(`[web-fetch] ledger reuse — ${String(url).slice(0, 100)} (${sk.why}) → held doc #${sk.row.doc_id}, no fetch`);
           const t = String(doc.body);
-          return { ok: true, url, title: doc.title || '', text: t.length > maxChars ? t.slice(0, maxChars) + '…' : t, truncated: t.length > maxChars, dedup: true };
+          // frame-safe cap: a held doc may carry a content-firewall frame — never orphan its closer
+          const capped = require('./content_firewall').truncateFramed(t, maxChars);
+          return { ok: true, url, title: doc.title || '', text: capped, truncated: capped.length < t.length, dedup: true, chars: t.length };
         }
       }
     } catch { /* reuse is an optimization — any failure falls through to the live fetch */ }
@@ -130,7 +132,7 @@ async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal, reuse
       const parsed = await sheetLib.toBoundedText(buf, { url, cap: Math.max(maxChars, 4000) });
       if (!parsed.ok) return { ok: false, url, error: parsed.error };
       try { require('./site_ledger').record(url, { kind: 'spreadsheet', chars: parsed.text.length }); } catch {}
-      return { ok: true, url, title: parsed.title, text: parsed.text, truncated: parsed.truncated };
+      return { ok: true, url, title: parsed.title, text: parsed.text, truncated: parsed.truncated, chars: parsed.text.length };
     }
     if (!/text\/html|application\/xhtml/i.test(contentType)) {
       return { ok: false, url, error: `unsupported content-type: ${contentType}` };
@@ -160,18 +162,25 @@ async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal, reuse
                 : mainMatch ? mainMatch[1]
                 : body;
 
-    const text = stripTags(content).replace(/\s+/g, ' ').trim();
-    const truncated = text.length > maxChars;
-    // land the FULL text (pre-truncation) as the URL's one living doc; ingest's own guards
-    // (SERP, <200ch shell) decide junk. Fallback keeps the bare visit count on any failure.
+    const raw = stripTags(content).replace(/\s+/g, ' ').trim();
+    // CONTENT FIREWALL on the fetch lane (2026-08-08): the browser read path has framed since
+    // 07-30, but this lane — the idle lanes' fetch + BOTH text doors of the escalation ladder —
+    // handed the model raw stranger prose. Frame here and every caller is covered at once.
+    const fw = require('./content_firewall');
+    const text = fw.isFramed(raw) ? raw : fw.frame(raw, { url, kind: 'page' }).text;
+    // land the FULL framed text as the URL's one living doc (the browser lane stores framed too);
+    // ingest's own guards (SERP, <200ch shell) decide junk. Fallback keeps the bare visit count.
     try { require('./web').ingestReading(url, title, text); }
-    catch { try { require('./site_ledger').record(url, { kind: 'fetch', chars: text.length }); } catch {} }
+    catch { try { require('./site_ledger').record(url, { kind: 'fetch', chars: raw.length }); } catch {} }
+    // frame-safe cap — a plain slice would orphan the frame's closing marker on any long page
+    const capped = fw.truncateFramed(text, maxChars);
     return {
       ok: true,
       url,
       title,
-      text: truncated ? text.slice(0, maxChars) + '…' : text,
-      truncated
+      text: capped,
+      truncated: capped.length < text.length,
+      chars: raw.length   // CONTENT length — the frame header must not inflate quality checks
     };
   } catch (err) {
     return { ok: false, url, error: err.message || String(err) };
