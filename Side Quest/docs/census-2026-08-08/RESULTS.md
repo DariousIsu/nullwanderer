@@ -181,6 +181,44 @@ rewritten (deliverable tab + the repaired working tab — corruption + narration
 file sent to Lucas. Honest note: the corrupted working-tab content's backup got overwritten by the
 second repair pass; its content survives only inside data/packaged/2026-08-08-louisiana-parishes-canvas-doc.html.
 
+## Inside-test batch 1 (fresh46, ~16:00-16:20 ET — one boot window, then straight back down)
+
+Verifies offline batches 1+2 (62109ef, cb180a6) on the real pipeline. Quota at window start 98.5%.
+
+- **⑤ boot replay: PASS.** "[canvas] replayed 62 document(s) / 304 block(s)" + the new
+  "board replay landed via boot" confirmation line.
+- **① phone count: PASS (the graded fail is fixed on the user surface).** Reply led with the asked
+  metric: "We hold 528 Louisiana contacts with a phone number (out of 1,683 total)", honest bound,
+  ONE voice ("skipping the second reply" fired). Log: `COVERAGE "in LA contacts with a phone
+  number" → hold 528 (of 1683) (493 w/ email, 528 w/ phone)`.
+- **② "status report": PASS.** No artifact-router line, no compose, canvasWrites empty — the
+  statusHandled gate held. Honest status, one voice.
+- **③ "Give me the parish contact list": PARTIAL — the destructive half is CURED.** The new guard
+  fired: "[correction] stood down — retrieval-shaped ask matches a HELD product… the pull-up owns
+  it, not a run mutation." No facet mutation, no research restart. REMAINING: the router still
+  sends the ask to route=status (medium question + noise), and the one-voice gate then correctly
+  blocks the artifact router — so the finished doc is not PRESENTED. Batch-3: retrieval-shaped asks
+  must route to the artifact lane, not status.
+- **④ canvas awareness: PASS.** The board block fired; the reply truthfully named the tabs (parish
+  leadership, email/phone inquiries, data-center report, validation docs, Hartfield/Green South).
+  Blemish: the clarify net captured the QUESTION as run guidance → a trailing "noted on the
+  clarification" voice (batch-3 net false-positive).
+
+**New findings from the window:**
+- **Engine-supervisor ZOMBIE-RESPAWN LOOP**: the real engine (one pid) served /health continuously
+  all window, but the supervisor false-declared it dead once (~15:58, likely a health timeout under
+  load), spawned a duplicate, and every duplicate's port-bind failure (exit 1) re-triggered another
+  respawn — 11+ cycles of spawn→"healthy" (the REAL engine answers the probe)→exit. The "spawned +
+  healthy" verdict never checks WHICH pid answered. Batch-3 fix: verify /health's reported pid is
+  the spawned child before declaring it healthy; back off when an existing healthy instance holds
+  the port.
+- **Replay-done latch never re-arms**: canvasReplayDone stays true across engine respawns; if the
+  serving engine ever actually dies and is replaced, the fresh engine gets NO board replay. Re-arm
+  the latch when the engine process identity changes.
+- **Quota-tier hole confirmed**: at 98-99% the county-sweep lane (metabolism absence-resolution →
+  web crawls → doc ingest → 30+ CRM writes for Adair County, Iowa) kept running at full pace while
+  idle and directed tiers were deferred. Whatever tier bills that lane, it is not governed.
+
 ## Open scenario queue (Phase 2 remainder)
 
 - Conversation-tier (runnable now, 120s port cooldown between turns): A8 correction (design the
