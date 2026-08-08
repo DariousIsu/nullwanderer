@@ -5881,6 +5881,26 @@ function _identityWithoutSuit(messages, suit) {
 
 async function runChatTurn(userMessage, attachments = [], io = {}) {
   if (!userMessage || !userMessage.trim()) return { ok: false, error: 'empty', say: null };
+  // PASTE INTAKE (2026-08-08, the Westmoreland email — pasted TWICE, answered NEVER): an 83k-char
+  // pasted email blew the fit window (27 turns dropped) and the reply answered a STALE thread. A
+  // large paste is SOURCE MATERIAL, not conversation: ingest it as a document (like an attachment
+  // arriving), and the turn proceeds on the user's own framing + a doc# COORDINATE + a bounded
+  // excerpt — the router, the fit window, and the replier all see a sane message, and the full
+  // text is addressable forever. 6000ch threshold: larger than any typed message, and already a
+  // quarter of the 25k fit budget.
+  if (userMessage.length > 6000) {
+    try {
+      const _framingEnd = userMessage.search(/begin forwarded message|-{5,} ?forwarded|^from:\s/im);
+      const _framing = _framingEnd > 0 ? userMessage.slice(0, _framingEnd).trim() : '';
+      const _subject = (userMessage.match(/^subject:\s*(.{3,120})$/im) || [])[1]
+        || userMessage.replace(/\s+/g, ' ').trim().slice(0, 80);
+      const _doc = db.insertDocument({ title: `Pasted: ${String(_subject).trim()}`.slice(0, 140), body: userMessage, source: 'pasted', ref: 'chat-paste' });
+      if (_doc && _doc.id) {
+        console.log(`[paste-intake] ${userMessage.length}ch paste ingested as doc#${_doc.id} "${String(_subject).slice(0, 60)}" — turn proceeds on framing + coordinate`);
+        userMessage = `${_framing ? _framing + '\n\n' : ''}[Lucas pasted a large document (${userMessage.length} chars) — it is INGESTED as doc#${_doc.id} "${String(_subject).slice(0, 80)}" and fully readable via localdb/doc tools. Opening excerpt:]\n${userMessage.slice(_framingEnd > 0 ? _framingEnd : 0, (_framingEnd > 0 ? _framingEnd : 0) + 1500)}`;
+      }
+    } catch (e) { console.error('[paste-intake] failed (turn proceeds on the raw paste):', e.message); }
+  }
   const emit = io.emit || (() => {});
   const sendComplete = io.onComplete || (() => {});
   const sendError = io.onError || (() => {});
