@@ -5069,7 +5069,27 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   catch (e) { console.error('[report-cmd] save failed:', e.message); }
   try { await promiseArtifactEmit({ slug: `report-${slug}`, title: `Report — ${t}`.slice(0, 60), markdown: md }); } catch {}
   console.log(`[report-cmd] report on "${t}" composed (${md.length}ch) → ${saved ? rel : '(save failed)'} + canvas`);
-  await fireToolFollowup({ io, channel, sessionId, resultText: `[The report Lucas asked for is BUILT and delivered — it is on his Canvas${saved ? ` and saved at ${rel}` : ''}, composed from ${rows.length} document(s) you already held (${rows.map((r) => '#' + r.id).join(', ')}). Tell him it's ready, where it is, and give the ONE most substantive finding in it — in your own voice, two or three sentences. Do not re-paste the whole report.]` });
+  // MEMORY FIRST, THEN RESEARCH THE GAPS — ONE FLOW (Lucas 2026-08-08: "why would those be
+  // separate tracks?"). The compose contract already forces "## Open questions" naming what the
+  // held documents do NOT answer; consuming it was the missing half. Each open question enqueues
+  // to the metabolism (same shape as the doc fill's pending marks), so the report's own gaps get
+  // researched autonomously and the next compose has more to stand on.
+  let openQs = 0;
+  try {
+    const m = md.match(/##\s*Open questions\s*\n([\s\S]{0,2000}?)(?:\n##\s|$)/i);
+    if (m) {
+      const rq = require('./lib/recheck_queue');
+      for (const line of m[1].split('\n')) {
+        const q = line.replace(/^\s*[-*\d.]+\s*/, '').trim();
+        if (q.length < 12) continue;
+        const r = rq.enqueue({ kind: 'open-question', subject: q.slice(0, 200), detail: { doc: `Report — ${t}`.slice(0, 80) }, priority: 5, bornFrom: 'report-gaps' });
+        if (r.ok) openQs++;
+      }
+      if (openQs) console.log(`[report-cmd] ${openQs} open question(s) queued to the metabolism`);
+    }
+  } catch (e) { console.error('[report-cmd] open-question enqueue failed:', e.message); }
+  const planNote = openQs ? ` The report names ${openQs} open question(s) the held material could not answer — each is now QUEUED for autonomous research; the report deepens as they resolve. State that plan in one sentence.` : '';
+  await fireToolFollowup({ io, channel, sessionId, resultText: `[The report Lucas asked for is BUILT and delivered — it is on his Canvas${saved ? ` and saved at ${rel}` : ''}, composed from ${rows.length} document(s) you already held (${rows.map((r) => '#' + r.id).join(', ')}). Tell him it's ready, where it is, and give the ONE most substantive finding in it — in your own voice, two or three sentences.${planNote} Do not re-paste the whole report.]` });
 }
 
 async function promiseArtifactEmit({ slug, title, markdown }) {
