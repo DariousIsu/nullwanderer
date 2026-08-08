@@ -219,6 +219,38 @@ Verifies offline batches 1+2 (62109ef, cb180a6) on the real pipeline. Quota at w
   web crawls → doc ingest → 30+ CRM writes for Adair County, Iowa) kept running at full pace while
   idle and directed tiers were deferred. Whatever tier bills that lane, it is not governed.
 
+## Offline batch 3 (2026-08-08 late — QUOTA FULLY EXHAUSTED, no live verification possible)
+
+Lucas: "testing has now been disabled with ollama, we have used the total budget." All batch-3
+verification is hermetic-smoke + code-path only; live confirmation queues for after the 08-09
+reset. Commit 115471a, gate 379/379 (smoke_engine newly registered — it was on disk, never gated).
+
+1. **Engine zombie-respawn CURED** (three mechanisms): _onExit probes health before respawning —
+   a healthy port means the exit was a bind-race loss, so the supervisor ADOPTS the holder and
+   stands down (the cycle-breaker); _spawn detects a child that died while another server answered
+   the health probe (adopt, no sidecar fleet, no false "spawned + healthy"); ensure() is
+   single-flight (the double-spawn seed race). Four regression cases in smoke_engine.
+2. **Replay re-arms on engine identity change**: heartbeat compares /health's pid to the pid the
+   board was replayed into; new pid = fresh blank engine → replay again.
+3. **Clarify net** can no longer capture a canvas-awareness question as run guidance.
+4. **Poll-seam retrieval-first**: a retrieve-shaped ask matching a HELD product skips the
+   deliverable poll's medium question; the artifact router's pull-up owns the turn (census ③'s
+   remaining half — needs the live re-run to confirm the finished doc is PRESENTED).
+5. **Metabolism bills lane 'research'** (stops at 90%), not 'interactive' (never throttled) — the
+   confirmed quota-tier hole: absence passes were crawling county sites and writing CRM rows at
+   99% of an exhausted pool.
+
+## Desk verdicts settled by code inspection (no boot needed)
+
+- **E2 conditional scenarios — chat door: UNREACHABLE.** "Run the Iran scenario" typed in chat has
+  NO deterministic route: the only doors are the forecast-studio IPC (UI-typed) and the autonomy
+  move. The capability works; the natural chat order cannot reach it. Beta-spec item: a chat net
+  (or artifact-router intent) for scenario orders.
+- **H4 QR suite — chat door: operator-only, unproven.** qr_* appears nowhere in main.js;
+  lib/echo_tier classifies qr_(save|generate|…) as operator-reachable write tools, so a chat order
+  could reach it ONLY if the operator model chooses the tool from the Echo catalog. No
+  deterministic door; never observed live. Grade stays open until a post-reset drive.
+
 ## Open scenario queue (Phase 2 remainder)
 
 - Conversation-tier (runnable now, 120s port cooldown between turns): A8 correction (design the
