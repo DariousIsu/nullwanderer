@@ -5019,7 +5019,23 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
        ORDER BY (title LIKE ?) DESC, LENGTH(COALESCE(body,'')) DESC LIMIT 8`
     ).all(like, like, like);
   } catch (e) { console.error('[report-cmd] doc query failed:', e.message); }
+  // TOKEN SEARCH (2026-08-08, the data-centers paper): a long topic as ONE LIKE pattern matches
+  // nothing — "positive benefits of data centers to local communities and power grid
+  // infrastructure" found 0 docs while 8 relevant grid-pressure inquiries sat in the store. When
+  // the phrase-match comes back empty, fall back to the product ledger's token search (title×3 +
+  // body scoring, recency decay) and load those docs as the material.
   if (!rows.length) {
+    try {
+      const hits = require('./lib/product_ledger').searchProducts({ db, query: t, notesDir: null, limit: 8 })
+        .filter((h) => h.kind === 'doc');
+      if (hits.length) {
+        rows = hits.map((h) => db.getDb().prepare('SELECT id, title, body FROM documents WHERE id = ?').get(h.id)).filter(Boolean);
+        console.log(`[report-cmd] phrase match empty — token search found ${rows.length} held doc(s)`);
+      }
+    } catch (e) { console.error('[report-cmd] token search failed:', e.message); }
+  }
+  if (!rows.length) {
+    console.log(`[report-cmd] "${t.slice(0, 80)}" — no held material (phrase + token search both empty), honest miss relayed`);
     await fireToolFollowup({ io, channel, sessionId, resultText: `[You were asked to BUILD A REPORT on "${t}" but you hold NO research documents about it — nothing in the document store matches. Say so plainly in one or two sentences, name what you'd need to go gather, and offer to run the research. Do NOT invent a document.]` });
     return;
   }
