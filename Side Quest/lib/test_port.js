@@ -171,7 +171,16 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
         req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
         req.on('end', () => {
           try {
-            const { say } = JSON.parse(body || '{}');
+            const { say, clear } = JSON.parse(body || '{}');
+            // {clear:true} → complete any open promise booked by THIS test port (sessionId 'test-port'), so a
+            // deterministic /promise test never leaves rows that would later surface to the user.
+            if (clear) {
+              const rq = require('./recheck_queue');
+              const rows = rq.openByKind({ kind: 'promise', limit: 100, now: Date.now() + 3600000 })
+                .filter((r) => (r.detail || {}).sessionId === 'test-port');
+              for (const r of rows) rq.complete(r.id, { outcome: 'test-port cleanup' });
+              return send(200, { ok: true, cleared: rows.length });
+            }
             if (!say || !String(say).trim()) return send(400, { ok: false, error: 'say required' });
             const detected = require('./delivery').detectPromise(String(say));
             if (typeof bookPromises === 'function') bookPromises(String(say), { sessionId: 'test-port', turnStartTs: Date.now() });
