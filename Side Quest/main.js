@@ -2252,7 +2252,17 @@ app.whenReady().then(() => {
       try {
         if (String(process.env.ZOE_RECHECK || '1') === '0') return;
         const rq = require('./lib/recheck_queue');
+        // B0 increment 2 (metabolism yield check, 2026-08-10): the tick's cloud passes already attribute
+        // (markActivity('metabolism') below covers the pass + applyOutcome writes = the 346k in stall_attrib.log),
+        // but the top-of-tick SYNCHRONOUS sweep ran UNMARKED → it fed the 'idle' blind spot. Name it (leak-safe:
+        // sweepAbsences is synchronous with no early return between the marks). DESIGN NOTE: metabolism is the
+        // protected north-star floor and is deliberately NOT _conversationActive()-gated — its verify passes are
+        // cloud awaits that yield the loop, and a blanket defer would both starve the floor and break the
+        // __kickMetabolism warming kick. Only its sync glue can wedge a live turn; instrument first, relocate
+        // from the live log (increment 3) if this actually carries block-ms. See INTEGRATED_BUILD_TRACK §B0.
+        markActivity('metabolism-sweep');
         const _sw = rq.sweepAbsences({});
+        markActivity('idle');
         if (_sw.queued) console.log(`[metabolism] swept ${_sw.queued} expired gap(s) into the queue`);
         // SPINE 3 A2.2: surface one open delivery-promise (past its grace window) so a debt is never dropped.
         await _surfaceOpenPromise();
