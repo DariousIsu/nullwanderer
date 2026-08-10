@@ -718,6 +718,19 @@ const hotLinks = new Map();                     // recognised id → { born } �
 // visible map of what she has been recognising instead of blinking it away.
 const HOT_TTL = 300000;
 const WORLD_CAP = 320, HOT_CAP = 80;
+// ST↔LT RECOGNITION TRAFFIC (Lucas, 2026-08-10). Every match.hit is a real short-term→long-term resolution
+// the resolver computed and then discarded — the mention text was treated as "never a node." It IS the
+// short-term working item, and anchor2 is its long-term canonical, so the pair is a genuine cross-store edge.
+// These decay over minutes: a decompose sweep thickens the bridge, quiet drains it. render() folds recogLinks
+// into the link set (so crossDeg — and thus the binary isthmus and the long-dead federation styling — light
+// up from real data) and recogNodes into the visible id set. Declared here, above render(), same as hotLinks.
+const recogLinks = new Map();      // key `s\x01t` → { s, t, born, rel } — decaying ST↔LT edges + pulled LT-neighborhood edges
+const recogNodes = new Map();      // echo id → born — LT neighbours pulled in on recognition, aged out with the edges
+const _pulledAt = new Map();       // LT id → last ego(id,1) time, to dedup neighborhood pulls during a match firehose
+const RECOG_TTL = 180000;          // 3-minute slow decay — Lucas's "slow decay (minutes)"
+const PULL_COOLDOWN = 45000;       // don't re-pull one LT node's neighborhood more than once per 45s
+const RECOG_NODE_CAP = 600;        // ceiling on pulled-in neighborhood nodes — the flood valve during a sweep
+const PULL_CAP = 150;              // per-pull ceiling: a mega-hub's whole 1-hop set landing in one frame stutters the buffer rebuild (deg-7638 pulled 306 → ~5fps). Full for ~every real node; only hubs trim, to their highest-degree neighbours.
 
 function ensureObj(n, seed) {
   let o = objs.get(n.id);
@@ -749,6 +762,7 @@ function render(opts) {
   for (const id of shortTerm.nodes) ids.add(id);
   for (const id of zoeSet) ids.add(id);          // the personality ring is in every view — identity doesn't scope out
   for (const id of hotSet) ids.add(id);          // recognised corpus nodes stay visible while their thread cools
+  for (const id of recogNodes.keys()) ids.add(id);   // LT neighbours pulled in by a recognition, until they decay
   let list = []; for (const id of ids) { const o = objs.get(id); if (o) list.push(o); }
   if (list.length > NODE_CAP) {
     const rank = (o) => (o.store === 'sidequest' || o.id === focalId) ? 1e9 : (o.degree || 0);   // never drop the core/focal
@@ -761,6 +775,9 @@ function render(opts) {
   const linkSrc = mode === 'overview' ? overviewLinks : [...world.links.values()];
   for (const l of linkSrc) if (keep.has(l.source) && keep.has(l.target)) links.push({ source: l.source, target: l.target, category: l.category, color: l.color, relType: l.relType });
   for (const m of shortTerm.links.values()) if (keep.has(m.s) && keep.has(m.t)) links.push({ source: m.s, target: m.t, category: m.category, relType: m.relType });
+  // Recognition traffic: the ST→LT bridge edges + the pulled LT neighborhood. crossDeg below counts the ones
+  // that span stores, so the binary isthmus and the federation styling form from exactly these — real data.
+  for (const e of recogLinks.values()) if (keep.has(e.s) && keep.has(e.t)) links.push({ source: e.s, target: e.t, category: 'recognition', relType: e.rel });
   // Local degree drives the short-term half of the gradient — those nodes carry no global `degree`, so how
   // connected a thing is HERE is the honest measure of how central it currently is to what she's working on.
   for (const o of nodes) { o.localDeg = 0; o.crossDeg = 0; }
@@ -2991,6 +3008,70 @@ function updateHotLinks(now) {
   for (const [id, v] of hotLinks) if (now - v.born > HOT_TTL) { hotLinks.delete(id); changed = true; }
   if (changed) buildMarkers();
 }
+// A recognition edge (ST→LT) or a pulled neighborhood edge (LT↔LT). Re-touching an existing key refreshes
+// `born`, so a busy bridge stays lit and only genuinely idle links decay — the traffic accumulates under load.
+function addRecogEdge(s, t, rel) {
+  if (s == null || t == null || s === t) return;
+  const key = s + '\x01' + t, e = recogLinks.get(key);
+  if (e) e.born = performance.now();
+  else recogLinks.set(key, { s, t, born: performance.now(), rel: rel || null });
+}
+// A recognition mention is a SHORT-TERM working item, but it is NOT a persisted sq.db short-term row — so it
+// must NOT go through mintLocal/shortTerm.nodes, or the 5s reconciler prunes it and the bridge loses its ST
+// end (measured: the cross-store edge vanished on the very next poll). It lives in recogNodes and co-decays
+// with its edge. If the mention already exists as a corpus node, this is an LT-internal recognition — no ST
+// node is created and the edge is honestly same-store.
+function mintRecogAnchor(nm) {
+  if (!objs.has(nm)) ensureObj({ id: nm, store: 'sidequest', entityType: 'unknown', epistemic: 'told' }, coreCentroid3D());
+  recogNodes.set(nm, performance.now());
+  return objs.get(nm) || null;
+}
+// Bring the long-term node's EXISTING connections into view and hang them off it — "connections that already
+// exist in long term should appear in short term and connect to the proper long term node" (Lucas). Rides the
+// same kg:ego IPC the graph-walk uses (preload.js:170), so this is renderer-only, no reboot. Deduped per LT
+// node by a cooldown so a hub recognised repeatedly during a decompose sweep is pulled once, not every hit.
+async function pullNeighborhood(ltId) {
+  if (ltId == null) return;
+  const now = performance.now(), last = _pulledAt.get(ltId);
+  if (last != null && now - last < PULL_COOLDOWN) return;
+  _pulledAt.set(ltId, now);
+  if (!(window.sq && window.sq.kg && window.sq.kg.ego)) return;
+  let res; try { res = await window.sq.kg.ego(ltId, 1); } catch (e) { return; }
+  if (!res || !res.ok || res.error) return;
+  const anchor = objs.get(ltId);
+  const seed = (anchor && Number.isFinite(anchor.x)) ? { x: anchor.x, y: anchor.y, z: anchor.z || 0 } : coreCentroid3D();
+  const t2 = performance.now();
+  // Trim a single pull to PULL_CAP highest-degree neighbours so one mega-hub can't land its whole 1-hop set in
+  // a single frame. `kept` then gates the edges, so no trimmed node leaves a dangling half-edge behind.
+  let neigh = (res.nodes || []).filter((n) => n.id !== ltId);
+  if (neigh.length > PULL_CAP) neigh = neigh.slice().sort((a, b) => (b.degree || 0) - (a.degree || 0)).slice(0, PULL_CAP);
+  const kept = new Set([ltId]);
+  for (const n of neigh) {
+    ensureObj({ id: n.id, store: n.store || 'echo', entityType: n.entityType, color: n.color, summary: n.summary, degree: n.degree, prov: n.prov }, objs.has(n.id) ? null : seed);
+    recogNodes.set(n.id, t2);                 // decays out with the edges, so the pull is transient traffic
+    kept.add(n.id);
+  }
+  for (const l of (res.links || [])) { const s = linkEnd(l.source), t = linkEnd(l.target); if (s != null && t != null && kept.has(s) && kept.has(t)) addRecogEdge(s, t, l.relType); }
+  // The pool can balloon during a sweep, so drop the oldest beyond the ceiling before the render folds it in.
+  if (recogNodes.size > RECOG_NODE_CAP) {
+    const arr = [...recogNodes.entries()].sort((a, b) => a[1] - b[1]); const drop = recogNodes.size - RECOG_NODE_CAP;
+    for (let i = 0; i < drop; i++) recogNodes.delete(arr[i][0]);
+  }
+  scheduleMintRender();                        // match.hit streams — coalesced rebuild, one render per 240ms
+}
+// Age out recognition edges + pulled neighborhood. A change in MEMBERSHIP (not the visual fade) is what needs
+// a rebuild — crossDeg and the link cloud must reflect the current bridge. Runs on the same frame clock as the
+// halos, and the rebuild is coalesced, so an expiry burst still costs one render.
+function updateRecog(now) {
+  let changed = false;
+  for (const [k, e] of recogLinks) if (now - e.born > RECOG_TTL) { recogLinks.delete(k); changed = true; }
+  for (const [id, born] of recogNodes) if (now - born > RECOG_TTL) {
+    recogNodes.delete(id); changed = true;
+    // If nothing else holds it, drop the object too — otherwise transient recognition nodes accumulate in objs.
+    if (!full.has(id) && !world.nodes.has(id) && !shortTerm.nodes.has(id) && !zoeSet.has(id) && !hotSet.has(id)) objs.delete(id);
+  }
+  if (changed) scheduleMintRender();
+}
 // ---- FIRING TRACES: the axon, not a wire ----
 // The permanent threads had to go, but deleting them outright threw away the thing worth keeping — Lucas
 // liked the BUILD-UP, just not that it never cleared. So a recognition now fires like a neuron: the path
@@ -3378,9 +3459,19 @@ function dispatchActivity(evt) {
     const a = A(), b = B(); if (!a || !b) return 'miss';
     gEdge(V3(a), V3(b), new THREE.Color(nodeColor(a)).getHex()); addHotLink(a.id); addHotLink(b.id); return 'drew';
   }
-  if (k === 'match.hit') {                      // she recognised a known thing — fire at it, halo it.
-    const b = B(); if (!b) return 'miss';       // anchor is the MENTION TEXT and never a node; only anchor2 is real
-    addHotLink(b.id); gMatch(b); return 'drew';
+  if (k === 'match.hit') {                      // she recognised a known thing — fire at it, halo it, and THREAD IT IN.
+    const b = B(); if (!b) return 'miss';       // anchor2 is the long-term canonical (a real echo node)
+    addHotLink(b.id); gMatch(b);
+    // The mention (anchor) is the SHORT-TERM working item this resolution came from — long treated as "never a
+    // node" and discarded. It is exactly the ST end of a real cross-store edge. Mint it into the ST core, draw
+    // the decaying bridge to its long-term home, then pull that home's existing neighborhood in behind it. The
+    // ≤80-char / not-the-canonical / not-identity guards keep a stray prose anchor or a self-edge out.
+    const nm = evt.anchor == null ? '' : String(evt.anchor);
+    if (nm && nm.length <= 80 && nm !== b.id && !zoeSet.has(nm)) {
+      const a = mintRecogAnchor(nm);
+      if (a) { addRecogEdge(a.id, b.id, evt.rel); pullNeighborhood(b.id); }
+    }
+    return 'drew';
   }
   if (k === 'recall') {                         // a memory pulled inward — same: the known thing must be visible
     const a = A(); if (!a) return 'miss'; addHotLink(a.id); gMatch(a); gRecall(V3(a)); return 'drew';
@@ -3458,6 +3549,7 @@ function stepFrame(now) {
   if (engineRunning) { _stillFrames = 2; } else if (_stillFrames > 0) { _stillFrames--; }
   if (engineRunning || _stillFrames > 0 || SHAPE === 'skin' || activeNodes.size) { updateNodeCloud(); updateLinkCloud(); updateTendrils(); }
   updateHotLinks(now);          // expire cooled recognitions BEFORE the markers paint this frame
+  updateRecog(now);             // age out ST↔LT recognition edges + pulled neighborhood (slow decay, minutes)
   updateMarkers(now);           // halos breathe and cool on their own clock, so these always run
   updateTraces(now);
   updateRegion(now);
@@ -3787,7 +3879,9 @@ window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () =
   linkN: () => linkIndex.length,
   zoe: () => ({ ring: zoeSet.size, feeling: zoeFeeling, anchor: !!zoeAnchor, membrane: !!membrane, center: { x: Math.round(_coreCen.x), y: Math.round(_coreCen.y), z: Math.round(_coreCen.z) } }),
   loadSelf,
-  recog: () => ({ minted: hotSet.size, halos: hotLinks.size, markers: markerIndex.length, ids: [...hotLinks.keys()].slice(0, 6) }),
+  recog: () => ({ minted: hotSet.size, halos: hotLinks.size, markers: markerIndex.length, edges: recogLinks.size, pulled: recogNodes.size, ids: [...hotLinks.keys()].slice(0, 6) }),
+  // drive a synthetic recognition end-to-end without waiting for the resolver — proves the whole bridge path
+  bridge: (a, b, rel) => { const nm = String(a || 'TEST_ST'); const lt = mintEcho(String(b || 'TEST_LT')); const st = mintRecogAnchor(nm); if (st && lt) { addRecogEdge(st.id, lt.id, rel || 'recognizes'); pullNeighborhood(lt.id); } return { edges: recogLinks.size, pulled: recogNodes.size }; },
   card: () => (cardEl && cardEl.style.display === 'block') ? { name: cardEl.querySelector('.nm').textContent, chips: [...cardEl.querySelectorAll('.chip')].map(c => c.textContent), summary: cardEl.querySelector('.sum').textContent.slice(0, 90), evidence: cardEl.querySelector('.ev').textContent.slice(0, 220) } : null,
   showCard, tip: (n) => tipLine(n),
   // Seed synthetic nodes straight into the object store. The evidence encoding is only provable with nodes

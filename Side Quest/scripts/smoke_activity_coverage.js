@@ -97,9 +97,13 @@ function loadDispatcher(src) {
     addHotLink: spy('addHotLink'), loadSelf: spy('loadSelf'),
     // her face on the cloud: hear/say/think move it, so the dispatcher reaches these too
     faceExpression: spy('faceExpression'), faceSpeak: spy('faceSpeak'), face: { target: 0 },
+    // ST↔LT recognition traffic (2026-08-10): match.hit now mints the working mention and threads a decaying
+    // bridge to its long-term home + pulls that home's neighborhood. Stubbed so the dispatcher runs offline.
+    zoeSet: { has: () => false },
+    mintRecogAnchor: (nm) => (nm == null || nm === '' ? null : { id: nm, x: 4, y: 5, z: 6, store: 'sidequest' }),
   };
   for (const g of ['queueBorn', 'queueNote', 'gEnrich', 'gEdge', 'gMatch', 'gRecall', 'gPromote', 'gAbsorb',
-    'gThink', 'gCross', 'gEvidence', 'gInflow', 'gRefute']) deps[g] = spy(g);
+    'gThink', 'gCross', 'gEvidence', 'gInflow', 'gRefute', 'addRecogEdge', 'pullNeighborhood']) deps[g] = spy(g);
   // sloppy-mode Function body, so `with` is available to bind the stubs without rewriting the source.
   const fn = new Function('deps', `with (deps) { ${fnSrc}\n return dispatchActivity; }`)(deps);
   return { fn, calls };
@@ -207,6 +211,18 @@ try {
     for (const s of silentAtRuntime) console.log('      ' + s);
   } else {
     console.log(`PASS: all ${ran} emitted kinds dispatched to a real gesture (executed, not just grepped).`);
+  }
+
+  // THE ST↔LT BRIDGE is the whole point of match.hit now — assert it actually writes the cross-store edge,
+  // not just the halo it drew before. "It drew a gesture" was true of the halo-only version too, so a revert
+  // to that would pass the coverage check above; only a check for addRecogEdge specifically catches it.
+  calls.length = 0;
+  fn({ kind: 'match.hit', db: 'sidequest', anchor: 'a working mention', anchor2: 'Canonical LT Object' });
+  if (!calls.some((c) => c.name === 'addRecogEdge')) {
+    failed = true;
+    console.log('FAIL: match.hit no longer writes a recognition edge (addRecogEdge) — the ST↔LT bridge is gone.');
+  } else {
+    console.log('PASS: match.hit writes the ST↔LT recognition edge (bridge intact).');
   }
 
   // VERSION SKEW. The renderer reloads independently of a main-process reboot, so for a window the old
