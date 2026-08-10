@@ -81,6 +81,10 @@ ok('salvaged output now PASSES the reject contract', rejectEditOutput(salv, '', 
 ok('multi-line preamble stripped', /^- Acadia/.test(salvageNarration('Okay.\nI\'ll put this together.\n- Acadia\n- Allen') || ''));
 // unsalvageable: deliberation runs THROUGH the content
 ok('deliberation-through-content is NOT salvaged', salvageNarration('Let me check the pipeline docs.\nI need to verify each one.\nStill working.') === null);
+// the MS PSC contact-table leak (08-09): "I have enough … Let me compile" preamble above the table
+const msLeak = 'I have enough grounded data to build the contact table. Let me compile the final deliverable.\n\nKey findings:\n\n| Name | Email |\n|------|-------|\n| Chris Brown | northern.district@psc.ms.gov |';
+ok('rejectEditOutput flags the "I have enough…" preamble', /narration/.test(rejectEditOutput(msLeak, '', 'build a contact table') || ''));
+ok('salvage strips the preamble, keeps the findings+table', (() => { const s = salvageNarration(msLeak); return s && /Key findings/.test(s) && /Chris Brown/.test(s) && !/I have enough/.test(s); })());
 // no narration prefix → nothing to salvage (returns null; caller keeps original)
 ok('a clean document salvages to null (no change needed)', salvageNarration('# Title\n- a\n- b') === null);
 // a pure-prose reply with no document structure is not salvaged

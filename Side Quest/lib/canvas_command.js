@@ -87,7 +87,10 @@ function detectEdit(text, { workingFresh = false } = {}) {
 // First-person process talk — a document never opens by describing the work of making itself.
 // "I'll"/"I'm going" contractions have NO space, so `i\s+'ll` missed them — line-1 "I'll put this
 // together" slipped the reject contract (08-09). Match the contraction directly.
-const NARRATION_OPEN = /^(?:i\s+(?:need|want|should|will|am\s+going)\b|i['’](?:ll|m\s+going)\b|let\s+me\b|okay|alright|first,?\s+(?:i|let)\b|looking\s+at\b|to\s+(?:apply|do)\s+this\b|sure\b|got\s+it\b|here['’]?s\b|here\s+(?:is|are|you\s+go)\b)/i;
+// "I have enough … to build/compile" is an operator sign-off preamble (08-09, the MS PSC contact
+// table landed with "I have enough grounded data to build the contact table. Let me compile …" on
+// top) — "have"/"'ve got" weren't narration verbs, so the line slipped. Added, tightly scoped.
+const NARRATION_OPEN = /^(?:i\s+(?:need|want|should|will|am\s+going|have\s+(?:enough|all|what|everything|the\s+))|i['’](?:ll|m\s+going|ve\s+(?:got|now))|let\s+me\b|okay|alright|first,?\s+(?:i|let)\b|looking\s+at\b|to\s+(?:apply|do)\s+this\b|sure\b|got\s+it\b|here['’]?s\b|here\s+(?:is|are|you\s+go)\b)/i;
 // Deliberation markers anywhere — "let me check the pipeline documents" is reasoning, not content.
 const NARRATION_BODY = /\blet\s+me\s+(?:check|look|see|verify|find|start)\b|\bi(?:'ll| will)\s+(?:check|look|need|start|gather)\b/i;
 // Instructions that legitimately make a doc smaller.
