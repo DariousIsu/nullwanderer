@@ -63,8 +63,12 @@ function lastExternalGatherTs() { return _lastExternalGatherTs; }
 // excavate browser/vision scan. Without this, a gather reached purely by browser (no web_fetch/web_extract
 // dispatch, or a ledger-reused fetch that makes no call) leaves _lastGatherTs unstamped, and the absence
 // gate would false-scold an honest "couldn't find it." Live drive 2026-08-10 caught exactly this hole.
-// The browser SERP + excavate browser scan ARE external retrieval, so stamp BOTH tiers.
-function markGather() { const t = Date.now(); _lastGatherTs = t; _lastExternalGatherTs = t; }
+// The browser SERP + excavate browser scan ARE external retrieval, so stamp BOTH tiers — but only on the
+// USER turn (a background research excavate runs under an autonomous ambient lane and must not stamp).
+function markGather() {
+  try { if (require('./lane').isAutonomous()) return; } catch {}
+  const t = Date.now(); _lastGatherTs = t; _lastExternalGatherTs = t;
+}
 
 const cap = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''));
 // A tool call that failed on ARGS (not data) — worth one corrected retry in routeNeed.
@@ -573,9 +577,13 @@ class EchoSuit {
       // gate. Stamped UNCONDITIONALLY (even an errored search is a look, not a confabulated absence): the
       // gate fails open, so the maximally-generous stamp is the safe one. See _GATHER_TOOLS above.
       try {
-        if (tag && tag.kind === 'do' && _GATHER_TOOLS.has(tag.name)) {
+        // TURN-SCOPED (live-drive 2026-08-10): only a NON-autonomous dispatch counts — a background lane
+        // (news-hourly, autonomic ticks, directed research; all run under lane.run({autonomous:true}))
+        // gathering concurrently must NOT read as "SHE looked THIS user turn." Without this, near-constant
+        // background web_fetch pollutes the global stamp and neuters the absence gate + step-5 verify.
+        if (tag && tag.kind === 'do' && _GATHER_TOOLS.has(tag.name) && !require('./lane').isAutonomous(opts && opts.autonomous)) {
           const _gt = Date.now();
-          _lastGatherTs = _gt;                                              // broad: any retrieval
+          _lastGatherTs = _gt;                                              // broad: any (user-turn) retrieval
           if (_EXTERNAL_GATHER_TOOLS.has(tag.name)) _lastExternalGatherTs = _gt;   // external only: web/news/wiki
         }
       } catch { /* stamping never breaks dispatch */ }

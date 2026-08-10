@@ -153,6 +153,17 @@ function mockClient(overrides = {}) {
     await new Promise((r) => setTimeout(r, 2));
     S.markGather();
     ok('markGather() (browser lane) advances the external stamp too', S.lastExternalGatherTs() > extAfter);
+    // TURN-SCOPED: a dispatch on the AUTONOMOUS (background) lane must NOT stamp — background gathering is
+    // not "she looked THIS user turn." Wrap the dispatch in an autonomous ambient lane and assert no advance.
+    const lane = require('../lib/lane');
+    const broadBefore = S.lastGatherTs(), extBefore2 = S.lastExternalGatherTs();
+    await new Promise((r) => setTimeout(r, 2));
+    await lane.run({ autonomous: true }, () => suit.dispatch({ kind: 'do', name: 'web_fetch', args: { url: 'x' } }));
+    ok('an AUTONOMOUS (background) external gather does NOT advance the broad stamp', S.lastGatherTs() === broadBefore);
+    ok('an AUTONOMOUS (background) external gather does NOT advance the external stamp', S.lastExternalGatherTs() === extBefore2);
+    await new Promise((r) => setTimeout(r, 2));
+    await lane.run({ autonomous: true }, async () => { S.markGather(); });
+    ok('markGather() under an autonomous lane does NOT stamp', S.lastExternalGatherTs() === extBefore2);
   }
 
   console.log('\ndispatch error feedback (self-correction):');
