@@ -203,6 +203,15 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
             if (!state || !String(state).trim()) return send(400, { ok: false, error: 'state required (e.g. "LA")' });
             const lr = require('./local_roster');
             if (action === 'coverage') return send(200, { ok: true, ...lr.coverage(String(state)) });
+            if (action === 'clear') {
+              // complete any open local-roster task from the fill producer — so a test enqueue never leaves
+              // tasks grinding the metabolism (committing a whole state to research is Lucas's call, not a test's).
+              const rq = require('./recheck_queue');
+              const rows = rq.openByKind({ kind: 'local-roster', limit: 5000, now: Date.now() + 3600000 })
+                .filter((r) => r.born_from === 'local-roster-fill');
+              for (const r of rows) rq.complete(r.id, { outcome: 'test-port cleanup' });
+              return send(200, { ok: true, cleared: rows.length });
+            }
             return send(200, { ok: true, ...lr.enqueueState(String(state), { limit: limit || null }) });
           } catch (e) { return send(500, { ok: false, error: e.message }); }
         });
