@@ -57,6 +57,16 @@ function due({ limit = 3, now = Date.now() } = {}) {
   } catch { return []; }
 }
 
+/** Open items of a given KIND, past due, oldest first. Used by the delivery path to surface promises
+ *  (which are excluded from the verification drain). */
+function openByKind({ kind, limit = 1, now = Date.now() } = {}) {
+  try {
+    return db().getDb().prepare(
+      `SELECT * FROM recheck_queue WHERE status = 'open' AND kind = ? AND due_ts <= ? ORDER BY due_ts ASC LIMIT ?`
+    ).all(str(kind), now, Math.max(1, limit)).map((r) => ({ ...r, detail: r.detail ? JSON.parse(r.detail) : null }));
+  } catch { return []; }
+}
+
 function complete(id, { outcome = '', now = Date.now() } = {}) {
   try { db().getDb().prepare(`UPDATE recheck_queue SET status = 'done', outcome = ?, last_attempt_ts = ?, attempts = attempts + 1 WHERE id = ?`).run(str(outcome).slice(0, 500), now, id); return true; }
   catch { return false; }
@@ -263,4 +273,4 @@ function applyOutcome(item, ans, { now = Date.now() } = {}) {
   return { action: 'deferred' };
 }
 
-module.exports = { enqueue, due, complete, defer, stats, sweepAbsences, buildPrompt, parseVerdict, parseRoster, applyOutcome, backoffMs, isBatchable, buildBatchPrompt, parseBatchVerdicts, BATCH_MAX };
+module.exports = { enqueue, due, openByKind, complete, defer, stats, sweepAbsences, buildPrompt, parseVerdict, parseRoster, applyOutcome, backoffMs, isBatchable, buildBatchPrompt, parseBatchVerdicts, BATCH_MAX };

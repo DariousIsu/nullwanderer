@@ -107,6 +107,17 @@ ok('a gap with no line stays inconclusive (→ defer path)', rq.parseBatchVerdic
 ok('em-dash and case tolerated', rq.parseBatchVerdicts('gap 2 — resolved: fact (source: z)', 2)[1].verdict === 'resolved');
 ok('out-of-range GAP index ignored', rq.parseBatchVerdicts('GAP 9 RESOLVED: x', 2).every((v) => v.verdict === 'inconclusive'));
 
+// ── openByKind: the delivery path's getter for open promises (Spine 3) ──────────────────────────
+rq.enqueue({ kind: 'promise', subject: 'roster#abc', detail: { deliverable: 'roster' }, dueTs: NOW - 1, now: NOW });
+rq.enqueue({ kind: 'promise', subject: 'list#def', detail: { deliverable: 'list' }, dueTs: NOW + 3600000, now: NOW });   // still in grace
+const openProm = rq.openByKind({ kind: 'promise', limit: 10, now: NOW });
+ok('openByKind returns the due promise', openProm.some((r) => r.subject === 'roster#abc'));
+ok('openByKind excludes a promise still in its grace window', !openProm.some((r) => r.subject === 'list#def'));
+ok('openByKind is kind-scoped (no non-promise items)', openProm.every((r) => r.kind === 'promise'));
+ok('openByKind carries the parsed detail (deliverable)', (openProm.find((r) => r.subject === 'roster#abc').detail || {}).deliverable === 'roster');
+rq.complete(openProm.find((r) => r.subject === 'roster#abc').id, { outcome: 'surfaced-to-user', now: NOW });
+ok('a surfaced promise is completed (leaves openByKind)', !rq.openByKind({ kind: 'promise', limit: 10, now: NOW }).some((r) => r.subject === 'roster#abc'));
+
 const st = rq.stats();
 ok('stats report open + kinds', st.open >= 1 && Array.isArray(st.byKind));
 

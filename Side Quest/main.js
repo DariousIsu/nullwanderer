@@ -2248,6 +2248,8 @@ app.whenReady().then(() => {
         const rq = require('./lib/recheck_queue');
         const _sw = rq.sweepAbsences({});
         if (_sw.queued) console.log(`[metabolism] swept ${_sw.queued} expired gap(s) into the queue`);
+        // SPINE 3 A2.2: surface one open delivery-promise (past its grace window) so a debt is never dropped.
+        await _surfaceOpenPromise();
         // M9.4 — THE TREND LINE (2026-08-08): one snapshot per day of the open-gap inventory, so
         // "the backlog must DECLINE week over week" is a measurement, not a hope. Read the series
         // back via meta keys metabolism.trend.YYYY-MM-DD.
@@ -14845,12 +14847,40 @@ function _bookDeliveryPromises(say, { sessionId, turnStartTs = 0 } = {}) {
     })();
     if (kept) return;   // a deliverable landed this turn → don't book
     const rq = require('./lib/recheck_queue');
+    const dueTs = Date.now() + PROMISE_GRACE_MS;   // a grace window: she may still deliver before we surface it
     for (const p of promises) {
       const subject = dlv.bookingSubject(p);
-      const r = rq.enqueue({ kind: 'promise', subject, detail: { say: p.sentence, deliverable: p.deliverable, sessionId }, priority: 6, bornFrom: 'delivery-binding' });
+      const r = rq.enqueue({ kind: 'promise', subject, detail: { say: p.sentence, deliverable: p.deliverable, sessionId }, priority: 6, dueTs, bornFrom: 'delivery-binding' });
       if (r && r.ok && !r.existing) console.log(`[delivery] booked unkept promise → recheck#${r.id}: ${p.deliverable}`);
     }
   } catch (e) { console.error('[delivery] promise-booking failed:', e.message); }
+}
+
+// SPINE 3 A2.2 — close the loop: surface an open, past-grace delivery-promise to Lucas so it is never
+// silently dropped. Picks the OLDEST due promise, asks honestly whether to deliver it now, and CLOSES the
+// row (surfacing IS the binding — the debt is now visible; if he says yes it becomes fresh work, if not it
+// was honestly raised). One per tick, respects surface etiquette (heartbeat delivers when he's present).
+const PROMISE_GRACE_MS = 3 * 60 * 1000;
+async function _surfaceOpenPromise() {
+  try {
+    const sid = currentSessionId;
+    if (!sid) return;
+    if (_conversationActive()) return;   // surface a "still owe you X" in a lull, never mid-exchange
+    const rq = require('./lib/recheck_queue');
+    const items = rq.openByKind({ kind: 'promise', limit: 1 });
+    if (!items.length) return;
+    const it = items[0];
+    const d = it.detail || {};
+    const what = String(d.deliverable || 'that').replace(/\s+/g, ' ').trim();
+    const uname = (() => { try { return db.getMeta('user_name') || 'you'; } catch { return 'you'; } })();
+    const msg = `Earlier I said I'd get ${what} together for ${uname}, and I haven't actually delivered it yet. Want me to do that now, or keep it on the list?`;
+    const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'delivery', unprompted: 1 });
+    try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+    try { require('./lib/blackboard').append({ source: 'delivery', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
+    rq.complete(it.id, { outcome: 'surfaced-to-user' });
+    console.log(`[delivery] surfaced open promise → recheck#${it.id} closed: ${what}`);
+  } catch (e) { console.error('[delivery] surface failed:', e.message); }
 }
 
 // surfaces the key finding + one concrete follow-up, so she doesn't just report "done" but actually opens
