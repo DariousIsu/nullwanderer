@@ -175,7 +175,8 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
             if (!say || !String(say).trim()) return send(400, { ok: false, error: 'say required' });
             const detected = require('./delivery').detectPromise(String(say));
             if (typeof bookPromises === 'function') bookPromises(String(say), { sessionId: 'test-port', turnStartTs: Date.now() });
-            const open = require('./recheck_queue').openByKind({ kind: 'promise', limit: 20 });
+            // reveal grace-window promises too (now far in the future) so a just-booked row is visible
+            const open = require('./recheck_queue').openByKind({ kind: 'promise', limit: 20, now: Date.now() + 3600000 });
             return send(200, { ok: true, detected, openPromises: open.map((r) => ({ id: r.id, subject: r.subject, deliverable: (r.detail || {}).deliverable })) });
           } catch (e) { return send(500, { ok: false, error: e.message }); }
         });
