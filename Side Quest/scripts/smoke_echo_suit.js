@@ -138,6 +138,21 @@ function mockClient(overrides = {}) {
     await new Promise((r) => setTimeout(r, 2));
     S.markGather();
     ok('markGather() advances the gather stamp (browser/excavate lane)', typeof S.markGather === 'function' && S.lastGatherTs() > preMark);
+    // TWO-TIER: an INTERNAL recall (search_knowledge) advances the BROAD stamp but NOT the external one;
+    // an EXTERNAL tool (quick_lookup) advances BOTH. The absence gate + step 5 read the external stamp.
+    ok('lastExternalGatherTs is exported and numeric', typeof S.lastExternalGatherTs === 'function' && typeof S.lastExternalGatherTs() === 'number');
+    const extBefore = S.lastExternalGatherTs();
+    await new Promise((r) => setTimeout(r, 2));
+    await suit.dispatch({ kind: 'do', name: 'search_knowledge', args: { query: 'x' } });   // INTERNAL recall
+    ok('an INTERNAL recall (search_knowledge) does NOT advance the external stamp', S.lastExternalGatherTs() === extBefore);
+    ok('…but it DOES advance the broad stamp', S.lastGatherTs() >= extBefore);
+    await new Promise((r) => setTimeout(r, 2));
+    await suit.dispatch({ kind: 'do', name: 'quick_lookup', args: { query: 'x' } });        // EXTERNAL retrieval
+    ok('an EXTERNAL tool (quick_lookup) DOES advance the external stamp', S.lastExternalGatherTs() > extBefore);
+    const extAfter = S.lastExternalGatherTs();
+    await new Promise((r) => setTimeout(r, 2));
+    S.markGather();
+    ok('markGather() (browser lane) advances the external stamp too', S.lastExternalGatherTs() > extAfter);
   }
 
   console.log('\ndispatch error feedback (self-correction):');

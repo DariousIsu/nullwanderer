@@ -35,24 +35,36 @@ function lastContactWriteTs() { return _lastContactWriteTs; }
 // OPEN, so a retrieval tool MISSING here would let an honest absence be wrongly scolded — over-inclusion is
 // the safe error (at worst it lets one confabulated absence pass, never a false accusation). Any dispatched
 // tool whose purpose is looking-something-up counts.
+// TWO-TIER (2026-08-10, live-drive refinement). The BROAD stamp (_lastGatherTs) counts ANY retrieval,
+// including the automatic memory/KG recall (search_knowledge) that fires on nearly EVERY turn. That makes it
+// useless for "did she look OUT THERE for THIS answer" — the question the absence gate + step-5 verify ask.
+// So a second, EXTERNAL-only stamp (_lastExternalGatherTs) counts only web/browser/news/wiki retrieval. The
+// absence gate + step 5 read the EXTERNAL stamp; anything wanting "any retrieval" keeps the broad one.
 let _lastGatherTs = 0;
-const _GATHER_TOOLS = new Set([
-  // external retrieval
-  'search', 'web_search', 'web_fetch', 'web_extract', 'web_resolve_oa', 'news_search', 'quick_lookup',
+let _lastExternalGatherTs = 0;
+// EXTERNAL retrieval — went out to the web/news/wiki, not just internal memory. (search_lane + excavate
+// browser lanes stamp this via markGather.)
+const _EXTERNAL_GATHER_TOOLS = new Set([
+  'web_search', 'web_fetch', 'web_extract', 'web_resolve_oa', 'news_search', 'quick_lookup',
   'academic_search', 'arxiv_search', 'mediawiki_search', 'mediawiki_get_extract', 'gdelt_article_search',
   'browser_navigate', 'browser_extract', 'browser_snapshot',
-  // internal knowledge / graph / documents
-  'search_knowledge', 'search_facts', 'search_entities', 'search_documents_semantic', 'search_contacts',
+]);
+// INTERNAL retrieval — memory / graph / documents / CRM. Stamps the BROAD signal only.
+const _INTERNAL_GATHER_TOOLS = new Set([
+  'search', 'search_knowledge', 'search_facts', 'search_entities', 'search_documents_semantic', 'search_contacts',
   'kg_query_local', 'kg_query_global', 'kg_neighborhood', 'knowledge_neighborhood', 'find_mentions',
   'get_sources_for', 'get_entity', 'get_document', 'get_document_by_path', 'get_contact', 'list_contacts',
   'list_contacts_compact', 'list_contacts_page', 'db_query', 'research_brief',
 ]);
+const _GATHER_TOOLS = new Set([..._EXTERNAL_GATHER_TOOLS, ..._INTERNAL_GATHER_TOOLS]);
 function lastGatherTs() { return _lastGatherTs; }
+function lastExternalGatherTs() { return _lastExternalGatherTs; }
 // Direct stamp for gather lanes that DON'T go through dispatch() — the browser SERP (search_lane) and the
 // excavate browser/vision scan. Without this, a gather reached purely by browser (no web_fetch/web_extract
 // dispatch, or a ledger-reused fetch that makes no call) leaves _lastGatherTs unstamped, and the absence
 // gate would false-scold an honest "couldn't find it." Live drive 2026-08-10 caught exactly this hole.
-function markGather() { _lastGatherTs = Date.now(); }
+// The browser SERP + excavate browser scan ARE external retrieval, so stamp BOTH tiers.
+function markGather() { const t = Date.now(); _lastGatherTs = t; _lastExternalGatherTs = t; }
 
 const cap = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''));
 // A tool call that failed on ARGS (not data) — worth one corrected retry in routeNeed.
@@ -561,7 +573,11 @@ class EchoSuit {
       // gate. Stamped UNCONDITIONALLY (even an errored search is a look, not a confabulated absence): the
       // gate fails open, so the maximally-generous stamp is the safe one. See _GATHER_TOOLS above.
       try {
-        if (tag && tag.kind === 'do' && _GATHER_TOOLS.has(tag.name)) _lastGatherTs = Date.now();
+        if (tag && tag.kind === 'do' && _GATHER_TOOLS.has(tag.name)) {
+          const _gt = Date.now();
+          _lastGatherTs = _gt;                                              // broad: any retrieval
+          if (_EXTERNAL_GATHER_TOOLS.has(tag.name)) _lastExternalGatherTs = _gt;   // external only: web/news/wiki
+        }
       } catch { /* stamping never breaks dispatch */ }
     }
   }
@@ -1696,7 +1712,7 @@ function routeCacheStats() {
 }
 
 module.exports = {
-  routeCacheStats, _raceTimeout, lastContactWriteTs, lastGatherTs, markGather,
+  routeCacheStats, _raceTimeout, lastContactWriteTs, lastGatherTs, lastExternalGatherTs, markGather,
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
   placeholderComplaint, sanitizeFtsQuery, prepareDoArgs, recipeMisrouteHint,
   setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates, _salienceDominant

@@ -14719,7 +14719,9 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
     // ACTUALLY RAN this turn. Probe = echo_suit.lastGatherTs() (stamped centrally in dispatch). Fails OPEN.
     try {
       const abs = _mc.groundAbsence(out, {
-        gatherRanThisTurn: () => { try { return require('./lib/echo_suit').lastGatherTs() >= (turnStartTs || 0); } catch { return true; } },
+        // EXTERNAL gather only: an internal memory/CRM recall (which fires nearly every turn) does not justify
+        // declaring a WEB-findable fact blank — she must have actually looked OUT THERE. Fails OPEN.
+        gatherRanThisTurn: () => { try { return require('./lib/echo_suit').lastExternalGatherTs() >= (turnStartTs || 0); } catch { return true; } },
       });
       if (!abs.ok) {
         const vcorr = _mc.verificationCorrection(abs.violations);
@@ -14765,7 +14767,9 @@ async function _verifyFactFollowup(say, { sessionId, turnStartTs = 0, evidence =
     const _mc = require('./lib/metacognition');
     // only the PURE-RECALL case: a groundFacts violation AND no gather ran this turn (stage 4 already handled
     // the gathered case inline). If a gather ran, don't second-guess with another message.
-    const gathered = (() => { try { return require('./lib/echo_suit').lastGatherTs() >= (turnStartTs || 0); } catch { return true; } })();
+    // EXTERNAL gather only: internal auto-recall fires every turn, so the broad stamp would make this ~never
+    // run. Pure recall = no EXTERNAL search this turn → the claim was never checked out there → verify it.
+    const gathered = (() => { try { return require('./lib/echo_suit').lastExternalGatherTs() >= (turnStartTs || 0); } catch { return true; } })();
     if (gathered) return;
     const gf = _mc.groundFacts(say, { evidence });
     if (gf.ok || !gf.violations.length) return;
