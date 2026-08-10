@@ -207,6 +207,8 @@ ok(m.groundFacts('The weather in Baton Rouge is mild today and the roads are cle
   'presence FP: no current-event predicate → not a checkable claim, no violation');
 ok(m.groundFacts('Governor Jeff Landry signed the bill into law on Tuesday.', { evidence: 'Coverage confirms Governor Jeff Landry signed the bill Tuesday after the House vote.' }).ok,
   'presence FP: a real event fully supported by evidence → no violation');
+ok(m.groundFacts('Cleco was acquired by Stonepeak and Bernhard Capital.', { evidence: 'A press release confirms Cleco was acquired by Stonepeak Infrastructure Partners and Bernhard Capital in a deal announced last year.' }).ok,
+  'presence FP (live-drive regression): a SHORTER "X and Y" claim grounds against a LONGER "X Extra Words and Y" evidence — the two firms ground individually, no "and"-bridge brittleness');
 ok(/unconfirmed|verify/i.test(m.verificationCorrection([{ kind: 'fact', claim: 'x', novelTerms: ['Stonepeak'] }])), 'verificationCorrection: fact → correction flags it unconfirmed and names the term');
 
 // --- SPINE 2: PREDICTION (false certainty) — the §7.6 wrong-prediction: an outcome stated as fact ---

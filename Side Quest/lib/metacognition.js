@@ -337,7 +337,11 @@ function groundAbsence(say, { gatherRanThisTurn = null } = {}) {
 // abstains (a bare recall isn't proof of invention; that case is the bounded-verify path, step 3b). Returns
 // {ok, violations:[{kind:'fact', claim, novelTerms}]}.
 const _FACT_EVENT_RE = /\b(?:acquired|acquisition|bought|buy(?:s|ing)?|purchased|merg(?:ed|er|ing)|appointed|named|elected|re-?elected|won|defeated|resigned|stepp(?:ed|ing)\s+down|ousted|died|passed\s+away|launch(?:ed|ing)?|signed|enacted|hired|fired|nominated|confirmed|took\s+over|sold|closed\s+on|indicted|convicted|sworn\s+in)\b/i;
-const _PROPER_RE = /\b([A-Z][a-zA-Z0-9&.\-]+(?:\s+(?:of|and|&|the)?\s*[A-Z][a-zA-Z0-9&.\-]+)*)\b/g;
+// NB: the bridge deliberately EXCLUDES "and" — "and" joins two DISTINCT entities ("Stonepeak and Bernhard
+// Capital"), and merging them into one term made the grounding check brittle: a claim's "Stonepeak and
+// Bernhard Capital" failed to substring-match evidence's "Stonepeak Infrastructure Partners and Bernhard
+// Capital" and false-fired (live drive 2026-08-10). Kept as separate terms, each grounds on its own.
+const _PROPER_RE = /\b([A-Z][a-zA-Z0-9&.\-]+(?:\s+(?:of|&|the)?\s*[A-Z][a-zA-Z0-9&.\-]+)*)\b/g;
 // capitalized words that are just sentence machinery / common openers — never the specifics of a claim
 const _PROPER_STOP = new Set(['The', 'This', 'That', 'These', 'Those', 'There', 'Here', 'He', 'She', 'It', 'They', 'We', 'You', 'I', 'A', 'An', 'And', 'But', 'Or', 'So', 'As', 'If', 'In', 'On', 'At', 'To', 'For', 'Of', 'By', 'With', 'From', 'Also', 'However', 'Meanwhile', 'According', 'Yes', 'No', 'While', 'When', 'Where', 'Then', 'Now', 'After', 'Before', 'Both', 'Its', 'His', 'Her', 'Their', 'Our', 'My']);
 function groundFacts(say, { evidence = '' } = {}) {
