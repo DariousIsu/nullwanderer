@@ -14723,6 +14723,20 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
         if (vcorr) { console.warn(`[antifab] asserted an absence without searching → corrected: ${abs.violations.map((v) => v.kind + ':' + v.claim).join(', ').slice(0, 160)}`); out += vcorr; }
       }
     } catch {}
+    // (4) SPINE 2 — PRESENCE (confabulation): a current-event fact whose specifics aren't in this turn's
+    // evidence. CONSERVATIVE here (step 3a): only hedge when a gather ALSO ran this turn — "she looked, found
+    // other things, but asserted an unsupported specific," the highest-confidence confab. Pure recall (no
+    // gather) is the bounded-verify path (step 3b) and is left alone for now. Fails OPEN.
+    try {
+      const _gathered = (() => { try { return require('./lib/echo_suit').lastGatherTs() >= (turnStartTs || 0); } catch { return false; } })();
+      if (_gathered && evidence && String(evidence).length >= 40) {
+        const gf = _mc.groundFacts(out, { evidence });
+        if (!gf.ok) {
+          const fcorr = _mc.verificationCorrection(gf.violations);
+          if (fcorr) { console.warn(`[antifab] asserted an unsupported current-event fact → corrected: ${gf.violations.map((v) => (v.novelTerms || []).join('/')).join(', ').slice(0, 160)}`); out += fcorr; }
+        }
+      }
+    } catch {}
     return out;
   } catch (e) { console.error('[antifab] verification failed:', e.message); return say; }
 }

@@ -329,13 +329,57 @@ function groundAbsence(say, { gatherRanThisTurn = null } = {}) {
   return { ok: violations.length === 0, violations };
 }
 
+// PRESENCE (confabulation): a reply asserting a specific CURRENT-EVENT fact ("Cleco was acquired by Stonepeak
+// and Bernhard Capital") whose distinguishing proper nouns appear NOWHERE in the turn's evidence (the gathered
+// text + the conversation) — the Cleco signature (0 corroborating hits). The predicate makes the claim
+// falsifiable; the novel proper nouns are the specifics that must be grounded. PURE: evidence injected.
+// Conservative like groundEmails: if evidence is thin (<40 chars — nothing was really gathered or said) it
+// abstains (a bare recall isn't proof of invention; that case is the bounded-verify path, step 3b). Returns
+// {ok, violations:[{kind:'fact', claim, novelTerms}]}.
+const _FACT_EVENT_RE = /\b(?:acquired|acquisition|bought|buy(?:s|ing)?|purchased|merg(?:ed|er|ing)|appointed|named|elected|re-?elected|won|defeated|resigned|stepp(?:ed|ing)\s+down|ousted|died|passed\s+away|launch(?:ed|ing)?|signed|enacted|hired|fired|nominated|confirmed|took\s+over|sold|closed\s+on|indicted|convicted|sworn\s+in)\b/i;
+const _PROPER_RE = /\b([A-Z][a-zA-Z0-9&.\-]+(?:\s+(?:of|and|&|the)?\s*[A-Z][a-zA-Z0-9&.\-]+)*)\b/g;
+// capitalized words that are just sentence machinery / common openers — never the specifics of a claim
+const _PROPER_STOP = new Set(['The', 'This', 'That', 'These', 'Those', 'There', 'Here', 'He', 'She', 'It', 'They', 'We', 'You', 'I', 'A', 'An', 'And', 'But', 'Or', 'So', 'As', 'If', 'In', 'On', 'At', 'To', 'For', 'Of', 'By', 'With', 'From', 'Also', 'However', 'Meanwhile', 'According', 'Yes', 'No', 'While', 'When', 'Where', 'Then', 'Now', 'After', 'Before', 'Both', 'Its', 'His', 'Her', 'Their', 'Our', 'My']);
+function groundFacts(say, { evidence = '' } = {}) {
+  const violations = [];
+  const ev = String(evidence || '');
+  if (ev.trim().length < 40) return { ok: true, violations };   // nothing substantive to ground against → abstain (step 3b handles bare recall)
+  const evLower = ev.toLowerCase();
+  const sentences = String(say || '').split(/(?<=[.!?])\s+|\n+/);
+  for (const sent of sentences) {
+    const s = sent.trim();
+    if (s.length < 12 || _ART_FUTURE_RE.test(s)) continue;
+    if (!_FACT_EVENT_RE.test(s)) continue;                        // fast-path: is this a checkable current-event claim?
+    const novel = [];
+    let m; _PROPER_RE.lastIndex = 0;
+    while ((m = _PROPER_RE.exec(s)) !== null) {
+      const term = String(m[1] || '').replace(/[.,'’]+$/, '').trim();
+      if (!term || _PROPER_STOP.has(term) || term.length < 3) continue;
+      // a term whose FIRST word is a stop-opener (sentence-initial "The X") — strip the opener, keep the rest
+      const words = term.split(/\s+/).filter((w) => !_PROPER_STOP.has(w));
+      const core = words.join(' ').trim();
+      if (!core || core.length < 3) continue;
+      if (!evLower.includes(core.toLowerCase())) novel.push(core);
+    }
+    if (novel.length) { violations.push({ kind: 'fact', claim: s.slice(0, 100), novelTerms: Array.from(new Set(novel)).slice(0, 4) }); }
+    if (violations.length >= 3) break;
+  }
+  return { ok: violations.length === 0, violations };
+}
+
 // The honest correction for Spine 2 (world-fact) gates — absence today; presence + prediction fold in next.
 // Separate from artifactCorrection (runtime-artifact claims) because the failure and the remedy differ:
 // an artifact claim is retracted ("it isn't there"); a world-fact claim is DE-CERTAINTIED ("I didn't verify").
 function verificationCorrection(violations = []) {
   const hasAbsence = violations.some((v) => v.kind === 'absence');
+  const facts = violations.filter((v) => v.kind === 'fact');
   const parts = [];
   if (hasAbsence) parts.push(`I said I couldn't find that, but I didn't actually search for it this turn — let me look before treating it as blank`);
+  if (facts.length) {
+    const terms = Array.from(new Set(facts.flatMap((v) => v.novelTerms || []))).slice(0, 4);
+    const tail = terms.length ? ` (${terms.join(', ')})` : '';
+    parts.push(`I stated ${facts.length > 1 ? 'some specifics' : 'that'} as fact${tail} but didn't verify ${facts.length > 1 ? 'them' : 'it'} against a source this turn — treat ${facts.length > 1 ? 'them' : 'it'} as unconfirmed`);
+  }
   if (!parts.length) return '';
   return `\n\n[Correction — ${parts.join('; ')}.]`;
 }
@@ -355,4 +399,4 @@ function artifactCorrection(violations = []) {
   return `\n\n[Correction — ${parts.join('; ')}. I mis-stated that as done; it isn't yet. I won't claim a file, canvas item, image, or database record exists unless it really does.]`;
 }
 
-module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, mentionsMeeting, claimsMeetingAction, meetingActionHonestyDirective, verifyArtifactClaims, artifactCorrection, groundEmails, groundAbsence, verificationCorrection, DATETIME_SELF_RE, ELECTION_RECENCY_RE };
+module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, mentionsMeeting, claimsMeetingAction, meetingActionHonestyDirective, verifyArtifactClaims, artifactCorrection, groundEmails, groundAbsence, groundFacts, verificationCorrection, DATETIME_SELF_RE, ELECTION_RECENCY_RE };

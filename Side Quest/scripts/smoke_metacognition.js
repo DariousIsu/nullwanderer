@@ -191,5 +191,23 @@ ok(m.groundAbsence("I'll try to find an email for him.", { gatherRanThisTurn: GA
 ok(/search|look/i.test(m.verificationCorrection([{ kind: 'absence', claim: 'x' }])), 'verificationCorrection: absence → correction says she didn\'t actually search');
 ok(m.verificationCorrection([]) === '', 'verificationCorrection: no violations → empty string');
 
+// --- SPINE 2: PRESENCE (confabulation) — the Cleco case: a current-event fact absent from evidence ---
+const CLECO = 'Cleco was acquired by Stonepeak Infrastructure Partners and Bernhard Capital last year.';
+const EV_ABOUT_CLECO_NO_DEAL = 'User asked: what is going on with Cleco Power in Louisiana? We found several 2025 rate-case filings and outage reports for Cleco.';
+const gf1 = m.groundFacts(CLECO, { evidence: EV_ABOUT_CLECO_NO_DEAL });
+ok(gf1.violations.some(v => v.kind === 'fact'), 'presence: acquisition claim whose acquirers are NOT in evidence → violation (the Cleco confab)');
+ok(gf1.violations[0] && /Stonepeak|Bernhard/i.test((gf1.violations[0].novelTerms || []).join(' ')), 'presence: the novelTerms name the unsupported specifics (Stonepeak/Bernhard)');
+ok(m.groundFacts(CLECO, { evidence: 'A press release confirms Cleco was acquired by Stonepeak Infrastructure Partners and Bernhard Capital in a deal announced last year.' }).ok,
+  'presence: same claim WITH the acquirers present in evidence → grounded, ok');
+ok(m.groundFacts(CLECO, { evidence: 'short' }).ok,
+  'presence: thin evidence (<40ch) → abstain (bare recall is the step-3b verify path, not a scold)');
+ok(m.groundFacts("I'll check whether Cleco was acquired by anyone.", { evidence: EV_ABOUT_CLECO_NO_DEAL }).ok,
+  'presence: FUTURE intent → not a falsifiable claim, no violation');
+ok(m.groundFacts('The weather in Baton Rouge is mild today and the roads are clear.', { evidence: EV_ABOUT_CLECO_NO_DEAL }).ok,
+  'presence FP: no current-event predicate → not a checkable claim, no violation');
+ok(m.groundFacts('Governor Jeff Landry signed the bill into law on Tuesday.', { evidence: 'Coverage confirms Governor Jeff Landry signed the bill Tuesday after the House vote.' }).ok,
+  'presence FP: a real event fully supported by evidence → no violation');
+ok(/unconfirmed|verify/i.test(m.verificationCorrection([{ kind: 'fact', claim: 'x', novelTerms: ['Stonepeak'] }])), 'verificationCorrection: fact → correction flags it unconfirmed and names the term');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
