@@ -2273,7 +2273,10 @@ app.whenReady().then(() => {
         // (open questions, non-roster absences) share a pass up to BATCH_MAX, so gap throughput
         // rises while spend does not. Roster/discrepancy/vacancy stay solo (per-subject contracts).
         const passBudget = Math.min(2, capPerHour - used);
-        const plate = rq.due({ limit: 8 });
+        // Spine 3: 'promise' items are DELIVERY debts, not facts to re-verify — the verification drain would
+        // run a meaningless verify + close them (losing the promise). They're surfaced by the delivery path
+        // (_surfaceOpenPromise) instead. Exclude them here.
+        const plate = rq.due({ limit: 8 }).filter((it) => it.kind !== 'promise');
         if (!plate.length) return;
         const batchable = plate.filter((it) => rq.isBatchable(it));
         const heavy = plate.filter((it) => !rq.isBatchable(it));
@@ -9754,6 +9757,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // SPINE 2 step 6: if she declared an EMAIL blank without searching, actually go look for it and either
   // surface it (the §7.1 cure) or confirm the blank. Fire-and-forget.
   try { _verifyAbsenceFollowup(finalSaid, { sessionId, turnStartTs: (userTurnRow && userTurnRow.ts) || 0, evidence: _replyEvidence, userName }).catch(() => {}); } catch {}
+  // SPINE 3: book any unkept delivery-promise so it's carried forward, not silently dropped.
+  try { _bookDeliveryPromises(finalSaid, { sessionId, turnStartTs: (userTurnRow && userTurnRow.ts) || 0 }); } catch {}
 
   try {
     // Include the corrected say ONLY when we rewrote it, so the renderer replaces the
@@ -14818,6 +14823,34 @@ async function _verifyAbsenceFollowup(say, { sessionId, turnStartTs = 0, evidenc
     try { require('./lib/blackboard').append({ source: 'verify', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
     console.log(`[verify] absence active-search (${res.verdict}${res.value ? ': ' + res.value : ''}) → follow-up posted`);
   } catch (e) { console.error('[verify] absence follow-up failed:', e.message); }
+}
+
+// SPINE 3 (delivery binding, docs/DELIVERY_BINDING_SPINE.md) — a reply that PROMISES a deliverable
+// ("I'll pull that roster together") but produces no artifact this turn would otherwise silently drop the
+// promise. Book the unkept promise on the recheck queue so it is CARRIED, not lost. "Kept this turn" = a
+// deliverable artifact actually landed (canvas / contact / image write) — if she delivered something, the
+// promise is plausibly satisfied and we don't book. Coarse on purpose (any artifact → skip): under-booking
+// beats flooding the queue. Fully fail-soft; a booking failure never touches the reply.
+function _bookDeliveryPromises(say, { sessionId, turnStartTs = 0 } = {}) {
+  try {
+    if (!say || say === '…') return;
+    const dlv = require('./lib/delivery');
+    const promises = dlv.detectPromise(say);
+    if (!promises.length) return;
+    const kept = (() => {
+      try { if (require('./lib/canvas_docs').lastWriteTs() >= (turnStartTs || 0)) return true; } catch {}
+      try { if (require('./lib/echo_suit').lastContactWriteTs() >= (turnStartTs || 0)) return true; } catch {}
+      if ((lastImageGenTs || 0) >= (turnStartTs || 0)) return true;
+      return false;
+    })();
+    if (kept) return;   // a deliverable landed this turn → don't book
+    const rq = require('./lib/recheck_queue');
+    for (const p of promises) {
+      const subject = dlv.bookingSubject(p);
+      const r = rq.enqueue({ kind: 'promise', subject, detail: { say: p.sentence, deliverable: p.deliverable, sessionId }, priority: 6, bornFrom: 'delivery-binding' });
+      if (r && r.ok && !r.existing) console.log(`[delivery] booked unkept promise → recheck#${r.id}: ${p.deliverable}`);
+    }
+  } catch (e) { console.error('[delivery] promise-booking failed:', e.message); }
 }
 
 // surfaces the key finding + one concrete follow-up, so she doesn't just report "done" but actually opens
