@@ -5160,13 +5160,34 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   let civicBlock = '';
   try { civicBlock = require('./lib/civic_store').civicDigestFor(t); } catch (e) { console.error('[report-cmd] civic digest failed:', e.message); }
   if (civicBlock) console.log(`[report-cmd] civic store digest riding the material (${civicBlock.split('\n').length - 1} body line(s))`);
-  if (!rows.length && !civicBlock) {
+  // THE NOTES DELIVERABLES RIDE TOO (2026-08-09, B3 census finding): the RICHEST held artifacts —
+  // directed-research dossiers and hand-built deliverables like the COMPLETE 64-parish
+  // notes/louisiana-parishes-leadership.md — live as NOTES FILES, which this door never searched
+  // (doc_store + civic store only). So "report on the parishes" composed the thinner civic view and
+  // MISSED the 64-parish deliverable we hold. Search notes for the topic, EXCLUDE prior composed
+  // reports (notes/report-*.md — not source material, and self-recursive), read the best as material.
+  let notesBlock = '';
+  try {
+    const notesDir = filesLib.resolvePath('notes');
+    const nhits = require('./lib/product_ledger').searchProducts({ db, query: t, notesDir, limit: 5 })
+      .filter((h) => h.kind === 'note' && !/(^|[\\/])report-/.test(String(h.path || '')));
+    const used = [];
+    const parts = [];
+    for (const h of nhits) {
+      if (parts.length >= 2) break;
+      try { const body = require('fs').readFileSync(filesLib.resolvePath(h.path), 'utf8'); if (body.trim().length > 80) { parts.push(`--- NOTE ${h.path} ---\n${body.slice(0, 14000)}`); used.push(h.path); } } catch {}
+    }
+    if (parts.length) { notesBlock = parts.join('\n\n'); console.log(`[report-cmd] ${parts.length} held NOTE deliverable(s) riding the material: ${used.join(', ')}`); }
+  } catch (e) { console.error('[report-cmd] notes retrieval failed:', e.message); }
+  if (!rows.length && !civicBlock && !notesBlock) {
     console.log(`[report-cmd] "${t.slice(0, 80)}" — no held material (docs + civic store all empty), honest miss relayed`);
     await fireToolFollowup({ io, channel, sessionId, resultText: `[You were asked to BUILD A REPORT on "${t}" but you hold NO research documents about it — nothing in the document store matches. Say so plainly in one or two sentences, name what you'd need to go gather, and offer to run the research. Do NOT invent a document.]` });
     return;
   }
-  const material = [civicBlock, ...rows.map((r) => `--- DOC #${r.id}: ${String(r.title || '').slice(0, 120)} ---\n${String(r.body || '').slice(0, 9000)}`)].filter(Boolean).join('\n\n');
-  console.log(`[report-cmd] composing from ${rows.length} held doc(s)${civicBlock ? ' + the civic store' : ''}: ${rows.map((r) => '#' + r.id).join(', ') || '(store only)'}`);
+  // notesBlock leads (after the civic digest): the hand-built deliverables/dossiers are the richest,
+  // most-complete material — the composer should stand on them first, then the thinner doc_store rows.
+  const material = [civicBlock, notesBlock, ...rows.map((r) => `--- DOC #${r.id}: ${String(r.title || '').slice(0, 120)} ---\n${String(r.body || '').slice(0, 9000)}`)].filter(Boolean).join('\n\n');
+  console.log(`[report-cmd] composing from ${rows.length} held doc(s)${civicBlock ? ' + civic store' : ''}${notesBlock ? ' + notes deliverable(s)' : ''}: ${rows.map((r) => '#' + r.id).join(', ') || '(store only)'}`);
   const msgs = [
     { role: 'system', content: `You are composing ONE finished, professional report from research documents the assistant ALREADY HOLDS. Rules — absolute:\n• Ground ONLY in the provided documents. Never add a fact, name, number, or URL that is not in them.\n• Every source annotation already present — "(source: …)" — stays attached to its claim. Never strip one, never invent one.\n• Structure: a title line, a 2-4 sentence executive summary, then "## " sections organized by what the material actually supports, then "## Open questions" naming what the documents do NOT answer.\n• Where the documents are thin or contradict each other, SAY SO in the text rather than papering over it. An honest gap is part of the report.\nOutput Markdown only — no preamble, no "here is".` },
     { role: 'user', content: `REPORT SUBJECT: ${t}\n\nTHE DOCUMENTS YOU HOLD:\n"""\n${material.slice(0, 60000)}\n"""\n\nCompose the finished report on ${t} now.` },
@@ -5191,7 +5212,12 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   // LATENT BUG FIX (found 08-07 via lint): main.js has no module-level `fs` — this call threw
   // ReferenceError into the catch on EVERY report, so the notes/ file never actually saved
   // (the canvas copy masked it). require inline like every other main.js call site.
-  try { require('fs').writeFileSync(filesLib.resolvePath(rel), `# Report — ${t}\n\n${md}\n\n---\n_Composed from ${rows.length ? `${rows.length} held research document(s): ${rows.map((r) => '#' + r.id).join(', ')}` : 'the civic store'}${rows.length && civicBlock ? ' + the civic store' : ''}._\n`, 'utf8'); saved = true; }
+  const _srcAttr = [
+    rows.length ? `${rows.length} held research document(s): ${rows.map((r) => '#' + r.id).join(', ')}` : '',
+    notesBlock ? 'held notes deliverable(s)' : '',
+    civicBlock ? 'the civic store' : '',
+  ].filter(Boolean).join(' + ') || 'held material';
+  try { require('fs').writeFileSync(filesLib.resolvePath(rel), `# Report — ${t}\n\n${md}\n\n---\n_Composed from ${_srcAttr}._\n`, 'utf8'); saved = true; }
   catch (e) { console.error('[report-cmd] save failed:', e.message); }
   try { await promiseArtifactEmit({ slug: `report-${slug}`, title: `Report — ${t}`.slice(0, 60), markdown: md }); } catch {}
   console.log(`[report-cmd] report on "${t}" composed (${md.length}ch) → ${saved ? rel : '(save failed)'} + canvas`);
