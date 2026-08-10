@@ -65,4 +65,34 @@ function coverage(stateCode, { frame = null, memberOf = null } = {}) {
   return { state: f.state, denominator: f.count, filled, remaining: f.count - filled, pct: f.count ? Math.round((filled / f.count) * 100) : 0 };
 }
 
-module.exports = { enqueueState, coverage, bodyTitle };
+// Assemble the CURRENT roster deliverable rows from the frame + whatever the civic store already holds —
+// coverage-HONEST: a verified locality shows its real body/officer/contacts; an unfilled one shows
+// "(researching)"/queued, NEVER a blank faked as complete. Injectable (civ/db) for offline testing.
+// → { state, denominator, filled, rows:[{Parish, 'Governing Body', 'Presiding Officer', Members, Email, Phone, Status}] }
+function assembleDeliverable(stateCode, { frame = null, deps = {} } = {}) {
+  const f = frame || localFrame.buildFrame(stateCode);
+  const civ = deps.civ || require('./civic_store');
+  const getMembers = deps.getMembers || ((bodyKey) => {
+    try { return require('./db').getDb().prepare(`SELECT person_name, role, email, phone FROM civic_memberships WHERE body_key = ? AND superseded_by IS NULL`).all(bodyKey); } catch { return []; }
+  });
+  const rows = f.localities.map((loc) => {
+    const title = bodyTitle(loc);
+    let members = [];
+    try { const b = civ.getBody(title); if (b) members = getMembers(b.body_key) || []; } catch {}
+    const presiding = members.find((m) => /presid|president|chair|mayor/i.test(str(m.role))) || members[0] || null;
+    const verified = members.length > 0;
+    return {
+      Parish: loc.name,
+      'Governing Body': loc.body || '(governing body)',
+      'Presiding Officer': presiding ? presiding.person_name : '(researching)',
+      Members: verified ? members.length : '',
+      Email: (presiding && presiding.email) || '',
+      Phone: (presiding && presiding.phone) || '',
+      Status: verified ? 'verified' : 'queued',
+    };
+  });
+  return { state: f.state, denominator: f.count, filled: rows.filter((r) => r.Status === 'verified').length, rows };
+}
+const str = (v) => (v == null ? '' : String(v));
+
+module.exports = { enqueueState, coverage, assembleDeliverable, bodyTitle };

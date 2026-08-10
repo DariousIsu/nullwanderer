@@ -74,5 +74,21 @@ ok(rq.parseLocalRoster('STILL-UNKNOWN: the official site had no roster page').me
   ok(cov.denominator === 4 && cov.filled === 1 && cov.remaining === 3 && cov.pct === 25, 'coverage measures filled/denominator (1/4 = 25%), remaining honest');
 }
 
+// ── assembleDeliverable: coverage-honest rows (the artifact-router door's payload) ──────────────────────
+{
+  const frame = { state: 'LA', count: 3, localities: [
+    { name: 'Acadia Parish', body: 'Police Jury' }, { name: 'Allen Parish', body: 'Police Jury' }, { name: 'Orleans Parish', body: 'New Orleans City Council' },
+  ] };
+  // mock civic store: only Acadia is filled (a verified president with contacts); the rest are empty
+  const civ = { getBody: (title) => (title === 'Acadia Parish Police Jury' ? { body_key: 'acadia' } : null) };
+  const getMembers = (bk) => (bk === 'acadia' ? [{ person_name: 'Ryan L. Turner', role: 'President', email: 'president@acadiaparishpolicejury.org', phone: '(337) 783-6885' }] : []);
+  const d = lr.assembleDeliverable('LA', { frame, deps: { civ, getMembers } });
+  ok(d.denominator === 3 && d.filled === 1, 'assembleDeliverable: filled/denominator honest (1/3)');
+  const acadia = d.rows.find((r) => r.Parish === 'Acadia Parish');
+  ok(acadia.Status === 'verified' && acadia['Presiding Officer'] === 'Ryan L. Turner' && /783-6885/.test(acadia.Phone), 'assembleDeliverable: a VERIFIED row carries the real officer + contacts');
+  const allen = d.rows.find((r) => r.Parish === 'Allen Parish');
+  ok(allen.Status === 'queued' && allen['Presiding Officer'] === '(researching)' && allen.Email === '', 'assembleDeliverable: an UNFILLED row is marked "(researching)", never blank-faked');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

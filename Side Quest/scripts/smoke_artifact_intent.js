@@ -32,7 +32,9 @@ const inSession = ai.wantText({ workingFresh: true, workingTitle: 'Louisiana par
 const noSession = ai.wantText({ workingFresh: false });
 ok('in-session offers canvas_edit with the doc named', /canvas_edit/.test(inSession) && /Louisiana parishes/.test(inSession));
 ok('out of session canvas_edit is not offered', !/canvas_edit/.test(noSession));
-ok('all standing intents offered', ['canvas_create', 'report', 'pullup', 'none'].every((i) => noSession.includes(i)));
+ok('all standing intents offered', ['canvas_create', 'report', 'roster', 'pullup', 'none'].every((i) => noSession.includes(i)));
+ok('roster is a valid intent, subject = the state', ai.validate('{"intent":"roster","subject":"Louisiana"}').valid && ai.validate('{"intent":"roster","subject":"Louisiana"}').value.intent === 'roster');
+ok('roster door describes the parish/county roster + state subject', /parish|count(?:y|ies)/i.test(noSession) && /roster/i.test(noSession));
 ok('typo doctrine rides the contract', /typos/i.test(noSession) && /pullet/.test(noSession));
 ok('unsure→none doctrine rides the contract', /When unsure, "none"/.test(noSession));
 

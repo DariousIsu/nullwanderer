@@ -5126,6 +5126,41 @@ async function presentHeldProduct({ io, channel, sessionId, hit, alternates = []
   await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked you to PULL UP a product you two already made ("${subject}"). ${whereNote} Do NOT present freshly-queried data as this product, and do NOT offer new research unless he asks.${altNote}]` });
 }
 
+// SPINE 3 — the LOCAL ROSTER door (docs/DELIVERY_BINDING_SPINE.md). Composes the whole local tier: resolve
+// the state → the frame's independent denominator → assemble what the civic store ALREADY holds (coverage-
+// honest: verified rows real, unfilled rows marked "(researching)", never blank-faked) → an OPENABLE xlsx via
+// the R6 door → ENQUEUE the localities so the metabolism fills the rest top-down → report the HONEST ceiling
+// (R7: filled/denominator + where the file is + that the rest are researching), never a fake-complete roster.
+async function buildLocalRosterDeliverable({ io, channel, sessionId, userName, subject }) {
+  const _lf = require('./lib/local_frame');
+  const _lr = require('./lib/local_roster');
+  const state = _lf.resolveState(subject || '');
+  if (!state) {
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked to build a local-government roster ("${String(subject || '').slice(0, 100)}") but the STATE wasn't clear. Ask him which state (e.g. "the Louisiana parish roster"). Do NOT invent one or claim a file exists.]` });
+    return;
+  }
+  let del, filePath = null, format = null, openable = false;
+  try {
+    del = _lr.assembleDeliverable(state);
+    const dir = filesLib.resolvePath('notes');
+    try { require('fs').mkdirSync(dir, { recursive: true }); } catch {}
+    const out = await require('./lib/spreadsheet_out').deliverSpreadsheet({
+      dir, basename: `${state}_local_roster_${new Date().toISOString().slice(0, 10)}`,
+      rows: del.rows, sheetName: `${state} roster`,
+    });
+    if (out && out.ok) { filePath = out.path; format = out.format; openable = out.openable; }
+  } catch (e) {
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[Building the ${state} local roster FAILED (${e.message}). Tell Lucas plainly it didn't produce a file; never claim one exists.]` });
+    return;
+  }
+  // enqueue the whole state top-down so the metabolism fills the gaps over time (deduped — a re-run coalesces).
+  let queued = 0;
+  try { const q = _lr.enqueueState(state); queued = q.enqueued; } catch (e) { console.error('[roster-door] enqueue failed:', e.message); }
+  const rel = filePath ? require('path').relative(__dirname, filePath).replace(/\\/g, '/') : null;
+  console.log(`[roster-door] ${state}: assembled ${del.filled}/${del.denominator} verified → ${format} ${openable ? '(openable)' : '(UNVERIFIED)'}${rel ? ' ' + rel : ''}; queued ${queued} for research`);
+  await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${state} local-government roster is ASSEMBLED and saved as an openable ${format} spreadsheet at "${rel}". HONEST COVERAGE — lead with this: ${del.filled} of ${del.denominator} localities are VERIFIED (their governing body + officials confirmed and in the sheet); the remaining ${del.denominator - del.filled} are marked "(researching)" and ${queued} were just queued for me to fill top-down from official sources over time. Tell Lucas exactly that — the file, the ${del.filled}/${del.denominator} verified count, and that the rest fill in as I research. Do NOT claim it is complete, and do NOT invent any official you have not verified.]` });
+}
+
 async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) {
   const t = String(topic || '').trim();
   const like = `%${t.replace(/[%_]/g, '')}%`;
@@ -10354,6 +10389,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               } else if (verdict.intent === 'report') {
                 buildReportFromHeld({ io, channel, sessionId, userName, topic: verdict.subject || userMessage.slice(0, 120) })
                   .catch((e) => console.error('[artifact-router] report failed:', e.message));
+              } else if (verdict.intent === 'roster') {
+                buildLocalRosterDeliverable({ io, channel, sessionId, userName, subject: verdict.subject || userMessage })
+                  .catch((e) => console.error('[artifact-router] roster failed:', e.message));
               }
               // M5.6 RELOCATED (08-08 audit: appending the ack directive HERE was dead code from
               // birth — composedUserMessage's last consumer runs ~1500 lines earlier and the reply

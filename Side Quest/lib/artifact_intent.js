@@ -41,12 +41,13 @@ function wantText({ workingFresh = false, workingTitle = '' } = {}) {
     + editLine
     + `- "canvas_create": an order to put NEW content onto the canvas (a fresh doc/list/table).\n`
     + `- "report": an order to COMPOSE/BUILD a report-shaped artifact about a subject from held research.\n`
+    + `- "roster": an order to BUILD/COMPILE the roster of a US state's LOCAL governing bodies — its counties or (in Louisiana) PARISHES and their officials ("build the Louisiana parish roster", "compile a spreadsheet of Texas county commissioners"). The subject is the STATE.\n`
     + `- "pullup": a request to RETRIEVE/hand over a product that was ALREADY MADE ("that list we made", "pull up the …", "where's the … you built").\n`
     + `- "none": conversation, questions about content, research asks, anything else. When unsure, "none" — a wrong route is worse than the ordinary reply path.\n`
-    + `Reply ONLY strict JSON: {"intent":"${(workingFresh ? ['canvas_edit'] : []).concat(['canvas_create', 'report', 'pullup', 'none']).join('|')}","subject":"<for report/pullup: the subject phrase>","instruction":"<for canvas_*: his instruction, normalized, typos corrected>"}.`;
+    + `Reply ONLY strict JSON: {"intent":"${(workingFresh ? ['canvas_edit'] : []).concat(['canvas_create', 'report', 'roster', 'pullup', 'none']).join('|')}","subject":"<for report/pullup/roster: the subject phrase (for roster: the state)>","instruction":"<for canvas_*: his instruction, normalized, typos corrected>"}.`;
 }
 
-const INTENTS = new Set(['canvas_edit', 'canvas_create', 'report', 'pullup', 'none']);
+const INTENTS = new Set(['canvas_edit', 'canvas_create', 'report', 'roster', 'pullup', 'none']);
 
 /** validate(raw) → { valid, value:{intent, subject, instruction} } — strict-JSON gate for ask(). */
 function validate(raw) {

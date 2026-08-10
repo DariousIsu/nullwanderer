@@ -83,4 +83,30 @@ function buildFrame(stateCode, { source = null } = {}) {
   return { state: code, count: localities.length, localities };
 }
 
-module.exports = { buildFrame, parseCounties, governanceFor, loadFrame, ROW_OFFICES_EXCLUDE, STATE_GOV, GENERIC_GOV, FRAME_FILE };
+// state name → USPS, for resolving "the Louisiana parish roster" → 'LA'. A constant, not per-state code.
+const STATE_NAMES = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA', colorado: 'CO', connecticut: 'CT',
+  delaware: 'DE', florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA',
+  kansas: 'KS', kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI',
+  minnesota: 'MN', mississippi: 'MS', missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV',
+  'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC',
+  'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI',
+  'south carolina': 'SC', 'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT',
+  virginia: 'VA', washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY',
+};
+const _USPS = new Set(Object.values(STATE_NAMES));
+// resolveState(text) → USPS code or null. A spelled-out state name wins; else a bare 2-letter code; else, since
+// "parish" is Louisiana's (and only Louisiana's) word for a county, a mention of "parish" implies LA.
+function resolveState(text) {
+  const raw = String(text || '');
+  const t = raw.toLowerCase();
+  for (const [name, code] of Object.entries(STATE_NAMES)) { if (new RegExp(`\\b${name}\\b`).test(t)) return code; }
+  // a bare code only counts when UPPERCASE in the original ("CA county") — lowercase 2-letter words ("me",
+  // "in", "or") are ordinary English, not states, so they must NOT resolve.
+  const m = raw.match(/\b([A-Z]{2})\b/g);
+  if (m) { for (const c of m) { if (_USPS.has(c)) return c; } }
+  if (/\bparish(?:es)?\b/.test(t)) return 'LA';
+  return null;
+}
+
+module.exports = { buildFrame, parseCounties, governanceFor, loadFrame, resolveState, ROW_OFFICES_EXCLUDE, STATE_GOV, GENERIC_GOV, STATE_NAMES, FRAME_FILE };

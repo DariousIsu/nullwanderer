@@ -50,5 +50,12 @@ ok(lf.buildFrame('ZZ').count === 0, 'an unknown state code → empty frame (no c
   ok(rows.length === 2 && rows[0].name === 'Acadia Parish' && rows[1].state === 'DE', 'parseCounties: pure TSV parse, header skipped');
 }
 
+// ── resolveState: "the Louisiana parish roster" → LA (for the artifact-router door) ─────────────────────
+ok(lf.resolveState('build the Louisiana parish roster') === 'LA', 'resolveState: spelled-out state name → LA');
+ok(lf.resolveState('compile a spreadsheet of Texas county commissioners') === 'TX', 'resolveState: Texas → TX');
+ok(lf.resolveState('the parish roster') === 'LA', 'resolveState: "parish" (LA-only word) implies Louisiana');
+ok(lf.resolveState('build the CA county roster') === 'CA', 'resolveState: a bare USPS code → CA');
+ok(lf.resolveState('build me a report on data centers') === null, 'resolveState: no state → null (door asks which state)');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
