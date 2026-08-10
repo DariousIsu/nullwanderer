@@ -140,6 +140,39 @@ function parseRoster(ans) {
   return out;
 }
 
+/** parseLocalRoster(ans) — the richer local-government verdict: an optional "BODY: <name>" (the
+ * research-CONFIRMED body name, which may correct the frame's hypothesis), a "PRESIDING: <name> | <title>"
+ * line, and "ROSTER: <name> | <role> | <email> | <phone>" lines (email/phone tolerate "-"/blank). Pure.
+ * → { body, members:[{personName, role, email, phone}] }. */
+function parseLocalRoster(ans) {
+  const text = str(ans);
+  const clean = (s) => { const t = str(s).trim(); return (!t || t === '-' || /^(none|n\/a|unknown|tbd|not published|not listed)$/i.test(t)) ? null : t; };
+  let body = null;
+  const members = [];
+  const byName = new Map();
+  // add-or-MERGE: a person named on both a PRESIDING and a ROSTER line is ONE member — the richer line fills
+  // the missing fields (so the presiding officer's contact, printed on the ROSTER line, is never lost).
+  const add = (name, { role, email, phone } = {}) => {
+    const n = str(name).replace(/\s+/g, ' ').trim();
+    if (!n || /^(none|n\/a|unknown|vacant)$/i.test(n)) return;
+    const k = n.toLowerCase();
+    const ex = byName.get(k);
+    if (!ex) { const m = { personName: n, role: role || 'Member', email: email || null, phone: phone || null }; byName.set(k, m); members.push(m); return; }
+    if (email && !ex.email) ex.email = email;
+    if (phone && !ex.phone) ex.phone = phone;
+    if (role && role !== 'Member' && (ex.role === 'Member' || !ex.role)) ex.role = role;   // a specific role beats the generic
+  };
+  for (const line of text.split('\n')) {
+    const b = line.match(/^\s*BODY:\s*(.{3,120})$/i);
+    if (b) { body = b[1].trim(); continue; }
+    const p = line.match(/^\s*PRESIDING:\s*([^|]{2,80}?)\s*(?:\|\s*(.{0,60}))?$/i);
+    if (p) { add(p[1], { role: clean(p[2]) || 'Presiding Officer' }); continue; }
+    const r = line.match(/^\s*ROSTER:\s*([^|]{2,80}?)\s*(?:\|\s*([^|]{0,60}))?\s*(?:\|\s*([^|]{0,80}))?\s*(?:\|\s*(.{0,40}))?$/i);
+    if (r) add(r[1], { role: clean(r[2]) || 'Member', email: clean(r[3]), phone: clean(r[4]) });
+  }
+  return { body, members };
+}
+
 // What we ALREADY HOLD on a subject — injected into every verification prompt so the pass starts
 // from the database, not the open web (Lucas, 2026-08-08: "she has already done these searches
 // hundreds of times, all of this information should already be in her database somewhere").
@@ -180,6 +213,21 @@ function buildPrompt(item) {
       return `VERIFICATION PASS — a seat with no feed row (possible vacancy): ${item.subject}.${held}Confirm against the official body roster + one news source: is the seat vacant, and if so since when / any special election scheduled? ${VERDICT_CONTRACT}`;
     case 'cardinality-conflict':
       return `VERIFICATION PASS — two sources disagree on the seat count of "${item.subject}": ${JSON.stringify(d).slice(0, 300)}.${held}Determine the current correct count from the official source (a resize is possible). ${VERDICT_CONTRACT}`;
+    case 'local-roster': {
+      // Spine 3 leaf-fill: research ONE local governing body, TOP-DOWN from its official site, with the R3
+      // scoping so the pass grabs the LEGISLATIVE body — never a row office (the census failure).
+      const kinds = Array.isArray(d.bodyKinds) && d.bodyKinds.length ? d.bodyKinds.join(', ') : 'the county/parish governing council or commission';
+      const excl = Array.isArray(d.exclude) && d.exclude.length ? d.exclude.join(', ') : 'sheriff, clerk, district attorney, assessor';
+      const hyp = d.body ? ` Its form is PRESUMED "${d.body}" (${d.govSource || 'hypothesis'}) — confirm that, or correct it to the real body.` : '';
+      const where = [d.place || item.subject, d.state].filter(Boolean).join(', ');
+      return `LOCAL ROSTER — research the GOVERNING BODY of ${where}.${hyp} The governing body is the locality's LEGISLATIVE/deliberative authority — one of: ${kinds}. It is NOT an independently-elected row office (EXCLUDE: ${excl}). Work TOP-DOWN: start from the OFFICIAL ${d.place || 'parish/county'} government website.${held}${LOCAL_FIRST}
+Output IN THIS ORDER, then STOP:
+- the verdict line — "RESOLVED: <official source URL + one sentence>" or "STILL-UNKNOWN: <what you checked>";
+- "BODY: <the official body name>";
+- "PRESIDING: <full name> | <title>";
+- one "ROSTER: <full name> | <role or Member> | <email or -> | <phone or ->" line per verified member.
+Only what the source actually prints — invent NOTHING; put "-" for any contact not published. ${VERDICT_CONTRACT}`;
+    }
     default:
       return `VERIFICATION PASS — re-verify: ${item.subject} (${item.kind}). ${JSON.stringify(d).slice(0, 300)}.${held}${LOCAL_FIRST} ${VERDICT_CONTRACT}`;
   }
@@ -251,6 +299,23 @@ function applyOutcome(item, ans, { now = Date.now() } = {}) {
         } catch { /* structured capture is best-effort; the resolve itself stands */ }
       }
     }
+    // Spine 3 leaf-fill: a resolved local-roster lands the body + its members STRUCTURED into the civic
+    // store, under a LOCALITY-scoped title (the parish/county name is in the title → distinct body_key, no
+    // cross-locality collapse). The research-confirmed BODY name (if any) overrides the frame hypothesis.
+    if (item.kind === 'local-roster') {
+      try {
+        const parsed = parseLocalRoster(ans);
+        const civ = require('./civic_store');
+        const title = parsed.body || (item.detail || {}).body || item.subject;
+        civ.upsertBody({ title, level: 'county', function: 'governing', state: (item.detail || {}).state || null, place: (item.detail || {}).place || null });
+        if (parsed.members.length) {
+          const r = civ.recordRoster({ bodyTitle: title, members: parsed.members, sourceKind: 'operator' });
+          if (r && r.ok) v.line = `${v.line} [${r.stored + r.unchanged} member(s) → "${title}"]`;
+        } else {
+          v.line = `${v.line} [body "${title}" recorded; no members parsed]`;
+        }
+      } catch { /* structured capture is best-effort; the resolve line still stands */ }
+    }
     complete(item.id, { outcome: `RESOLVED: ${v.line}`, now });
     // ALIVENESS: a closed doubt is worth a sentence to Lucas — the metabolism working is only felt
     // if its wins surface. One line through the unprompted door (the heartbeat delivers when he's
@@ -273,4 +338,4 @@ function applyOutcome(item, ans, { now = Date.now() } = {}) {
   return { action: 'deferred' };
 }
 
-module.exports = { enqueue, due, openByKind, complete, defer, stats, sweepAbsences, buildPrompt, parseVerdict, parseRoster, applyOutcome, backoffMs, isBatchable, buildBatchPrompt, parseBatchVerdicts, BATCH_MAX };
+module.exports = { enqueue, due, openByKind, complete, defer, stats, sweepAbsences, buildPrompt, parseVerdict, parseRoster, parseLocalRoster, applyOutcome, backoffMs, isBatchable, buildBatchPrompt, parseBatchVerdicts, BATCH_MAX };

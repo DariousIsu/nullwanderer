@@ -188,6 +188,7 @@ const smokes = [
   'smoke_delivery.js',
   'smoke_spreadsheet_out.js',
   'smoke_local_frame.js',
+  'smoke_local_roster.js',
   'smoke_calibration_pressure.js',
   'smoke_focus.js',
   'smoke_condense.js',

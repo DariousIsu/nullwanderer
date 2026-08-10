@@ -118,6 +118,25 @@ ok('openByKind carries the parsed detail (deliverable)', (openProm.find((r) => r
 rq.complete(openProm.find((r) => r.subject === 'roster#abc').id, { outcome: 'surfaced-to-user', now: NOW });
 ok('a surfaced promise is completed (leaves openByKind)', !rq.openByKind({ kind: 'promise', limit: 10, now: NOW }).some((r) => r.subject === 'roster#abc'));
 
+// ── local-roster (Spine 3 leaf-fill): a resolved verdict records the body + members to the civic store ──
+{
+  const item = { id: 999, kind: 'local-roster', subject: 'Acadia Parish Police Jury', detail: { body: 'Police Jury', state: 'LA', place: 'Acadia Parish' } };
+  const ans = [
+    'RESOLVED: roster at acadiaparishpolicejury.org',
+    'BODY: Acadia Parish Police Jury',
+    'PRESIDING: Ryan L. Turner | President',
+    'ROSTER: Ryan L. Turner | President | president@acadiaparishpolicejury.org | (337) 783-6885',
+    'ROSTER: Jody Frey | District 1 | - | -',
+  ].join('\n');
+  const out = rq.applyOutcome(item, ans, { now: NOW });
+  ok('local-roster resolved → action resolved', out.action === 'resolved');
+  const civ = require('../lib/civic_store');
+  const body = civ.getBody('Acadia Parish Police Jury');
+  ok('local-roster upserts a LOCALITY-scoped body (distinct key)', body && /acadia parish police jury/.test(body.body_key) && body.state === 'LA');
+  const mems = require('../lib/db').getDb().prepare('SELECT person_name, email FROM civic_memberships WHERE body_key = ? AND superseded_by IS NULL').all(body.body_key);
+  ok('local-roster records the members', mems.length === 2 && mems.some((m) => /Turner/.test(m.person_name) && /president@/.test(m.email || '')));
+}
+
 const st = rq.stats();
 ok('stats report open + kinds', st.open >= 1 && Array.isArray(st.byKind));
 

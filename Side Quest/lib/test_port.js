@@ -191,6 +191,23 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
         });
         return;
       }
+      // DEBUG / interim trigger: the Spine-3 leaf-fill. {state, limit?, action:'enqueue'|'coverage'} →
+      // enqueue a state's localities as local-roster research tasks (the metabolism then drains them), or
+      // report honest coverage (filled/denominator). Deterministic; the research itself runs in the metabolism.
+      if (req.method === 'POST' && req.url === '/local-roster') {
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
+        req.on('end', () => {
+          try {
+            const { state, limit, action } = JSON.parse(body || '{}');
+            if (!state || !String(state).trim()) return send(400, { ok: false, error: 'state required (e.g. "LA")' });
+            const lr = require('./local_roster');
+            if (action === 'coverage') return send(200, { ok: true, ...lr.coverage(String(state)) });
+            return send(200, { ok: true, ...lr.enqueueState(String(state), { limit: limit || null }) });
+          } catch (e) { return send(500, { ok: false, error: e.message }); }
+        });
+        return;
+      }
       if (req.method === 'POST' && req.url === '/turn') {
         let body = '';
         req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
@@ -214,7 +231,7 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
         });
         return;
       }
-      send(404, { ok: false, error: 'POST /turn, POST /antifab, POST /verify, POST /promise, or GET /status' });
+      send(404, { ok: false, error: 'POST /turn, /antifab, /verify, /promise, /local-roster, or GET /status' });
     } catch (e) { send(500, { ok: false, error: e.message }); }
   });
   _server.listen(port, '127.0.0.1', () => console.log(`[test-port] inside access port on 127.0.0.1:${port} (POST /turn drives the REAL pipeline)`));
