@@ -209,5 +209,22 @@ ok(m.groundFacts('Governor Jeff Landry signed the bill into law on Tuesday.', { 
   'presence FP: a real event fully supported by evidence → no violation');
 ok(/unconfirmed|verify/i.test(m.verificationCorrection([{ kind: 'fact', claim: 'x', novelTerms: ['Stonepeak'] }])), 'verificationCorrection: fact → correction flags it unconfirmed and names the term');
 
+// --- SPINE 2: PREDICTION (false certainty) — the §7.6 wrong-prediction: an outcome stated as fact ---
+ok(m.groundPrediction('The incumbent will win the runoff easily.').violations.some(v => v.kind === 'prediction'),
+  'prediction: "will win" with no hedge → violation (the §7.6 false certainty)');
+ok(m.groundPrediction('Landry is going to lose that seat.').violations.some(v => v.kind === 'prediction'),
+  'prediction: "going to lose" a seat, flat → violation');
+ok(m.groundPrediction('The incumbent will likely win the runoff.').ok,
+  'prediction: same outcome WITH a hedge ("likely") → honest, no violation');
+ok(m.groundPrediction('I\'d put the incumbent\'s odds of winning around 70%.').ok,
+  'prediction: framed as odds/probability → honest, no violation');
+ok(m.groundPrediction('The incumbent will win.', { forecastCited: true }).ok,
+  'prediction: backed by a cited forecast → honest, no violation');
+ok(m.groundPrediction('The meeting will start at 3pm and I will send you the notes.').ok,
+  'prediction FP: ordinary "will" (no contest-outcome verb) → not a prediction claim');
+ok(m.groundPrediction('The bill passed the House on Tuesday.').ok,
+  'prediction FP: a PAST event ("passed"), not a future claim → no violation');
+ok(/expectation|certainty|probabilit/i.test(m.verificationCorrection([{ kind: 'prediction', claim: 'x' }])), 'verificationCorrection: prediction → reframes as expectation/probability, not certainty');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

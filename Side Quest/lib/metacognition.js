@@ -367,12 +367,35 @@ function groundFacts(say, { evidence = '' } = {}) {
   return { ok: violations.length === 0, violations };
 }
 
+// PREDICTION (false certainty): a contestable FUTURE outcome asserted in the indicative — "X will win", "the
+// bill will pass", "they're going to lose" — with no uncertainty marker and no forecast backing. A forecast is
+// honest ONLY as a probability, not a fact (the forecast suite exists, Brier 0.115). Constrained to
+// contest/political OUTCOME verbs (win/lose/pass/be elected/flip…) behind future modality, so ordinary "will"
+// ("the meeting will start at 3", "I will help") never trips. PURE. Returns {ok, violations:[{kind:'prediction'}]}.
+const _PRED_FUTURE_RE = /\b(?:will|'ll|won'?t|will\s+not|going\s+to|gonna|is\s+going\s+to|are\s+going\s+to|expected\s+to|set\s+to|poised\s+to|on\s+track\s+to)\b[^.!?\n]*\b(?:win|wins|lose|loses|pass(?:es)?|fail(?:s)?|be\s+(?:elected|re-?elected|defeated|ousted)|flip(?:s)?|hold(?:s)?\s+(?:the\s+)?(?:seat|majority|line)|carr(?:y|ies)|sweep(?:s)?|prevail(?:s)?|beat(?:s)?|defeat(?:s)?|clinch(?:es)?|take(?:s)?\s+(?:the\s+)?(?:seat|majority|house|senate|state))\b/i;
+// an uncertainty/forecast marker anywhere in the sentence makes the prediction HONEST → no violation.
+const _PRED_HEDGE_RE = /\b(?:likely|unlikely|probabl[ey]|possibl[ey]|may|might|could|should|would|expect(?:ed|s|ing)?|anticipate|project(?:ed|ion|s)?|forecast|estimate[ds]?|odds|chance[s]?|percent|per\s?cent|%|probability|favou?red|favou?rite|lean(?:s|ing)?|toss-?up|my\s+(?:bet|guess|money|read|sense)|i\s+(?:think|expect|suspect|believe|reckon|would\s+guess)|i'?d\s+(?:guess|say|expect)|in\s+my\s+(?:view|estimation)|tends?\s+to|roughly|around|about|nearly|almost\s+certainly)\b/i;
+function groundPrediction(say, { forecastCited = false } = {}) {
+  const violations = [];
+  const sentences = String(say || '').split(/(?<=[.!?])\s+|\n+/);
+  for (const sent of sentences) {
+    const s = sent.trim();
+    if (s.length < 10) continue;
+    if (!_PRED_FUTURE_RE.test(s)) continue;              // fast-path: a contest-outcome future claim?
+    if (_PRED_HEDGE_RE.test(s) || forecastCited) continue;   // hedged or forecast-backed → honest
+    violations.push({ kind: 'prediction', claim: s.slice(0, 100) });
+    if (violations.length >= 2) break;
+  }
+  return { ok: violations.length === 0, violations };
+}
+
 // The honest correction for Spine 2 (world-fact) gates — absence today; presence + prediction fold in next.
 // Separate from artifactCorrection (runtime-artifact claims) because the failure and the remedy differ:
 // an artifact claim is retracted ("it isn't there"); a world-fact claim is DE-CERTAINTIED ("I didn't verify").
 function verificationCorrection(violations = []) {
   const hasAbsence = violations.some((v) => v.kind === 'absence');
   const facts = violations.filter((v) => v.kind === 'fact');
+  const hasPrediction = violations.some((v) => v.kind === 'prediction');
   const parts = [];
   if (hasAbsence) parts.push(`I said I couldn't find that, but I didn't actually search for it this turn — let me look before treating it as blank`);
   if (facts.length) {
@@ -380,6 +403,7 @@ function verificationCorrection(violations = []) {
     const tail = terms.length ? ` (${terms.join(', ')})` : '';
     parts.push(`I stated ${facts.length > 1 ? 'some specifics' : 'that'} as fact${tail} but didn't verify ${facts.length > 1 ? 'them' : 'it'} against a source this turn — treat ${facts.length > 1 ? 'them' : 'it'} as unconfirmed`);
   }
+  if (hasPrediction) parts.push(`I stated a future outcome as certain — that's my expectation, not a certainty, and a forecast belongs as a probability rather than a fact`);
   if (!parts.length) return '';
   return `\n\n[Correction — ${parts.join('; ')}.]`;
 }
@@ -399,4 +423,4 @@ function artifactCorrection(violations = []) {
   return `\n\n[Correction — ${parts.join('; ')}. I mis-stated that as done; it isn't yet. I won't claim a file, canvas item, image, or database record exists unless it really does.]`;
 }
 
-module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, mentionsMeeting, claimsMeetingAction, meetingActionHonestyDirective, verifyArtifactClaims, artifactCorrection, groundEmails, groundAbsence, groundFacts, verificationCorrection, DATETIME_SELF_RE, ELECTION_RECENCY_RE };
+module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, mentionsMeeting, claimsMeetingAction, meetingActionHonestyDirective, verifyArtifactClaims, artifactCorrection, groundEmails, groundAbsence, groundFacts, groundPrediction, verificationCorrection, DATETIME_SELF_RE, ELECTION_RECENCY_RE };

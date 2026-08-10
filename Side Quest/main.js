@@ -14737,6 +14737,15 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
         }
       }
     } catch {}
+    // (5) SPINE 2 — PREDICTION (false certainty): a contestable future outcome asserted flat, with no
+    // uncertainty marker and no forecast backing. Reframes to a probability rather than a fact. Pure/lexical.
+    try {
+      const pr = _mc.groundPrediction(out, { forecastCited: false });
+      if (!pr.ok) {
+        const pcorr = _mc.verificationCorrection(pr.violations);
+        if (pcorr) { console.warn(`[antifab] asserted a future outcome as certain → corrected: ${pr.violations.map((v) => v.claim).join(' | ').slice(0, 160)}`); out += pcorr; }
+      }
+    } catch {}
     return out;
   } catch (e) { console.error('[antifab] verification failed:', e.message); return say; }
 }
