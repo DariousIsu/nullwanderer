@@ -14770,9 +14770,9 @@ async function _verifyFactFollowup(say, { sessionId, turnStartTs = 0, evidence =
     // EXTERNAL gather only: internal auto-recall fires every turn, so the broad stamp would make this ~never
     // run. Pure recall = no EXTERNAL search this turn → the claim was never checked out there → verify it.
     const gathered = (() => { try { return require('./lib/echo_suit').lastExternalGatherTs() >= (turnStartTs || 0); } catch { return true; } })();
-    if (gathered) { console.log('[verify] skip: an external gather ran this turn (not pure recall)'); return; }
+    if (gathered) return;   // an external gather ran this turn → not pure recall (stage 4 handles the gathered confab)
     const gf = _mc.groundFacts(say, { evidence });
-    if (gf.ok || !gf.violations.length) { console.log('[verify] skip: no ungrounded current-event fact in the reply (grounded or no predicate)'); return; }
+    if (gf.ok || !gf.violations.length) return;   // no ungrounded current-event fact (grounded, or no predicate)
     const top = gf.violations[0];
     console.log(`[verify] pure-recall confab candidate → verifying: ${String(top.novelTerms || []).join('/').slice(0, 80)}`);
     const vc = require('./lib/verify_claim');
