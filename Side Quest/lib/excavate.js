@@ -56,6 +56,68 @@ async function _wikiUrl(need, deps = {}) {
   return null;
 }
 
+// ── THE FALL-THROUGH FLOOR (census fresh51) ──────────────────────────────────────────────────────
+// When the headful VISION read comes up empty on every screen, the answer is often STILL fetchable as
+// TEXT: the live audit found the act-on-page render JS-blind (NOT_VISIBLE on NWS + cleco.com) and the
+// keyless search substrate dead — while `web_extract`/`web_fetch` (curl_cffi/patchright) returned the
+// real page content. This is the working path the lanes never fell through to. `_fetchText` pulls the
+// clean body via the same dispatch tier wikiLookup uses (web_extract first, web_fetch as backup),
+// reusing its body-shape extraction. Dep-injectable (deps.dispatch) so the offline gate needs no Echo.
+async function _fetchText(url, deps = {}) {
+  const d = deps.dispatch || (() => { try { return require('./echo_suit').liveDispatch(); } catch { return null; } })();
+  if (!d || !url) return '';
+  for (const name of ['web_extract', 'web_fetch']) {
+    try {
+      const r = await d({ kind: 'do', name, args: { url } });
+      if (!r || !r.ok) continue;
+      let body = '';
+      try {
+        const j = JSON.parse(r.text);
+        if (j && typeof j === 'object') {
+          body = String(j.text || j.content || j.markdown || j.extract || j.body || j.text_preview || '').trim();
+          if (!body) { let longest = ''; for (const v of Object.values(j)) if (typeof v === 'string' && v.length > longest.length) longest = v; body = longest.trim(); }  // unknown shape → longest string field
+        }
+      } catch {}
+      if (!body) body = String(r.text || '').trim();   // may return plain text (not JSON)
+      body = body.replace(/\s+/g, ' ').trim();
+      if (body.length > 80) return body;
+    } catch {}
+  }
+  return '';
+}
+
+// Distil ONE answer to `need` from fetched page text (excavate's find-one-answer contract). Same
+// FOUND:/NOT_VISIBLE grammar as the vision scan, but reading text. Uses a text completion — injectable
+// via deps.completeText for the offline gate; live path resolves a source the way vision does. Fail-soft.
+function _textAnswerPrompt(need, text) {
+  return `Read the following page text and answer ONE question:\n"${String(need).slice(0, 220)}"\n\n`
+    + `If the answer is present in the text, reply EXACTLY one line:\nFOUND: <the answer, one short sentence>\n`
+    + `If it is not in the text, reply EXACTLY:\nNOT_VISIBLE\n`
+    + `Only use the text below; never guess or fall back on prior knowledge.\n\n--- PAGE TEXT ---\n${String(text).slice(0, 6000)}`;
+}
+async function _answerFromText(need, text, deps = {}) {
+  const t = String(text || '').trim();
+  if (t.length < 80) return null;
+  let out = '';
+  try {
+    if (deps.completeText) {
+      out = await deps.completeText(_textAnswerPrompt(need, t));
+    } else {
+      const { complete } = require('./ollama');
+      const srcs = require('./models').sources() || [];
+      const src = srcs.find(s => s.tier === 'cloud' && s.token) || srcs.find(s => s.tier === 'local');
+      if (!src) return null;
+      const model = deps.textModel || (() => { try { return require('./vision').visionModelFor('excavate').model; } catch { return null; } })();
+      if (!model) return null;
+      out = await complete({ model, messages: [{ role: 'user', content: _textAnswerPrompt(need, t) }], base: src.base, headers: src.token ? { Authorization: `Bearer ${src.token}` } : {}, options: { temperature: 0.1, num_ctx: 8192 }, timeoutMs: 120000 });
+    }
+  } catch { return null; }
+  const s = String(out || '').trim();
+  if (!s || /not[_\s-]?visible/i.test(s)) return null;
+  const m = s.match(FOUND_RE);
+  return m ? m[1].trim().replace(/\s+/g, ' ') : null;
+}
+
 // Chrome/boilerplate link texts vision must never follow (nav, account, tools, footer) — a guard on the
 // text it names, so a weak model can't send her to "Main menu" / "Log in".
 const _CHROME_LINK = /^(main menu|jump to.*|search|log ?in|sign ?in|create account|contents|current events|random article|about wikipedia|community portal|recent changes|upload file|help|learn to edit|donate|tools|what links here|related changes|special pages|permanent link|page information|cite this page|talk|read|edit|edit source|view history|view source|watch|namespaces|views|more|personal tools|languages|add links|toggle .*|hide|show|back to top|privacy policy|disclaimers|mobile view|home|menu|skip to content|accessibility help)$/i;
@@ -152,6 +214,17 @@ async function excavate(need, { url = null, maxSteps = 8, maxClicks = 2, deps = 
     if (!clicked) { log('no useful link to click → stop'); break; }
     log(`clicked "${clicked}" → digging deeper (${depth + 1}/${maxClicks})`);
   }
+  // FALL-THROUGH FLOOR: vision saw nothing on any screen (JS-blind render or answer in stripped text).
+  // The page is often still fetchable as TEXT — pull it and distil the one answer. (Never invents: a
+  // NOT_VISIBLE from the text pass returns not-found, same as the vision scan.)
+  try {
+    const text = await _fetchText(nav.url, deps);
+    if (text) {
+      const ans = await _answerFromText(n, text, deps);
+      if (ans) { log(`vision miss → web_extract fall-through FOUND (${text.length}ch)`); return { found: true, answer: ans, url: nav.url, steps: lastScan ? lastScan.steps : 0, clicks: maxClicks, via: 'text' }; }
+      log(`vision miss → web_extract fall-through read ${text.length}ch, no answer in text`);
+    }
+  } catch {}
   return { found: false, url: nav.url, steps: lastScan ? lastScan.steps : 0 };
 }
 
@@ -199,7 +272,15 @@ async function seePage(focus, { url = null, maxViews = 3, deps = {} } = {}) {
     if (t && !/^\(nothing relevant/i.test(t)) parts.push(t);
     try { const s = await web.scroll('down'); if (!s || !s.ok) break; } catch { break; }
   }
+  // FALL-THROUGH FLOOR: vision extracted nothing across every view (JS-blind render). The page's facts
+  // are usually still readable as TEXT — fetch the clean body so deep research banks CONTENT, not a miss.
+  if (!parts.length) {
+    try {
+      const text = await _fetchText(pageUrl || url, deps);
+      if (text) { log(`vision empty → web_extract fall-through (${text.length}ch)`); return { ok: true, url: pageUrl || url, text: text.slice(0, 6000), via: 'text' }; }
+    } catch {}
+  }
   return { ok: true, url: pageUrl, text: parts.join('\n').replace(/\n{3,}/g, '\n\n').trim() };
 }
 
-module.exports = { excavate, seePage, _scanPage, _clickToward, _visionPrompt, _clickPrompt, _seePrompt, _wikiUrl, FOUND_RE, CLICK_RE };
+module.exports = { excavate, seePage, _scanPage, _clickToward, _visionPrompt, _clickPrompt, _seePrompt, _wikiUrl, _fetchText, _answerFromText, _textAnswerPrompt, FOUND_RE, CLICK_RE };

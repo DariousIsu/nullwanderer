@@ -112,6 +112,54 @@ function fakeWeb({ shots }) {
     ok(excavate._seePrompt(null) === excavate._seePrompt(''), 'null focus behaves exactly like empty');
   }
 
+  // ── THE FALL-THROUGH FLOOR (census fresh51): vision blind on every screen → web_extract text → answer ──
+  // The live gap: the headful vision read returned NOT_VISIBLE on JS-heavy pages while web_fetch/web_extract
+  // returned real content, and the lane never fell through to it. deps.dispatch + deps.completeText are the
+  // injected working path (offline: no Echo, no cloud).
+  const dispatchExtract = (text) => async ({ name }) => (name === 'web_extract' ? { ok: true, text: JSON.stringify({ text }) } : { ok: false });
+  {
+    const webF = fakeWeb({ shots: ['A', 'B', 'C'] });
+    const cleoText = 'Cleco is a Louisiana electric utility owned by a consortium led by Macquarie. It serves 290,000 customers across central Louisiana. CEO: William Fontenot.';
+    const rF = await excavate.excavate('who owns Cleco and who is its CEO', {
+      url: 'https://www.cleco.com/about', maxSteps: 2, maxClicks: 0,
+      deps: { web: webF, vision: visionNo, dispatch: dispatchExtract(cleoText), completeText: async () => 'FOUND: Cleco is owned by a Macquarie-led consortium; CEO William Fontenot.' },
+    });
+    ok(rF.found && rF.via === 'text' && /Macquarie|Fontenot/.test(rF.answer), 'vision blind on every screen → web_extract fall-through distils the answer from TEXT');
+  }
+  {
+    // the text genuinely lacks the answer → NOT_VISIBLE from the text pass → still honest not-found (never invents).
+    const webG = fakeWeb({ shots: ['A', 'B'] });
+    const rG = await excavate.excavate('the mayor of Atlantis', {
+      url: 'https://x', maxSteps: 2, maxClicks: 0,
+      deps: { web: webG, vision: visionNo, dispatch: dispatchExtract('An unrelated page about widgets and their prices.'), completeText: async () => 'NOT_VISIBLE' },
+    });
+    ok(!rG.found, 'fall-through text lacks the answer → honest not-found (no confabulation)');
+  }
+  {
+    // no dispatch injected AND no live Echo → fall-through yields nothing → unchanged not-found (regression guard).
+    const webH = fakeWeb({ shots: ['SAME', 'SAME'] });
+    const rH = await excavate.excavate('x', { url: 'https://x', maxSteps: 3, maxClicks: 0, deps: { web: webH, vision: visionNo } });
+    ok(!rH.found && rH.via === undefined, 'no working fetch path (no dispatch, no live Echo) → excavate still returns honest not-found');
+  }
+  {
+    // seePage: vision extracts nothing across views → web_extract fall-through returns the page TEXT for banking.
+    let si = 0;
+    const seeWebE = { open: async () => ({ ok: true, url: 'https://org/team' }), screenshot: async () => ({ ok: true, base64: 'E' + (si++), url: 'https://org/team' }), scroll: async () => ({ ok: true }) };
+    const seeNothing = { describe: async () => ({ ok: true, text: '(nothing relevant)' }) };
+    const body = 'Board of Directors: Jane Roe (Chair), Marcus Lee (Treasurer). Founded 2019 in Baton Rouge.';
+    const spE = await excavate.seePage('the leadership', { url: 'https://org/team', maxViews: 2, deps: { web: seeWebE, vision: seeNothing, dispatch: dispatchExtract(body) } });
+    ok(spE.ok && spE.via === 'text' && /Jane Roe/.test(spE.text), 'seePage vision-empty → web_extract fall-through banks the page TEXT');
+  }
+  {
+    // _fetchText: prefers web_extract, unwraps the JSON body, and rejects a too-thin body.
+    const t1 = await excavate._fetchText('https://x', { dispatch: async ({ name }) => (name === 'web_extract' ? { ok: true, text: JSON.stringify({ text: 'A'.repeat(200) }) } : { ok: false }) });
+    ok(t1.length >= 100, '_fetchText pulls the web_extract body');
+    const t2 = await excavate._fetchText('https://x', { dispatch: async () => ({ ok: true, text: JSON.stringify({ text: 'tiny' }) }) });
+    ok(t2 === '', '_fetchText rejects a sub-80ch body (not real content)');
+    const t3 = await excavate._fetchText('https://x', { dispatch: async () => null });
+    ok(t3 === '', '_fetchText fail-soft when dispatch returns null');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
