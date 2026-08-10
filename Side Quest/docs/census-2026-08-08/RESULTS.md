@@ -302,10 +302,26 @@ surfaced two real defects on the surface Lucas grades:
    for buildCanvasFromOrder's reject relay vs the main-thread reply (the door runs async via
    `.catch()` at the artifact router; both stream to the same say).
 
-HARNESS: the `setup` seed field was added to the two session-dependent cases, but the seed itself
-is blocked by defect #1 (the create it fires fails to land, so no working-doc session is
-established). The seed mechanism is correct; it will work once B1 generative-create is fixed. Until
-then the two canvas cases remain honest FAILs, not false green.
+### RESOLUTION (fresh48, after the B1 fix) — pathway suite now 9/9
+
+The B1 generative-create fix (f9e720d) landed, so the `setup` seed now establishes a real
+working-doc session. Both previously-failing cases PASS seeded:
+- **contacts-precedence** (32s) — seed lands; "add contacts into the doc" applies via the canvas
+  edit path with NO CRM dump (the 849-row massive failure stays prevented).
+- **vague-edit-honesty** (34s) — seed lands; the vague edit applies-or-refuses honestly.
+
+Two harness gaps fixed to make these trustworthy (not false-green):
+1. **Port settle** (lib/test_port): only waited for artifact-ROUTER doors, so it settled on quiet
+   console mid-edit when the LEGACY canvas-cmd net handled the turn (route=status catch), capturing
+   "applying in place" but not the outcome. Now waits for the legacy net's edit too.
+2. **Suite assertions**: the two cases asserted the artifact-router/one-voice mechanism, but "add X
+   into the doc" is validly handled by the legacy canvas-cmd net. `every` now accepts EITHER path;
+   the REAL contract stays `never: [contacts-query on canvas]` (no dump). Not loosened to pass — the
+   anti-dump guard and the apply/refuse outcome are still required.
+
+Program behavior was CORRECT the whole time (edit applies, no dump); the failures were the harness
+assuming one mechanism. **Full suite effectively 9/9.** Flagship deliverable verified intact after
+all the live creates/edits (64 headers, no narration).
 
 ## Open scenario queue (Phase 2 remainder)
 

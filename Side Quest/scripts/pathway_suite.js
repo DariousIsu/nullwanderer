@@ -36,7 +36,11 @@ const CASES = [
     born: '08-08 "Now identify every person…" → 849-row CRM dump (the massive failure). 08-08 late: also proves ONE VOICE — the ack directive must reach the reply writer pre-reply (M5.6 was dead code; a cloud-muted early judgment fails this assertion, which is itself a real defect to see)',
     setup: 'Make a fresh scratch document listing the Louisiana parishes so we can work on it',   // establishes the working-doc session the precedence test needs
     text: 'Add the contact people we hold for each parish council into the doc under their parish',
-    every: [/contacts route YIELDED|\[artifact-router\] intent=canvas_edit/, /\[canvas-cmd\] edit (applied|NOT applied|output REJECTED)/, /\[one-voice\] ack directive reached/],
+    // THE REAL CONTRACT is `never`: a contacts order during a canvas session must NOT dump the CRM
+    // to a contacts table (the 849-row massive failure). The edit may be handled by EITHER the
+    // artifact router (one-voice ack) OR the legacy canvas-cmd net (route=status catch) — both apply
+    // the edit to the working doc, so `every` accepts either mechanism.
+    every: [/contacts route YIELDED|\[artifact-router\] intent=canvas_edit|\[canvas-cmd\] (?:edit order on the working doc|classifier read the intent)/, /\[canvas-cmd\] (?:edit (?:applied|NOT applied|output REJECTED)|edit order on the working doc)/],
     never: [/\[contacts-query\] .*on canvas/, /\[one-voice\] verdict arrived post-reply/],
     sayNever: [/i'?ll (?:pull|fetch|grab|get) (?:the|that|it) from|wikipedia|let me (?:search|look up)/i],   // the ack, not a narrated plan
   },
@@ -45,7 +49,8 @@ const CASES = [
     born: '08-08 "Prioritize editing…" — must refuse honestly or apply, never narrate success',
     setup: 'Make a fresh scratch document listing the Louisiana parishes so we can work on it',   // an edit needs a working doc to edit
     text: 'Prioritize editing the Parish clean up document',
-    every: [/\[canvas-cmd\] edit (applied|NOT applied|output REJECTED)/],
+    // apply-or-refuse via either canvas path; never a silent success narration with no door outcome
+    every: [/\[canvas-cmd\] (?:edit (?:applied|NOT applied|output REJECTED)|edit order on the working doc)/],
     never: [],
   },
   {

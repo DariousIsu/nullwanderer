@@ -91,7 +91,11 @@ async function _runInjectedTurn(runChatTurn, { text, settleMs, maxMs }) {
   // the reply — twice the port settled on quiet console while the edit still ran. When the router
   // dispatched a door, quiet is not enough: hold until that door's OUTCOME line appears (or cap,
   // reported honestly via settled:false).
-  const routedDoor = () => logLines.some((l) => /\[artifact-router\] intent=(?!none)/.test(l));
+  // A door owns the tail of the turn if EITHER the artifact router dispatched one OR the LEGACY
+  // canvas-cmd net began an in-place edit/order (2026-08-09: "add contacts into the doc" routed to
+  // status and the legacy net applied the edit — the port settled on quiet console mid-edit because
+  // it only watched for artifact-router doors, capturing "applying in place" but not the outcome).
+  const routedDoor = () => logLines.some((l) => /\[artifact-router\] intent=(?!none)|\[canvas-cmd\] (?:edit order on the working doc|classifier read the intent)/.test(l));
   const doorOutcome = () => logLines.some((l) => /\[canvas-cmd\] (?:edit applied|edit NOT applied|edit output REJECTED|order executed)|\[pull-up\] |\[report-cmd\] |canvas (?:edit|create|report|pull-up)? ?failed/.test(l));
   let settled = false;
   while (Date.now() - started < maxMs) {
