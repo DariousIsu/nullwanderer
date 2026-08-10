@@ -101,7 +101,7 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 
 | # | Capability | Verdict | Evidence / remaining live check |
 |---|---|---|---|
-| H1 | Local image gen ("draw me…") | **UNTESTED** | SDXL/ComfyUI; kill-switch smoke-covered. Drive one draw post-reset. |
+| H1 | Local image gen ("draw me…") | **WORKS (live-verified fresh49)** | "Draw me two pictures of a Louisiana bayou at sunset" → `[draw] made 2/2`, two real PNGs written (data/zoe_workspace/images/gen_*.png), honest reply ("two bayou sunsets… on your Canvas"). Minor: the count-prefix "two pictures of" isn't stripped from the SDXL subject (cosmetic). |
 | H2 | Calendar surface (view + operator writes) | **UNTESTED (UI-only)** | No chat door by design; verify via the studio UI. |
 | H3 | Editor / verification studio | **UNTESTED (UI-only)** | Advisory lanes; live Echo required. |
 | H4 | QR suite | **UNREACHABLE / operator-only** | Desk-verdict: qr_* appears nowhere in main.js; reachable only if the operator model picks it from the Echo catalog. No deterministic door; never observed. |
