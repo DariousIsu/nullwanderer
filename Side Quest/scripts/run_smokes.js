@@ -184,6 +184,7 @@ const smokes = [
   'smoke_preferences.js',
   'smoke_personal_facts.js',
   'smoke_metacognition.js',
+  'smoke_verify_claim.js',
   'smoke_calibration_pressure.js',
   'smoke_focus.js',
   'smoke_condense.js',

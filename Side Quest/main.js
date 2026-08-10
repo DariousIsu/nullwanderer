@@ -9748,6 +9748,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // CONVERSATION STATE (conversation harness, Piece 3): fold this exchange into the running
   // "where we are" summary — async + non-blocking (one cheap bounded call) so it's ready next turn.
   try { require('./lib/convo_state').update(sessionId, userMessage, finalSaid).catch(() => {}); } catch {}
+  // SPINE 2 step 5: if the reply asserted a PURE-RECALL current-event fact (no gather this turn), verify it
+  // against ONE bounded search and post a follow-up beat. Fire-and-forget — never blocks or delays the reply.
+  try { _verifyFactFollowup(finalSaid, { sessionId, turnStartTs: (userTurnRow && userTurnRow.ts) || 0, evidence: _replyEvidence, userName }).catch(() => {}); } catch {}
 
   try {
     // Include the corrected say ONLY when we rewrote it, so the renderer replaces the
@@ -14748,6 +14751,36 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
     } catch {}
     return out;
   } catch (e) { console.error('[antifab] verification failed:', e.message); return say; }
+}
+
+// SPINE 2 step 5 — BOUNDED VERIFY (Lucas's fold-in, docs/BIDIRECTIONAL_VERIFICATION_GATE.md). The inline
+// gate (stage 4) hedges a confab ONLY when a gather also ran; the PURE-RECALL confab (she asserted a specific
+// current-event fact with no search at all — the Cleco case) is left alone there by design. This catches it:
+// fire ONE bounded search on that claim and post a FOLLOW-UP beat (the reply already streamed) — corroborated
+// → confirm; uncorroborated → own it and mark it unverified. Fire-and-forget + fully fail-soft: on any skip/
+// error NOTHING is posted (silence beats a false correction). One claim per reply. NOT awaited by the reply.
+async function _verifyFactFollowup(say, { sessionId, turnStartTs = 0, evidence = '', userName = 'you' } = {}) {
+  try {
+    if (!say || say === '…' || !sessionId) return;
+    const _mc = require('./lib/metacognition');
+    // only the PURE-RECALL case: a groundFacts violation AND no gather ran this turn (stage 4 already handled
+    // the gathered case inline). If a gather ran, don't second-guess with another message.
+    const gathered = (() => { try { return require('./lib/echo_suit').lastGatherTs() >= (turnStartTs || 0); } catch { return true; } })();
+    if (gathered) return;
+    const gf = _mc.groundFacts(say, { evidence });
+    if (gf.ok || !gf.violations.length) return;
+    const top = gf.violations[0];
+    const vc = require('./lib/verify_claim');
+    const search = (q) => require('./lib/search_lane').search(q);
+    const res = await vc.verifyFact(top.claim, top.novelTerms || [], { search, timeoutMs: 12000 });
+    if (res.verdict !== 'corroborated' && res.verdict !== 'uncorroborated') return;   // skip/timeout/error → say nothing
+    const msg = vc.followupText(top.claim, res.verdict, { userName });
+    const row = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'verify', unprompted: 1 });
+    try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+    try { require('./lib/blackboard').append({ source: 'verify', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
+    console.log(`[verify] bounded verify (${res.verdict}, ${res.matched || 0}/${res.total || 0}) → follow-up posted: ${String(top.novelTerms || []).slice(0, 80)}`);
+  } catch (e) { console.error('[verify] follow-up failed:', e.message); }
 }
 
 // surfaces the key finding + one concrete follow-up, so she doesn't just report "done" but actually opens
