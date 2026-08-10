@@ -2330,7 +2330,7 @@ app.whenReady().then(() => {
   // THE INSIDE ACCESS PORT (2026-08-08, Lucas) — localhost-only door that drives the REAL chat
   // pipeline for full pathway tests (see lib/test_port.js). ZOE_TEST_PORT=0 disables.
   if (process.env.ZOE_TEST_PORT !== '0') {
-    try { require('./lib/test_port').start({ runChatTurn, antifabCorrect: _antifabCorrect }); } catch (e) { console.error('[test-port] failed to start:', e.message); }
+    try { require('./lib/test_port').start({ runChatTurn, antifabCorrect: _antifabCorrect, bookPromises: _bookDeliveryPromises }); } catch (e) { console.error('[test-port] failed to start:', e.message); }
   }
 
   // PULLER ORG-KIND BACKFILL — one-shot organ, meta-gated (M4.4 follow-up, 2026-08-07). The org

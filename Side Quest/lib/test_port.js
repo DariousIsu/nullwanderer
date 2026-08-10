@@ -111,7 +111,7 @@ async function _runInjectedTurn(runChatTurn, { text, settleMs, maxMs }) {
   };
 }
 
-function start({ runChatTurn, antifabCorrect = null, port = parseInt(process.env.ZOE_TEST_PORT, 10) || 8767 } = {}) {
+function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port = parseInt(process.env.ZOE_TEST_PORT, 10) || 8767 } = {}) {
   if (_server) return _server;
   if (typeof runChatTurn !== 'function') throw new Error('test_port needs runChatTurn');
   _server = http.createServer(async (req, res) => {
@@ -164,6 +164,23 @@ function start({ runChatTurn, antifabCorrect = null, port = parseInt(process.env
         });
         return;
       }
+      // DEBUG: run the REAL delivery-binding on a supplied reply — detect the promise + book the unkept one,
+      // then return the current open promise queue. Deterministic proof of book+queue (no model). {say}.
+      if (req.method === 'POST' && req.url === '/promise') {
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
+        req.on('end', () => {
+          try {
+            const { say } = JSON.parse(body || '{}');
+            if (!say || !String(say).trim()) return send(400, { ok: false, error: 'say required' });
+            const detected = require('./delivery').detectPromise(String(say));
+            if (typeof bookPromises === 'function') bookPromises(String(say), { sessionId: 'test-port', turnStartTs: Date.now() });
+            const open = require('./recheck_queue').openByKind({ kind: 'promise', limit: 20 });
+            return send(200, { ok: true, detected, openPromises: open.map((r) => ({ id: r.id, subject: r.subject, deliverable: (r.detail || {}).deliverable })) });
+          } catch (e) { return send(500, { ok: false, error: e.message }); }
+        });
+        return;
+      }
       if (req.method === 'POST' && req.url === '/turn') {
         let body = '';
         req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
@@ -187,7 +204,7 @@ function start({ runChatTurn, antifabCorrect = null, port = parseInt(process.env
         });
         return;
       }
-      send(404, { ok: false, error: 'POST /turn, POST /antifab, POST /verify, or GET /status' });
+      send(404, { ok: false, error: 'POST /turn, POST /antifab, POST /verify, POST /promise, or GET /status' });
     } catch (e) { send(500, { ok: false, error: e.message }); }
   });
   _server.listen(port, '127.0.0.1', () => console.log(`[test-port] inside access port on 127.0.0.1:${port} (POST /turn drives the REAL pipeline)`));
