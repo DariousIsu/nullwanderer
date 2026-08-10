@@ -215,6 +215,20 @@ const _ART_CANVAS_VERB_RE = /\b(put|placed|added|dropped|posted|loaded|saved|fil
 // database") uses "have" and matches NEITHER branch → no false positive.
 const _ART_DB_DONE_RE = /\b(added|saved|stored|recorded|logged|created|inserted|put|entered)\b[^.!?\n]*\b(?:to|in|into|onto)\b[^.!?\n]*\b(?:contacts?(?:\s+(?:database|db|list|record))?|crm|database|records?)\b|\b(?:is|are|now|has been|have been|it'?s|he'?s|she'?s|they'?re)\b[^.!?\n]*\b(?:in|on)\b[^.!?\n]*\b(?:contacts?\s+(?:database|db|list)|crm|database)\b/i;
 
+// ── SPINE 2: BIDIRECTIONAL VERIFICATION (2026-08-10, docs/BIDIRECTIONAL_VERIFICATION_GATE.md) ──────────────
+// The artifact gate above checks claims that leave a trace in Zoe's OWN runtime. Spine 2 checks claims about
+// the WORLD — the three directions the same missing check fails: absence (false-blank), presence (confab),
+// prediction (false-certainty). Regex FINDS the candidate phrasing (genuinely lexical); a STRUCTURAL probe
+// decides (did a gather run? is it in evidence? is it forecast-backed?). Every probe fails OPEN.
+//
+// ABSENCE (false-blank): a claim that a lookup came back empty — "couldn't find it", "no email listed",
+// "nothing came up". To justify a NEGATIVE you must have actually LOOKED. Branch 1 = a negated find/locate
+// verb. Branch 2 = a record-noun asserted absent ("no email found/listed/on file", "the address isn't
+// listed"). Guarded against generic negatives ("no problem", "no doubt", "no easy answer") by requiring a
+// find-verb or a concrete record-noun + an availability word — never a bare "no".
+const _ABS_FIND_RE = /\b(?:could(?:n'?t| not)|can(?:'?t|not)|was(?:n'?t| not)\s+able\s+to|were(?:n'?t| not)\s+able\s+to|un(?:able|successful)(?:\s+to)?|did(?:n'?t| not)|failed\s+to)\s+(?:manage\s+to\s+)?(?:find|locate|track\s+down|dig\s+up|turn\s+up|pull\s+up|source|surface)\b|\b(?:no\s+results|nothing\s+(?:came|turned)\s+up|came\s+up\s+(?:empty|with\s+nothing)|drew\s+a\s+blank|no\s+luck\s+finding)\b/i;
+const _ABS_RECORD_RE = /\bno\s+(?:\w+\s+){0,3}(?:e-?mail|phone|address|contact|record|listing|entry|number|profile|information|data|website|bio)\b[^.!?\n]*\b(?:found|listed|available|on\s+file|on\s+record|in\s+(?:the\s+)?(?:database|records?|system|crm))\b|\b(?:e-?mail|phone|address|contact|record|listing|website)\b[^.!?\n]*\b(?:is(?:n'?t| not)|was(?:n'?t| not)|are(?:n'?t| not))\b[^.!?\n]*\b(?:listed|available|found|on\s+file|on\s+record|public(?:ly\s+available)?)\b/i;
+
 // IMAGE: a claim to have CREATED an image — or that one is "on your canvas" / "here it is" / "generating now"
 // — when NO image was generated this turn. The free-form/operator path narrates image DELIVERY without an
 // executed generation (live #10872: "…Generating now." rendered nothing; the operator never emitted a draw
@@ -295,6 +309,37 @@ function groundEmails(say, evidence = '') {
   return { text: out, stripped };
 }
 
+// ── SPINE 2 gates ─────────────────────────────────────────────────────────────────────────────────────────
+// ABSENCE (false-blank): a reply asserting a lookup came up empty is only HONEST if a gather actually ran this
+// turn. gatherRanThisTurn()->bool is injected (echo_suit.lastGatherTs() >= turnStart). Fails OPEN: a probe
+// error, or no probe, → assume she looked (never scold a real, honest "not found"). Returns {ok, violations}.
+// Bare-recall note (unlike the presence gate): an absence claim WITHOUT a gather IS the defect we're catching —
+// she said "not found" without looking — so here "no gather" is the POSITIVE signal, not a reason to abstain.
+function groundAbsence(say, { gatherRanThisTurn = null } = {}) {
+  const violations = [];
+  if (typeof gatherRanThisTurn !== 'function') return { ok: true, violations };   // no probe → nothing to check
+  const sentences = String(say || '').split(/(?<=[.!?])\s+|\n+/);
+  for (const sent of sentences) {
+    const s = sent.trim();
+    if (s.length < 6 || _ART_FUTURE_RE.test(s)) continue;              // "I'll try to find it" is intent, not a blank
+    if (!_ABS_FIND_RE.test(s) && !_ABS_RECORD_RE.test(s)) continue;    // fast-path: is this an absence claim at all?
+    let looked = true; try { looked = !!gatherRanThisTurn(); } catch { looked = true; }   // fail OPEN
+    if (!looked) { violations.push({ kind: 'absence', claim: s.slice(0, 90) }); break; }  // one is enough
+  }
+  return { ok: violations.length === 0, violations };
+}
+
+// The honest correction for Spine 2 (world-fact) gates — absence today; presence + prediction fold in next.
+// Separate from artifactCorrection (runtime-artifact claims) because the failure and the remedy differ:
+// an artifact claim is retracted ("it isn't there"); a world-fact claim is DE-CERTAINTIED ("I didn't verify").
+function verificationCorrection(violations = []) {
+  const hasAbsence = violations.some((v) => v.kind === 'absence');
+  const parts = [];
+  if (hasAbsence) parts.push(`I said I couldn't find that, but I didn't actually search for it this turn — let me look before treating it as blank`);
+  if (!parts.length) return '';
+  return `\n\n[Correction — ${parts.join('; ')}.]`;
+}
+
 // The honest correction appended to a reply whose artifact claim didn't check out.
 function artifactCorrection(violations = []) {
   const files = violations.filter((v) => v.kind === 'file').map((v) => v.claim);
@@ -310,4 +355,4 @@ function artifactCorrection(violations = []) {
   return `\n\n[Correction — ${parts.join('; ')}. I mis-stated that as done; it isn't yet. I won't claim a file, canvas item, image, or database record exists unless it really does.]`;
 }
 
-module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, mentionsMeeting, claimsMeetingAction, meetingActionHonestyDirective, verifyArtifactClaims, artifactCorrection, groundEmails, DATETIME_SELF_RE, ELECTION_RECENCY_RE };
+module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, mentionsMeeting, claimsMeetingAction, meetingActionHonestyDirective, verifyArtifactClaims, artifactCorrection, groundEmails, groundAbsence, verificationCorrection, DATETIME_SELF_RE, ELECTION_RECENCY_RE };

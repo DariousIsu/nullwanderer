@@ -164,5 +164,32 @@ ok(m.verifyArtifactClaims('I updated the chart on your canvas.', { imageGenThisT
 ok(/image/i.test(m.artifactCorrection([{ kind: 'image', claim: 'x' }])), 'artifactCorrection: image violation → correction names the image');
 ok(m.artifactCorrection([]) === '', 'artifactCorrection: no violations → empty string');
 
+// --- SPINE 2: ABSENCE (false-blank) — the parish §7.1 case: "couldn't find an email" WITHOUT searching ---
+const GATHER_NO = () => false, GATHER_YES = () => true;
+ok(m.groundAbsence("I couldn't find an email address for Mayor Arceneaux.", { gatherRanThisTurn: GATHER_NO }).violations.some(v => v.kind === 'absence'),
+  'absence: "couldn\'t find an email" + NO gather this turn → violation (the §7.1 false-blank)');
+ok(m.groundAbsence("I couldn't find an email address for Mayor Arceneaux.", { gatherRanThisTurn: GATHER_YES }).ok,
+  'absence: same claim WITH a gather this turn → honest absence, no violation');
+ok(m.groundAbsence('No email is listed for him in any public record.', { gatherRanThisTurn: GATHER_NO }).violations.some(v => v.kind === 'absence'),
+  'absence: record-noun branch ("no email is listed") + no gather → violation');
+ok(m.groundAbsence('The phone number isn\'t publicly available.', { gatherRanThisTurn: GATHER_NO }).violations.some(v => v.kind === 'absence'),
+  'absence: "phone number isn\'t publicly available" + no gather → violation');
+ok(m.groundAbsence("I couldn't find it.", { gatherRanThisTurn: () => { throw new Error('probe down'); } }).ok,
+  'absence: probe THROWS → fails OPEN (no false scold)');
+ok(m.groundAbsence("I couldn't find it.", {}).ok,
+  'absence: no probe injected → nothing to check, ok');
+// FP guards — generic negatives are NOT lookup-absence claims
+ok(m.groundAbsence('No problem — I\'ll take care of that.', { gatherRanThisTurn: GATHER_NO }).ok,
+  'absence FP: "no problem" → not an absence claim');
+ok(m.groundAbsence("There's no easy answer to that question.", { gatherRanThisTurn: GATHER_NO }).ok,
+  'absence FP: "no easy answer" → not an absence claim');
+ok(m.groundAbsence('No doubt he\'ll respond soon.', { gatherRanThisTurn: GATHER_NO }).ok,
+  'absence FP: "no doubt" → not an absence claim');
+ok(m.groundAbsence("I'll try to find an email for him.", { gatherRanThisTurn: GATHER_NO }).ok,
+  'absence: FUTURE intent ("I\'ll try to find") → not a blank claim, no violation');
+// correction copy
+ok(/search|look/i.test(m.verificationCorrection([{ kind: 'absence', claim: 'x' }])), 'verificationCorrection: absence → correction says she didn\'t actually search');
+ok(m.verificationCorrection([]) === '', 'verificationCorrection: no violations → empty string');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

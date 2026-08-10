@@ -14712,6 +14712,17 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
       const corr = _mc.artifactCorrection(av.violations);
       if (corr) { console.warn(`[antifab] claimed an artifact that isn't there → corrected: ${av.violations.map((v) => v.kind + ':' + v.claim).join(', ').slice(0, 180)}`); out += corr; }
     }
+    // (3) SPINE 2 — ABSENCE (false-blank): a "couldn't find it / none listed" claim is only honest if a gather
+    // ACTUALLY RAN this turn. Probe = echo_suit.lastGatherTs() (stamped centrally in dispatch). Fails OPEN.
+    try {
+      const abs = _mc.groundAbsence(out, {
+        gatherRanThisTurn: () => { try { return require('./lib/echo_suit').lastGatherTs() >= (turnStartTs || 0); } catch { return true; } },
+      });
+      if (!abs.ok) {
+        const vcorr = _mc.verificationCorrection(abs.violations);
+        if (vcorr) { console.warn(`[antifab] asserted an absence without searching → corrected: ${abs.violations.map((v) => v.kind + ':' + v.claim).join(', ').slice(0, 160)}`); out += vcorr; }
+      }
+    } catch {}
     return out;
   } catch (e) { console.error('[antifab] verification failed:', e.message); return say; }
 }
