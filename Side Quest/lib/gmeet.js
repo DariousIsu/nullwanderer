@@ -32,6 +32,7 @@ const FOLLOW_MAX_WAIT_MS = 25000;   // ...or after this long with ANY pending li
 const LEAVE_SILENCE_MS = 300000;   // after a clear sign-off AND she's effectively alone, if captions stay quiet THIS long she hangs up (5 min; 90s was far too eager — a quiet stretch mid-meeting ≠ over)
 const ALONE_LEAVE_MS = 240000;     // effectively ALONE (attendee panel ≤1) for THIS long → leave, no verbal sign-off needed. The real-world "everyone dropped off" signal the sign-off gate kept missing (Lucas: "she still doesn't know when to leave").
 const MAX_MEETING_MS = 3 * 3600000; // hard backstop: never sit in a call past 3h whatever the captions do — the "stuck in observing forever" state now has a ceiling.
+const CAPTION_DROUGHT_MS = 180000;  // A1 fall-through floor: in a meeting with others present but ZERO captions EVER for this long → CC is off/broken; say so ONCE (she can't follow live) and keep attending. Well under the alone/sign-off leave triggers, and past join+intro+caption-start latency.
 const MEETING_RESEARCH_GAP_MS = 30000;   // M2: governed cadence for in-meeting background research (steady, not spammy)
 
 // ── WHO SHE TALKS TO IN A MEETING ───────────────────────────────────────────────────────────────
@@ -302,6 +303,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_understanding_log', ''); db.setMeta('gmeet_last_recap', '');
   db.setMeta('gmeet_present', '[]'); db.setMeta('gmeet_directives', '[]');
   db.setMeta('gmeet_started_at', String(Date.now()));   // M1: transcript scope anchor
+  db.setMeta('gmeet_cap_ever', ''); db.setMeta('gmeet_dry_notified', '');   // A1: caption-drought detector state (per meeting)
   db.setMeta('gmeet_ended_at', '0');   // post-meeting recall freshness stamp (set when the call ends)
   db.setMeta('gmeet_last_research_at', '0'); db.setMeta('gmeet_researched', '[]');   // M2: research governance
   db.setMeta('gmeet_ledger', '[]');   // the action ledger is PER MEETING — last week's drafts are not this call's
@@ -852,8 +854,10 @@ async function runTick(ctx = {}) {
     // the meeting is over even with NO verbal sign-off (people simply dropped off). This is the signal
     // the sign-off-only gate kept missing, and why she sat in an ended call. Reset the clock the instant
     // anyone else is present, so a momentary scrape blip mid-meeting can't hang her up.
+    let _presentCount = null;
     try {
       const _present = parseAttendees(await d.scrapeAttendees(d.web)).length;
+      _presentCount = _present;
       if (_present <= 1) {
         if (!db.getMeta('gmeet_alone_since')) db.setMeta('gmeet_alone_since', String(_tNow));
         const _since = parseInt(db.getMeta('gmeet_alone_since') || '0', 10) || _tNow;
@@ -876,6 +880,7 @@ async function runTick(ctx = {}) {
     }
     if (_seenCaps.size > 600) _seenCaps = new Set(Array.from(_seenCaps).slice(-300));   // bound memory
     if (fresh.length) {
+      db.setMeta('gmeet_cap_ever', '1');   // A1: captions ARE working this meeting → the drought signal never fires
       const block = fresh.map(c => `${c.speaker}: ${c.text}`).join('\n');
       surface(`Meeting captions:\n${block}`, `(gmeet) ${fresh.length} new caption(s)`);
       // M1: persist each line to the durable, timestamped transcript so it can purge from her
@@ -948,6 +953,26 @@ async function runTick(ctx = {}) {
         }
       }
     }
+    // A1 FALL-THROUGH FLOOR (gmeet variant, docs/INTEGRATED_BUILD_TRACK §A1): captions are gmeet's only LIVE
+    // perception. When they NEVER come through (CC off / DOM changed) she used to observe SILENTLY for up to
+    // MAX_MEETING_MS with no honest signal she was effectively blind (the census G3 disease). gmeet's floor is
+    // the audio-loopback companion (meeting_audio, gated ZOE_MEETING_AUDIO, started at the meeting level) — a
+    // parallel capture, not a per-tick reader — so the honest fall-through is: once captions have been dry this
+    // long with others present AND none EVER arrived, SAY SO ONCE (audio-aware) and KEEP attending (Lucas's
+    // pick: she may be here on his behalf). Checked AFTER this tick's caption handling so gmeet_cap_ever is
+    // current. Never silently perceive nothing. Latched via gmeet_dry_notified.
+    if (db.getMeta('gmeet_cap_ever') !== '1' && !db.getMeta('gmeet_dry_notified')
+        && _startedAt && (_tNow - _startedAt) >= CAPTION_DROUGHT_MS
+        && (_presentCount == null || _presentCount >= 2)) {
+      db.setMeta('gmeet_dry_notified', '1');
+      const audioOn = (() => { try { return require('./config').meetingAudioConfig().enabled; } catch { return false; } })();
+      const msg = audioOn
+        ? `I'm in the meeting but not getting any live captions, so I can't follow it in the moment — audio capture is on, though, so I'll still have the transcript afterward.`
+        : `I'm in the meeting but not getting any captions, and audio capture isn't set up — so I can't follow this one live. Turn captions on if you'd like me to follow along.`;
+      try { ctx.onSurface && ctx.onSurface(msg); } catch {}
+      return { stage, ok: true, note: `caption drought (${Math.round((_tNow - _startedAt) / 1000)}s, none ever, ${audioOn ? 'audio-on' : 'no-audio'}) → honest surface, staying` };
+    }
+
     // ADDRESSED TO HER (active participation): if a fresh caption directly addresses Zoe
     // (anyone may — Lucas's call), she ANSWERS in the meeting chat autonomously. This takes
     // precedence over the periodic follow-along — being spoken to is the priority. Dedup so a
@@ -1052,7 +1077,7 @@ async function runTick(ctx = {}) {
 }
 
 module.exports = {
-  STAGES, get, set, active, start, reset, url, runTick, defaultDeps, synthesizeMeeting,
+  STAGES, CAPTION_DROUGHT_MS, get, set, active, start, reset, url, runTick, defaultDeps, synthesizeMeeting,
   // pure helpers (tested)
   detectMeetUrl, meetLinkFromEvent, introPrompt, validateIntro, ensureIntro, parseCaptions, parseAttendees,
   addressesSelf, isSelfSpeaker, selfNames, looksLikeSignOff, extractDirective, segmentTurns, parseMeetingAction,

@@ -212,6 +212,38 @@ function mockDeps(over = {}) {
   ok('the fetched answer is posted to chat', wr.ok && mWeb.calls.posts.length === 1 && /218/.test(mWeb.calls.posts[0]));
   g.reset();
 
+  console.log('\nA1 caption-drought → honest surface, keeps attending (G3 gmeet variant):');
+  g.start(URL1); g.set('observing');
+  db.setMeta('gmeet_started_at', String(Date.now() - (g.CAPTION_DROUGHT_MS + 5000)));   // captions dry long enough
+  let droughtMsg = null;
+  const mDry = mockDeps({ attendeesText: 'Alice\nBob\nCarol', captionsText: '', inMeeting: true });   // others present, zero captions
+  const rDry = await g.runTick({ deps: mDry.deps, userName: 'Lucas', onSurface: (t) => { droughtMsg = t; } });
+  ok('drought → honest surface about no captions', /not getting any (?:live )?captions/i.test(droughtMsg || ''));
+  ok('drought → STILL observing (stays, does not leave)', g.get() === 'observing');
+  ok('drought note reflects the honest surface', /caption drought/.test(rDry.note));
+  let droughtMsg2 = null;
+  await g.runTick({ deps: mDry.deps, userName: 'Lucas', onSurface: (t) => { droughtMsg2 = t; } });
+  ok('drought surface is latched — does not repeat every tick', droughtMsg2 === null);
+  g.reset();
+
+  console.log('\nA1 drought does NOT fire once captions are working:');
+  g.start(URL1); g.set('observing');
+  db.setMeta('gmeet_started_at', String(Date.now() - (g.CAPTION_DROUGHT_MS + 5000)));
+  let noDrought = null;
+  const mCap = mockDeps({ attendeesText: 'Alice\nBob', captionsText: 'Alice: We can hear you fine', inMeeting: true });
+  const rCap = await g.runTick({ deps: mCap.deps, userName: 'Lucas', onSurface: (t) => { noDrought = t; } });
+  ok('captions working → NO drought surface', noDrought === null && /new caption/.test(rCap.note));
+  g.reset();
+
+  console.log('\nA1 drought stays quiet when alone (the alone-leave owns that case):');
+  g.start(URL1); g.set('observing');
+  db.setMeta('gmeet_started_at', String(Date.now() - (g.CAPTION_DROUGHT_MS + 5000)));
+  let aloneMsg = null;
+  const mAlone = mockDeps({ attendeesText: 'Zoe (You)', captionsText: '', inMeeting: true });   // ≤1 present
+  await g.runTick({ deps: mAlone.deps, userName: 'Lucas', onSurface: (t) => { aloneMsg = t; } });
+  ok('alone + no captions → no drought surface (present<2)', !/not getting any/i.test(aloneMsg || ''));
+  g.reset();
+
   console.log('\nrecipes present + structured:');
   ok('gmeet_join loads (verified:false)', (() => { const x = store.load('gmeet_join'); return x && x.task === 'join' && x.verified === false && x.steps.length >= 3; })());
   ok('gmeet_post_chat loads', (() => { const x = store.load('gmeet_post_chat'); return x && x.task === 'post_chat' && x.steps.some(s => s.value === '{{message}}'); })());
