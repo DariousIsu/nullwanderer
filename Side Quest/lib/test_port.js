@@ -139,6 +139,28 @@ function start({ runChatTurn, antifabCorrect = null, port = parseInt(process.env
         });
         return;
       }
+      // DEBUG: run the REAL async verify chain (groundFacts → verifyFact → the live search_lane instrument)
+      // on a supplied reply — deterministic proof that an ungrounded current-event fact reaches the bounded
+      // verify AND that the real SERP instrument returns a usable verdict (the smokes only inject a mock
+      // search). {say, evidence} → {violation, query, verdict, matched, total}. Uses the real browser search,
+      // so it is SLOW (~10-20s). Read-only: judges, never posts to chat.
+      if (req.method === 'POST' && req.url === '/verify') {
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
+        req.on('end', async () => {
+          try {
+            const { say, evidence } = JSON.parse(body || '{}');
+            if (!say || !String(say).trim()) return send(400, { ok: false, error: 'say required' });
+            const gf = require('./metacognition').groundFacts(String(say), { evidence: String(evidence || '') });
+            if (gf.ok || !gf.violations.length) return send(200, { ok: true, violation: false, note: 'no ungrounded current-event fact' });
+            const top = gf.violations[0];
+            const vc = require('./verify_claim');
+            const res = await vc.verifyFact(top.claim, top.novelTerms || [], { search: (q) => require('./search_lane').search(q), timeoutMs: 20000 });
+            return send(200, { ok: true, violation: true, novelTerms: top.novelTerms, query: res.query, verdict: res.verdict, matched: res.matched, total: res.total, reason: res.reason });
+          } catch (e) { return send(500, { ok: false, error: e.message }); }
+        });
+        return;
+      }
       if (req.method === 'POST' && req.url === '/turn') {
         let body = '';
         req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
@@ -162,7 +184,7 @@ function start({ runChatTurn, antifabCorrect = null, port = parseInt(process.env
         });
         return;
       }
-      send(404, { ok: false, error: 'POST /turn, POST /antifab, or GET /status' });
+      send(404, { ok: false, error: 'POST /turn, POST /antifab, POST /verify, or GET /status' });
     } catch (e) { send(500, { ok: false, error: e.message }); }
   });
   _server.listen(port, '127.0.0.1', () => console.log(`[test-port] inside access port on 127.0.0.1:${port} (POST /turn drives the REAL pipeline)`));

@@ -14732,9 +14732,9 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
       }
     } catch {}
     // (4) SPINE 2 — PRESENCE (confabulation): a current-event fact whose specifics aren't in this turn's
-    // evidence. CONSERVATIVE here (step 3a): only hedge when a gather ALSO ran this turn — "she looked, found
-    // other things, but asserted an unsupported specific," the highest-confidence confab. Pure recall (no
-    // gather) is the bounded-verify path (step 3b) and is left alone for now. Fails OPEN.
+    // evidence. Immediate inline HEDGE when a gather ALSO ran this turn — "she looked, found other things, but
+    // asserted an unsupported specific." The async _verifyFactFollowup then RESOLVES this hedge with a real
+    // bounded search (and also covers the pure-recall case that never reaches here). Fails OPEN.
     try {
       const _gathered = (() => { try { return require('./lib/echo_suit').lastGatherTs() >= (turnStartTs || 0); } catch { return false; } })();
       if (_gathered && evidence && String(evidence).length >= 40) {
@@ -14759,25 +14759,26 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
 }
 
 // SPINE 2 step 5 — BOUNDED VERIFY (Lucas's fold-in, docs/BIDIRECTIONAL_VERIFICATION_GATE.md). The inline
-// gate (stage 4) hedges a confab ONLY when a gather also ran; the PURE-RECALL confab (she asserted a specific
-// current-event fact with no search at all — the Cleco case) is left alone there by design. This catches it:
-// fire ONE bounded search on that claim and post a FOLLOW-UP beat (the reply already streamed) — corroborated
-// → confirm; uncorroborated → own it and mark it unverified. Fire-and-forget + fully fail-soft: on any skip/
+// gate (stage 4) can only HEDGE a confab inline; this ACTIVELY CHECKS it. Fires on any ungrounded
+// current-event fact — PURE-RECALL (no external search at all — the Cleco case) OR GATHERED-BUT-UNSUPPORTED
+// (she searched but the specific isn't in what she pulled; stage 4 hedged it, this resolves the hedge). Fire
+// ONE bounded search on the claim and post a FOLLOW-UP beat (the reply already streamed) — corroborated →
+// confirm; uncorroborated → own it and mark it unverified. Fire-and-forget + fully fail-soft: on any skip/
 // error NOTHING is posted (silence beats a false correction). One claim per reply. NOT awaited by the reply.
 async function _verifyFactFollowup(say, { sessionId, turnStartTs = 0, evidence = '', userName = 'you' } = {}) {
   try {
     if (!say || say === '…' || !sessionId) return;
     const _mc = require('./lib/metacognition');
-    // only the PURE-RECALL case: a groundFacts violation AND no gather ran this turn (stage 4 already handled
-    // the gathered case inline). If a gather ran, don't second-guess with another message.
-    // EXTERNAL gather only: internal auto-recall fires every turn, so the broad stamp would make this ~never
-    // run. Pure recall = no EXTERNAL search this turn → the claim was never checked out there → verify it.
-    const gathered = (() => { try { return require('./lib/echo_suit').lastExternalGatherTs() >= (turnStartTs || 0); } catch { return true; } })();
-    if (gathered) return;   // an external gather ran this turn → not pure recall (stage 4 handles the gathered confab)
+    // Actively VERIFY any ungrounded current-event fact, in BOTH cases: PURE-RECALL (no external search — the
+    // claim was never checked out there) AND GATHERED-BUT-UNSUPPORTED (she DID search but the asserted
+    // specific isn't in what she pulled — stage 4 hedged it inline; this resolves that hedge with a real
+    // check). The external-gather flag is now just a LABEL, not a gate. groundFacts only flags a violation
+    // when the specific is absent from this turn's evidence, so a grounded fact never reaches here.
+    const gathered = (() => { try { return require('./lib/echo_suit').lastExternalGatherTs() >= (turnStartTs || 0); } catch { return false; } })();
     const gf = _mc.groundFacts(say, { evidence });
     if (gf.ok || !gf.violations.length) return;   // no ungrounded current-event fact (grounded, or no predicate)
     const top = gf.violations[0];
-    console.log(`[verify] pure-recall confab candidate → verifying: ${String(top.novelTerms || []).join('/').slice(0, 80)}`);
+    console.log(`[verify] ${gathered ? 'gathered-but-unsupported' : 'pure-recall'} confab candidate → verifying: ${String(top.novelTerms || []).join('/').slice(0, 80)}`);
     const vc = require('./lib/verify_claim');
     const search = (q) => require('./lib/search_lane').search(q);
     const res = await vc.verifyFact(top.claim, top.novelTerms || [], { search, timeoutMs: 12000 });
