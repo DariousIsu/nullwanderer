@@ -62,7 +62,7 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 
 | # | Capability | Verdict | Evidence / remaining live check |
 |---|---|---|---|
-| D1 | Schema-locked shapes (quick-hit / briefing / op-ed / verification / citation-pack / draft-review) | **UNTESTED** | Reached via operator/condense; cite_floor enforced Echo-side. Drive one shape post-reset. |
+| D1 | Schema-locked shapes (quick-hit / briefing / op-ed / verification / citation-pack / draft-review) | **RENDER SHAPES UNREACHABLE via chat (request still served)** | "Give me a quick-hit briefing on X" routes to the GENERIC report-from-held door (composed 6367ch → notes+canvas), NOT saga_render_quick_hit — so the schema-locked/voice-validated/cite-floor render FORMATS have no dedicated chat door (operator/echoSuit-side only), like E2/H4. The user's ask is served by B3's report door; the branded format is not. Beta-spec gap: add chat doors for the render shapes, or accept operator-only. |
 | D2 | Certify a document (vault + certification) | **UNTESTED** | Two-lane advisory workflow; live Echo required (smoke_editor_roundtrip now skips when Echo is down). |
 
 ## E. Forecast & scenario
