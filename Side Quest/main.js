@@ -6349,10 +6349,47 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         const r = releaseSwarm('chat');
         say = r.ok ? `Released the swarm on ${r.beatId} — the workers are back on normal rotation.` : `There's no swarm running to release.`;
       } else {
-        const r = await startSwarm({ target: mOn[1], requestedBy: 'chat' });
-        say = r.ok
-          ? `On it — swarming ${r.beatId}: ${r.workers} worker(s) splitting ${r.targets} targets in parallel. I'll fold each dossier in as it lands.`
-          : `I couldn't start that swarm — ${r.reason}.`;
+        // R4 — ROSTER-MODE SWARM: if the target names a STATE with open local-roster leaf-fill tasks (the door
+        // enqueued them via enqueueState), run a DIRECTED, un-throttled PARALLEL completion of that state's
+        // roster — ~workers× faster than the serial metabolism (cap 12/h). Each worker runs the SAME R3-scoped
+        // local-roster prompt → applyOutcome → civic_store (the e45085b guardrail: never a generic pass). Only a
+        // Lucas-commissioned completion un-throttles (lane:'interactive'); background metabolism stays paced.
+        // Otherwise fall through to the beat swarm. See docs/INTEGRATED_BUILD_TRACK_2026-08-10.md §R4.
+        const _rosterState = (() => { try { return require('./lib/local_frame').resolveState(mOn[1]); } catch { return null; } })();
+        const _rq = require('./lib/recheck_queue');
+        const _lr = require('./lib/local_roster');
+        const _rosterTasks = _rosterState ? _lr.openTasks(_rosterState, { rq: _rq }) : [];
+        if (_rosterState && _rosterTasks.length) {
+          const _frame = require('./lib/local_frame').buildFrame(_rosterState);
+          const _workers = Math.max(1, Math.min(_workerCount(), _rosterTasks.length));
+          say = `On it — swarming the ${_frame.state} roster: ${_workers} worker(s) draining ${_rosterTasks.length} localities in parallel (directed, un-throttled). I'll re-assemble the sheet and give you the honest count when it lands.`;
+          console.log(`[swarm] START local-roster ${_rosterState}: ${_rosterTasks.length} tasks across ${_workers} worker(s) (directed, un-throttled)`);
+          // Fire-and-forget: the turn returns the ack immediately; completion surfaces via a followup.
+          (async () => {
+            try {
+              const runTask = async (item) => {
+                const res = await runCloudOperator({ userMessage: _rq.buildPrompt(item), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'interactive', budgetMult: 0.75 });
+                return _rq.applyOutcome(item, res && res.answer ? String(res.answer) : '');
+              };
+              await _lr.drainSwarm({ tasks: _rosterTasks, workers: _workers, runTask });
+              const cov = _lr.coverage(_rosterState);
+              let sheetLine = '';
+              try {
+                const asm = _lr.assembleDeliverable(_rosterState);
+                const so = require('./lib/spreadsheet_out');
+                const out = await so.deliverSpreadsheet({ dir: path.join(__dirname, 'notes'), basename: `${_rosterState}_local_roster_${new Date().toISOString().slice(0, 10)}`, rows: asm.rows, sheetName: `${_frame.state} roster` });
+                if (out && out.ok) sheetLine = ` → ${path.relative(__dirname, out.path)}${out.openable ? ' (openable)' : ''}`;
+              } catch (e) { console.error('[swarm-roster] sheet re-assemble failed:', e.message); }
+              console.log(`[swarm] DONE local-roster ${_rosterState}: coverage ${cov.filled}/${cov.denominator}${sheetLine}`);
+              await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${_frame.state} roster swarm just finished. Coverage is now ${cov.filled}/${cov.denominator} localities filled${sheetLine}. Tell Lucas the honest count in one or two sentences — every blank that remains is a verified "not found", never an un-attempted lookup.]` });
+            } catch (e) { console.error('[swarm-roster] directed completion failed:', e.message); }
+          })();
+        } else {
+          const r = await startSwarm({ target: mOn[1], requestedBy: 'chat' });
+          say = r.ok
+            ? `On it — swarming ${r.beatId}: ${r.workers} worker(s) splitting ${r.targets} targets in parallel. I'll fold each dossier in as it lands.`
+            : `I couldn't start that swarm — ${r.reason}.`;
+        }
       }
       const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: say, model: 'swarm-verb' });
       try { for (const ch of say) emit(ch); sendComplete({ saidId: saidRow.id, truncated: 0, swarmVerb: true }); } catch {}

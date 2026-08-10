@@ -95,4 +95,43 @@ function assembleDeliverable(stateCode, { frame = null, deps = {} } = {}) {
 }
 const str = (v) => (v == null ? '' : String(v));
 
-module.exports = { enqueueState, coverage, assembleDeliverable, bodyTitle };
+// R4 — the OPEN local-roster tasks for ONE state (the door already enqueued them via enqueueState). Filters
+// the recheck queue's open local-roster items by their detail.state, so a swarm drains EXACTLY one state's
+// leaf-fill. Injectable rq for offline testing. Returns the recheck items (detail already hydrated).
+function openTasks(stateCode, { rq = null, limit = 1000 } = {}) {
+  const _rq = rq || require('./recheck_queue');
+  const code = String(stateCode || '').toUpperCase();
+  const all = _rq.openByKind({ kind: 'local-roster', limit }) || [];
+  if (!code) return all;
+  return all.filter((it) => String((it && it.detail && it.detail.state) || '').toUpperCase() === code);
+}
+
+// R4 — the SWARM DRAIN: run runTask(item) over `tasks` with at most `workers` in flight (a bounded pool), so a
+// directed completion converges ~workers× faster than the serial metabolism (cap 12/h) WITHOUT firing all N
+// model calls at once. Pure control flow — runTask is INJECTED (real = buildPrompt→runCloudOperator→
+// applyOutcome; test = a mock), so this is offline-testable. Fail-SOFT per task: one task throwing never sinks
+// the pool. onResult(r, i) fires as each task lands (for live coverage re-assembly). Returns
+// [{item, ok, result|error}] in task order. This is the parallel analog of the metabolism's serial drain — the
+// SAME per-task contract (buildPrompt is R3-scoped; applyOutcome writes civic_store), just fanned out.
+async function drainSwarm({ tasks = [], workers = 2, runTask, onResult = null } = {}) {
+  const list = Array.isArray(tasks) ? tasks.slice() : [];
+  if (typeof runTask !== 'function' || !list.length) return [];
+  const K = Math.max(1, Math.min(Math.floor(workers) || 1, list.length));
+  const results = new Array(list.length);
+  let next = 0;
+  const worker = async () => {
+    while (true) {
+      const i = next++;
+      if (i >= list.length) return;
+      let r;
+      try { r = { item: list[i], ok: true, result: await runTask(list[i], i) }; }
+      catch (e) { r = { item: list[i], ok: false, error: (e && e.message) || String(e) }; }
+      results[i] = r;
+      if (typeof onResult === 'function') { try { onResult(r, i); } catch { /* a callback throw must not sink the pool */ } }
+    }
+  };
+  await Promise.all(Array.from({ length: K }, () => worker()));
+  return results;
+}
+
+module.exports = { enqueueState, coverage, assembleDeliverable, bodyTitle, openTasks, drainSwarm };
