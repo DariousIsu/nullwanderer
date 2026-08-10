@@ -186,6 +186,7 @@ const smokes = [
   'smoke_metacognition.js',
   'smoke_verify_claim.js',
   'smoke_delivery.js',
+  'smoke_spreadsheet_out.js',
   'smoke_calibration_pressure.js',
   'smoke_focus.js',
   'smoke_condense.js',

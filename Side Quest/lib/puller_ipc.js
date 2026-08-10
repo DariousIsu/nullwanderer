@@ -150,16 +150,25 @@ function register(ipcMain) {
 
   // Export promoted dossiers in Echo Contact shape (the chosen handoff path → pass76_bulk_prospects).
   // Send-safety gate: conflicted/bounced excluded by default; opts.minGrade floors weak rows.
-  ipcMain.handle('puller:export', (_e, opts = {}) => {
+  ipcMain.handle('puller:export', async (_e, opts = {}) => {
     try {
       const status = opts.all ? null : 'promoted';
       const items = db.listTargets({ status, limit: 1e7 }).map(t => buildDossier(t.id)).filter(Boolean);
       const { rows, excluded } = exporter.toContactRows(items, opts);
       const dir = path.join(__dirname, '..', 'data', 'exports');
       fs.mkdirSync(dir, { recursive: true });
-      const file = path.join(dir, `puller_contacts_${Date.now()}.csv`);
+      // The machine handoff stays CSV in Echo Contact shape (→ pass76_bulk_prospects consumes it) — do NOT
+      // change this format. Alongside it, produce a HUMAN-openable spreadsheet via the R6 door (Spine 3):
+      // a styled, VERIFIED xlsx (CSV fallback if xlsx can't be written) that Lucas can just open.
+      const stamp = Date.now();
+      const file = path.join(dir, `puller_contacts_${stamp}.csv`);
       fs.writeFileSync(file, exporter.toCSV(rows), 'utf-8');
-      return { ok: true, file, count: rows.length, excluded: excluded.length, considered: items.length };
+      let openable = null;
+      try {
+        const out = await require('./spreadsheet_out').deliverSpreadsheet({ dir, basename: `puller_contacts_${stamp}_openable`, rows, columns: exporter.COLUMNS, sheetName: 'Contacts' });
+        if (out && out.ok) openable = { file: out.path, format: out.format, verified: out.openable };
+      } catch (e) { console.error('[puller] openable export failed (CSV handoff still delivered):', e.message); }
+      return { ok: true, file, openable, count: rows.length, excluded: excluded.length, considered: items.length };
     } catch (e) { console.error('[puller] export failed:', e.message); return { ok: false, error: e.message }; }
   });
 
