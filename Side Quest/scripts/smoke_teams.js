@@ -179,6 +179,47 @@ function makeDeps(capScript = [], opts = {}) {
     teams.reset();
   }
 
+  console.log('\nA1 caption-drought → honest surface, keeps attending (G3 teams variant):');
+  {
+    const G = require('../lib/gmeet');   // teams reuses g.CAPTION_DROUGHT_MS
+    teams.start(U1); teams.set('observing');
+    db.setMeta('teams_started_at', String(CLOCK - (G.CAPTION_DROUGHT_MS + 5000)));   // captions dry long enough (fake clock)
+    const { ctx, state, surfacedOut } = makeDeps([], { attendees: 'Alice\nBob\nCarol' });   // others present, ZERO captions
+    state.inMeeting = true;
+    const r = await teams.runTick(ctx);
+    ok('teams drought → honest surface about no captions', surfacedOut.some(t => /not getting any (?:live )?captions/i.test(t)));
+    ok('teams drought → STILL observing (stays, does not leave)', teams.get() === 'observing');
+    ok('teams drought note reflects the honest surface', /caption drought/.test(r.note));
+    const before = surfacedOut.length;
+    await teams.runTick(ctx);
+    ok('teams drought latched — does not repeat every tick', surfacedOut.length === before);
+    teams.reset();
+  }
+
+  console.log('\nA1 teams drought does NOT fire once captions are working:');
+  {
+    const G = require('../lib/gmeet');
+    teams.start(U1); teams.set('observing');
+    db.setMeta('teams_started_at', String(CLOCK - (G.CAPTION_DROUGHT_MS + 5000)));
+    const { ctx, state, surfacedOut } = makeDeps(['Alice: We can hear you fine'], { attendees: 'Alice\nBob' });
+    state.inMeeting = true;
+    const r = await teams.runTick(ctx);
+    ok('teams captions working → NO drought surface', !surfacedOut.some(t => /not getting any/i.test(t)) && /new caption/.test(r.note));
+    teams.reset();
+  }
+
+  console.log('\nA1 teams drought stays quiet when alone (present<2):');
+  {
+    const G = require('../lib/gmeet');
+    teams.start(U1); teams.set('observing');
+    db.setMeta('teams_started_at', String(CLOCK - (G.CAPTION_DROUGHT_MS + 5000)));
+    const { ctx, state, surfacedOut } = makeDeps([], { attendees: 'Zoe (You)' });   // ≤1 present
+    state.inMeeting = true;
+    await teams.runTick(ctx);
+    ok('teams alone + no captions → no drought surface (present<2)', !surfacedOut.some(t => /not getting any/i.test(t)));
+    teams.reset();
+  }
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { require('fs').rmSync(path.dirname(process.env.SQ_DB_PATH), { recursive: true, force: true }); } catch {}
   process.exit(fail === 0 ? 0 : 1);

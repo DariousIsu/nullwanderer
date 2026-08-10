@@ -99,6 +99,7 @@ function start(teamsUrl) {
   db.setMeta('teams_understanding_log', ''); db.setMeta('teams_last_recap', '');
   db.setMeta('teams_present', '[]'); db.setMeta('teams_directives', '[]');
   db.setMeta('teams_started_at', String(Date.now()));
+  db.setMeta('teams_cap_ever', ''); db.setMeta('teams_dry_notified', '');   // A1: caption-drought detector state (per meeting)
   db.setMeta('teams_ended_at', '0');
   db.setMeta('teams_lobby_since', '0'); db.setMeta('teams_lobby_told', '0');
   db.setMeta('teams_context', '');
@@ -379,6 +380,7 @@ async function runTick(ctx = {}) {
     }
     if (_seenCaps.size > 600) _seenCaps = new Set(Array.from(_seenCaps).slice(-300));
     if (fresh.length) {
+      db.setMeta('teams_cap_ever', '1');   // A1: captions ARE working this meeting → the drought signal never fires
       const block = fresh.map(c => `${c.speaker}: ${c.text}`).join('\n');
       surface(`Meeting captions:\n${block}`, `(teams) ${fresh.length} new caption(s)`);
       try {
@@ -428,6 +430,28 @@ async function runTick(ctx = {}) {
           surface('The meeting wrapped up, so I left the Teams call — I\'m back to my own time.', '(teams) left after sign-off');
           if (recap) surface(`Here's what I took from the meeting — ${recap}`, '(teams) meeting recap');
           return { stage, ok: true, note: `sign-off + quiet + alone → left → done${recap ? ' + recap' : ''}${lv && lv.ok ? '' : ' (leave unconfirmed)'}` };
+        }
+      }
+    }
+
+    // A1 FALL-THROUGH FLOOR (teams variant, docs/INTEGRATED_BUILD_TRACK §A1): captions are teams' only LIVE
+    // perception — and they historically scraped EMPTY (fix d7b2c99). teams has NO max-duration/alone backstop
+    // (unlike gmeet), so a caption-less call is observed silently with even less bound (the census G3 disease,
+    // un-backstopped). Once captions have been dry for CAPTION_DROUGHT_MS with others present AND none EVER
+    // arrived (teams_cap_ever), SAY SO ONCE (audio-aware) via onSurface and KEEP attending (Lucas's pick).
+    // Checked AFTER this tick's caption handling so cap_ever is current; latched via teams_dry_notified.
+    if (db.getMeta('teams_cap_ever') !== '1' && !db.getMeta('teams_dry_notified')) {
+      const _startedAt = parseInt(db.getMeta('teams_started_at') || '0', 10) || 0;
+      if (_startedAt && (tNow - _startedAt) >= g.CAPTION_DROUGHT_MS) {
+        let _present = null; try { _present = g.parseAttendees(await d.scrapeAttendees(d.web)).length; } catch {}
+        if (_present == null || _present >= 2) {
+          db.setMeta('teams_dry_notified', '1');
+          const audioOn = (() => { try { return require('./config').meetingAudioConfig().enabled; } catch { return false; } })();
+          const msg = audioOn
+            ? `I'm in the Teams meeting but not getting any live captions, so I can't follow it in the moment — audio capture is on, though, so I'll still have the transcript afterward.`
+            : `I'm in the Teams meeting but not getting any captions, and audio capture isn't set up — so I can't follow this one live. Turn captions on if you'd like me to follow along.`;
+          try { ctx.onSurface && ctx.onSurface(msg); } catch {}
+          return { stage, ok: true, note: `caption drought (${Math.round((tNow - _startedAt) / 1000)}s, none ever, ${audioOn ? 'audio-on' : 'no-audio'}) → honest surface, staying` };
         }
       }
     }
