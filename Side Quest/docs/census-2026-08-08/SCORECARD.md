@@ -181,15 +181,67 @@ Verified every factual "WORKS" answer against INDEPENDENT sources (my own web_ex
   UI-only: D1, H2/H3/H5. The chat-drivable census is now **substrate-limited** — the rest either wait on
   the substrate fix or need Lucas's go (F5).
 
-## What "first real beta" requires from here (the completion build)
+## What "first real beta" requires — THE THREE SPINES (revised 2026-08-10)
 
-1. **One post-reset boot** runs `pathway_suite --run` (flips the 7 FIXED-PENDING-LIVE + the 4
-   PARTIAL conversation lanes to WORKS or exposes a residual) and drives the ~18 UNTESTED
-   capabilities to first grades. This is the single biggest remaining coverage step.
-2. **Two UNREACHABLE chat doors to build** (E2 scenario, H4 QR) — or an explicit decision that they
-   stay UI/operator-only for beta.
-3. **The one work-contract spine** (whackamole-to-merge): the recurring diseases this census found —
-   phrasing-net misroutes, two-voice replies, stale-product wins, ungoverned lanes — are ONE
-   disease (doors judging in a vacuum). Every fix above is a point-fix; the spine builds the
-   done-definition / artifact-registry / single-owner / read-back contract ONCE and lanes feed it.
-   The point-fixes are the interim; the spine is the beta-completion build.
+The census called this "one work-contract spine." Building THROUGH it — the carried-salience manifest,
+then the Louisiana parish-roster deliverable (a real research task run EXTERNALLY by disciplined Claude
+agents + Python, because Zoe's native path can't yet) — separated it into **three structural spines**.
+The parish roster is the **canonical acceptance test**: it exercises all three at once, and every failure
+in it — even Claude's own §7 mistakes — was one of these three.
+
+**SPINE 1 — DISCOURSE (conversation state).** Recent conversation is a resolved, CARRIED coordinate
+structure every stage dereferences against — not per-phrasing regex nets.
+- **STATUS: BUILT + live-verified** (carried-salience manifest, steps 1-4/5; 6d8821f→23b534d; "his contact
+  info" bound Arceneaux, `2 held / 0 gap`). REMAINING: step 5 (retire referent.js's 3 nets), unify the
+  parallel cognition need-builder (still emits "the person in question").
+- Fixes: pronoun/reference misroutes; the placeholder need; the reference-resolution class of stale-product/two-voice.
+
+**SPINE 2 — VERIFICATION (truth). ⭐THE TOP NEW BUILD — the safety spine.** No assertion reaches Lucas
+without a rendered-source check — **BIDIRECTIONAL (presence AND absence) and covering INFERENCES/PREDICTIONS.**
+The false-POSITIVE (C4 Cleco confabulation), the false-NEGATIVE (parish false-blank — a real email declared
+"not published" because a markdown fetcher silently stripped `mailto:`/obfuscation, §7.1), and the
+false-PREDICTION (Iberville "likely recoverable" — wrong on verification, §7.6) are ONE disease: a claim
+about the world never checked against the world.
+- **STATUS: NOT BUILT.** The anti-fab gate covers only artifact-EXISTENCE ("I wrote a file" → checked vs
+  disk). It does NOT cover a factual claim, a "we don't hold X", or a plausible guess.
+- Fixes: C4 confabulation; the honest-ceiling (R7 — "64/64 · 99% phones" is a coverage CLAIM to verify
+  against the weakest real number, email 52%); the entire "grade on reality, not the polished surface" theme.
+
+**SPINE 3 — DELIVERY (work-contract + the deliverable).** A task/promise is bound to ACTUAL delivery:
+tries every path (fall-through), cannot settle on a bare promise, and the output is SCOPED, coverage-honest,
+and in a CONSUMABLE format.
+- **STATUS: PARTIAL.** Fall-through floor LANDED (9cbdf83 — one rung). REMAINING: the promise→delivery
+  binding (the census cross-cutting disease: G6/G3/G2 bare-promise + unkept-say + unsettled); the research +
+  deliverable doors below.
+- Fixes: G6 multi-hop, G3 unsettled+leak, F4 claimed-not-written.
+
+**The parish-roster repairs (R1-R7) ARE Spines 2+3 on the RESEARCH lane, plus two genuinely NEW organs:**
+| R | Repair | Spine |
+|---|--------|-------|
+| R1 | parish/local governing-body SOURCE tier for `roster_refresh` (federal-only today) — **NEW data organ** | 3 (feeds) |
+| R3 | governance-type SCOPING (Police Jury / President+Council / Commission / Metro Council; exclude sheriff/clerk/DA…) — **NEW scoping organ** | 3 |
+| R2 | completeness+trust gate (INDEPENDENT denominator; serve-vs-rebuild) | 2 + 3 |
+| R4 | swarm roster-mode production-grade + un-throttled for a directed completion (C5) | 3 |
+| R5 | per-row source-grounded: **browser-render, decode obfuscation, validate-vs-HTML BEFORE declaring unavailable, open member subpages** | 2 (core) |
+| R6 | native styled-spreadsheet OUT + **openable check** (delivered ≠ openable; default CSV) | 3 door |
+| R7 | lead with the honest ceiling | 2 |
+
+**BUILD ORDER (revised):**
+1. **Finish Spine 1** — step 5 + unify the need-builder. Small; closes the just-built organ.
+2. **Spine 2 — the bidirectional verification gate.** Highest leverage: safety spine, subsumes
+   confabulation + false-blank + honest-ceiling, and it's the lesson Claude wrote in its own §7.4/§7.6
+   remediation. Build generically (extract falsifiable assertions incl. negatives + predictions → rendered-
+   source check → hedge/retract the uncorroborated), then wire R5's browser-render+de-obfuscation as its
+   research-lane instrument.
+3. **Spine 3 — the delivery binding + research/deliverable doors** (R1, R3, R2, R4, R6). Biggest, most-organ
+   build; the parish roster is its acceptance test.
+4. **Residual census coverage:** re-drive the re-graded lanes (C4/C6/G6 vs the fall-through), UI-only +
+   NEEDS-LIVE-CONTEXT lanes, E2/H4 doors — smaller now the substrate is understood. Plus `pathway_suite --run`.
+
+**SEPARATE (not a spine — infrastructure):** the main-loop STALL (heavy metabolism blocks live turns → 150s
+watchdog). Its own investigation; it degrades all three spines but is not one of them.
+
+**⭐THE BETA BAR (acceptance test):** Zoe *natively* pulls a complete, governance-scoped, source-verified,
+coverage-honest Louisiana parish roster and hands Lucas an OPENABLE spreadsheet — every blank a VERIFIED
+"not published," not an un-attempted lookup. When she can do that in one commissioned turn, all three
+spines are proven and beta is real.
