@@ -5,6 +5,14 @@
 
 ---
 
+## PROGRESS (updated 2026-08-10, sole builder) — gate 388/388 green, all local
+
+- ✅ **B0 — main-loop stall** (measure→mechanism): `ingest-drain` now yields to live conversation (`dd10a13`); the reply-path `idle` blind spot is attributed (`reply-prompt`/`reply-fit`, `28689dd`); metabolism yield-checked + `metabolism-sweep` named (`b7f9bcf`). **Increment 3 (relocate whatever the new log names) is live-boot-gated** — read `data/stall_attrib.log` after driving turns.
+- ✅ **A1 — fall-through generalized (COMPLETE, all lanes):** generic organ `lib/fallthrough.js` (`285fc26`) → media_cc video floor `enqueue_transcript` + G3 leak fix (`1b3c05a`) → gmeet drought→honest-surface+stay (`279366c`) → teams drought (`f77996a`). Live proofs (empty-caption video/meeting) are quota-gated. Finding flagged: teams lacks gmeet's `MAX_MEETING_MS` backstop (auto-leave change — Lucas's call).
+- ▶ **NEXT: R4** (swarm roster-mode, offline-buildable — extend `startSwarm` `main.js:6314`) → R2 serve-vs-rebuild → ★ commissioned LA run (live). Then Phase C (Spine 4).
+
+---
+
 ## 0. The situation, integrated
 
 The census reduced the program to **three spines of honesty**: **1 Discourse** (salience manifest — built), **2 Verification** (bidirectional gate — built + live-verified), **3 Delivery** (partly built; remainder below). This session added a fourth, from cross-referencing the cognitive-memory literature against the program: **Spine 4 — Cognition/Self**, the reflective self-loop that our own North Star ("always-on restlessness") and drift audit both say is unbuilt.
