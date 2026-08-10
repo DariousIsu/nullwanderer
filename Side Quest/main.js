@@ -8889,6 +8889,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   } catch (e) { console.error('[brainstorm] lane failed:', e.message); }
 
+  // B0 stall-attrib increment 2 (2026-08-10): name the reply-path SYNCHRONOUS prompt assembly. It ran
+  // OUTSIDE any markActivity lane, so the dominant 'idle' mass in data/stall_attrib.log (~9.85M ms, ran=0-1ms
+  // blocks) was largely THIS — a live turn wedging its own loop. Mirrors the heartbeat's sync-phase marking
+  // (main.js ~1573). Restored to idle right after the (synchronous) build so a block just after attributes as
+  // "idle (just-ended: reply-prompt)". See docs/INTEGRATED_BUILD_TRACK_2026-08-10.md §B0.
+  markActivity('reply-prompt');
   const messages = buildChatPrompt({
     userName,
     recentReflections: distilledBrief ? [] : recentReflections,
@@ -8916,6 +8922,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     echoSuitBlock: (echoSuit && !cloudOwnsAnswer) ? echoSuit.suitContextBlock() : null,   // cloud owns factual turns → no local tool menu
     newUserMessage: composedUserMessage
   });
+  markActivity('idle');   // B0 stall-attrib: reply-prompt assembly done
 
   // STREAM directive-filter: hold any "[" open until it closes; drop it if it reads as a leaked
   // directive, so an echoed [ANSWER TO GIVE…]/[Lucas asked…] never reaches the UI live (the final-text
@@ -9382,11 +9389,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // says exactly what fell. num_predict below makes the generation reserve real.
   let _localMessages = messages;
   const LOCAL_NUM_PREDICT = 1200;
+  markActivity('reply-fit');   // B0 stall-attrib increment 2: name the [fit] window-eviction sync phase (was 'idle')
   try {
     const fit = require('./lib/context').fitToWindow(messages, { numCtx: 8192, numPredict: LOCAL_NUM_PREDICT });
     _localMessages = fit.messages;
     if (fit.report) console.warn(`[fit] local prompt ${fit.report.before}ch > ${fit.report.budget}ch budget — dropped ${fit.report.droppedTurns} old turn(s), system -${fit.report.systemCut}ch, final -${fit.report.finalCut}ch → ${fit.report.after}ch`);
   } catch (e) { console.error('[fit] local fit failed — sending unfitted:', e.message); }
+  markActivity('idle');   // B0 stall-attrib: [fit] phase done
   try {
     if (replyWriter !== MODEL) { /* the cloud already wrote it — skip the local generation entirely */ }
     else if ((operatorDirected || operatorReviewDirect) && operatorAnswer && operatorAnswer.trim()) {
