@@ -7351,6 +7351,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // below (draw, roster-canvas, social-enrich; contacts already yielded above) must stand down, or
   // it consumes the turn with a session-blind judgment (M7.2 — the hijack class, generalized).
   const _artifactSessionOwns = !!(_artifactVerdictEarly && _artifactVerdictEarly.intent && _artifactVerdictEarly.intent !== 'none');
+  // ROSTER DELIVERY vs the discover gate (2026-08-10 census re-drive). Intake reads "build me the
+  // Louisiana parish roster as a spreadsheet" as a discover ASSIGNMENT, so the in-turn operator + a
+  // standing generic focus claim it and it never reaches the roster door — the pre-compact drive
+  // produced a chat STATUS ("2 verified, still working"), never the openable spreadsheet. But the
+  // roster door is the DELIVERY half of that same top-down research, not a compose-from-held
+  // regeneration: it hands over the coverage-honest snapshot NOW and books the remaining localities to
+  // the metabolism queue via the R3-scoped roster prompt (sheriff/DA excluded). So a roster-owned turn
+  // stands the generic operator/focus DOWN and reaches its door even under _discoverAssignment. ONLY
+  // roster is exempted; report/pullup/canvas stay discover-gated (compose-from-held genuinely preempts
+  // the live dossier — the LPSC lesson above). The generic focus is suppressed too, so the unscoped
+  // directed pass can't run in parallel and pollute the store with the row offices the organ excludes.
+  const _rosterOwns = !!(_artifactVerdictEarly && _artifactVerdictEarly.intent === 'roster');
   let turnRoute = require('./lib/turn_router').computeTurnRoute({
     socialTurn, activityQ, deliverableAggQ,
     factual: _factualR, personalFactQ, devQ, stateQ,
@@ -8552,7 +8564,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // docSetBlock override: force the operator in directed mode. isAssignment stays FALSE, so the
     // research-run/focus machinery is NOT spun for a code review — this is a source-review, not a project.
     const selfCodeReview = (() => { try { return require('./lib/self_source').isSelfCodeReview(userMessage); } catch { return false; } })();
-    if (opMode !== 'off' && (routeAllowsAny('lookup', 'task') || docSetBlock || selfCodeReview) && (needsExternal || isAssignment || docSetBlock || selfCodeReview) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && userMessage && userMessage.trim().length > 6) {
+    if (opMode !== 'off' && (routeAllowsAny('lookup', 'task') || docSetBlock || selfCodeReview) && (needsExternal || isAssignment || docSetBlock || selfCodeReview) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && !_rosterOwns && userMessage && userMessage.trim().length > 6) {
       // directed (in-turn completion mode) when this is an assignment (intake gate, or regex
       // fallback) — or a set-analysis ask, or a self-code-review, which need the multi-step budget.
       const directed = isAssignment || !!docSetBlock || selfCodeReview;
@@ -8610,7 +8622,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // i.e. intakeRoute is null). Either way we only CREATE a run when there's a real project to run.
     const intakeSaysProject = !!(intakeRoute && intakeRoute.action !== 'none');
     const regexFallback = (intakeRoute === null) && (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
-    if (opModeOn && routeAllows('task') && (intakeSaysProject || regexFallback) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled) {
+    if (opModeOn && routeAllows('task') && (intakeSaysProject || regexFallback) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && !_rosterOwns) {
       const already = (() => { try { const f = focusLib.getCurrent(); return !!(f && focusLib.isDirected(f)); } catch { return false; } })();
       if (!already) {
         // Prefer the RESOLUTION-grounded clarify (e.g. "which Curtis?" / "I don't have a match for the
@@ -8819,7 +8831,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const _discoverAssignment = !!(isAssignment && intakeRoute && intakeRoute.action === 'discover');
   let _artifactAckAppended = false;
   if (_artifactVerdictEarly && _artifactVerdictEarly.intent && _artifactVerdictEarly.intent !== 'none'
-    && !followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled && !_discoverAssignment) {
+    && !followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled && (!_discoverAssignment || _rosterOwns)) {
     composedUserMessage = `${composedUserMessage}\n\n[A deterministic door (${_artifactVerdictEarly.intent}) is handling this order and will report its own outcome — landed, rejected, or failed — in a separate message. Your reply: ONE short sentence acknowledging you're on it. Do NOT describe steps or sources, do NOT promise specifics, and do NOT claim anything landed — the door's report is the only truth about the outcome.]`;
     _artifactAckAppended = true;
     console.log(`[one-voice] ack directive reached the reply writer (intent=${_artifactVerdictEarly.intent})`);
@@ -10361,7 +10373,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // canvas" clause spawned an unordered create attempt).
     // ...and a DISCOVER assignment is owned by directed research (see ONE VOICE PART 2) — the
     // compose/retrieve doors stand down so they can't preempt the real web-researched dossier.
-    if (!followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled && !_discoverAssignment
+    if (!followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled && (!_discoverAssignment || _rosterOwns)
       && !/^(0|false|off)$/i.test(String(process.env.ZOE_ARTIFACT_ROUTER || '').trim())) {
       try {
         const ai = require('./lib/artifact_intent');
