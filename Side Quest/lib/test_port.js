@@ -111,7 +111,7 @@ async function _runInjectedTurn(runChatTurn, { text, settleMs, maxMs }) {
   };
 }
 
-function start({ runChatTurn, port = parseInt(process.env.ZOE_TEST_PORT, 10) || 8767 } = {}) {
+function start({ runChatTurn, antifabCorrect = null, port = parseInt(process.env.ZOE_TEST_PORT, 10) || 8767 } = {}) {
   if (_server) return _server;
   if (typeof runChatTurn !== 'function') throw new Error('test_port needs runChatTurn');
   _server = http.createServer(async (req, res) => {
@@ -119,6 +119,25 @@ function start({ runChatTurn, port = parseInt(process.env.ZOE_TEST_PORT, 10) || 
     try {
       if (req.method === 'GET' && req.url === '/status') {
         return send(200, { ok: true, inFlight: _inFlight, lastUserTurnAgoMs: _lastUserTurnAgoMs(), port });
+      }
+      // DEBUG: run the REAL wired anti-fabrication / Spine-2 gate on a SUPPLIED reply — deterministic proof
+      // that the gate transforms a bad reply in the live process (no model needed). {say, evidence, turnStartTs}.
+      // turnStartTs default = now (so lastGatherTs is stale → "no gather this turn", exercises absence);
+      // pass turnStartTs:0 to make a historical gather count (exercises the gathered-confab fact gate).
+      if (req.method === 'POST' && req.url === '/antifab') {
+        if (typeof antifabCorrect !== 'function') return send(501, { ok: false, error: 'antifabCorrect not wired' });
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
+        req.on('end', () => {
+          try {
+            const { say, evidence, turnStartTs } = JSON.parse(body || '{}');
+            if (!say || !String(say).trim()) return send(400, { ok: false, error: 'say required' });
+            const ts = (turnStartTs === undefined || turnStartTs === null) ? Date.now() : turnStartTs;
+            const corrected = antifabCorrect(String(say), ts, String(evidence || ''));
+            return send(200, { ok: true, original: String(say), corrected, changed: corrected !== String(say) });
+          } catch (e) { return send(500, { ok: false, error: e.message }); }
+        });
+        return;
       }
       if (req.method === 'POST' && req.url === '/turn') {
         let body = '';
@@ -143,7 +162,7 @@ function start({ runChatTurn, port = parseInt(process.env.ZOE_TEST_PORT, 10) || 
         });
         return;
       }
-      send(404, { ok: false, error: 'POST /turn or GET /status' });
+      send(404, { ok: false, error: 'POST /turn, POST /antifab, or GET /status' });
     } catch (e) { send(500, { ok: false, error: e.message }); }
   });
   _server.listen(port, '127.0.0.1', () => console.log(`[test-port] inside access port on 127.0.0.1:${port} (POST /turn drives the REAL pipeline)`));
