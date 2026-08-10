@@ -26,11 +26,16 @@
  */
 
 const db = require('./db');
+const ft = require('./fallthrough');   // A1: the shared fall-through floor (descend/withFallthrough)
 
 const STAGES = ['none', 'opening', 'enabling', 'watching', 'done'];
 const MAX_STAGE_STRIKES = 3;
 const FOLLOW_EVERY_LINES = 4;     // synthesize a running understanding after this many new caption lines
 const FOLLOW_MAX_WAIT_MS = 25000; // ...or after this long with ANY pending lines, so a sparse/slow video still gets understood
+// A1 FALL-THROUGH FLOOR: after this many consecutive PLAYING ticks with NO fresh captions AND none ever
+// seen (media_lines==0 — the true "captions never worked" case, distinct from a mid-video silence), descend
+// to the transcribe floor and END honestly. Closes the census G3 leak (a caption-less video watched forever).
+const CAPTION_DROUGHT_TICKS = 5;
 
 // Captions she's already surfaced this session (exact normalized text), so the caption
 // window re-rendering the same phrase isn't re-reported each watch tick. Reset on start().
@@ -222,6 +227,7 @@ function start(mediaUrl, { topic = '' } = {}) {
   try { recordWatched(u, topic); } catch {}   // remember she started this — dedups a re-pick even before the recap lands
   db.setMeta('media_strikes', '0');
   db.setMeta('media_left_ticks', '0');
+  db.setMeta('media_dry_ticks', '0');   // A1: caption-drought counter (consecutive playing-but-no-fresh ticks)
   db.setMeta('media_started_at', String(Date.now()));
   db.setMeta('media_ended_at', '0');
   db.setMeta('media_via', '');
@@ -332,6 +338,23 @@ async function liveIsPlaying(web) {
   } catch { return false; }
 }
 
+// A1 FALL-THROUGH FLOOR — the transcribe rung. When live captions never come through, secure the content
+// out-of-band: fire the engine's background transcript job (av download + whisper + diarize) on the media
+// URL, fire-and-forget. Mirrors main.js's speech path (enqueue_transcript). Returns { ok, session_id? };
+// fail-soft (engine offline / error → { ok:false }). Dep-injected via defaultDeps so the offline gate needs
+// no engine, and the watch loop treats it as a fallthrough reader through lib/fallthrough.
+async function liveEnqueueTranscript(mediaUrl) {
+  try {
+    const u = String(mediaUrl || '').trim();
+    if (!u) return { ok: false, reason: 'no-url' };
+    const echoSuit = require('./echo_suit');
+    if (!echoSuit || !echoSuit.connected) return { ok: false, reason: 'engine-offline' };
+    const r = await echoSuit.dispatch({ kind: 'do', name: 'enqueue_transcript', args: { url: u, name: `Video — ${hostOf(u) || 'watched'}`.slice(0, 120) } });
+    let rr = null; try { rr = JSON.parse(r && r.text); } catch { rr = r; }
+    return (rr && rr.ok) ? { ok: true, session_id: rr.session_id } : { ok: false, reason: (rr && rr.error) || 'enqueue-failed' };
+  } catch (e) { return { ok: false, reason: e.message }; }
+}
+
 function defaultDeps() {
   return {
     web: require('./web'),
@@ -339,6 +362,7 @@ function defaultDeps() {
     enableCaptions: liveEnableCaptions,
     readCaptions: liveReadCaptions,
     isPlaying: liveIsPlaying,
+    transcribe: liveEnqueueTranscript,   // A1: the transcribe floor (enqueue_transcript), injectable for the gate
     streamChat: require('./ollama').streamChat,
     MODEL: require('./config').extractionModel(),
     // storeMeeting(content, opts) → persist the end-of-video recap as durable, retrievable
@@ -474,6 +498,7 @@ async function runTick(ctx = {}) {
     const fresh = freshFrom(_seen, parseCaptionBlock(text));
     if (_seen.size > 600) _seen = new Set(Array.from(_seen).slice(-300));
     if (fresh.length) {
+      db.setMeta('media_dry_ticks', '0');   // A1: captions are flowing → reset the drought counter
       db.setMeta('media_via', via || db.getMeta('media_via') || '');
       const block = fresh.join('\n');
       surface(`Video captions:\n${block}`, `(media) ${fresh.length} new caption(s)`);
@@ -494,6 +519,33 @@ async function runTick(ctx = {}) {
       db.setMeta('media_pending', ((prevPend ? prevPend + '\n' : '') + block).slice(-4000));
       db.setMeta('media_pending_lines', String(parseInt(db.getMeta('media_pending_lines') || '0', 10) + fresh.length));
       if (!db.getMeta('media_pending_since')) db.setMeta('media_pending_since', String(d.now ? d.now() : Date.now()));
+    } else {
+      // A1 FALL-THROUGH FLOOR + G3 LEAK FIX: a PLAYING video whose captions NEVER come through (textTracks +
+      // DOM overlay both empty) used to keep 'watching' FOREVER — isPlaying stays true, no fresh lines, no
+      // understanding, and the lane never tried a transcript nor terminated (census G3). Count the drought;
+      // once it persists AND no caption ever landed (media_lines==0 — so a mid-video silence never trips it),
+      // DESCEND to the transcribe floor (the shared fallthrough organ) and END HONESTLY whether or not it
+      // secures the content. Never watch nothing indefinitely; never invent a recap.
+      const dry = parseInt(db.getMeta('media_dry_ticks') || '0', 10) + 1;
+      db.setMeta('media_dry_ticks', String(dry));
+      const everSaw = parseInt(db.getMeta('media_lines') || '0', 10) > 0;
+      if (dry >= CAPTION_DROUGHT_TICKS && !everSaw) {
+        db.setMeta('media_dry_ticks', '0');
+        const floor = await ft.descend(
+          [async () => { const t = d.transcribe ? await d.transcribe(url()) : null; return (t && t.ok) ? { enqueued: true, session_id: t.session_id } : null; }],
+          { label: 'captions', ok: (r) => !!(r && r.enqueued), log: (msg) => console.log('[media_cc] ' + msg) }
+        );
+        const recap = await synthesizeWatch(d, ctx).catch(() => '');   // '' when nothing was captured — never invents
+        set('done');
+        db.setMeta('media_ended_at', String(Date.now()));
+        if (floor.ok) {
+          try { ctx.onSurface && ctx.onSurface(`I couldn't read captions on that video, so I've queued a full transcript in the background — I'll have it shortly.`); } catch {}
+          if (recap) surface(`Here's what I took from the video — ${recap}`, '(media) video recap');
+          return { stage, ok: true, note: 'caption drought → transcript floor enqueued → done' };
+        }
+        try { ctx.onSurface && ctx.onSurface(`I couldn't get captions or a transcript for that one, so I've stopped watching it.`); } catch {}
+        return { stage, ok: true, note: 'caption drought → no transcript floor → honest end' };
+      }
     }
 
     // FOLLOW ALONG: synthesize what she's watching in ONE model tick — so she REGISTERS the
@@ -524,7 +576,7 @@ async function runTick(ctx = {}) {
 }
 
 module.exports = {
-  STAGES, get, set, active, start, reset, url, runTick, defaultDeps, synthesizeWatch,
+  STAGES, CAPTION_DROUGHT_TICKS, get, set, active, start, reset, url, runTick, defaultDeps, synthesizeWatch, liveEnqueueTranscript,
   // watched registry (durable re-watch guard + artifact)
   recordWatched, markRecap, wasWatchedRecently,
   // pure helpers (tested)

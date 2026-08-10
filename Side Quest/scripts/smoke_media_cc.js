@@ -24,6 +24,7 @@ function mockDeps(over = {}) {
       enableCaptions: async () => { calls.enables.push(1); return over.enableResult || { ok: true, via: 'button' }; },
       readCaptions: async () => { calls.reads++; return { text: over.captionsRef ? over.captionsRef.text : (over.captionsText || ''), via: over.via || 'dom' }; },
       isPlaying: async () => (over.isPlaying !== undefined ? over.isPlaying : true),
+      transcribe: over.transcribe || (async () => over.transcribeResult || null),   // A1 transcribe floor stub
       MODEL: 'test',
       streamChat: over.streamChat || (async ({ onToken }) => onToken(over.modelText != null ? over.modelText : 'A running understanding of the video.')),
       storeMeeting: async (content, opts) => { calls.stored.push({ content, opts }); return { id: 1 }; },
@@ -146,6 +147,38 @@ function mockDeps(over = {}) {
   await m.runTick({ deps: dFail.deps, onSurface: t => { gaveUp = t; } });
   await m.runTick({ deps: dFail.deps, onSurface: t => { gaveUp = t; } });
   ok('after 3 fails → inactive + surfaced the failure', !m.active() && /couldn'?t open/i.test(gaveUp || ''));
+  m.reset();
+
+  console.log('\nA1 caption-drought floor → transcript enqueued → honest end (G3 leak fix):');
+  m.start(YT); m.set('watching');
+  let enqUrl = null, dMsg = null;
+  const dDry = mockDeps({ captionsText: '', isPlaying: true, transcribe: async (u) => { enqUrl = u; return { ok: true, session_id: 'sess-1' }; } });
+  for (let i = 1; i <= m.CAPTION_DROUGHT_TICKS; i++) {
+    await m.runTick({ deps: dDry.deps, onSurface: (t) => { dMsg = t; } });
+    if (i < m.CAPTION_DROUGHT_TICKS) ok(`dry tick ${i} keeps watching (no premature end)`, m.get() === 'watching');
+  }
+  ok('drought threshold → transcript enqueued on the media URL', enqUrl === YT);
+  ok('drought → watch ENDS (leak closed, not watching forever)', !m.active());
+  ok('honest surface: queued a background transcript', /queued a full transcript/i.test(dMsg || ''));
+  m.reset();
+
+  console.log('\nA1 drought does NOT trip mid-video: a silence AFTER real captions keeps watching:');
+  m.start(YT); m.set('watching');
+  const refM = { text: 'A real caption early in the video' };
+  const dMid = mockDeps({ captionsRef: refM, isPlaying: true, transcribe: async () => ({ ok: true }) });
+  await m.runTick({ deps: dMid.deps });                               // 1 real caption → media_lines>0
+  for (let i = 0; i < m.CAPTION_DROUGHT_TICKS + 2; i++) await m.runTick({ deps: dMid.deps });  // long silence (same line = no fresh)
+  ok('captions worked earlier → long silence never terminates (still watching)', m.active() && m.get() === 'watching');
+  m.reset();
+
+  console.log('\nA1 drought with NO transcript floor → honest end, no invented recap:');
+  m.start(YT); m.set('watching');
+  let honestMsg = null;
+  const dNone = mockDeps({ captionsText: '', isPlaying: true, transcribe: async () => ({ ok: false }) });
+  for (let i = 1; i <= m.CAPTION_DROUGHT_TICKS; i++) await m.runTick({ deps: dNone.deps, onSurface: (t) => { honestMsg = t; } });
+  ok('both empty → watch ends honestly (leak still closed)', !m.active());
+  ok('honest "no captions or transcript" surface', /couldn'?t get captions or a transcript/i.test(honestMsg || ''));
+  ok('no episodic recap invented when nothing was captured', dNone.calls.stored.length === 0);
   m.reset();
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);

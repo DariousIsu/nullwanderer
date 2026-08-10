@@ -22,6 +22,7 @@ const dir = __dirname;
 const smokes = [
   'smoke_manifest.js',
   'smoke_fallthrough.js',
+  'smoke_media_cc.js',
   'smoke_salience.js',
   'smoke_owner_world.js',
   'smoke_boot_grace.js',
