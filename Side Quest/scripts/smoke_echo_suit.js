@@ -133,6 +133,11 @@ function mockClient(overrides = {}) {
     ok('a non-gather dispatch (propose) does NOT advance the gather stamp', S.lastGatherTs() === propped);
     await suit.dispatch({ kind: 'delegate', agent: 'briefing_writer', task: 'draft' });         // NOT a gather
     ok('a delegate dispatch does NOT advance the gather stamp', S.lastGatherTs() === propped);
+    // markGather: the direct stamp for browser/excavate lanes that bypass dispatch()
+    const preMark = S.lastGatherTs();
+    await new Promise((r) => setTimeout(r, 2));
+    S.markGather();
+    ok('markGather() advances the gather stamp (browser/excavate lane)', typeof S.markGather === 'function' && S.lastGatherTs() > preMark);
   }
 
   console.log('\ndispatch error feedback (self-correction):');

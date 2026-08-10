@@ -48,6 +48,11 @@ const _GATHER_TOOLS = new Set([
   'list_contacts_compact', 'list_contacts_page', 'db_query', 'research_brief',
 ]);
 function lastGatherTs() { return _lastGatherTs; }
+// Direct stamp for gather lanes that DON'T go through dispatch() — the browser SERP (search_lane) and the
+// excavate browser/vision scan. Without this, a gather reached purely by browser (no web_fetch/web_extract
+// dispatch, or a ledger-reused fetch that makes no call) leaves _lastGatherTs unstamped, and the absence
+// gate would false-scold an honest "couldn't find it." Live drive 2026-08-10 caught exactly this hole.
+function markGather() { _lastGatherTs = Date.now(); }
 
 const cap = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''));
 // A tool call that failed on ARGS (not data) — worth one corrected retry in routeNeed.
@@ -1691,7 +1696,7 @@ function routeCacheStats() {
 }
 
 module.exports = {
-  routeCacheStats, _raceTimeout, lastContactWriteTs, lastGatherTs,
+  routeCacheStats, _raceTimeout, lastContactWriteTs, lastGatherTs, markGather,
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
   placeholderComplaint, sanitizeFtsQuery, prepareDoArgs, recipeMisrouteHint,
   setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates, _salienceDominant

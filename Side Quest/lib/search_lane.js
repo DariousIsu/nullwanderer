@@ -161,6 +161,7 @@ async function search(query, { signal } = {}) {
     const p = await ensure();
     await p.goto(SEARCH_URL(q), { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
     const results = await readBingSerp(p, 8);
+    try { require('./echo_suit').markGather(); } catch {}   // a real SERP search = she LOOKED (feeds the absence gate)
     return { query: q, results: Array.isArray(results) ? results : [] };
   });
 }
