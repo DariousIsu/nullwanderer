@@ -4894,7 +4894,35 @@ async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
   // PAYLOAD CONTRACT (M6, 2026-08-08 audit): the EDIT door ran rejectEditOutput twice while this
   // CREATE door ran it zero times — the same operator finalize that narrated three edit runs can
   // narrate a create. Empty cur disarms the shrink guard; the narration checks are the contract.
-  const _createReject = require('./lib/canvas_command').rejectEditOutput(md, '', order);
+  const _cc = require('./lib/canvas_command');
+  let _createReject = _cc.rejectEditOutput(md, '', order);
+  // B1 GENERATIVE-CREATE (2026-08-09 live census, fresh47): "make a doc listing the parishes" made
+  // the operator AGENT wrap the real list in a conversational opener ("Sure! Here's…\n\n# …") →
+  // NARRATION_OPEN rejected the whole thing though the document was right there → nothing landed.
+  // Two-stage recovery before an honest miss: (1) deterministic SALVAGE (strip the short narration
+  // prefix when a clean document follows — free); (2) ONE reframe-retry with a stricter authoring
+  // prompt (costs a pass, but only when salvage can't). The reject is the LAST resort, unchanged.
+  if (_createReject && /narration|deliberation/.test(_createReject)) {
+    const salvaged = _cc.salvageNarration(md);
+    if (salvaged) {
+      md = salvaged; _createReject = _cc.rejectEditOutput(md, '', order);
+      if (!_createReject) console.log('[canvas-cmd] create output salvaged — stripped a narration preamble, document kept');
+    }
+    if (_createReject) {
+      try {
+        const res2 = await runCloudOperator({
+          userMessage: `Your previous output for Lucas's canvas order "${order}" was REJECTED because it read as narration, not a document (it began with conversational framing like "Sure" / "I'll" / "Let me"). Re-emit NOW as PURE canvas content: your VERY FIRST character must be the document body itself (a "#" heading or a "-" list item), NOT a sentence about what you are doing. No preamble, no "here is", no sign-off. ${heldBlock ? 'Use the held roster names where they answer. ' : ''}A bounded list must be COMPLETE, one item per line, in the order asked. If you truly cannot ground it, reply with ONE line starting "CANNOT:".`,
+          context: '', task: true,
+        });
+        const md2 = res2 && res2.answer ? String(res2.answer).trim() : '';
+        if (md2 && !/^CANNOT:/i.test(md2)) {
+          const salv2 = _cc.salvageNarration(md2) || md2;
+          const rej2 = _cc.rejectEditOutput(salv2, '', order);
+          if (!rej2) { md = salv2; _createReject = null; console.log('[canvas-cmd] create output recovered on reframe-retry'); }
+        }
+      } catch (e) { console.error('[canvas-cmd] reframe-retry failed:', e.message); }
+    }
+  }
   if (_createReject) {
     console.log(`[canvas-cmd] create output REJECTED (${_createReject}) — nothing landed`);
     await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas's canvas order produced INVALID output (${_createReject}) and NOTHING landed on the canvas. Tell him plainly the create failed its output check and he can re-order it — never claim a doc exists.]` });

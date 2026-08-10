@@ -173,6 +173,14 @@ ok(lg._INTERNAL_TAG_RE.test('<think>') && lg._INTERNAL_TAG_RE.test('</web-open>'
   ok(!lg.isUnkeptPromiseSay('It landed on the canvas, check it out.'), '"check it out" is an invitation, not a promise');
   ok(!lg.isUnkeptPromiseSay('Have a look at the table when you get a chance.'), '"have a look" is an invitation');
   ok(lg.isUnkeptPromiseSay('Checking the records...'), 'bare "checking..." (her own pending work) still detects');
+  // OUTCOME REPORTS are not promises (08-09: a door's terminal reject relay contains "check" and
+  // spawned a duplicate answer-now re-fire — two identical failure lines in one reply)
+  ok(!lg.isUnkeptPromiseSay('The canvas create failed its output check — nothing landed. You can re-order it.'),
+    'a create-failure report ("failed its output check") is NOT an unkept promise');
+  ok(!lg.isUnkeptPromiseSay('The edit did not apply — the doc on your canvas is unchanged.'),
+    'an edit-failure report is not a promise');
+  ok(!lg.isUnkeptPromiseSay('No matching product — we never made that one.'),
+    'a not-found report is not a promise');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

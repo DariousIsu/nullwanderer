@@ -85,7 +85,9 @@ function detectEdit(text, { workingFresh = false } = {}) {
 // relay says so.
 
 // First-person process talk — a document never opens by describing the work of making itself.
-const NARRATION_OPEN = /^(?:i\s+(?:need|want|should|will|'ll|am\s+going)\b|let\s+me\b|okay|alright|first,?\s+(?:i|let)\b|looking\s+at\b|to\s+(?:apply|do)\s+this\b|sure\b|got\s+it\b)/i;
+// "I'll"/"I'm going" contractions have NO space, so `i\s+'ll` missed them — line-1 "I'll put this
+// together" slipped the reject contract (08-09). Match the contraction directly.
+const NARRATION_OPEN = /^(?:i\s+(?:need|want|should|will|am\s+going)\b|i['’](?:ll|m\s+going)\b|let\s+me\b|okay|alright|first,?\s+(?:i|let)\b|looking\s+at\b|to\s+(?:apply|do)\s+this\b|sure\b|got\s+it\b|here['’]?s\b|here\s+(?:is|are|you\s+go)\b)/i;
 // Deliberation markers anywhere — "let me check the pipeline documents" is reasoning, not content.
 const NARRATION_BODY = /\blet\s+me\s+(?:check|look|see|verify|find|start)\b|\bi(?:'ll| will)\s+(?:check|look|need|start|gather)\b/i;
 // Instructions that legitimately make a doc smaller.
@@ -110,6 +112,36 @@ function isNarration(text) {
 function isDeliberation(text) {
   const out = str(text).trim();
   return !!out && NARRATION_BODY.test(out);
+}
+
+// A line that is clearly DOCUMENT CONTENT: a markdown heading, list item, table row, blockquote,
+// bold-lead bullet, or a numbered entry. Used to tell "narration prefix + real doc" apart from
+// "narration all the way down".
+const CONTENT_LINE = /^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|\|.*\||>\s|\*\*.+\*\*)/;
+
+/** salvageNarration(md) → the document with a SHORT leading narration/preamble prefix stripped,
+ * or null when unsalvageable. The B1 generative-create failure (2026-08-09): buildCanvasFromOrder
+ * drives the operator AGENT, whose final answer wraps real content in a conversational opener
+ * ("Sure! Here's the list:\n\n# Parishes\n- …") — NARRATION_OPEN rejects the whole thing though the
+ * document is right there. Conservative: strip at most 3 leading narration/blank lines, and only
+ * accept if what remains is CLEAN (no deliberation anywhere) AND actually looks like a document
+ * (a content line within the first two non-blank lines). Never salvages mixed reasoning+content. */
+function salvageNarration(md) {
+  const lines = str(md).split('\n');
+  let i = 0, stripped = 0;
+  while (i < lines.length && stripped < 3) {
+    const ln = lines[i].trim();
+    if (!ln) { i++; continue; }                                  // blank lines are free to skip
+    if (NARRATION_OPEN.test(ln) && !CONTENT_LINE.test(lines[i])) { i++; stripped++; continue; }
+    break;                                                       // first non-narration, non-blank line
+  }
+  if (i === 0) return null;                                      // nothing was stripped → not this case
+  const rest = lines.slice(i).join('\n').trim();
+  if (!rest) return null;
+  if (NARRATION_OPEN.test(rest) || NARRATION_BODY.test(rest)) return null;   // deliberation remains → unsalvageable
+  const head = rest.split('\n').filter((l) => l.trim()).slice(0, 2);
+  if (!head.some((l) => CONTENT_LINE.test(l))) return null;      // remainder isn't document-shaped
+  return rest;
 }
 
 function rejectEditOutput(md, cur, order) {
@@ -152,4 +184,4 @@ function pendingSubjects(md) {
   return out;
 }
 
-module.exports = { detect, detectEdit, rejectEditOutput, isNarration, isDeliberation, pendingSubjects };
+module.exports = { detect, detectEdit, rejectEditOutput, salvageNarration, isNarration, isDeliberation, pendingSubjects };

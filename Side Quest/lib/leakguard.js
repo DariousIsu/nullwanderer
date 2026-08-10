@@ -106,10 +106,17 @@ const _PROMISE_RE = /\b(fetch|gather|grab|pull|retriev|check|look)(?:ing)?\b.{0,
 // matched them (08-08 audit, the double-relay: a door relay ending in its own "Take a look"
 // invitation read as a promise-say and re-fired the followup — two near-identical relays in chat).
 const _INVITATION_RE = /\b(?:take|have|give)\s+(?:a\s+|another\s+)?look\b|\bcheck\s+(?:it|that|them|those|your)\b|\bgive\s+it\s+a\s+(?:read|scan|once-?over)\b|\bsee\s+for\s+yourself\b/i;
+// A completed NEGATIVE OUTCOME is a REPORT, not a pending promise (08-09: a door's terminal reject
+// relay — "The canvas create failed its output check — nothing landed" — contains "check" and tripped
+// _PROMISE_RE, so fireToolFollowup's answer-now re-fire spawned a SECOND copy of the relay: two
+// identical failure lines in one reply. A promise is forward-looking ("Fetching…"); a failure report
+// is past-tense. When the text states a completed miss, it is the final word, never an unkept promise.
+const _OUTCOME_RE = /\b(?:failed|did\s?n['’]?t|does\s?n['’]?t|could\s?n['’]?t|was\s?n['’]?t|were\s?n['’]?t|not\s+(?:applied|apply|land(?:ed)?|delivered|found)|nothing\s+(?:landed|happened|is\s+on)|unchanged|no\s+(?:such|matching)\b)/i;
 function isUnkeptPromiseSay(text) {
   const s = String(text || '').trim();
   if (!s || s.length > 160) return false;   // a real answer has substance; promises are short
   if (_INVITATION_RE.test(s)) return false; // delivered-work invitation, not a pending promise
+  if (_OUTCOME_RE.test(s)) return false;    // a completed miss report, not a forward-looking promise
   return _PROMISE_RE.test(s);
 }
 

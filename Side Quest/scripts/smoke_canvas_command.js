@@ -69,5 +69,22 @@ ok('pending entries extracted with subject + label', pend.length === 2 && pend[0
 ok('filled entries are NOT queued', !pend.some((p) => p.subject === 'Ascension Parish'));
 ok('no pending marks → empty plan', pendingSubjects('- **X**\n  - all: done').length === 0 && pendingSubjects('').length === 0);
 
+// ── salvageNarration: B1 generative-create recovery (2026-08-09 live census) ────────────────────
+const { salvageNarration } = require(path.join(__dirname, '..', 'lib', 'canvas_command'));
+// the failing shape: the operator agent wraps a real list in a conversational opener
+const wrapped = 'Sure! Here is the list of Louisiana parishes:\n\n# Louisiana Parishes\n- Acadia\n- Allen\n- Ascension';
+ok('rejectEditOutput flags the wrapped output', /narration/.test(rejectEditOutput(wrapped, '', 'make a doc listing the parishes') || ''));
+const salv = salvageNarration(wrapped);
+ok('salvage strips the opener, keeps the document', salv && /^# Louisiana Parishes/.test(salv) && /Acadia/.test(salv) && !/Sure!/.test(salv));
+ok('salvaged output now PASSES the reject contract', rejectEditOutput(salv, '', 'make a doc') === null);
+// multi-line preamble (still short) is salvaged
+ok('multi-line preamble stripped', /^- Acadia/.test(salvageNarration('Okay.\nI\'ll put this together.\n- Acadia\n- Allen') || ''));
+// unsalvageable: deliberation runs THROUGH the content
+ok('deliberation-through-content is NOT salvaged', salvageNarration('Let me check the pipeline docs.\nI need to verify each one.\nStill working.') === null);
+// no narration prefix → nothing to salvage (returns null; caller keeps original)
+ok('a clean document salvages to null (no change needed)', salvageNarration('# Title\n- a\n- b') === null);
+// a pure-prose reply with no document structure is not salvaged
+ok('prose with no content lines is not salvaged', salvageNarration('Sure, I can help with that whenever you are ready to begin.') === null);
+
 console.log(`smoke_canvas_command: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
