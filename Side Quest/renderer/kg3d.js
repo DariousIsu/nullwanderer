@@ -148,6 +148,10 @@ const _midCen = { x: 0, y: 0, z: 0 };            // the middle of the whole clou
 // ============================================================================================================
 let SHAPE = 'halves';
 try { SHAPE = localStorage.getItem('kg3d.shape') || 'halves'; } catch (e) {}
+// A shape SWITCH morphs deterministically to the new arrangement (a smooth glide) instead of unpinning every
+// node and physics-reheating — the old path scattered all 2k across the scene with links stretched over the
+// void ("binary is glitchy through its transitions", Lucas 2026-08-10). Non-null while a morph is in flight.
+let _tween = null;
 // VRM skin state, declared UP HERE with the other early state rather than beside its own functions: render()
 // consults vrmReady to re-seat the binding, and render() lives above the VRM block. This file has sprung the
 // temporal-dead-zone trap five times now, always the same way — a const declared next to the code that feels
@@ -184,7 +188,8 @@ function targetCorona(n) {
 function targetBinary(n) {
   const s = nodeSeed(n), sq = n.store === 'sidequest';
   const sep = CLOUD_R * 0.62, lobe = (sq ? 0.40 : 0.62) * CLOUD_R;
-  const pull = Math.max(0, Math.min(0.85, (n.crossDeg || 0) * 0.30));     // 0 = deep in its lobe, 1 = on the midline
+  const cd = n.crossDegL != null ? n.crossDegL : (n.crossDeg || 0);        // FROZEN at relayout: live crossDeg churns per render as recognition flows, which would move the midline under the nodes mid-morph
+  const pull = Math.max(0, Math.min(0.85, cd * 0.30));                     // 0 = deep in its lobe, 1 = on the midline
   const cx = _midCen.x + (sq ? -sep : sep) * (1 - pull);
   const r = lobe * s.rf * (1 - pull * 0.45);
   const u = (s.u * 2 - 1) * 0.98, perp = r * Math.sqrt(Math.max(0, 1 - u * u));
@@ -544,6 +549,7 @@ try {
     // this file has sprung on me. The one-shot flag is consumed by the initial overview cooldown anyway.)
     if (_fitOnCool) { _fitOnCool = false; fitView(1000, true); }
     settleLayout();                        // the cloud cooled — freeze it + drop the heavy forces (block below)
+    setLinksHot(false);                    // whatever hid the links during a hot morph/settle, they're back now
   });
 } catch (e) {}
 
@@ -605,6 +611,66 @@ function unsettleLayout(nodes) {
   // EDGES MODEL THE FORM: in brain the link force packs each lobe by its own connectivity and pulls the
   // cross-lobe tracts taut, so it's given real authority there; elsewhere it stays a gentle influence.
   try { const lf = Graph.d3Force('link'); if (lf) { if (lf.strength) lf.strength(SHAPE === 'brain' ? 0.55 : 0.16); if (lf.distance) lf.distance(SHAPE === 'brain' ? 26 : 40); } } catch (e) {}
+}
+// ---- SHAPE MORPH (Lucas: "binary is glitchy through its transitions") --------------------------------------
+// A shape SWITCH used to unpin every node and reheat, so all of them flew across the scene while charge
+// scattered them and links stretched over the gap. Instead, glide each node deterministically from where it is
+// to its new-shape home over ~1.2s (links hidden), then hand off to a GENTLE settle from that placed
+// arrangement — nothing travels far, so there is no scatter to watch.
+// The target home point for a node under the CURRENT shape — the same pick force() makes, factored out so the
+// morph can aim at it. `free`/`skin` have no positional prior (physics / the mesh own them) → null.
+function shapeTarget(n) {
+  return SHAPE === 'brain' ? targetBrain(n) : SHAPE === 'corona' ? targetCorona(n) : SHAPE === 'binary' ? targetBinary(n) : (SHAPE === 'free' || SHAPE === 'skin') ? null : targetPoint(n);
+}
+// (A) Snapshot crossDeg into a STABLE field the binary layout reads. crossDeg is recomputed every render(), so
+// once recognition made it non-zero, binary's target midline moved on every match — nodes chased a shifting
+// destination. Freezing it at relayout keeps the arrangement stable; recognition still lights the bridge edges.
+function freezeCrossDeg() { try { for (const n of Graph.graphData().nodes) n.crossDegL = n.crossDeg || 0; } catch (e) {} }
+// (C) Hide the link cloud while the layout is HOT (a morph or settle in flight) so the stretched-link chaos of
+// the transition is never drawn; the links return at the settled positions.
+function setLinksHot(hot) { try { if (linkLines) linkLines.visible = !hot; } catch (e) {} }
+// (B) Begin the morph. from = current position, target = new-shape home; the node is pinned so physics can't
+// fight the glide (the tween drives fx each frame). Returns false if the shape has no targets (free), so the
+// caller can fall back to a plain resettle.
+function startShapeTween(nodes) {
+  let any = false;
+  for (const n of nodes) {
+    if (n.zoe || !Number.isFinite(n.x)) continue;
+    const p = shapeTarget(n);
+    if (!p) continue;
+    n._frx = n.x; n._fry = n.y; n._frz = n.z || 0;
+    n._tgx = p.x; n._tgy = p.y; n._tgz = p.z;
+    n.fx = n.x; n.fy = n.y; n.fz = (n.z || 0);
+    any = true;
+  }
+  if (!any) return false;
+  _tween = { start: performance.now(), dur: 1200 };
+  setLinksHot(true);
+  engineRunning = true;         // keep the buffers syncing while the tween drives positions
+  return true;
+}
+// Advance the morph one frame: ease each node from→target, then at t=1 hand off to a gentle physics settle from
+// the placed arrangement and reveal the links. Called from the frame loop.
+function stepTween(now) {
+  if (!_tween) return;
+  const t = Math.min(1, (now - _tween.start) / _tween.dur);
+  const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;   // easeInOutCubic
+  const g = Graph.graphData();
+  for (const n of g.nodes) {
+    if (n._tgx == null) continue;
+    n.x = n._frx + (n._tgx - n._frx) * e; n.fx = n.x;
+    n.y = n._fry + (n._tgy - n._fry) * e; n.fy = n.y;
+    n.z = n._frz + (n._tgz - n._frz) * e; n.fz = n.z;
+  }
+  if (t >= 1) {
+    for (const n of g.nodes) { if (n._tgx == null) continue; n._tgx = n._tgy = n._tgz = n._frx = n._fry = n._frz = null; }
+    _tween = null;
+    try { unsettleLayout(g.nodes); } catch (e2) {}   // gentle settle from the good arrangement adds organic life
+    engineRunning = true;
+    try { Graph.d3ReheatSimulation(); } catch (e2) {}
+    setLinksHot(false);
+    _fitOnCool = true;                                // re-frame (broadside) once it cools
+  }
 }
 // Per-frame decay of the budget (bounded by ACTIVE_CAP). A member that fades to nothing re-freezes; the live
 // ones get a slow per-node wander scaled by activation — the "subtly alive" drift, stored as a display offset.
@@ -3540,6 +3606,7 @@ function stepFrame(now) {
   }
   updateDrawnFeatures(now);     // the drawn eyes/mouth hide themselves outside skin mode
   updateFaceStyle();            // the fake lash node-art rides the lids (hides itself outside skin mode)
+  stepTween(now);               // a shape morph glides nodes to their new home before the sync block reads them
   // Position syncing only while the layout is actually moving. `_stillFrames` keeps a couple of frames of
   // sync after it stops so the last motion lands, and any reheat (new data, a mint) restarts it.
   // `skin` ALWAYS syncs: every node is pinned with fx/fy/fz, so the simulation cools within a second and
@@ -3757,21 +3824,33 @@ async function applyShape(next) {
   if (starfield) starfield.visible = beyond;
   if (dustCloud) dustCloud.visible = beyond;
   if (tendrilLines) tendrilLines.visible = beyond;
+  _tween = null;                             // cancel any morph already in flight
   if (SHAPE === 'skin') {
     setOverlay('Loading her model…');
     const vrm = await loadVRM();
-    if (!vrm) { setOverlay('VRM unavailable — data/avatars/zoe.vrm missing or loader not built', 3200); SHAPE = 'brain'; if (shapeEl) shapeEl.value = SHAPE; return; }
-    placeVRM(); vrm.scene.visible = true;
-    const n = buildSkinBinding();
-    setOverlay(n ? null : 'no nodes to bind', n ? 0 : 2000);
-    updateSkin(); buildRoutedLinks(); setRoutedVisible(true);
-  } else {
-    releaseSkin(); setRoutedVisible(false);
-    try { unsettleLayout(Graph.graphData().nodes); } catch (e) {}   // a new shape must physically resettle — unfreeze + restore forces
-    engineRunning = true;
+    if (vrm) {
+      placeVRM(); vrm.scene.visible = true;
+      const n = buildSkinBinding();
+      setOverlay(n ? null : 'no nodes to bind', n ? 0 : 2000);
+      updateSkin(); buildRoutedLinks(); setRoutedVisible(true); setLinksHot(false);
+      try { Graph.d3ReheatSimulation(); } catch (e) {}
+      _fitOnCool = true;
+      return;
+    }
+    setOverlay('VRM unavailable — data/avatars/zoe.vrm missing or loader not built', 3200);
+    SHAPE = 'brain'; if (shapeEl) shapeEl.value = SHAPE;   // fall through and morph into brain instead
   }
-  try { Graph.d3ReheatSimulation(); } catch (e) {}
-  _fitOnCool = true;                         // re-frame once the new arrangement settles
+  // Abstract shapes: freeze the layout's crossDeg (A), then MORPH to the new arrangement (B) instead of the old
+  // unpin-and-scatter reheat. `free` has no target to glide to, so it falls back to a plain gentle resettle.
+  releaseSkin(); setRoutedVisible(false); setLinksHot(false);
+  freezeCrossDeg();
+  if (!startShapeTween(Graph.graphData().nodes)) {
+    setLinksHot(true);
+    try { unsettleLayout(Graph.graphData().nodes); } catch (e) {}
+    engineRunning = true;
+    try { Graph.d3ReheatSimulation(); } catch (e) {}
+    _fitOnCool = true;
+  }
 }
 if (shapeEl) {
   shapeEl.value = SHAPE;
