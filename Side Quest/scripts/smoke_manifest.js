@@ -153,6 +153,64 @@ ok(ambMan.objects[0].status === 'ambiguous' && ambMan.objects[0].candidates.leng
   ok(aliceRow && aliceRow.coord === 'person:owner/alice', 'owner-world prior: "Alice" → the daughter coordinate, NOT the civic legislator resolve');
   ok(aliceRow.status === 'held' && /cheer/i.test(aliceRow.gloss), 'owner-world prior: carries the daughter gloss, civic resolve never consulted');
 
+  // ── CARRIED SALIENCE: a reference dereferences the frame instead of resolving/minting the pronoun ──
+  // The live failure verbatim: "who is the mayor of Shreveport?" → "Tom Arceneaux" → "have we found HIS
+  // contact info?" — "his" must bind the Arceneaux coordinate on the table, never mint "the person in question".
+  const sal = require('../lib/salience');
+  // PURE: a preCoord resolution (what the deref produces) is used verbatim + held, no re-slug.
+  const preMan = M.assembleManifest(
+    { intent: 'answer', objects: [{ mention: 'his', type: 'person', op: 'resolve', salient: true, ref: true }], relations: [], constraints: [] },
+    [{ status: 'resolved', preCoord: 'person:civic/9001', object: { entity_type: 'person', summary: 'Tom Arceneaux' } }],
+    { selfFlags: [false], ownerFlags: [false] }
+  );
+  ok(preMan.objects[0].coord === 'person:civic/9001' && preMan.objects[0].status === 'held', 'assemble: a preCoord (salience deref) is used verbatim + held, never re-slugged');
+
+  // HIT: seed the frame with the resolved mayor, then a ref:true "his" binds that coordinate.
+  const store1 = new Map();
+  const salDep1 = { dereference: (s, o) => sal.dereference(s, { ...o, store: store1 }), fold: (s, o) => sal.fold(s, o, { store: store1 }) };
+  sal.fold('sess1', [{ coord: 'person:civic/9001', type: 'person', status: 'held', surface: 'Tom Arceneaux', gloss: 'Mayor of Shreveport' }], { store: store1 });
+  const refHit = await M.buildManifest('have we found his contact info', {
+    sessionId: 'sess1',
+    deps: {
+      decompose: async () => ({ intent: 'answer', objects: [{ mention: 'his', type: 'person', op: 'resolve', salient: true, ref: true }], relations: [], constraints: [] }),
+      resolve: async () => { throw new Error('resolve must NOT be consulted for a ref hit'); },
+      ownerResolve: () => null, isSelfName: () => false, isOwnerName: () => false, salience: salDep1,
+    },
+  });
+  const hisRow = refHit.objects.find(o => o.surface === 'his');
+  ok(hisRow && hisRow.coord === 'person:civic/9001', 'REF DEREF: "his" binds the Arceneaux coordinate from the frame (not "the person in question")');
+  ok(hisRow && hisRow.status === 'held' && !refHit.gaps.some(g => g.surface === 'his'), 'REF DEREF: the bound reference is held, not a gap');
+
+  // MISS: the frame holds only a document; a person ref finds no antecedent → honest gap, and it must NOT
+  // fall through to the blind civic resolve (which here returns a wrong namesake).
+  const store2 = new Map();
+  const salDep2 = { dereference: (s, o) => sal.dereference(s, { ...o, store: store2 }), fold: (s, o) => sal.fold(s, o, { store: store2 }) };
+  sal.fold('sess2', [{ coord: 'document:graph/5', type: 'document', status: 'held', surface: 'the parish list' }], { store: store2 });
+  const refMiss = await M.buildManifest('what about his email', {
+    sessionId: 'sess2',
+    deps: {
+      decompose: async () => ({ intent: 'answer', objects: [{ mention: 'his', type: 'person', op: 'resolve', salient: true, ref: true }], relations: [], constraints: [] }),
+      resolve: async () => ({ status: 'resolved', object: { id: 999, entity_type: 'person', summary: 'WRONG civic namesake' } }),
+      ownerResolve: () => null, isSelfName: () => false, isOwnerName: () => false, salience: salDep2,
+    },
+  });
+  const missRow = refMiss.objects.find(o => o.surface === 'his');
+  ok(missRow && missRow.status === 'minted-new', 'REF MISS: no compatible antecedent → honest gap, NOT the blind civic resolve');
+  ok(refMiss.gaps.some(g => g.surface === 'his'), 'REF MISS: surfaces as a gap so the cloud asks WHICH person');
+
+  // FOLD: after a turn resolves a named person, the frame carries it so the NEXT turn's ref binds it.
+  const store3 = new Map();
+  const salDep3 = { dereference: (s, o) => sal.dereference(s, { ...o, store: store3 }), fold: (s, o) => sal.fold(s, o, { store: store3 }) };
+  await M.buildManifest('who is Tom Arceneaux', {
+    sessionId: 'sess3',
+    deps: {
+      decompose: async () => ({ intent: 'answer', objects: [{ mention: 'Tom Arceneaux', type: 'person', op: 'resolve', salient: true }], relations: [], constraints: [] }),
+      resolve: async () => ({ status: 'resolved', object: { id: 7777, entity_type: 'person', summary: 'Mayor of Shreveport' } }),
+      ownerResolve: () => null, isSelfName: () => false, isOwnerName: () => false, salience: salDep3,
+    },
+  });
+  ok(sal.dereference('sess3', { type: 'person', store: store3 })?.coord === 'person:graph/7777', 'FOLD: a resolved named person carries forward into the frame for the next turn');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

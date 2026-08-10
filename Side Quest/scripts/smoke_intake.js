@@ -66,10 +66,14 @@ ok(intake.subsetTopN('') === null, 'empty → null');
   const rdEmpty = intake.routeDecomposition(null);
   ok(rdEmpty.ok === false && rdEmpty.intent === 'chat' && rdEmpty.objects.length === 0, 'routeDecomposition(null) → inert chat plan (fail-safe, no action)');
   ok(intake.routeDecomposition({ intent: 'frobnicate' }).intent === 'answer', 'unknown intent → answer (respond, never fire heavy machinery)');
-  const rdObj = intake.routeDecomposition({ intent: 'research', objects: [{ mention: 'Sen. Curtis', type: 'person', op: 'resolve', salient: true }, { mention: '', type: 'person' }, { mention: 'the webinar', type: 'bogus' }] });
-  ok(rdObj.objects.length === 2, 'objects: empty-mention dropped');
+  const rdObj = intake.routeDecomposition({ intent: 'research', objects: [{ mention: 'Sen. Curtis', type: 'person', op: 'resolve', salient: true }, { mention: '', type: 'person' }, { mention: 'the webinar', type: 'bogus' }, { mention: 'his', type: 'person', ref: true, salient: true }] });
+  ok(rdObj.objects.length === 3, 'objects: empty-mention dropped');
   ok(rdObj.objects[0].type === 'person' && rdObj.objects[0].salient === true, 'object keeps valid type + salient');
+  ok(rdObj.objects[0].ref === false, 'a named object is ref:false (bound by resolution, not the frame)');
   ok(rdObj.objects[1].type === null && rdObj.objects[1].op === 'resolve', 'unknown type → null; op defaults to resolve');
+  // REFERENCE (carried-salience step 2): a pronoun mention carries ref:true + its wanted type through to the manifest,
+  // which will DEREFERENCE it against the frame instead of resolving/minting it (never "the person in question").
+  ok(rdObj.objects[2].ref === true && rdObj.objects[2].mention === 'his' && rdObj.objects[2].type === 'person', 'a pronoun mention keeps ref:true + type for frame dereference');
   const rdRel = intake.routeDecomposition({ intent: 'schedule', relations: [{ source: 'the meeting', type: 'about', target: 'the webinar' }, { source: 'a', type: '', target: 'b' }] });
   ok(rdRel.relations.length === 1 && rdRel.relations[0].type === 'about', 'relations: require source+type+target (incomplete dropped)');
   const rdCon = intake.routeDecomposition({ intent: 'schedule', constraints: [{ kind: 'temporal', value: 'tomorrow', binds: 'the meeting' }, { kind: 'bogus', value: 'x' }, { value: '' }] });

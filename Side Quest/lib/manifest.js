@@ -121,6 +121,8 @@ function assembleManifest(plan, resolutions, { userName = 'Lucas', selfFlags = [
     let coord;
     if (cls.status === STATUS.SELF) {
       coord = 'self:zoe/core';
+    } else if (res && res.preCoord) {
+      coord = res.preCoord;                  // SALIENCE DEREF: a reference bound to a coordinate already on the table — used verbatim
     } else if (resolved && resolved.ownerWorld && typeof resolved.id === 'string' && resolved.id.includes(':')) {
       coord = resolved.id;
     } else {
@@ -180,12 +182,15 @@ function render(manifest) {
  *   deps.isSelfName(name) / deps.isOwnerName(name)   (default: lib/db)
  * Fail-soft: any failure yields a minimal manifest rather than throwing into the turn.
  */
-async function buildManifest(text, { userName = 'Lucas', context = '', deps = {} } = {}) {
+async function buildManifest(text, { userName = 'Lucas', context = '', sessionId = null, deps = {} } = {}) {
   const t = String(text || '').trim();
   if (!t) return { user: userName, intent: 'chat', objects: [], gaps: [], relations: [], temporal: null };
 
   const decompose = deps.decompose || ((m, o) => require('./intake').decompose(m, o));
   const resolve = deps.resolve || ((m, o) => require('./echo_suit').resolveMention(m, o));
+  // CARRIED SALIENCE (docs/CARRIED_SALIENCE_MANIFEST.md): the per-session frame a reference dereferences
+  // against. Only active when a sessionId is threaded — offline manifest smokes pass none and behave as before.
+  const salience = deps.salience || (() => { try { return require('./salience'); } catch { return null; } })();
   // OWNER-WORLD PRIOR: the tiny high-precision personal store is consulted BEFORE civic resolution, so a
   // bare "Alice" binds to the daughter, not a legislator (the whole point of the owner-world).
   const ownerResolve = deps.ownerResolve || ((n) => { try { return require('./owner_world').resolve(n); } catch { return null; } });
@@ -206,6 +211,16 @@ async function buildManifest(text, { userName = 'Lucas', context = '', deps = {}
   const resolutions = [];
   for (let i = 0; i < objects.length; i++) {
     const o = objects[i];
+    // REFERENCE (carried salience): a mention flagged ref:true points at something already on the table.
+    // Dereference the frame by wanted type instead of resolving/minting the bare pronoun — so "his" binds
+    // the Arceneaux coordinate, never "the person in question". A miss is an honest gap (→ clarify), not a guess.
+    if (o.ref && salience && sessionId) {
+      const want = o.type ? canonType(o.type) : null;
+      let hit = null; try { hit = salience.dereference(sessionId, { type: want }); } catch {}
+      if (hit) { resolutions.push({ status: 'resolved', preCoord: hit.coord, object: { entity_type: hit.type, summary: hit.gloss } }); continue; }
+      resolutions.push({ status: 'no-match', mention: o.mention });   // no antecedent → minted-new gap → clarify
+      continue;
+    }
     // owner-world FIRST — wins over civic and even over op=create (if we already hold Alice, she isn't new)
     let ow = null; try { ow = ownerResolve(o.mention); } catch {}
     if (ow && ow.object) { resolutions.push(ow); continue; }
@@ -260,6 +275,10 @@ async function buildManifest(text, { userName = 'Lucas', context = '', deps = {}
       man.objects.push({ surface: sub, coord, type, status: cls.status, salient: false, gloss: obj.summary ? String(obj.summary).slice(0, 140) : null });
     }
   } catch { /* enrichment is best-effort */ }
+
+  // CARRY THE FRAME FORWARD: fold this turn's RESOLVED antecedents (held/owner) into the salience frame so
+  // the NEXT turn's "his"/"that"/"pull it up" can dereference them. salience.fold filters out gaps + self.
+  if (salience && sessionId) { try { salience.fold(sessionId, man.objects); } catch {} }
 
   return man;
 }
