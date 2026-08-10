@@ -121,6 +121,12 @@ Driving C4 + G6 surfaced one shared root cause behind every research/open-web mi
 
 **Two beta-completion items this implies (fix-time, not census):** (a) **provision the search keys** (exa/brave/tavily) in the engine's keychain/config; (b) **make the research lanes fall through to `web_fetch` of a resolved URL** when search returns empty and excavation reports `NOT_VISIBLE` — the working path should be the floor, not the unused branch. Also — seen **twice, systemic**: the web-intent **query extractor** does not resolve the subject. G6 ② sent the whole verbose instruction as the query; C6 was worse — it searched `"his social media accounts and any public profiles you can verify"` and **dropped the subject name ("Marcus Thibodeaux Lafayette") entirely**, grabbing only the trailing clause. Resolve the entity before searching.
 
+### ✅ FIX #1 LANDED + LIVE RE-VERIFIED (fresh52, commit 9cbdf83)
+The fall-through floor (b) is built into `excavate()`/`seePage()`: vision blind on every screen → `web_extract`/`web_fetch` the page text → distil the answer (never invents). Gate 379/379. **Live re-verify on fresh52 established three things:**
+1. **The fix loads + fires safely** — `[excavate] vision miss → web_extract fall-through read 724ch, no answer in text` on a thin page → honest not-found, zero fabrication.
+2. **The read substrate WORKS** — Baton Rouge lookup: `[excavate] FOUND: population 222,795 (census.gov)` via vision. Content CAN be read + grounded (turn 2 replied grounded on 222,795).
+3. **⭐THE BINDING CONSTRAINT IS THE SEAM, NOT THE READ — this is fix (c), the work-contract spine.** Turn 1 of that lookup: excavate `FOUND: 222,795` + `cognition → enriched:excavate-verify`, **but the reply said "I don't have that number… let me try again."** The enrichment landed AFTER the reply writer composed the miss — the **same ordering race as the one-voice M5.6 ack seam, but for FOUND ANSWERS**. Even with a perfect read, a found answer doesn't reliably reach the same turn's reply. **This is what actually blocks Lucas's surface** — the next fix.
+
 ---
 
 ## Tally (45 capabilities)
