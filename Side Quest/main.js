@@ -875,6 +875,12 @@ app.whenReady().then(() => {
   const maybeDrainIngest = async () => {
     if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_INGEST_ENABLED || '').trim())) return;  // gate-less lane: OFF until armed
     if (_bootGraceActive()) { _logBootDefer('ingest'); return; }   // cold-boot stutter: hold catch-up drain while warming
+    // B0 stall fix (2026-08-10): the stall_attrib.log named ingest-drain the #1 ATTRIBUTED loop-blocker
+    // (~1.5M ms over 6 days), and it was the only top-offending local-sync lane MISSING the live-conversation
+    // yield its siblings (decompose-sweep/doc-contact-sweep) already have. A 40-iter drainUntilEmpty wedged
+    // live turns → the 150s chat watchdog. Yield while he types; resume on the ~30s lull (the load-governor
+    // contract). See docs/INTEGRATED_BUILD_TRACK_2026-08-10.md §B0.
+    if (_conversationActive()) { _logLoadDeferral('ingest'); return; }
     if (ingestRunning) return;
     if (!echoSuit || !echoSuit.connected) return;
     if (Date.now() - parseInt(db.getMeta('last_ingest_drain_at') || '0', 10) < INGEST_MIN_GAP_MS) return;  // floor
