@@ -41,7 +41,7 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 | # | Capability | Verdict | Evidence / remaining live check |
 |---|---|---|---|
 | B1 | Canvas CREATE | **WORKS (fixed + live-verified fresh48)** | Was BROKEN for generative create (model narrated → rejected → nothing landed + doubled relay). FIXED (f9e720d): salvageNarration strips the operator's conversational opener + reframe-retry fallback; NARRATION_OPEN catches "I'll"/"Here's" contractions; the outcome-report exclusion kills the doubled reject relay. Live proof: "make a doc listing the parishes" → landed (1120ch, 65 lines), reply = ack + "64 parishes", one followup, no double. Create-from-held still works. |
-| B2 | Canvas EDIT | **UNTESTED** | Do not edit-test against the flagship deliverable. Drive against a scratch doc post-reset. |
+| B2 | Canvas EDIT | **WORKS (live-verified fresh51)** | Seeded a scratch 6-item checklist (B1), then "add two items at the end, keep the rest" → `[canvas-cmd] edit order on the working doc → applying in place`, updated **in place** (6→8 lines, same `tab_key`, 346→442ch), first six untouched. Reply one voice + accurate ("added 'Secure a venue' and 'Recruit volunteers'… still the same first six"). No narration reject, no phantom tab, no double relay. (Handled by the legacy canvas-cmd net via route=converse, not the artifact-router — the dual path, but it delivers.) |
 | B3 | Report composed from held material | **WORKS (fixed + live-verified fresh51) — now rides the notes deliverables** | Composes grounded/cited reports from held material with honest "Data Gaps" sections + open-questions→metabolism; unverified emails flagged not guessed. FINDING 1 (the notes-retrieval gap) FIXED (46af743 + 6a3a253): the door now searches notes/ for the richest held artifacts, EXCLUDING prior report-*.md. Root of the miss was product_ledger's `slice(-400)` scanning only 400 of 1,963 notes files by name (the deliverable sat at #1169) — replaced with a filename pre-filter across ALL files. Live proof: the report grew 8,163→10,995ch and now covers 45 parishes (was ~5), riding notes/louisiana-parishes-leadership.md. FINDING 2 (open): a stale same-topic directed focus can tangle a report request; clear the focus first. |
 | B4 | Product pull-up (product_ledger) | **FIXED-PENDING-LIVE** | Census B4: pulled the STALE draft over the finished doc; presented a failure record as the artifact; claimed canvas landing that didn't verify. Fixed (supersession cb180a6, failure-record exclusion + emit-return-checked relay 803eab4). Live check: `pullup-retrieval` say-assertions. |
 | B5 | House-style packaging | **PARTIAL** | fresh45: real branded HTML+PDF landed, honest self-check — BUT packaged the corrupted working tab (stale-sibling, now fixed by supersession) and the working-doc corruption is REPAIRED (parish-working-tab rewrite). Re-drive post-reset to confirm it packages the right source. |
@@ -54,9 +54,9 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 | C1 | Directed research assignment (P0→P4b) | **WORKS (live-verified fresh48/49) — EXCELLENT** | Drove "research the LA/MS Public Service Commission, build a dossier." Directed research web-searched + cross-referenced + produced ANALYST-GRADE cited dossiers (all 5 LA commissioners with districts/party/terms, 6 recent votes with docket numbers/dissents/dates/sources; MS: found commissioners, honestly flagged the pending seat, CAUGHT + corrected a LA/MS cross-contamination). Found+fixed a precedence collision (0aa0232): a discover assignment also fired the report-from-HELD door, landing a "we hold nothing" report on canvas beside the real dossier — now the compose/retrieve doors stand down on discover (verified fresh49: no report door fired). |
 | C2 | Run controls (wrap/expand/stop) | **WORKS (stop)** | fresh45: stop landed, focus cleared, honest relay. Wrap/expand X-of-N honesty untested live. |
 | C3 | Named-roster fill / list-completion | **WORKS (live-verified fresh49) — cite-or-leave-blank honored** | "Build a contact table for these 5 people, find emails." Landed a table with ZERO guessed emails: grounded official district emails where published (northern.district@/central.district@psc.ms.gov), honest "No direct email" + real fallback (office phone / general email) where not — correctly tracked Maxwell left for USDA, Presley's official email inactive. Routed enrich→canvas_create (not the roster_intake lane specifically), but the anti-fabrication contract held. Minor: an operator "I have enough…" preamble leaked to the doc top → fixed (1eb7aa1). |
-| C4 | Deep dive (premium single-subject) | **UNTESTED** | Premium-lane spend; drive post-reset within quota. |
-| C5 | Swarm (parallel worker surge) | **UNTESTED** | Partition convergence must be watched live. |
-| C6 | Social/online-account enrich | **UNTESTED** | UNKNOWN-never-vouches staging; drive post-reset. |
+| C4 | Deep dive (premium single-subject) | **HONEST-MISS — substrate-blocked (live fresh51)** | "Deep dive on Cleco (LA utility): ownership, territory, leadership, rate cases; cite it." → full in-turn completion mode (12 steps/180s), **excavated the real cleco.com leadership pages** but every scan returned `NOT_VISIBLE` (JS-rendered, excavator saw no text); ended on an **honest miss** ("couldn't pin down…") — **zero fabricated facts** (the safety win). No dossier delivered. Root cause is the shared web-read substrate (see finding below), not the lane logic. C1 worked earlier because that data was already in the local corpus; Cleco was not. |
+| C5 | Swarm (parallel worker surge) | **SUBSTRATE-BLOCKED (deferred)** | Swarm = N parallel directed-research workers on the same web-read substrate that C4/C6 just proved is down (search keyless + excavator JS-blind). Driving it now reproduces the honest-miss at 3-4× the spend with no new safety property to confirm. Re-drive once the substrate is provisioned; the distinct thing to watch there is partition convergence (no double-work, no gaps). |
+| C6 | Social/online-account enrich | **HONEST-MISS + never-vouches CONFIRMED (live fresh51)** | "Enrich Marcus Thibodeaux (Lafayette small-biz owner) — find verifiable social/public profiles." Obscure subject + dead search substrate → **invented zero handles**, reported honestly ("results came back generic, not his actual profiles"). **The UNKNOWN-never-vouches safety property HELD** — the important result. Blocked by the same substrate; also re-exposed the **query-extractor defect worse than G6**: it searched `"his social media accounts and any public profiles you can verify"` — **dropped the subject name entirely**, grabbing the trailing clause. |
 
 ## D. Renders (saga / vault deliverable shapes)
 
@@ -92,10 +92,10 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 |---|---|---|---|
 | G1 | Google Meet — join/observe/scribe/leave | **NEEDS-LIVE-CONTEXT** | Requires a real meeting. Leave-polarity fixed 08-07; scribe boot-resume untested. |
 | G2 | Teams meeting | **NEEDS-LIVE-CONTEXT / known-degraded** | First live fire 08-07: join+observe worked, 0/101 captions scraped. Fix d7b2c99 live, PROOF = next real meeting. |
-| G3 | Watch a video / find clips | **UNTESTED** | Drive "watch this video <url>" post-reset. |
+| G3 | Watch a video / find clips | **PARTIAL — identifies, can't read content (live fresh51)** | "Watch this video and tell me what happens: youtube…jNQXAC9IVRw" → correctly ID'd "Me at the zoo, the first YouTube upload" (metadata), opened with captions on, then `[media_cc] watching (no new captions, dom)` **~20× — zero captions scraped**, **never fell through to `av_transcribe`**, turn **unsettled** on an unkept promise ("I'll tell you once the captions roll through"). Same caption-scrape-empty failure as **G2 (Teams 0/101)**, same no-fallthrough shape as C4/G6. |
 | G4 | Listen / transcribe a call | **NEEDS-LIVE-CONTEXT** | Requires live audio. |
 | G5 | Record a recipe by demonstration | **NEEDS-LIVE-CONTEXT** | Requires a live demonstration. |
-| G6 | "Open X in your browser" | **UNTESTED** | Drive post-reset. |
+| G6 | "Open X in your browser" | **PARTIAL — single-hop opens, multi-hop drops the action (live fresh51)** | ①"check the web for the latest NWS active alert" → opened the alerts page, read the front tab, reported the alert area **empty** honestly (that page renders alerts as a JS map, no text) — no fabrication. ②"look up Baton Rouge on Wikipedia, give the population" → web-intent fired but sent the **whole verbose sentence** as the Google query (crude entity extraction); read the results snippet ("227,470 at the 2020 census") and reported it honestly as *a snippet, not the article*, promising to open the article. ③ follow-up "yes, open the article" → **routed `converse` (conf 0.5) — the web-action intent was LOST**; emitted a bare `"Opening the actual Wikipedia article now."` promise-say with **no `[web] open`, no tool call, no content**, and settled. Two defects: (a) query extraction; (b) affirmative follow-up loses the action intent → unkept promise-say the guard can't force (no action was ever assigned). **(b) = prime evidence for the work-contract spine.** |
 
 ## H. Peripheral
 
@@ -109,22 +109,43 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 
 ---
 
+## ⚠️ SUBSTRATE FINDING (live fresh51, 2026-08-10) — the web-read stack is degraded, and it gates a whole column
+
+Driving C4 + G6 surfaced one shared root cause behind every research/open-web miss, distinct from any lane's own logic:
+
+1. **Search-provider keys are absent.** Direct engine probe `web_search("Cleco…")` → `results:[]`, `providers_skipped: {exa:"no_key_or_error", brave:"no_key_or_error", duckduckgo:"no_key_or_error"}`. Every lane that *leads* with search finds nothing. (SQ `.env` carries no EXA/BRAVE/TAVILY/JINA key either.)
+2. **The act-on-page excavator is JS-blind.** On NWS alerts and cleco.com the headless scan returned `NOT_VISIBLE` on every step — it cannot read JS-rendered pages, so excavation-fallback also yields nothing.
+3. **But `web_fetch` works.** `web_fetch("en.wikipedia.org/wiki/Cleco")` → `tier:curl_cffi, 200, 50KB` of real content. The healthy path exists — **the lanes just never fall through to it** when search is dead and excavation is blind.
+
+**Consequence for the census:** C4 (deep-dive), C5 (swarm), C6 (social-enrich), and G6 (open-web) all sit on this substrate — driving them now reproduces the same honest-miss. C1 passed earlier only because its subject was already in the local corpus. **The honesty layer is holding everywhere (zero fabrication under total substrate failure — the important safety result), but the *delivery* is blocked.**
+
+**Two beta-completion items this implies (fix-time, not census):** (a) **provision the search keys** (exa/brave/tavily) in the engine's keychain/config; (b) **make the research lanes fall through to `web_fetch` of a resolved URL** when search returns empty and excavation reports `NOT_VISIBLE` — the working path should be the floor, not the unused branch. Also — seen **twice, systemic**: the web-intent **query extractor** does not resolve the subject. G6 ② sent the whole verbose instruction as the query; C6 was worse — it searched `"his social media accounts and any public profiles you can verify"` and **dropped the subject name ("Marcus Thibodeaux Lafayette") entirely**, grabbing only the trailing clause. Resolve the entity before searching.
+
+---
+
 ## Tally (45 capabilities)
 
 **Post-reset live verification (fresh47, pathway_suite --run, 7/9):**
-- **WORKS (now live-verified): 17** — A1, A2, A4, A5, A6, B1, B3, B4, C1, C2(stop), C3, E1, F1, F6, F8, F9, H1
-  (fresh48/49 census drives: B1, C1+discover-fix, C3 cite-or-leave-blank, H1 image gen, B3 report-from-held).
-  Open findings: B3-notes-retrieval FIXED (now rides notes/ deliverables, live-verified 45 parishes).
-  Still open (non-blocking): a stale same-topic focus can tangle a report request; D1 render shapes
-  + E2 scenarios + H4 QR have no chat door.
-  (A2/A4/A5/A6/B4 flipped FIXED-PENDING-LIVE → WORKS by the suite's reply-graded passes:
-  contacts-no-session, status-no-phantom, held-list-no-restart, canvas-not-blind, pullup-retrieval).
-- **BROKEN (found live): 1** — B1 generative-create (model narrates → rejected → nothing lands +
-  doubled relay). Own batch.
-- **PARTIAL: 2** — B3, F2 (B5 packaging now works modulo the repaired working doc).
+- **WORKS (now live-verified): 18** — A1, A2, A4, A5, A6, B1, **B2**, B3, B4, C1, C2(stop), C3, E1, F1, F6, F8, F9, H1
+  (fresh48/49 drives: B1, C1+discover-fix, C3 cite-or-leave-blank, H1 image gen, B3 report-from-held;
+  **fresh51 drive: B2 canvas-edit in-place**).
+- **fresh51 SUBSTRATE-BLOCKED honest-misses (delivery blocked, honesty HELD — zero fabrication): 3** —
+  C4 deep-dive, C6 social-enrich (never-vouches confirmed), G6 open-web (multi-hop). All three trace to
+  the ONE web-read substrate finding above (search keyless + excavator JS-blind + no fallthrough to the
+  working `web_fetch`). C5 swarm **deferred** on the same substrate.
+- **fresh51 PARTIAL (identify-but-can't-read-content): G3** watch-video — IDs the video, scrapes zero
+  captions, no fallthrough to `av_transcribe`, unsettled promise. Same failure family as G2 (Teams).
+- **THE CROSS-CUTTING DISEASE (now 4 lanes, reproducible): pick-a-primary-reader → primary fails →
+  NO fallthrough to the working path → end on an unkept promise-say (sometimes unsettled).**
+  G6 (search/excavator→no web_fetch), C4 (excavator→no web_fetch), G3 (DOM-captions→no av_transcribe),
+  G2 (Teams captions). This IS the work-contract spine — the census has now produced hard evidence.
+- **BROKEN (found live, since FIXED): 1** — B1 generative-create (fixed 4f63b9c, re-verified fresh51).
+- **PARTIAL: 2** — F2; B3-notes FIXED.
 - **UNREACHABLE (chat door): 2** — E2, H4
 - **NEEDS-LIVE-CONTEXT: 7** — A7, A9, B6, G1, G2, G4, G5
-- **UNTESTED (needs a live drive): ~16** — A3, A8, B2, C1, C3, C4, C5, C6, D1, D2, F3, F4, F5, F7, G3, G6, H1, H2/H3/H5(UI)
+- **UNTESTED remaining (chat-drivable): F5 byline (public — explicit-go only), A3, A8, D2, F3, F4, F7**;
+  UI-only: D1, H2/H3/H5. The chat-drivable census is now **substrate-limited** — the rest either wait on
+  the substrate fix or need Lucas's go (F5).
 
 ## What "first real beta" requires from here (the completion build)
 
