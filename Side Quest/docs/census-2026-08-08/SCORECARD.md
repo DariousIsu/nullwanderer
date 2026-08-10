@@ -51,7 +51,7 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 
 | # | Capability | Verdict | Evidence / remaining live check |
 |---|---|---|---|
-| C1 | Directed research assignment (P0→P4b) | **UNTESTED** | The base contract of all research; the Hartfield P4b acceptance test has never run. Highest-priority post-reset drive. |
+| C1 | Directed research assignment (P0→P4b) | **WORKS (live-verified fresh48/49) — EXCELLENT** | Drove "research the LA/MS Public Service Commission, build a dossier." Directed research web-searched + cross-referenced + produced ANALYST-GRADE cited dossiers (all 5 LA commissioners with districts/party/terms, 6 recent votes with docket numbers/dissents/dates/sources; MS: found commissioners, honestly flagged the pending seat, CAUGHT + corrected a LA/MS cross-contamination). Found+fixed a precedence collision (0aa0232): a discover assignment also fired the report-from-HELD door, landing a "we hold nothing" report on canvas beside the real dossier — now the compose/retrieve doors stand down on discover (verified fresh49: no report door fired). |
 | C2 | Run controls (wrap/expand/stop) | **WORKS (stop)** | fresh45: stop landed, focus cleared, honest relay. Wrap/expand X-of-N honesty untested live. |
 | C3 | Named-roster fill / list-completion | **UNTESTED** | The cite-or-leave-blank flagship; code-complete, live proof explicitly pending. Post-reset. |
 | C4 | Deep dive (premium single-subject) | **UNTESTED** | Premium-lane spend; drive post-reset within quota. |
@@ -112,7 +112,8 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 ## Tally (45 capabilities)
 
 **Post-reset live verification (fresh47, pathway_suite --run, 7/9):**
-- **WORKS (now live-verified): 12** — A1, A2, A4, A5, A6, B4, C2(stop), E1, F1, F6, F8, F9
+- **WORKS (now live-verified): 14** — A1, A2, A4, A5, A6, B1, B4, C1, C2(stop), E1, F1, F6, F8, F9
+  (B1 fixed+verified fresh48; C1 verified excellent fresh48/49 + the discover-precedence fix).
   (A2/A4/A5/A6/B4 flipped FIXED-PENDING-LIVE → WORKS by the suite's reply-graded passes:
   contacts-no-session, status-no-phantom, held-list-no-restart, canvas-not-blind, pullup-retrieval).
 - **BROKEN (found live): 1** — B1 generative-create (model narrates → rejected → nothing lands +
