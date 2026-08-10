@@ -28,7 +28,7 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 |---|---|---|---|
 | A1 | Factual + shared-history recall | **WORKS** | fresh45 live: "Who is the parish president of Jefferson Parish?" → "Cynthia Lee Sheng" (matches the deliverable). Caveat: answered via web-excavate, not the held doc (held-source-homecoming inefficiency, not a correctness fail). |
 | A2 | "How's the research going" — status | **FIXED-PENDING-LIVE** | Census ②: "status report" spawned a phantom "Report — status" tab. Fixed (statusHandled gates the artifact router, 62109ef). Live check: `status-no-phantom` suite case (canvasEmpty). |
-| A3 | "Look up the latest X" — live lookup | **UNTESTED** | Operator web path; not driven this census. Post-reset drive. |
+| A3 | "Look up the latest X" — live lookup | **WORKS (live-verified fresh53)** | "Look up the latest: who currently holds the office of Louisiana Secretary of State, and since when?" → **"Nancy Landry. Assumed office January 8, 2024, after winning election November 18, 2023."** Correct + current, grounded via Google/excavate, one voice. (Minor: verbose query passed whole to Google — cosmetic, Google forgave it; a background loop stalled and the 150s watchdog force-resumed — recovery working.) |
 | A4 | Held-contacts query (list/count) | **FIXED-PENDING-LIVE** | Census ①: "how many with a phone number" answered with totals+emails (Lucas's graded fail). Fixed (phone/countOnly schema, 62109ef) + re-run fresh46: "528 with a phone number (of 1,683)" leads. Live check: `contacts-no-session` say-assertions. |
 | A5 | Held-roster ask ("give me the parish contact list") | **FIXED-PENDING-LIVE** | Census ③ (flagship): restarted 6-8h research on the finished list. Destructive half CURED (correction net stands down, retrieval-first guard, cb180a6) — fresh46 confirmed "stood down, no run mutation". Retrieval-presentation half fixed at the poll seam (115471a), UNVERIFIED live. Live check: `held-list-no-restart`. |
 | A6 | Doc-QA + canvas awareness | **FIXED-PENDING-LIVE** | Census ④: blind with 60 tabs ("couldn't pin down documents"). Fixed (board-aware buildBlock, cb180a6) + re-run fresh46: named the tabs truthfully. Live check: `canvas-not-blind`. |
@@ -132,9 +132,13 @@ The fall-through floor (b) is built into `excavate()`/`seePage()`: vision blind 
 ## Tally (45 capabilities)
 
 **Post-reset live verification (fresh47, pathway_suite --run, 7/9):**
-- **WORKS (now live-verified): 18** — A1, A2, A4, A5, A6, B1, **B2**, B3, B4, C1, C2(stop), C3, E1, F1, F6, F8, F9, H1
+- **WORKS (now live-verified): 19** — **A3**, A1, A2, A4, A5, A6, B1, **B2**, B3, B4, C1, C2(stop), C3, E1, F1, F6, F8, F9, H1
   (fresh48/49 drives: B1, C1+discover-fix, C3 cite-or-leave-blank, H1 image gen, B3 report-from-held;
-  **fresh51 drive: B2 canvas-edit in-place**).
+  **fresh51: B2 canvas-edit in-place; fresh53: A3 live-lookup (Nancy Landry, correct)** + Shreveport/
+  Lafayette factual lookups both correct — the KEYLESS browser search path WORKS, see the substrate correction).
+  **NB: C4/C6/G6's "substrate-blocked" verdicts were MISDIAGNOSED — search isn't dead (app is keyless-by-design,
+  browser SERP-scraping works); those misses were the excavator being JS-blind / find-one-answer mismatch,
+  which the fall-through floor (9cbdf83) addresses. Re-drive them against the fall-through.**
 - **fresh51 SUBSTRATE-BLOCKED honest-misses (delivery blocked, honesty HELD — zero fabrication): 3** —
   C4 deep-dive, C6 social-enrich (never-vouches confirmed), G6 open-web (multi-hop). All three trace to
   the ONE web-read substrate finding above (search keyless + excavator JS-blind + no fallthrough to the
