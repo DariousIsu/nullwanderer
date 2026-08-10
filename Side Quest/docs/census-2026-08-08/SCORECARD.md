@@ -53,7 +53,7 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 |---|---|---|---|
 | C1 | Directed research assignment (P0→P4b) | **WORKS (live-verified fresh48/49) — EXCELLENT** | Drove "research the LA/MS Public Service Commission, build a dossier." Directed research web-searched + cross-referenced + produced ANALYST-GRADE cited dossiers (all 5 LA commissioners with districts/party/terms, 6 recent votes with docket numbers/dissents/dates/sources; MS: found commissioners, honestly flagged the pending seat, CAUGHT + corrected a LA/MS cross-contamination). Found+fixed a precedence collision (0aa0232): a discover assignment also fired the report-from-HELD door, landing a "we hold nothing" report on canvas beside the real dossier — now the compose/retrieve doors stand down on discover (verified fresh49: no report door fired). |
 | C2 | Run controls (wrap/expand/stop) | **WORKS (stop)** | fresh45: stop landed, focus cleared, honest relay. Wrap/expand X-of-N honesty untested live. |
-| C3 | Named-roster fill / list-completion | **UNTESTED** | The cite-or-leave-blank flagship; code-complete, live proof explicitly pending. Post-reset. |
+| C3 | Named-roster fill / list-completion | **WORKS (live-verified fresh49) — cite-or-leave-blank honored** | "Build a contact table for these 5 people, find emails." Landed a table with ZERO guessed emails: grounded official district emails where published (northern.district@/central.district@psc.ms.gov), honest "No direct email" + real fallback (office phone / general email) where not — correctly tracked Maxwell left for USDA, Presley's official email inactive. Routed enrich→canvas_create (not the roster_intake lane specifically), but the anti-fabrication contract held. Minor: an operator "I have enough…" preamble leaked to the doc top → fixed (1eb7aa1). |
 | C4 | Deep dive (premium single-subject) | **UNTESTED** | Premium-lane spend; drive post-reset within quota. |
 | C5 | Swarm (parallel worker surge) | **UNTESTED** | Partition convergence must be watched live. |
 | C6 | Social/online-account enrich | **UNTESTED** | UNKNOWN-never-vouches staging; drive post-reset. |
@@ -112,8 +112,8 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 ## Tally (45 capabilities)
 
 **Post-reset live verification (fresh47, pathway_suite --run, 7/9):**
-- **WORKS (now live-verified): 14** — A1, A2, A4, A5, A6, B1, B4, C1, C2(stop), E1, F1, F6, F8, F9
-  (B1 fixed+verified fresh48; C1 verified excellent fresh48/49 + the discover-precedence fix).
+- **WORKS (now live-verified): 15** — A1, A2, A4, A5, A6, B1, B4, C1, C2(stop), C3, E1, F1, F6, F8, F9
+  (B1 fixed+verified fresh48; C1 verified excellent + discover-precedence fix; C3 cite-or-leave-blank honored fresh49).
   (A2/A4/A5/A6/B4 flipped FIXED-PENDING-LIVE → WORKS by the suite's reply-graded passes:
   contacts-no-session, status-no-phantom, held-list-no-restart, canvas-not-blind, pullup-retrieval).
 - **BROKEN (found live): 1** — B1 generative-create (model narrates → rejected → nothing lands +
