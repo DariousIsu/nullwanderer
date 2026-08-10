@@ -8744,9 +8744,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // consumed — with gates IDENTICAL to the late router's door-firing guards, so the reply promises
   // a door if and only if a door will actually fire. (Appending at judgment time raced the status
   // gate: "status report" would have promised a report the statusHandled gate then blocked.)
+  // DISCOVER OWNS THE TURN (2026-08-09 live census, the LPSC assignment): "Research X — build me a
+  // dossier" is an intake DISCOVER assignment → directed research composes the real dossier from live
+  // tools. The artifact router's compose/retrieve doors (report-from-HELD especially) must STAND
+  // DOWN, or they preempt it: on LPSC the report door pulled 8 topically-loose held docs and landed a
+  // "we hold nothing on this" report ON THE CANVAS, competing with the excellent web-researched
+  // dossier directed research had just produced. Compose-from-held is contradictory with go-discover.
+  const _discoverAssignment = !!(isAssignment && intakeRoute && intakeRoute.action === 'discover');
   let _artifactAckAppended = false;
   if (_artifactVerdictEarly && _artifactVerdictEarly.intent && _artifactVerdictEarly.intent !== 'none'
-    && !followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled) {
+    && !followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled && !_discoverAssignment) {
     composedUserMessage = `${composedUserMessage}\n\n[A deterministic door (${_artifactVerdictEarly.intent}) is handling this order and will report its own outcome — landed, rejected, or failed — in a separate message. Your reply: ONE short sentence acknowledging you're on it. Do NOT describe steps or sources, do NOT promise specifics, and do NOT claim anything landed — the door's report is the only truth about the outcome.]`;
     _artifactAckAppended = true;
     console.log(`[one-voice] ack directive reached the reply writer (intent=${_artifactVerdictEarly.intent})`);
@@ -10261,7 +10268,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // reply promised it. stop/expand/correction-handled turns are owned by THOSE doors — an artifact
     // door firing on top of them is the hijack class (census C2: a STOP order's "it is on your
     // canvas" clause spawned an unordered create attempt).
-    if (!followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled
+    // ...and a DISCOVER assignment is owned by directed research (see ONE VOICE PART 2) — the
+    // compose/retrieve doors stand down so they can't preempt the real web-researched dossier.
+    if (!followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled && !_discoverAssignment
       && !/^(0|false|off)$/i.test(String(process.env.ZOE_ARTIFACT_ROUTER || '').trim())) {
       try {
         const ai = require('./lib/artifact_intent');
@@ -10352,7 +10361,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     }
 
-    if (!followupFired && !_artifactJudged && !/^(0|false|off)$/i.test(String(process.env.ZOE_PRODUCT_LEDGER || '').trim())) {
+    if (!followupFired && !_artifactJudged && !_discoverAssignment && !/^(0|false|off)$/i.test(String(process.env.ZOE_PRODUCT_LEDGER || '').trim())) {
       let _pask = null;
       try { _pask = require('./lib/product_ledger').detectAsk(userMessage); } catch {}
       if (_pask && _pask.subject) {
@@ -10370,7 +10379,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     }
 
-    if (!followupFired && !_artifactJudged && !/^(0|false|off)$/i.test(String(process.env.ZOE_REPORT_CMD || '').trim())) {
+    // ...and NOT on a discover assignment — directed research composes the real dossier; the
+    // report-from-HELD net must not preempt it (the LPSC collision, 2026-08-09).
+    if (!followupFired && !_artifactJudged && !_discoverAssignment && !/^(0|false|off)$/i.test(String(process.env.ZOE_REPORT_CMD || '').trim())) {
       let _rcmd = null;
       try { _rcmd = require('./lib/report_command').detect(userMessage); } catch {}
       if (_rcmd && _rcmd.topic) {
