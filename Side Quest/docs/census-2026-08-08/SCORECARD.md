@@ -42,7 +42,7 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 |---|---|---|---|
 | B1 | Canvas CREATE | **WORKS (fixed + live-verified fresh48)** | Was BROKEN for generative create (model narrated → rejected → nothing landed + doubled relay). FIXED (f9e720d): salvageNarration strips the operator's conversational opener + reframe-retry fallback; NARRATION_OPEN catches "I'll"/"Here's" contractions; the outcome-report exclusion kills the doubled reject relay. Live proof: "make a doc listing the parishes" → landed (1120ch, 65 lines), reply = ack + "64 parishes", one followup, no double. Create-from-held still works. |
 | B2 | Canvas EDIT | **UNTESTED** | Do not edit-test against the flagship deliverable. Drive against a scratch doc post-reset. |
-| B3 | Report composed from held material | **UNTESTED (compose exercised)** | The A2 phantom path exercised the composer; the intended report order not driven clean. |
+| B3 | Report composed from held material | **WORKS (live-verified fresh49) — grounded + honest, 2 findings** | Clean drive: composed an 8,884ch grounded/cited report from 8 held doc_store docs + civic store → notes + canvas, 9 open questions queued to metabolism. Real rosters (Acadia/Allen/Ascension/Jeff Davis/LaSalle), doc citations, honest "Data Gaps" section, unverified emails flagged not guessed. FINDING 1: it does NOT reach the richest held artifact — the complete 64-parish notes/ deliverable (report retrieval = doc_store, not notes/ files); composed the thinner civic-store view instead (held-source-homecoming gap). FINDING 2: a stale same-topic directed focus (#3748 from canvas tests) tangled the FIRST drive into a rejected edit + confused 3-part reply; a clean focus fixed it. |
 | B4 | Product pull-up (product_ledger) | **FIXED-PENDING-LIVE** | Census B4: pulled the STALE draft over the finished doc; presented a failure record as the artifact; claimed canvas landing that didn't verify. Fixed (supersession cb180a6, failure-record exclusion + emit-return-checked relay 803eab4). Live check: `pullup-retrieval` say-assertions. |
 | B5 | House-style packaging | **PARTIAL** | fresh45: real branded HTML+PDF landed, honest self-check — BUT packaged the corrupted working tab (stale-sibling, now fixed by supersession) and the working-doc corruption is REPAIRED (parish-working-tab rewrite). Re-drive post-reset to confirm it packages the right source. |
 | B6 | Drop a PDF onto the canvas — ingest | **NEEDS-LIVE-CONTEXT** | Requires a real drop. |
@@ -112,8 +112,10 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 ## Tally (45 capabilities)
 
 **Post-reset live verification (fresh47, pathway_suite --run, 7/9):**
-- **WORKS (now live-verified): 15** — A1, A2, A4, A5, A6, B1, B4, C1, C2(stop), C3, E1, F1, F6, F8, F9
-  (B1 fixed+verified fresh48; C1 verified excellent + discover-precedence fix; C3 cite-or-leave-blank honored fresh49).
+- **WORKS (now live-verified): 17** — A1, A2, A4, A5, A6, B1, B3, B4, C1, C2(stop), C3, E1, F1, F6, F8, F9, H1
+  (fresh48/49 census drives: B1, C1+discover-fix, C3 cite-or-leave-blank, H1 image gen, B3 report-from-held).
+  Open findings (recorded, not blocking): B3 doesn't reach the notes/ deliverable (retrieval=doc_store);
+  a stale same-topic focus can tangle a report request.
   (A2/A4/A5/A6/B4 flipped FIXED-PENDING-LIVE → WORKS by the suite's reply-graded passes:
   contacts-no-session, status-no-phantom, held-list-no-restart, canvas-not-blind, pullup-retrieval).
 - **BROKEN (found live): 1** — B1 generative-create (model narrates → rejected → nothing lands +
