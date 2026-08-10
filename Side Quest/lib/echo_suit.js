@@ -28,6 +28,27 @@ let _lastContactWriteTs = 0;
 const _CONTACT_WRITE_TOOLS = new Set(['create_contact', 'update_contact', 'upsert_account', 'update_account', 'create_account']);
 function lastContactWriteTs() { return _lastContactWriteTs; }
 
+// GATHER STAMP (2026-08-10, Spine 2 step 1 — docs/BIDIRECTIONAL_VERIFICATION_GATE.md). The absence gate
+// (metacognition.groundAbsence) must justify a "couldn't find it / none listed" claim: an honest absence
+// means a search ACTUALLY RAN this turn and came back empty; a confabulated absence means she never looked.
+// Same central-dispatch stamp as the contact-write probe. The set is deliberately GENEROUS: the gate fails
+// OPEN, so a retrieval tool MISSING here would let an honest absence be wrongly scolded — over-inclusion is
+// the safe error (at worst it lets one confabulated absence pass, never a false accusation). Any dispatched
+// tool whose purpose is looking-something-up counts.
+let _lastGatherTs = 0;
+const _GATHER_TOOLS = new Set([
+  // external retrieval
+  'search', 'web_search', 'web_fetch', 'web_extract', 'web_resolve_oa', 'news_search', 'quick_lookup',
+  'academic_search', 'arxiv_search', 'mediawiki_search', 'mediawiki_get_extract', 'gdelt_article_search',
+  'browser_navigate', 'browser_extract', 'browser_snapshot',
+  // internal knowledge / graph / documents
+  'search_knowledge', 'search_facts', 'search_entities', 'search_documents_semantic', 'search_contacts',
+  'kg_query_local', 'kg_query_global', 'kg_neighborhood', 'knowledge_neighborhood', 'find_mentions',
+  'get_sources_for', 'get_entity', 'get_document', 'get_document_by_path', 'get_contact', 'list_contacts',
+  'list_contacts_compact', 'list_contacts_page', 'db_query', 'research_brief',
+]);
+function lastGatherTs() { return _lastGatherTs; }
+
 const cap = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''));
 // A tool call that failed on ARGS (not data) — worth one corrected retry in routeNeed.
 const ARG_ERR_RE = /unexpected keyword|validation error|field required|missing .*argument|not a valid|invalid argument|no such (?:column|table)|required (?:property|argument)/i;
@@ -530,6 +551,12 @@ class EchoSuit {
           if (okWrite && _res.text) { try { const _j = JSON.parse(_res.text); if (_j && (_j.ok === false || _j.error)) okWrite = false; } catch { /* non-JSON success text is fine */ } }
           if (okWrite) _lastContactWriteTs = Date.now();
         }
+      } catch { /* stamping never breaks dispatch */ }
+      // GATHER stamp: any dispatched retrieval tool means she ACTUALLY LOOKED this turn — feeds the absence
+      // gate. Stamped UNCONDITIONALLY (even an errored search is a look, not a confabulated absence): the
+      // gate fails open, so the maximally-generous stamp is the safe one. See _GATHER_TOOLS above.
+      try {
+        if (tag && tag.kind === 'do' && _GATHER_TOOLS.has(tag.name)) _lastGatherTs = Date.now();
       } catch { /* stamping never breaks dispatch */ }
     }
   }
@@ -1664,7 +1691,7 @@ function routeCacheStats() {
 }
 
 module.exports = {
-  routeCacheStats, _raceTimeout, lastContactWriteTs,
+  routeCacheStats, _raceTimeout, lastContactWriteTs, lastGatherTs,
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
   placeholderComplaint, sanitizeFtsQuery, prepareDoArgs, recipeMisrouteHint,
   setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates, _salienceDominant

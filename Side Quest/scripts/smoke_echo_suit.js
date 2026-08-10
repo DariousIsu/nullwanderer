@@ -118,6 +118,23 @@ function mockClient(overrides = {}) {
     ok('guide surfaces the full contract+atlas on demand', guide.ok && /README_MCP|atlas|contract/i.test(guide.text));
   }
 
+  console.log('\ngather stamp (Spine 2 absence-gate probe):');
+  {
+    const suit = S.createSuit({ client: mockClient() });
+    await suit.connect();
+    ok('lastGatherTs is exported and numeric', typeof S.lastGatherTs === 'function' && typeof S.lastGatherTs() === 'number');
+    const before = S.lastGatherTs();
+    await new Promise((r) => setTimeout(r, 2));   // guarantee the clock advances, so afterGather>before proves a FRESH stamp
+    await suit.dispatch({ kind: 'do', name: 'search_knowledge', args: { query: 'water' } });   // a GATHER tool
+    const afterGather = S.lastGatherTs();
+    ok('a dispatched gather tool (search_knowledge) advances lastGatherTs — she LOOKED', afterGather > before);
+    const propped = S.lastGatherTs();
+    await suit.dispatch({ kind: 'propose', proposeKind: 'entity', payload: { name: 'X' } });    // NOT a gather
+    ok('a non-gather dispatch (propose) does NOT advance the gather stamp', S.lastGatherTs() === propped);
+    await suit.dispatch({ kind: 'delegate', agent: 'briefing_writer', task: 'draft' });         // NOT a gather
+    ok('a delegate dispatch does NOT advance the gather stamp', S.lastGatherTs() === propped);
+  }
+
   console.log('\ndispatch error feedback (self-correction):');
   {
     const suit = S.createSuit({ client: mockClient() });
