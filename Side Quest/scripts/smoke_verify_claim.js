@@ -60,6 +60,29 @@ ok(v.judgeFact([], [{ title: 'x', snippet: 'y' }]).verdict === 'uncorroborated',
   const r5 = await v.verifyFact('X was acquired by Y', ['Y'], {});
   ok(r5.verdict === 'skip', 'verifyFact: no search instrument injected → skip');
 
+  // ── ABSENCE ACTIVE-SEARCH (step 6): the §7.1 cure — actually find the email she called blank ──────────────
+  ok(v.buildAbsenceQuery('I couldn\'t find an email for Mayor Arceneaux.').toLowerCase().includes('arceneaux'), 'absence query: subject pulled from the claim (Arceneaux), title dropped');
+  ok(v.buildAbsenceQuery('No email is listed for him.', 'We were discussing Tom Arceneaux, the Shreveport mayor.').toLowerCase().includes('tom arceneaux'), 'absence query: no subject in claim → pulled from context (Tom Arceneaux)');
+  ok(/email/i.test(v.buildAbsenceQuery('I couldn\'t find an email for Mayor Arceneaux.')), 'absence query: includes the email record-noun');
+  ok(v.extractEmails([{ title: 'Contact', snippet: 'Reach the mayor at mayor@shreveportla.gov today.' }])[0] === 'mayor@shreveportla.gov', 'extractEmails: pulls a real address from a snippet');
+  ok(v.extractEmails([{ snippet: 'e.g. name@example.com or noreply@wixpress.com' }]).length === 0, 'extractEmails: discards placeholders (example/noreply/wixpress)');
+  {
+    const foundSearch = async () => ({ results: [{ title: 'Shreveport Mayor', snippet: 'Office of the Mayor — mayor@shreveportla.gov' }] });
+    const emptySearch = async () => ({ results: [{ title: 'Shreveport', snippet: 'City news and events.' }] });
+    const rf = await v.verifyAbsence("I couldn't find an email for Mayor Arceneaux.", { search: foundSearch });
+    ok(rf.verdict === 'found' && rf.value === 'mayor@shreveportla.gov', 'verifyAbsence: FOUND surfaces the email she wrongly called blank (§7.1 cure)');
+    const rn = await v.verifyAbsence("I couldn't find an email for Mayor Arceneaux.", { search: emptySearch });
+    ok(rn.verdict === 'not-found', 'verifyAbsence: NOT-FOUND when the search surfaces no address (honest blank)');
+    const rs = await v.verifyAbsence('I couldn\'t find his phone number.', { search: foundSearch });
+    ok(rs.verdict === 'skip' && rs.reason === 'not-email', 'verifyAbsence: a non-email absence → skip (confession stands)');
+    const rt = await v.verifyAbsence("I couldn't find an email for Mayor Arceneaux.", { search: () => new Promise((res) => setTimeout(() => res({ results: [] }), 200)), timeoutMs: 20 });
+    ok(rt.verdict === 'skip' && rt.reason === 'timeout', 'verifyAbsence: slow search abandoned at timeout → skip (fail-soft)');
+    const re = await v.verifyAbsence("I couldn't find an email for Mayor Arceneaux.", { search: () => { throw new Error('dead'); } });
+    ok(re.verdict === 'skip', 'verifyAbsence: search throws → skip (no follow-up on a hiccup)');
+  }
+  ok(/mayor@shreveportla\.gov/.test(v.absenceFollowupText('found', 'mayor@shreveportla.gov', { userName: 'Lucas' })), 'absenceFollowupText: FOUND surfaces the address');
+  ok(/honest|couldn'?t/i.test(v.absenceFollowupText('not-found', null, { userName: 'Lucas' })), 'absenceFollowupText: NOT-FOUND confirms the blank is honest');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

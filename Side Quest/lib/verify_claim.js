@@ -77,4 +77,74 @@ async function verifyFact(claim, novelTerms, { search, timeoutMs = 12000 } = {})
   }
 }
 
-module.exports = { buildFactQuery, judgeFact, followupText, verifyFact };
+// ── ABSENCE ACTIVE-SEARCH (Spine 2 step 6, docs/BIDIRECTIONAL_VERIFICATION_GATE.md §4b) ─────────────────────
+// The absence gate (groundAbsence) CONFESSES "I didn't actually search — let me look." This does the looking:
+// when she declares an EMAIL absent without an external search, fire one bounded search for the subject's
+// email and either SURFACE what she wrongly called blank (the §7.1 cure) or CONFIRM the blank honestly.
+// Scoped to EMAIL — the highest-value, cleanly-extractable case (a phone/address value is fuzzier and stays
+// confession-only). Pure judgment + injected search, exactly like verifyFact.
+const _ABS_IS_EMAIL_RE = /\be-?mail\b/i;
+const _EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const _ABS_PROPER_RE = /\b([A-Z][a-zA-Z0-9&.\-]+(?:\s+[A-Z][a-zA-Z0-9&.\-]+)*)\b/g;
+const _ABS_PROPER_STOP = new Set(['I', 'The', 'A', 'An', 'No', 'None', 'His', 'Her', 'Their', 'Mayor', 'Governor', 'Senator', 'Representative', 'Councilman', 'Councilwoman', 'Dr', 'Mr', 'Ms', 'Mrs']);
+
+// the subject to look up: the longest proper-noun phrase in the claim, else the most-recent one in context.
+function _absSubject(claim, context = '') {
+  const grab = (s) => {
+    const out = []; let m; _ABS_PROPER_RE.lastIndex = 0;
+    while ((m = _ABS_PROPER_RE.exec(String(s || ''))) !== null) {
+      const words = String(m[1]).split(/\s+/).filter((w) => !_ABS_PROPER_STOP.has(w));
+      const core = words.join(' ').trim();
+      if (core.length >= 3) out.push(core);
+    }
+    return out;
+  };
+  const inClaim = grab(claim);
+  if (inClaim.length) return inClaim.sort((a, b) => b.length - a.length)[0];   // richest name in the claim
+  const inCtx = grab(context);
+  return inCtx.length ? inCtx.sort((a, b) => b.length - a.length)[0] : '';   // richest name on the table (a person beats a bare city)
+}
+
+function buildAbsenceQuery(claim, context = '') {
+  const subj = _absSubject(claim, context);
+  if (!subj) return '';
+  return `${subj} email address`.slice(0, 200);
+}
+
+// PURE. Pull plausible email addresses out of the SERP results (placeholders discarded, deduped).
+function extractEmails(results = []) {
+  const hay = (Array.isArray(results) ? results : []).map((r) => `${(r && r.title) || ''} ${(r && r.snippet) || ''}`).join(' \n ');
+  const found = Array.from(new Set((hay.match(_EMAIL_RE) || []).map((e) => e.trim())));
+  return found.filter((e) => !/(example|noreply|no-reply|sentry|wixpress|domain\.com|email\.com|yourdomain)/i.test(e));
+}
+
+// The follow-up after an active absence search. FOUND → surface it + own the premature blank; NOT-FOUND →
+// confirm the blank is honest (fulfils the gate's "let me look" promise either way).
+function absenceFollowupText(verdict, value, { userName = 'you' } = {}) {
+  if (verdict === 'found' && value) {
+    return `Following up, ${userName} — I said I couldn't find that, but I went and searched, and there is one: ${value}. I flagged it blank too quickly; worth confirming it's current before you rely on it.`;
+  }
+  return `Following up, ${userName} — I went back and actually searched for it, and I still couldn't turn up an address. The blank is honest, not a shortcut this time.`;
+}
+
+// Async orchestrator, parallel to verifyFact. Only handles EMAIL absences; anything else → skip (the gate's
+// confession stands). Fully fail-soft. Returns {verdict:'found'|'not-found'|'skip', value?, query?}.
+async function verifyAbsence(claim, { context = '', search, timeoutMs = 12000 } = {}) {
+  try {
+    if (typeof search !== 'function') return { verdict: 'skip', reason: 'no-search' };
+    if (!_ABS_IS_EMAIL_RE.test(String(claim || ''))) return { verdict: 'skip', reason: 'not-email' };
+    const query = buildAbsenceQuery(claim, context);
+    if (!query || query.length < 8) return { verdict: 'skip', reason: 'no-subject' };
+    let timer;
+    const timeout = new Promise((res) => { timer = setTimeout(() => res({ __timeout: true }), timeoutMs); });
+    const r = await Promise.race([Promise.resolve().then(() => search(query)), timeout]);
+    clearTimeout(timer);
+    if (!r || r.__timeout) return { verdict: 'skip', reason: 'timeout', query };
+    const emails = extractEmails((r && r.results) || []);
+    return emails.length ? { verdict: 'found', value: emails[0], query } : { verdict: 'not-found', query };
+  } catch (e) {
+    return { verdict: 'skip', reason: 'error' };
+  }
+}
+
+module.exports = { buildFactQuery, judgeFact, followupText, verifyFact, buildAbsenceQuery, extractEmails, absenceFollowupText, verifyAbsence, _absSubject };

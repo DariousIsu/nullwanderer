@@ -9751,6 +9751,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // SPINE 2 step 5: if the reply asserted a PURE-RECALL current-event fact (no gather this turn), verify it
   // against ONE bounded search and post a follow-up beat. Fire-and-forget — never blocks or delays the reply.
   try { _verifyFactFollowup(finalSaid, { sessionId, turnStartTs: (userTurnRow && userTurnRow.ts) || 0, evidence: _replyEvidence, userName }).catch(() => {}); } catch {}
+  // SPINE 2 step 6: if she declared an EMAIL blank without searching, actually go look for it and either
+  // surface it (the §7.1 cure) or confirm the blank. Fire-and-forget.
+  try { _verifyAbsenceFollowup(finalSaid, { sessionId, turnStartTs: (userTurnRow && userTurnRow.ts) || 0, evidence: _replyEvidence, userName }).catch(() => {}); } catch {}
 
   try {
     // Include the corrected say ONLY when we rewrote it, so the renderer replaces the
@@ -14786,6 +14789,34 @@ async function _verifyFactFollowup(say, { sessionId, turnStartTs = 0, evidence =
     try { require('./lib/blackboard').append({ source: 'verify', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
     console.log(`[verify] bounded verify (${res.verdict}, ${res.matched || 0}/${res.total || 0}) → follow-up posted: ${String(top.novelTerms || []).slice(0, 80)}`);
   } catch (e) { console.error('[verify] follow-up failed:', e.message); }
+}
+
+// SPINE 2 step 6 — ABSENCE ACTIVE-SEARCH (docs/BIDIRECTIONAL_VERIFICATION_GATE.md §4b). The absence gate
+// (stage 3) confesses "I didn't actually search — let me look"; this DOES the looking. When she declared an
+// EMAIL absent without an external search this turn, fire ONE bounded search for the subject's email and post
+// a follow-up: FOUND → surface what she wrongly called blank (the §7.1 cure); NOT-FOUND → confirm the blank is
+// honest. Fire-and-forget + fail-soft (skip → nothing posted). Same external-gather gate as step 5.
+async function _verifyAbsenceFollowup(say, { sessionId, turnStartTs = 0, evidence = '', userName = 'you' } = {}) {
+  try {
+    if (!say || say === '…' || !sessionId) return;
+    const _mc = require('./lib/metacognition');
+    // only when she did NOT externally search this turn (else the absence is already honest — she looked).
+    const gathered = (() => { try { return require('./lib/echo_suit').lastExternalGatherTs() >= (turnStartTs || 0); } catch { return true; } })();
+    if (gathered) return;
+    const abs = _mc.groundAbsence(say, { gatherRanThisTurn: () => false });   // find the absence claim itself (probe forced: we already know no external gather)
+    if (abs.ok || !abs.violations.length) return;
+    const top = abs.violations[0];
+    const vc = require('./lib/verify_claim');
+    const search = (q) => require('./lib/search_lane').search(q);
+    const res = await vc.verifyAbsence(top.claim, { context: evidence, search, timeoutMs: 12000 });
+    if (res.verdict !== 'found' && res.verdict !== 'not-found') { console.log(`[verify] absence search skipped (${res.reason || ''})`); return; }   // not-email/no-subject/timeout/error → say nothing
+    const msg = vc.absenceFollowupText(res.verdict, res.value, { userName });
+    const row = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'verify', unprompted: 1 });
+    try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+    try { require('./lib/blackboard').append({ source: 'verify', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
+    console.log(`[verify] absence active-search (${res.verdict}${res.value ? ': ' + res.value : ''}) → follow-up posted`);
+  } catch (e) { console.error('[verify] absence follow-up failed:', e.message); }
 }
 
 // surfaces the key finding + one concrete follow-up, so she doesn't just report "done" but actually opens

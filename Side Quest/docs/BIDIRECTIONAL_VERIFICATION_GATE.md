@@ -143,6 +143,20 @@ Each step is its own commit, its own smoke, gate stays green (`npm test`).
 Steps 1–4 are the honest-hedge backbone (cheap, synchronous, ships the whole disease-surface). Step 5
 is the active-verification upgrade and can trail.
 
+6. **Absence active-search** (BUILT 2026-08-10) — the 4b upgrade from confess to CHECK. When she declares
+   an EMAIL absent without an external search this turn, `verify_claim.verifyAbsence` fires one bounded
+   search for the subject's email and posts a follow-up: FOUND → surface what she wrongly called blank
+   (the §7.1 cure); NOT-FOUND → confirm the blank is honest. Scoped to EMAIL (the cleanly-extractable,
+   highest-value case; phone/address stay confession-only). `main.js _verifyAbsenceFollowup`,
+   fire-and-forget, same external-gather gate as step 5, fully fail-soft.
+
+**Live-verification note (2026-08-10).** The 4 synchronous gates are proven live via the test-port
+`/antifab` route (all 7 cases). The async verify beats (steps 5, 6) are logic-proven by smoke and their
+wiring executes live, but a live POSTED beat is rare in practice: for well-known facts the reply operator
+auto-enriches (a real external gather), grounds the claim, and the beat correctly skips — the system being
+healthy. The live drives also hardened the gather signal into TWO tiers (external vs any) and TURN-SCOPED
+it (`!lane.isAutonomous()`), so background metabolism no longer masks "did SHE look this turn."
+
 ## 6. What this is NOT
 
 - Not a fact-checker for every sentence — only load-bearing, falsifiable, checkable assertions.
