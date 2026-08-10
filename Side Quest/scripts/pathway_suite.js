@@ -34,6 +34,7 @@ const CASES = [
   {
     name: 'contacts-precedence',
     born: '08-08 "Now identify every person…" → 849-row CRM dump (the massive failure). 08-08 late: also proves ONE VOICE — the ack directive must reach the reply writer pre-reply (M5.6 was dead code; a cloud-muted early judgment fails this assertion, which is itself a real defect to see)',
+    setup: 'Make a fresh scratch document listing the Louisiana parishes so we can work on it',   // establishes the working-doc session the precedence test needs
     text: 'Add the contact people we hold for each parish council into the doc under their parish',
     every: [/contacts route YIELDED|\[artifact-router\] intent=canvas_edit/, /\[canvas-cmd\] edit (applied|NOT applied|output REJECTED)/, /\[one-voice\] ack directive reached/],
     never: [/\[contacts-query\] .*on canvas/, /\[one-voice\] verdict arrived post-reply/],
@@ -42,6 +43,7 @@ const CASES = [
   {
     name: 'vague-edit-honesty',
     born: '08-08 "Prioritize editing…" — must refuse honestly or apply, never narrate success',
+    setup: 'Make a fresh scratch document listing the Louisiana parishes so we can work on it',   // an edit needs a working doc to edit
     text: 'Prioritize editing the Parish clean up document',
     every: [/\[canvas-cmd\] edit (applied|NOT applied|output REJECTED)/],
     never: [],
@@ -134,6 +136,16 @@ async function waitIdle() {
   }
   let pass = 0, fail = 0;
   for (const c of cases) {
+    // SESSION SEED (2026-08-09): cases that test artifact-SESSION precedence need a FRESH working
+    // doc first — the cold-boot suite has none, so on a first-position run the edit path never
+    // engages (the M7.2 _fresh gate falls through). `setup` fires a real establishing turn, then
+    // the graded turn runs against the live session. Skipped for cases with no setup.
+    if (c.setup) {
+      await waitIdle();
+      process.stdout.write(`[${c.name}] seeding session… `);
+      try { const sr = await post({ text: c.setup, settleMs: 12000, maxMs: 300000 }); console.log(sr.code === 200 ? 'ok' : `HTTP ${sr.code}`); }
+      catch (e) { console.log(`seed ERROR ${e.message}`); }
+    }
     await waitIdle();
     process.stdout.write(`[${c.name}] running… `);
     let r;

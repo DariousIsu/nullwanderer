@@ -40,7 +40,7 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 
 | # | Capability | Verdict | Evidence / remaining live check |
 |---|---|---|---|
-| B1 | Canvas CREATE | **PARTIAL / FIXED-PENDING-LIVE** | Reject path CONFIRMED live (census C2: narration-create correctly refused). Full create path untested; the one-voice ack now reaches the reply pre-write (4f63b9c). Post-reset full drive. |
+| B1 | Canvas CREATE | **SPLIT: create-from-HELD works / generative-create BROKEN** | Create-from-held-material works (the parish deliverable landed). GENERATIVE create (model must author the body) BROKEN live (fresh47): "make a doc listing the parishes" → model narrates → rejectEditOutput refuses → nothing lands + the reject relay renders TWICE. Reject contract sound (no garbage); capability doesn't deliver. Own batch: harden create authoring prompt + reframe-retry + fix the doubled relay. |
 | B2 | Canvas EDIT | **UNTESTED** | Do not edit-test against the flagship deliverable. Drive against a scratch doc post-reset. |
 | B3 | Report composed from held material | **UNTESTED (compose exercised)** | The A2 phantom path exercised the composer; the intended report order not driven clean. |
 | B4 | Product pull-up (product_ledger) | **FIXED-PENDING-LIVE** | Census B4: pulled the STALE draft over the finished doc; presented a failure record as the artifact; claimed canvas landing that didn't verify. Fixed (supersession cb180a6, failure-record exclusion + emit-return-checked relay 803eab4). Live check: `pullup-retrieval` say-assertions. |
@@ -111,12 +111,16 @@ post-reset run is the gate on flipping FIXED-PENDING-LIVE → WORKS for the conv
 
 ## Tally (45 capabilities)
 
-- **WORKS (live/observed): 7** — A1, C2(stop), E1, F1, F6, F8, F9
-- **FIXED-PENDING-LIVE: 7** — A2, A4, A5, A6, B4, F1(tier), + B5 partial
-- **PARTIAL: 4** — B1, B3, B5, F2
+**Post-reset live verification (fresh47, pathway_suite --run, 7/9):**
+- **WORKS (now live-verified): 12** — A1, A2, A4, A5, A6, B4, C2(stop), E1, F1, F6, F8, F9
+  (A2/A4/A5/A6/B4 flipped FIXED-PENDING-LIVE → WORKS by the suite's reply-graded passes:
+  contacts-no-session, status-no-phantom, held-list-no-restart, canvas-not-blind, pullup-retrieval).
+- **BROKEN (found live): 1** — B1 generative-create (model narrates → rejected → nothing lands +
+  doubled relay). Own batch.
+- **PARTIAL: 2** — B3, F2 (B5 packaging now works modulo the repaired working doc).
 - **UNREACHABLE (chat door): 2** — E2, H4
 - **NEEDS-LIVE-CONTEXT: 7** — A7, A9, B6, G1, G2, G4, G5
-- **UNTESTED (needs a live drive): ~18** — A3, A8, B2, C1, C3, C4, C5, C6, D1, D2, F3, F4, F5, F7, G3, G6, H1, H2/H3/H5(UI)
+- **UNTESTED (needs a live drive): ~16** — A3, A8, B2, C1, C3, C4, C5, C6, D1, D2, F3, F4, F5, F7, G3, G6, H1, H2/H3/H5(UI)
 
 ## What "first real beta" requires from here (the completion build)
 

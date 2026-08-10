@@ -251,6 +251,62 @@ reset. Commit 115471a, gate 379/379 (smoke_engine newly registered — it was on
   could reach it ONLY if the operator model chooses the tool from the Echo catalog. No
   deterministic door; never observed live. Grade stays open until a post-reset drive.
 
+## POST-RESET LIVE VERIFICATION (fresh47, 2026-08-09 — the pathway suite --run)
+
+The Ollama pool reset; one boot ran `scripts/pathway_suite.js --run` (9 cases, now reply-graded).
+Boot clean: `[canvas] replayed 60 document(s)` + `board replay landed via boot (engine pid 23140)`
+— the batch-3 replay-confirmation path fires.
+
+**Result: 7 passed, 2 failed (both harness-precondition, confirmed NOT regressions).**
+
+PASS (each proves a census fix on the surface Lucas grades — the reply text + canvasWrites):
+- **contacts-no-session** (34s) — the phone-count graded fail: reply leads with the phone metric.
+- **status-no-phantom** (27s) — "status report" lands NO canvas tab (one-voice status gate).
+- **held-list-no-restart** (74s) — the FLAGSHIP census ③: no research restart, no facet mutation.
+- **canvas-not-blind** (30s) — names the board's tabs instead of "couldn't pin down documents".
+- **pullup-retrieval** (98s) — ledger pull-up, no research-pivot language in the reply.
+- **draw-yield-in-session** (61s), **plain-chat-control** (28s) — no regression.
+
+FAIL (harness ordering, not code):
+- **contacts-precedence**, **vague-edit-honesty** — both miss only the `[canvas-cmd] edit …` line.
+  Root cause: these test artifact-SESSION precedence, which needs a FRESH working-doc session; the
+  cold-boot suite has none when they run first (position 1-2). Confirmed by manual drive AFTER a
+  focus existed: `[canvas-cmd] edit applied — updated in place (3523ch, 33 lines)` fires correctly,
+  and the reply's `[one-voice] ack`/relay is present. The flagship deliverable
+  (promise-louisiana-parishes-leadership) verified INTACT afterward: 64 headers, 69,843ch, no
+  narration — the edit hit a scratch tab, not the deliverable. HARNESS FIX: seed a working-doc
+  session before session-dependent cases (below).
+
+Batch-5 one-voice validated: the two canvas cases' ONLY missing assertion is the canvas-cmd edit
+line — `[one-voice] ack directive reached` was NOT missing, so the ack reached the reply writer
+(the M5.6 dead-code fix works live).
+
+### NEW DEFECT CLASS found while seeding the canvas cases (B1 generative CREATE) — BROKEN
+
+Driving the session-seed turn ("Make a fresh scratch document listing the Louisiana parishes")
+surfaced two real defects on the surface Lucas grades:
+1. **Canvas CREATE from a GENERATIVE order fails the narration check.** The order asks the model to
+   PRODUCE content (the parish list) INTO a new doc; buildCanvasFromOrder's model output "opens as
+   narration, not a document" → `rejectEditOutput` correctly refuses it → NOTHING lands. The reject
+   contract works (no garbage), but the capability doesn't deliver: `[canvas-cmd] create output
+   REJECTED — nothing landed`, canvasWrites empty. This is census **B1 flipped from PARTIAL to
+   BROKEN for the generative-create path** (create-from-HELD-material, e.g. the parish deliverable,
+   works — this is create-where-the-model-must-author-the-body). Root: the create prompt lets the
+   model narrate its intent instead of emitting a document body; the contract catches it but there's
+   no retry/reframe. Fix (own batch): harden the create authoring prompt (produce a document body,
+   never narration) + a reframe-and-retry on the first narration reject.
+2. **The rejection relay renders TWICE** — "The canvas create failed its output check — nothing
+   landed. You can re-order it" appears twice in one reply (the one `[canvas-cmd] create output
+   REJECTED` fires a single fireToolFollowup, so the doubling is in emit/say accumulation, not a
+   double door-fire). A two-voice defect on the failure path. Fix (own batch): trace the emit path
+   for buildCanvasFromOrder's reject relay vs the main-thread reply (the door runs async via
+   `.catch()` at the artifact router; both stream to the same say).
+
+HARNESS: the `setup` seed field was added to the two session-dependent cases, but the seed itself
+is blocked by defect #1 (the create it fires fails to land, so no working-doc session is
+established). The seed mechanism is correct; it will work once B1 generative-create is fixed. Until
+then the two canvas cases remain honest FAILs, not false green.
+
 ## Open scenario queue (Phase 2 remainder)
 
 - Conversation-tier (runnable now, 120s port cooldown between turns): A8 correction (design the
