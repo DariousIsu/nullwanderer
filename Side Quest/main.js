@@ -14770,14 +14770,15 @@ async function _verifyFactFollowup(say, { sessionId, turnStartTs = 0, evidence =
     // EXTERNAL gather only: internal auto-recall fires every turn, so the broad stamp would make this ~never
     // run. Pure recall = no EXTERNAL search this turn → the claim was never checked out there → verify it.
     const gathered = (() => { try { return require('./lib/echo_suit').lastExternalGatherTs() >= (turnStartTs || 0); } catch { return true; } })();
-    if (gathered) return;
+    if (gathered) { console.log('[verify] skip: an external gather ran this turn (not pure recall)'); return; }
     const gf = _mc.groundFacts(say, { evidence });
-    if (gf.ok || !gf.violations.length) return;
+    if (gf.ok || !gf.violations.length) { console.log('[verify] skip: no ungrounded current-event fact in the reply (grounded or no predicate)'); return; }
     const top = gf.violations[0];
+    console.log(`[verify] pure-recall confab candidate → verifying: ${String(top.novelTerms || []).join('/').slice(0, 80)}`);
     const vc = require('./lib/verify_claim');
     const search = (q) => require('./lib/search_lane').search(q);
     const res = await vc.verifyFact(top.claim, top.novelTerms || [], { search, timeoutMs: 12000 });
-    if (res.verdict !== 'corroborated' && res.verdict !== 'uncorroborated') return;   // skip/timeout/error → say nothing
+    if (res.verdict !== 'corroborated' && res.verdict !== 'uncorroborated') { console.log(`[verify] search inconclusive (${res.verdict}/${res.reason || ''}) → no follow-up`); return; }   // skip/timeout/error → say nothing
     const msg = vc.followupText(top.claim, res.verdict, { userName });
     const row = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'verify', unprompted: 1 });
     try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
