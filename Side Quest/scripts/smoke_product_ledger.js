@@ -54,6 +54,12 @@ ok('recency outranks the stale near-match', !hits.length || hits.findIndex((h) =
 const hHits = pl.searchProducts({ db, query: 'report hartfield foundation', notesDir, limit: 3, now });
 ok('notes files are found', hHits.some((h) => h.kind === 'note' && /hartfield/.test(h.path)));
 
+// FILENAME SIGNAL (08-09, B3 census): a deliverable is found by its NAME even with a THIN body —
+// the fix for slice(-400) silently dropping the 64-parish deliverable at file #1169 of 1,963.
+fs.writeFileSync(path.join(notesDir, 'acadia-parish-roster.md'), 'x');   // name carries the topic, body is nothing
+const fnHits = pl.searchProducts({ db, query: 'acadia parish roster', notesDir, limit: 3, now });
+ok('a note matched by FILENAME alone is found (thin body)', fnHits.some((h) => h.kind === 'note' && /acadia-parish-roster/.test(h.path)));
+
 const miss = pl.searchProducts({ db, query: 'quarterly kraken sightings ledger', notesDir, limit: 3, now });
 ok('an unmade product honestly misses', miss.length === 0);
 

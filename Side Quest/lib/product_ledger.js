@@ -154,7 +154,15 @@ function searchProducts({ db, query, notesDir = null, limit = 3, now = Date.now(
   try {
     if (notesDir) {
       const fs = require('fs'); const path = require('path');
-      const files = fs.readdirSync(notesDir).filter((f) => /\.md$/i.test(f)).slice(-400);
+      // FILENAME pre-filter across ALL files (2026-08-09, B3 census): the old `slice(-400)` scanned
+      // only the last 400 names alphabetically and SILENTLY DROPPED the 64-parish deliverable at
+      // file #1169 of 1,963 — the artificial-cap-truncate disease, and reading 2,000 bodies per
+      // query does not scale. A note's NAME carries its topic, so a filename token-match is the cheap
+      // strong signal; only those candidates get a stat + body read. Capped so a very common token
+      // can't blow up the read set. Filename-only-generic deliverables (name doesn't carry the topic)
+      // are the rare miss this trades for scale — recorded, not chased here.
+      let files = [];
+      try { files = fs.readdirSync(notesDir).filter((f) => /\.md$/i.test(f) && toks.some((w) => f.toLowerCase().includes(w))).slice(0, 200); } catch { files = []; }
       for (const f of files) {
         const p = path.join(notesDir, f);
         let st = null; try { st = fs.statSync(p); } catch { continue; }
