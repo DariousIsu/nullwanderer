@@ -9072,10 +9072,27 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         try {
           const _namesSomething = /(?:^|\s)[A-Z][A-Za-z'&.-]+(?:\s+[A-Z][A-Za-z'&.-]+)*/.test(userMessage);
           const _isMeetingTurn = require('./lib/references').MEETING_RE.test(userMessage);
-          if (_namesSomething || _isMeetingTurn) {
+          // DISCOURSE-AWARE GATE (carried salience, docs/CARRIED_SALIENCE_MANIFEST.md): also fire when a
+          // salience frame is active, so a turn that points at the current topic PURELY BY PRONOUN ("have
+          // we found his contact info?") still enters the coordinate system — where referent.js's regex
+          // nets were the only catch, and only for the phrasings someone wrote a net for.
+          const _sal = require('./lib/salience');
+          const _frameActive = (() => { try { return _sal.peek(sessionId).length > 0; } catch { return false; } })();
+          if (_namesSomething || _isMeetingTurn || _frameActive) {
             const _mani = require('./lib/manifest');
             const _ctx = (recentTurns || []).slice(-4).map((t) => `${t.speaker || '?'}: ${String(t.content || '').replace(/\s+/g, ' ').slice(0, 160)}`).join('\n');
-            const _man = await _mani.buildManifest(userMessage, { userName, context: _ctx });
+            // FOLD WHAT SHE JUST NAMED: most person antecedents ("the mayor is Tom Arceneaux") are
+            // introduced by HER reply, not his message — so a pronoun next turn has nothing to bind unless
+            // her reply's entities are on the table. Fold the last assistant reply (once, guarded) before
+            // resolving this turn. One cheap decompose on the fast model, only while a conversation is live.
+            try {
+              const _lastAi = [...(recentTurns || [])].reverse().find((t) => /ai/.test(String(t.speaker || '')) && t.content && String(t.content).length > 8);
+              const _aiKey = _lastAi ? String(_lastAi.id || _lastAi.ts || String(_lastAi.content).slice(0, 48)) : null;
+              if (_lastAi && _sal.shouldFoldReply(sessionId, _aiKey)) {
+                await _mani.buildManifest(String(_lastAi.content).slice(0, 600), { userName, sessionId });
+              }
+            } catch (e) { console.error('[salience] reply-fold failed:', e.message); }
+            const _man = await _mani.buildManifest(userMessage, { userName, context: _ctx, sessionId });
             references = _mani.render(_man);
             const _held = (_man.objects || []).filter((o) => o.status === 'held' || o.status === 'self').length;
             if (references) console.log(`[manifest] ${(_man.objects || []).length} coord(s), ${_held} held, ${(_man.gaps || []).length} gap(s)`);

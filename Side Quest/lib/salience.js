@@ -19,7 +19,10 @@
 'use strict';
 
 const _store = new Map();                                   // sessionId -> { entries:[...], lastTouch }
-const ANTECEDENT_STATUS = new Set(['held', 'owner']);       // only real, resolved things are antecedents
+// Resolved, owner-world, OR named-but-thin: a minted coordinate still carries a real surface ("Tom
+// Arceneaux") to bind — a person named in her reply but not yet in the graph is still a valid antecedent.
+// Never self (Zoe is not a "his"/"that") and never ambiguous (no clean referent).
+const ANTECEDENT_STATUS = new Set(['held', 'owner', 'minted-new']);
 const CAP = 8;                                              // most-recent N coordinates on the table
 const MAX_IDLE_MS = 30 * 60 * 1000;                         // a long gap means the discourse moved on — expire
 
@@ -40,7 +43,10 @@ function fold(sessionId, objects, { turn = null, now = Date.now(), cap = CAP, st
   if (f.lastTouch && (now - f.lastTouch) > MAX_IDLE_MS) f.entries = [];
   f.lastTouch = now;
   for (const o of (Array.isArray(objects) ? objects : [])) {
-    if (!o || !o.coord || !ANTECEDENT_STATUS.has(String(o.status || ''))) continue;
+    // a REFERENCE's own (mis)resolution is never an antecedent — else a ref-miss "his" (minted
+    // person:short/his) would pollute the frame and a later "his" would bind the pronoun, not a person.
+    if (!o || !o.coord || o.ref === true) continue;
+    if (!ANTECEDENT_STATUS.has(String(o.status || ''))) continue;
     const at = f.entries.findIndex((e) => e.coord === o.coord);
     const prevHits = at >= 0 ? f.entries[at].hits : 0;
     if (at >= 0) f.entries.splice(at, 1);                   // move-to-front on repeat
@@ -93,4 +99,15 @@ function peek(sessionId, { store = _store } = {}) {
 // Drop a session's frame (topic reset / session end).
 function clear(sessionId, { store = _store } = {}) { store.delete(sessionId); }
 
-module.exports = { fold, dereference, topOfType, peek, clear, _store, CAP, MAX_IDLE_MS, ANTECEDENT_STATUS };
+// Guard so the last assistant reply is folded into the frame at most ONCE (main.js folds what SHE just
+// named so a pronoun next turn can bind it — but only the first time it sees that reply). Returns true the
+// first time this key is seen for the session, false after.
+function shouldFoldReply(sessionId, key, { store = _store } = {}) {
+  if (!key) return false;
+  const f = _frame(store, sessionId);
+  if (f.lastReplyKey === key) return false;
+  f.lastReplyKey = key;
+  return true;
+}
+
+module.exports = { fold, dereference, topOfType, peek, clear, shouldFoldReply, _store, CAP, MAX_IDLE_MS, ANTECEDENT_STATUS };

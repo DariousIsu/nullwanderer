@@ -20,15 +20,24 @@ const S = () => new Map();
   ok(hit && /Arceneaux/.test(hit.surface), 'the deref carries the real surface, not a placeholder');
 }
 
-// ── gaps and ambiguous mentions are NOT antecedents (a pronoun must never bind an unresolved mint) ──
+// ── a reference's own mint + ambiguous + self are NOT antecedents ───────────────────────────────────
 {
   const store = S();
   sal.fold('sess', [
-    { coord: 'person:short/the-person', type: 'person', status: 'minted-new', surface: 'his' },
-    { coord: 'person:graph/amb', type: 'person', status: 'ambiguous', surface: 'John' },
+    { coord: 'person:short/his', type: 'person', status: 'minted-new', surface: 'his', ref: true },   // a reference's OWN miss
+    { coord: 'person:graph/amb', type: 'person', status: 'ambiguous', surface: 'John' },               // no clean referent
+    { coord: 'self:zoe/core', type: 'self', status: 'self', surface: 'you' },                          // Zoe is not a "his"/"that"
   ], { turn: 1, store });
-  ok(sal.dereference('sess', { type: 'person', store }) === null, 'minted-new gap + ambiguous do NOT enter the frame → no false antecedent');
-  ok(sal.peek('sess', { store }).length === 0, 'frame stays empty when nothing resolved');
+  ok(sal.dereference('sess', { type: 'person', store }) === null, 'a reference-miss + ambiguous + self do NOT enter the frame → no false antecedent');
+  ok(sal.peek('sess', { store }).length === 0, 'frame stays empty when nothing bindable resolved');
+}
+
+// ── a NAMED-but-thin minted entity (named in her reply, not yet in the graph) IS a valid antecedent ──
+{
+  const store = S();
+  sal.fold('sess', [{ coord: 'person:short/tom-arceneaux', type: 'person', status: 'minted-new', surface: 'Tom Arceneaux' }], { turn: 1, store });
+  const hit = sal.dereference('sess', { type: 'person', store });
+  ok(hit && hit.coord === 'person:short/tom-arceneaux', 'a NAMED minted person (thin coord, real surface) binds "his" — the web-answer case');
 }
 
 // ── supersession: a newer person of the same type wins ──────────────────────────────────────────────
@@ -96,6 +105,15 @@ const S = () => new Map();
   const store = S();
   sal.fold('a', [{ coord: 'person:civic/1', type: 'person', status: 'held', surface: 'A' }], { turn: 1, store });
   ok(sal.dereference('b', { type: 'person', store }) === null, 'session B cannot dereference session A\'s antecedents');
+}
+
+// ── shouldFoldReply: the last assistant reply folds at most once ────────────────────────────────────
+{
+  const store = S();
+  ok(sal.shouldFoldReply('sess', 'reply#1', { store }) === true, 'a new reply key folds once (true)');
+  ok(sal.shouldFoldReply('sess', 'reply#1', { store }) === false, 'the same reply key does not re-fold (false)');
+  ok(sal.shouldFoldReply('sess', 'reply#2', { store }) === true, 'the next reply key folds again (true)');
+  ok(sal.shouldFoldReply('sess', '', { store }) === false, 'an empty key never folds');
 }
 
 console.log(`smoke_salience: ${pass} passed, ${fail} failed`);

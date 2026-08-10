@@ -135,6 +135,8 @@ function assembleManifest(plan, resolutions, { userName = 'Lucas', selfFlags = [
       type,
       status: cls.status,
       salient: !!o.salient,
+      ref: !!o.ref,                          // a reference (pronoun/anaphor) — never folded back as an antecedent
+
       gloss: (resolved && (resolved.summary || resolved.gloss)) ? String(resolved.summary || resolved.gloss).slice(0, 140) : null,
       candidates: (cls.status === STATUS.AMBIGUOUS && Array.isArray(res.candidates)) ? res.candidates.slice(0, 4) : undefined,
     };
