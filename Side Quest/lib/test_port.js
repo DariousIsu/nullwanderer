@@ -155,8 +155,11 @@ function start({ runChatTurn, antifabCorrect = null, port = parseInt(process.env
             if (gf.ok || !gf.violations.length) return send(200, { ok: true, violation: false, note: 'no ungrounded current-event fact' });
             const top = gf.violations[0];
             const vc = require('./verify_claim');
+            // also run the raw SERP directly so we can see whether the instrument returns anything
+            let serpCount = null, serpSample = null;
+            try { const q = vc.buildFactQuery(top.claim, top.novelTerms || []); const raw = await require('./search_lane').search(q); serpCount = ((raw && raw.results) || []).length; serpSample = (raw && raw.results && raw.results[0]) ? `${raw.results[0].title} :: ${raw.results[0].snippet}`.slice(0, 160) : null; } catch (e) { serpCount = `ERR:${e.message}`; }
             const res = await vc.verifyFact(top.claim, top.novelTerms || [], { search: (q) => require('./search_lane').search(q), timeoutMs: 20000 });
-            return send(200, { ok: true, violation: true, novelTerms: top.novelTerms, query: res.query, verdict: res.verdict, matched: res.matched, total: res.total, reason: res.reason });
+            return send(200, { ok: true, violation: true, novelTerms: top.novelTerms, query: res.query, verdict: res.verdict, matched: res.matched, total: res.total, reason: res.reason, serpCount, serpSample });
           } catch (e) { return send(500, { ok: false, error: e.message }); }
         });
         return;
