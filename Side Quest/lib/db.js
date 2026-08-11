@@ -577,6 +577,11 @@ const MIGRATIONS = [
   // is survivable here. Canonical = the OLDEST id per content hash: the first encounter keeps the id
   // everything already cites.
   `ALTER TABLE documents ADD COLUMN superseded_by INTEGER`,
+  // Spine 4 / C1 (docs/INTEGRATED_BUILD_TRACK_2026-08-10.md §C1) — importance ("poignancy") for LANDED
+  // documents, stamped at landing by doc_store.land via importance.scoreDocument (deterministic, no model
+  // call; the browser_download flood scores low by shape). 1..10; consumed by promotion triage (C2) + the
+  // reflection trigger (C3). Nullable — rows landed before this migration carry no score (treated as default).
+  `ALTER TABLE documents ADD COLUMN importance INTEGER`,
   `CREATE INDEX IF NOT EXISTS idx_documents_superseded ON documents(superseded_by)`,
 
   // KNOWN-INCORRECT (§7) — the inoculation record. A claim that has been DISPROVEN is kept, forever,
@@ -1763,7 +1768,7 @@ function insertKnowledge({ kind = 'note', content, embedding = null, source = nu
 // Whole new material lands here durably the moment it arrives; the nightly pass promotes it to Echo
 // long-term. parentId/version carry the iteration model (an update = a new iteration of the original).
 
-function insertDocument({ title = null, body, source = null, ref = null, understanding = null, parentId = null, version = 1, origin = null, fetchUrl = null }) {
+function insertDocument({ title = null, body, source = null, ref = null, understanding = null, parentId = null, version = 1, origin = null, fetchUrl = null, importance = null }) {
   if (!body || !String(body).trim()) return null;
   const ts = Date.now();
   // ORIGIN + CONTENT IDENTITY. The hash is computed HERE, never accepted from a caller — it is a fact
@@ -1781,9 +1786,9 @@ function insertDocument({ title = null, body, source = null, ref = null, underst
     _hash = og.contentHash(body);
   } catch (e) { console.error('[db] origin capture failed:', e.message); }
   const info = getDb()
-    .prepare(`INSERT INTO documents (title, body, source, ref, understanding, parent_id, version, promoted, created_ts, updated_ts, origin, origin_host, content_hash, fetch_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`)
-    .run(title, String(body), source, ref, understanding, parentId, version, ts, ts, _origin, _host, _hash, _fetch);
+    .prepare(`INSERT INTO documents (title, body, source, ref, understanding, parent_id, version, promoted, created_ts, updated_ts, origin, origin_host, content_hash, fetch_url, importance)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(title, String(body), source, ref, understanding, parentId, version, ts, ts, _origin, _host, _hash, _fetch, importance);
   _kgTap('doc.land', title || ref || ('#' + info.lastInsertRowid));
   return { id: info.lastInsertRowid, ts };
 }

@@ -39,7 +39,12 @@ function land({ title = null, body = '', source = null, ref = null, understandin
     // ENCOUNTER of one document, never a second document.
     const dup = db.getDocumentByHash ? db.getDocumentByHash(body) : null;
     if (dup) return { id: dup.id, landed: false, duplicateOf: dup.id };
-    const r = db.insertDocument({ title, body, source, ref, understanding, origin, fetchUrl });
+    // Spine 4 / C1 — stamp importance ("poignancy") at landing, deterministically (no model call; the
+    // browser_download flood scores low by shape). Fail-open: a scoring hiccup lands the doc unscored (null)
+    // rather than blocking the landing. Consumed by promotion triage (C2) + the reflection trigger (C3).
+    let importance = null;
+    try { importance = require('./importance').scoreDocument({ source, body, title, origin }); } catch (e) { console.error('[doc_store] importance score failed:', e.message); }
+    const r = db.insertDocument({ title, body, source, ref, understanding, origin, fetchUrl, importance });
     return { id: r ? r.id : null, landed: !!r };
   } catch (e) { console.error('[doc_store] land failed:', e.message); return { id: null, landed: false }; }
 }

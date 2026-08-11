@@ -102,4 +102,31 @@ async function score(text, { userName = 'them', kind = 'thought' } = {}) {
   return final;
 }
 
-module.exports = { score, quickScore, parseScore, DEFAULT_SCORE };
+// ── DOCUMENT IMPORTANCE (Spine 4 / C1 — docs/INTEGRATED_BUILD_TRACK_2026-08-10.md §C1) ──────────────────────
+// The CHEAP, DETERMINISTIC analog of score() for the doc_store LANDING. score() is model-assisted and tuned
+// for SHORT thoughts/readings; documents land at ~600/day (the browser_download web-capture flood is ~76% of
+// that), so a per-doc model call is both unaffordable and unnecessary — a document's significance is legible
+// from its SHAPE. Source/kind sets the base; length modulates; the bulk flood scores LOW so the downstream
+// consumers (promotion triage in C2, the reflection trigger in C3) can favor deliverables/meetings over
+// scraped pages. PURE, no I/O, no model call. Returns 1..10 (same scale as score()).
+const _DOC_BASE = {
+  deliverable: 8, research: 8,
+  meeting: 8, meeting_transcript: 7,
+  conversation: 6,
+  canvas_drop: 5, notes: 5, media_watch: 5,
+  newsletter: 3, news: 3,
+  browser_download: 2,   // the flood — legible-low by shape, no inference spent on it
+};
+function scoreDocument({ source = null, body = '', title = null, origin = null } = {}) {
+  const src = String(source || '').toLowerCase().trim();
+  let s = _DOC_BASE[src] != null ? _DOC_BASE[src] : 5;   // default = an ordinary document
+  const len = String(body || '').trim().length;
+  if (len < 200) s -= 2;                 // a thin stub can't be weighty (score()'s <25 guard, doc-scaled)
+  else if (len > 8000) s += 1;           // a substantial, worked document
+  // A SYNTHESIZED deliverable/research (origin===null — derived from many pages, not fetched from one) is
+  // higher signal than a raw fetched page; a browser_download WITH an origin stays bulk.
+  if ((src === 'research' || src === 'deliverable') && !origin) s += 1;
+  return clamp(Math.round(s));
+}
+
+module.exports = { score, quickScore, parseScore, scoreDocument, DEFAULT_SCORE };

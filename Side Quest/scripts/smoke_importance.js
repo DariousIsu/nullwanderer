@@ -54,6 +54,27 @@ function run() {
 
   ok('DEFAULT_SCORE exported and sane', importance.DEFAULT_SCORE >= 1 && importance.DEFAULT_SCORE <= 10);
 
+  console.log('\nscoreDocument (C1 — deterministic document poignancy, no model call):');
+  ok('browser_download flood → low (≤3)', importance.scoreDocument({ source: 'browser_download', body: 'x'.repeat(1000) }) <= 3);
+  ok('news → low (≤3)', importance.scoreDocument({ source: 'news', body: 'x'.repeat(1000) }) <= 3);
+  ok('deliverable → high (≥8)', importance.scoreDocument({ source: 'deliverable', body: 'x'.repeat(3000) }) >= 8);
+  ok('meeting → high (≥7)', importance.scoreDocument({ source: 'meeting', body: 'x'.repeat(3000) }) >= 7);
+  ok('unknown source → mid (5)', importance.scoreDocument({ source: 'whatever', body: 'x'.repeat(1000) }) === 5);
+  ok('thin stub scores below its full-length base', importance.scoreDocument({ source: 'notes', body: 'tiny' }) < importance.scoreDocument({ source: 'notes', body: 'x'.repeat(1000) }));
+  ok('synthesized research (no origin) beats a fetched page (with origin)', importance.scoreDocument({ source: 'research', body: 'x'.repeat(9000), origin: null }) > importance.scoreDocument({ source: 'browser_download', body: 'x'.repeat(9000), origin: 'https://x.com' }));
+  ok('always clamped 1..10', (() => { const s = importance.scoreDocument({ source: 'deliverable', body: 'x'.repeat(50000) }); return s >= 1 && s <= 10; })());
+  ok('bulk stays below deliverable (the triage signal C2/C3 use)', importance.scoreDocument({ source: 'browser_download', body: 'x'.repeat(3000) }) < importance.scoreDocument({ source: 'deliverable', body: 'x'.repeat(3000) }));
+
+  console.log('\ndocuments.importance stamped at landing (doc_store.land → column round-trip):');
+  const docStore = require('../lib/doc_store');
+  const land1 = docStore.land({ title: 'A real deliverable', body: 'A substantial worked deliverable. '.repeat(200), source: 'deliverable', ref: 'imp-test-deliverable' });
+  const drow = db.getDocumentByRef('imp-test-deliverable');
+  ok('deliverable landed with a high importance stamp', land1.landed && drow && drow.importance >= 8);
+  const land2 = docStore.land({ title: 'scraped page', body: 'some scraped web content here. '.repeat(200), source: 'browser_download', ref: 'imp-test-bulk', origin: 'https://example.com/page' });
+  const brow = db.getDocumentByRef('imp-test-bulk');
+  ok('browser_download landed with a low importance stamp', land2.landed && brow && brow.importance <= 3);
+  ok('landing stamps bulk below deliverable (triage-ready)', brow && drow && brow.importance < drow.importance);
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { db.getDb().close(); } catch {}
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmp + ext); } catch {} }
