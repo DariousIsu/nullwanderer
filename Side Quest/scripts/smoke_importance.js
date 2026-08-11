@@ -75,6 +75,23 @@ function run() {
   ok('browser_download landed with a low importance stamp', land2.landed && brow && brow.importance <= 3);
   ok('landing stamps bulk below deliverable (triage-ready)', brow && drow && brow.importance < drow.importance);
 
+  console.log('\nreflectionPressure (C2 — value-triaged reflection pressure from a landing):');
+  ok('bulk (browser_download score 2) → 0 pressure', importance.reflectionPressure(2) === 0);
+  ok('news (3) → 0', importance.reflectionPressure(3) === 0);
+  ok('ordinary (5) → 0 — only ABOVE-ordinary builds pressure', importance.reflectionPressure(5) === 0);
+  ok('deliverable (9) → 4', importance.reflectionPressure(9) === 4);
+  ok('meeting (8) → 3', importance.reflectionPressure(8) === 3);
+  ok('junk/undefined/negative → 0', importance.reflectionPressure(undefined) === 0 && importance.reflectionPressure(-3) === 0);
+
+  console.log('\nC2 wiring: an important landing builds reflection pressure; bulk does not:');
+  const accum0 = parseInt(db.getMeta('reflection_importance_accum') || '0', 10);
+  docStore.land({ title: 'deliverable two', body: 'Another substantial worked deliverable body. '.repeat(200), source: 'deliverable', ref: 'imp-c2-deliverable' });
+  const accum1 = parseInt(db.getMeta('reflection_importance_accum') || '0', 10);
+  ok('deliverable landing bumped reflection_importance_accum', accum1 > accum0);
+  docStore.land({ title: 'bulk two', body: 'yet more scraped web content here. '.repeat(200), source: 'browser_download', ref: 'imp-c2-bulk', origin: 'https://example.com/two' });
+  const accum2 = parseInt(db.getMeta('reflection_importance_accum') || '0', 10);
+  ok('browser_download landing did NOT bump the accumulator (value-triaged)', accum2 === accum1);
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { db.getDb().close(); } catch {}
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmp + ext); } catch {} }

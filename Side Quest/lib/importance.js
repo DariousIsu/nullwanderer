@@ -129,4 +129,16 @@ function scoreDocument({ source = null, body = '', title = null, origin = null }
   return clamp(Math.round(s));
 }
 
-module.exports = { score, quickScore, parseScore, scoreDocument, DEFAULT_SCORE };
+// ── REFLECTION PRESSURE (Spine 4 / C2 — docs/INTEGRATED_BUILD_TRACK_2026-08-10.md §C2) ──────────────────────
+// The reflection significance trigger (reflection.js — Park's 150-threshold) is fed by thought/reading
+// importance via monologue.bumpReflectionAccum. C1 stamps DOCUMENT importance at landing; C2 connects it so
+// genuinely-important LANDED material (deliverables, meetings, research) ALSO builds reflection pressure —
+// while the bulk web-capture flood (browser_download/news, ordinary or below) contributes NOTHING. That gate
+// IS the "know when to spend" triage in miniature: the C1 score decides whether a landing is worth
+// accumulating toward reflection, so restlessness rises on substance, not on scraped volume. Pure. 0..5.
+function reflectionPressure(docScore) {
+  const s = Math.round(Number(docScore) || 0);
+  return Math.max(0, s - 5);   // only ABOVE-ordinary docs (deliverable≈9, meeting≈8, research≈10) build pressure; bulk = 0
+}
+
+module.exports = { score, quickScore, parseScore, scoreDocument, reflectionPressure, DEFAULT_SCORE };

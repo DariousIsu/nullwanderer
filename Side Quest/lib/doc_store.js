@@ -45,6 +45,16 @@ function land({ title = null, body = '', source = null, ref = null, understandin
     let importance = null;
     try { importance = require('./importance').scoreDocument({ source, body, title, origin }); } catch (e) { console.error('[doc_store] importance score failed:', e.message); }
     const r = db.insertDocument({ title, body, source, ref, understanding, origin, fetchUrl, importance });
+    // C2 (Spine 4) — a genuinely-important NEW landing builds reflection pressure (Park's significance
+    // trigger, reflection.js). Value-triaged by C1's score: bulk (browser_download/news) contributes 0, so
+    // scraped volume never drives reflection — substance does. Mirrors monologue.bumpReflectionAccum for the
+    // thought/reading side; only on a real landing (dedup skips returned above). Fail-open.
+    if (r && importance != null) {
+      try {
+        const p = require('./importance').reflectionPressure(importance);
+        if (p > 0) { const a = parseInt(db.getMeta('reflection_importance_accum') || '0', 10); db.setMeta('reflection_importance_accum', String(a + p)); }
+      } catch (e) { console.error('[doc_store] reflection pressure bump failed:', e.message); }
+    }
     return { id: r ? r.id : null, landed: !!r };
   } catch (e) { console.error('[doc_store] land failed:', e.message); return { id: null, landed: false }; }
 }
