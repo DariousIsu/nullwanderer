@@ -117,18 +117,22 @@ function enterObserving() {
     ok('did NOT store an empty/fabricated recap', calls.store === 0);
   }
 
-  console.log('\nNO sign-off → silence alone does NOT make her leave:');
+  console.log('\nNO sign-off + others present → silence does NOT make her leave:');
   {
     const { ctx, calls } = makeDeps([
       'Joshua Fredrickson: the database will give them that',   // tick 1: ordinary line
       '',                                                       // tick 2: quiet
     ]);
     enterObserving();
+    // Others still in the call — so the ALONE_LEAVE_MS path (leave when effectively alone for 4 min,
+    // no sign-off needed; added after this test was written) can't fire and confound the assertion.
+    // The point here is narrow: WITHOUT a sign-off, silence does not trip the SIGN-OFF leave path.
+    ctx.deps.scrapeAttendees = async () => 'Lucas Overby\nJoshua Fredrickson';
     CLOCK += 10_000;
     await gmeet.runTick(ctx);
     CLOCK += 305_000;
     await gmeet.runTick(ctx);
-    ok('did NOT leave (no sign-off)', calls.leave === 0);
+    ok('did NOT leave (no sign-off, others present)', calls.leave === 0);
     ok('still observing', gmeet.get() === 'observing');
   }
 
@@ -151,12 +155,15 @@ function enterObserving() {
       '',                                                  // quiet
     ], {});
     enterObserving();
+    // Others still present, so the ALONE_LEAVE_MS path can't fire — this isolates the sign-off LATCH
+    // behavior (armed → disarmed by resumed talk → no leave) from the independent alone-leave.
+    ctx.deps.scrapeAttendees = async () => 'Lucas Overby\nJoshua Fredrickson';
     CLOCK += 10_000; await gmeet.runTick(ctx);
     ok('armed after the pleasantry', db.getMeta('gmeet_signoff_seen') === '1');
     CLOCK += 10_000; await gmeet.runTick(ctx);
     ok('DISARMED after conversation resumed', db.getMeta('gmeet_signoff_seen') === '');
     CLOCK += 305_000; await gmeet.runTick(ctx);
-    ok('did NOT leave (latch was disarmed)', calls.leave === 0);
+    ok('did NOT leave (latch was disarmed, others present)', calls.leave === 0);
   }
 
   // FORCE-LEAVE (live incident 2026-08-11): a user-prompted "leave" when active() is FALSE but she's still

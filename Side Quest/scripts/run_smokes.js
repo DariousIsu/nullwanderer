@@ -325,6 +325,7 @@ const smokes = [
   'smoke_product_ledger.js',
   'smoke_roster_watch.js',
   'smoke_meeting_leave.js',
+  'smoke_gmeet_leave.js',
   'smoke_canvas_command.js',
   'smoke_org_backfill.js',
   'smoke_recheck_queue.js',
