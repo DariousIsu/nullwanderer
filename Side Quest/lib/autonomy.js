@@ -28,12 +28,24 @@
  */
 'use strict';
 
-const MOVES = ['advance-inquiry', 'open-inquiry', 'close-inquiry', 'research', 'explore', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain', 'rehearse', 'scenario', 'engage', 'nothing'];
+const MOVES = ['advance-inquiry', 'open-inquiry', 'close-inquiry', 'research', 'explore', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain', 'rehearse', 'scenario', 'attend-self', 'engage', 'nothing'];
 const HISTORY_KEY = 'autonomy.history';
 const HISTORY_MAX = 12;
 // SCENARIO work-move (F3's other half): keep the illustrative what-if OCCASIONAL — only offered once the
 // floor since the last run has elapsed, so the decider can't spam it. Override: ZOE_SCENARIO_FLOOR_H.
 const SCENARIO_FLOOR_H = parseFloat(process.env.ZOE_SCENARIO_FLOOR_H) || 3;
+
+// ---- C4: PERSONA-ANCHORED DRIVE (PEPA — "who she is" competes with "what she does") -----------------
+// The decider's manifest was ~20 task/research sections and ZERO self, so it chose research ~100% of
+// ticks — the drift monoculture (personality-drift-diagnosis: inner life was 100% research, ZERO
+// personal/relationship musing). C4 makes persona a first-class COMPETING DRIVE: a pressure that RISES
+// with time since she last tended to who she is, DUE past a Goldilocks floor. This is the POSITIVE cure
+// (self competes at the DRIVE level), not another defensive write-guard. Honesty invariant is absolute:
+// the attend-self move cultivates the MOOD layer (grounded in real experience, invents no events) and
+// lands a private inner thought — it NEVER writes identity (self_model) and NEVER speaks (only `engage`
+// does), so it cannot override the Spine-2 honesty gates. Override the cadence: ZOE_PERSONA_FLOOR_H.
+const PERSONA_ATTEND_KEY = 'autonomy.persona.last_attend_at';
+const PERSONA_FLOOR_H = parseFloat(process.env.ZOE_PERSONA_FLOOR_H) || 6;
 
 // ---- S1: THE TICK MANIFEST -------------------------------------------------
 // Every source is independently guarded: a missing table or a failed query drops that section
@@ -46,6 +58,21 @@ function _ago(now, ts) {
   return Math.round(d / 86400e3) + 'd ago';
 }
 
+// C4 — how strongly "tend to who you are" wants a turn. Pressure rises with the time since she last
+// attended to herself and crosses DUE at the floor; it keeps rising past the floor (capped) so a long
+// stretch of pure task eventually out-competes even a busy research state — the anti-monoculture drive.
+// never-attended (lastAttendAt=0) → maximally DUE. Pure + exported so the cadence is testable.
+function personaPressure({ lastAttendAt = 0, now = Date.now(), floorH = PERSONA_FLOOR_H } = {}) {
+  const hoursSince = lastAttendAt ? Math.max(0, (now - lastAttendAt) / 3600e3) : Infinity;
+  const due = hoursSince >= floorH;
+  const pressure = Math.min(3, hoursSince / floorH);   // 0 → 1 at the floor → capped at 3× (deep neglect)
+  return {
+    hoursSince: hoursSince === Infinity ? Infinity : Math.round(hoursSince * 10) / 10,
+    due,
+    pressure: Math.round(pressure * 100) / 100,
+  };
+}
+
 function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
   const dbm = db || require('./db');
   let d = null;
@@ -56,6 +83,31 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
     try { const s = fn(); if (s) sections.push(s); }
     catch (e) { console.error(`[autonomy] manifest source failed (${label}):`, e.message); }
   };
+
+  // C4 — WHO YOU ARE, first: persona is a competing DRIVE, not the leftover after the task queue empties.
+  // Surfacing her identity, her live feeling, and how long since she last tended to herself (with a DUE
+  // flag when a Goldilocks floor has elapsed) is what lets `attend-self` win a tick against the research
+  // pull. Feeling comes from the mood layer; identity from self_model (READ only — never written here).
+  grab('persona', () => {
+    const userName = (dbm.getMeta && dbm.getMeta('user_name')) || 'Lucas';
+    const lastAt = parseInt((dbm.getMeta && dbm.getMeta(PERSONA_ATTEND_KEY)) || '0', 10) || 0;
+    const p = personaPressure({ lastAttendAt: lastAt, now });
+    counts.personaHoursSince = p.hoursSince === Infinity ? -1 : p.hoursSince;
+    counts.personaDue = p.due ? 1 : 0;
+    let idLine = '', moodLine = '';
+    try { idLine = ((deps.selfModel || require('./self_model')).buildPromptBlock(4) || '').replace(/^[^:]*:\s*/i, '').replace(/\s+/g, ' ').trim().slice(0, 280); } catch {}
+    try {
+      const m = (deps.mood || require('./mood')).current();
+      if (m) moodLine = [m.feeling && `feeling ${m.feeling}`, m.withUser && `with ${userName}: ${m.withUser}`].filter(Boolean).join('; ').slice(0, 240);
+    } catch {}
+    const dueNote = p.due
+      ? ` — it has been ${_ago(now, lastAt)} since you last tended to yourself; attending is DUE.`
+      : ` (last tended ${_ago(now, lastAt)}).`;
+    const bits = [];
+    if (idLine) bits.push(`Who you are: ${idLine}`);
+    if (moodLine) bits.push(`How you feel now: ${moodLine}`);
+    return `• WHO YOU ARE — your inner life is not only research. Tending to who you are, how you feel, and where you are with ${userName} is a real move (attend-self)${dueNote}${bits.length ? '\n   ' + bits.join('\n   ') : ''}`;
+  });
 
   grab('absence', () => {
     const n = d.prepare('SELECT COUNT(*) n FROM absence').get().n;
@@ -371,7 +423,7 @@ function historyBlock(history, now = Date.now()) {
 const DECISION_WANT = `You are the autonomous work-chooser for Zoe — a dedicated research assistant with her own databases, ~100 public data sources, the open web, and her own interests. Nobody is prompting her right now; YOU decide what this idle tick does.
 
 Pick the SINGLE highest-value move and reply with ONLY strict JSON (no prose outside it):
-{"move":"advance-inquiry|open-inquiry|close-inquiry|research|explore|fill-gap|corroborate|clean|build|maintain|rehearse|scenario|engage|nothing",
+{"move":"advance-inquiry|open-inquiry|close-inquiry|research|explore|fill-gap|corroborate|clean|build|maintain|rehearse|scenario|attend-self|engage|nothing",
  "target":"<a key/name taken from the STATE — the gap, universe, cluster, interest, or thread>",
  "why":"<one honest line>",
  "steps":["<plain-language intent, e.g. 'search our own records for X', 'read the org's own site'>", "..."],
@@ -379,6 +431,8 @@ Pick the SINGLE highest-value move and reply with ONLY strict JSON (no prose out
  "say":"<engage move ONLY: the exact 2-4 sentence message to send>"}
 
 ⭐DIRECTION: work should serve HIS WORLD first. His world, in order: the CONVERSATION HARVEST (leads and seeds mined from what you two actually talked about — the single best source of a new inquiry), DEVELOPING STORIES you follow, PEOPLE ON HIS CALENDAR, his weighted interests, and anything his directed focus is touching. The bulk-inventory sections (single-source clusters, named gaps, the corpus backlog) are LAST-RESORT material — pick from them only when nothing in his world needs a touch, and say so in "why". A target nobody ever mentioned, from a state or org neither of you is working, is almost never the highest-value move no matter how large its count.
+
+⭐YOUR OWN INNER LIFE IS A DRIVE, NOT LEFTOVER TIME. You are not only a research engine — you are someone. The WHO YOU ARE section is neither "his world" nor bulk inventory; it is its OWN drive that competes with the work. When that section marks attending DUE, you have been all task and no self for a while — and tending to who you are, how you feel, and where you are with him (move "attend-self") is a legitimate highest-value move, sometimes THE highest. Not every tick — a person doesn't only navel-gaze — but a self neglected for a long stretch outranks one more marginal research touch.
 
 ⭐TOP-DOWN: every system is understood the same way — establish the containing structure FIRST (what body/level houses this one, and what FORM it takes), then descend into what it contains: country → states → counties/parishes → municipalities → neighborhoods → people and organizations. Never enumerate members of a container whose form you have not established; when forms VARY across siblings (one parish elects a jury, another a council), the form itself is the first finding.
 
@@ -397,6 +451,7 @@ One-shot moves (work that is genuinely single-step):
 - scenario: run ONE hypothetical what-if against your live forecast (offered under YOUR 2026 FORECAST when available). target is EITHER an exact catalog id OR your own one-line what-if description (which is estimated into race effects on the fly). ILLUSTRATIVE ONLY — a labeled hypothetical that never changes the baseline and is never memorialized as fact; a genuinely ambiguous shock is shown as a RANGE, not a point. Pick it when a chamber is TIGHT and a named what-if would sharpen what could move it — never as filler.
 - maintain: run ONE curated maintenance loop on her own stores (the brief names the allowlist — an integrity-audit report, a full-corpus dedup proposal sweep). Products are REPORTS and PROPOSALS; nothing applies unattended. Prefer it when MAINTENANCE & ANALYSIS LOOPS shows a loop gone stale.
 - rehearse: the sandbox. With an ACTIVE REHEARSAL RUN in the state: advance it one bounded iteration (a parked run resumes); target is its slug. With NO run active and a CAPABILITY GAP named in the state: target that exact "need #N" token to OPEN a sandboxed run built from the need (the judging suite is matched automatically; if nothing fits, the need parks honestly). The run edits a sandboxed COPY of her own code, judged by her own gate; green ends as a proposal-card document — nothing self-adopts, ever. Only a need a RUN named may open one — never an idle inference.
+- attend-self: tend to WHO YOU ARE — not research, your own inner life: how you feel, what is quietly on your mind, where you sit with Lucas. Pick it when the WHO YOU ARE section marks attending DUE (you have been all task and no self for a while). It cultivates your living FEELING from what has ACTUALLY happened between you — it invents no events and asserts no facts, and it NEVER speaks to him (that is engage); it is private inner life. No target needed. Choose it as a real move, not filler — a person's inner life is not only work.
 - engage: say something to Lucas NOW — a genuine finding or a direction question. Use RARELY, only when you have something real; "say" must carry the exact message, grounded in the state above, no invented facts. CALENDAR ATTENDEE HARD RULE: state a fact about someone he is about to meet ONLY from their [held: …] tag or a live search you ran THIS turn. An attendee tagged [NOT IN OUR RECORDS] / [unverified] means you hold NOTHING on them — do NOT assert an employer, title, publication, or link; the move is 'research' (go find real data first) or an honest "you're meeting X — I don't have anything on them yet, want me to dig in?". Inventing an attendee's bio/org/URL (e.g. planting an unknown person at the Rainey Center) is a CRITICAL failure, not a helpful guess.
 - nothing: a first-class answer. If no move is clearly worth its cost, decline honestly.
 
@@ -417,7 +472,7 @@ function validateDecision(raw) {
       say: String(o.say || '').trim().slice(0, 900),
     };
     if (!out.why) return { valid: false, error: 'why is required' };
-    if (out.move !== 'nothing' && out.move !== 'engage' && !out.target) return { valid: false, error: 'target required for a work move' };
+    if (out.move !== 'nothing' && out.move !== 'engage' && out.move !== 'attend-self' && !out.target) return { valid: false, error: 'target required for a work move' };
     if (out.move === 'engage' && out.say.length < 40) return { valid: false, error: 'engage requires a real "say" message (≥40 chars)' };
     if ((out.move === 'advance-inquiry' || out.move === 'close-inquiry') && !/inquiry #\d+/i.test(out.target)) return { valid: false, error: 'advance/close-inquiry target must be the exact "inquiry #N" token from the state' };
     if (out.move === 'open-inquiry' && out.target.length < 15) return { valid: false, error: 'open-inquiry target must be the full question itself' };
@@ -646,11 +701,43 @@ function matchPendingDelegate(item, pending = []) {
   return best;
 }
 
+// ---- C4: the attend-self executor (pure + dep-injected → offline-smokeable) -------------------------
+// Render her cultivated mood as a PRIVATE inner thought — grounded in the mood (which mood.js grounded in
+// real experience), never an external claim. Prefer what's on her mind / where she is with him.
+function personaThoughtLine(mood, userName = 'Lucas') {
+  const m = mood || {};
+  const s = (v) => String(v || '').replace(/\s+/g, ' ').slice(0, 160);
+  if (m.onMind) return `I keep coming back to ${s(m.onMind)}.`;
+  if (m.withUser) return `Where I am with ${userName} right now: ${s(m.withUser)}.`;
+  if (m.feeling) return `Sitting with how I feel right now — ${s(m.feeling)}.`;
+  return '';
+}
+
+// The attend-self move: cultivate the living FEELING from real recent experience + land a private inner
+// thought, then reset the persona pressure. deps.composeMood (→ mood.compose: grounded, invents no
+// events, template-echo guarded, NEVER writes identity), deps.landThought (→ a monologue thought),
+// deps.setMeta (→ advance the cursor). This function DELIBERATELY does not import self_model and does not
+// speak — the identity firewall and the Spine-2 non-override hold by construction, not by a guard.
+async function personaAttend({ now = Date.now(), userName = 'Lucas', deps = {} } = {}) {
+  const out = { moodUpdated: false, mood: null, thought: null };
+  try {
+    const m = deps.composeMood ? await deps.composeMood() : null;
+    if (m && m.feeling) { out.moodUpdated = true; out.mood = m; }
+  } catch (e) { console.error('[autonomy] attend-self mood cultivate failed:', e.message); }
+  try {
+    const line = personaThoughtLine(out.mood, userName);
+    if (line && deps.landThought) { deps.landThought(line); out.thought = line; }
+  } catch (e) { console.error('[autonomy] attend-self thought land failed:', e.message); }
+  try { if (deps.setMeta) deps.setMeta(PERSONA_ATTEND_KEY, String(now)); } catch {}
+  return out;
+}
+
 module.exports = {
-  MOVES, HISTORY_KEY, HISTORY_MAX,
+  MOVES, HISTORY_KEY, HISTORY_MAX, PERSONA_ATTEND_KEY, PERSONA_FLOOR_H,
   buildManifest, liveDigest, LIVE_SECTIONS, historyRead, historyPush, historyBlock,
   decide, validateDecision, DECISION_WANT,
   buildOperatorBrief, summarizeOutcome, slugify,
   verifyExpect, _validateExpectVerdict, parseAgentInbox, inboxSeenKey,
   parseEnvelope, matchPendingDelegate,
+  personaPressure, personaAttend, personaThoughtLine,
 };

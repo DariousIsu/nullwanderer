@@ -12179,6 +12179,31 @@ async function autonomyTick() {
       console.log(`[autonomy] chose=engage → spoke (${decision.say.length}c)`);
       return;
     }
+    if (decision.move === 'attend-self') {
+      // C4 — PERSONA-ANCHORED DRIVE (PEPA): she tends to WHO SHE IS, not a task. Grounded persona musing
+      // cultivates the MOOD layer (dynamic, cloud-evolved, GROUNDED in real experience, invents no events)
+      // and lands a private inner thought so her inner life carries relationship/self musing, not only
+      // research (the drift measure). It NEVER writes self_model (identity firewall) and NEVER speaks
+      // (that is engage) — so it cannot override the Spine-2 honesty gates. Reuses the exact mood
+      // cultivation genFn from the per-turn refresh (main.js ~10893).
+      const _pName = (() => { try { return db.getMeta('user_name') || 'Lucas'; } catch { return 'Lucas'; } })();
+      const res = await autonomy.personaAttend({
+        now, userName: _pName,
+        deps: {
+          composeMood: () => require('./lib/mood').compose({
+            userName: _pName,
+            recentRows: (() => { try { return db.getRecentTurns(12); } catch { return []; } })(),
+            genFn: (prompt) => condenseComplete([{ role: 'user', content: prompt }], { numPredict: 320 }),
+            nowTs: now,
+          }),
+          landThought: (line) => { try { db.insertMonologue({ content: line, model: 'attend-self', type: 'thought' }); } catch {} },
+          setMeta: (k, v) => { try { db.setMeta(k, v); } catch {} },
+        },
+      });
+      autonomy.historyPush(H, { ts: now, move: 'attend-self', outcome: res.moodUpdated ? `tended to self — feeling: ${String((res.mood && res.mood.feeling) || '').slice(0, 60)}` : 'tended to self (mood unchanged)' });
+      console.log(`[autonomy] chose=attend-self → mood=${res.moodUpdated ? 1 : 0} thought=${res.thought ? 1 : 0}`);
+      return;
+    }
     // LINES OF INQUIRY (O0) — the continuity moves. open = create + first touch NOW; advance =
     // one bounded touch that ENDS with a validated write-back (the next touch starts where this
     // one stopped); close = honest closure, answered lands the artifact. §6 L1: the return
