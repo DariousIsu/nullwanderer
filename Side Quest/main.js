@@ -12186,6 +12186,20 @@ async function autonomyTick() {
       // research (the drift measure). It NEVER writes self_model (identity firewall) and NEVER speaks
       // (that is engage) — so it cannot override the Spine-2 honesty gates. Reuses the exact mood
       // cultivation genFn from the per-turn refresh (main.js ~10893).
+      //
+      // DUE GATE (boot_c4 live finding, 2026-08-11): the 6h Goldilocks floor is only advisory in the
+      // decision prompt, so when the research/task lanes are quota-throttled the decider kept picking
+      // attend-self every few minutes — persona flipping into its OWN mini-monoculture (the inverse of
+      // the drift it cures) and re-cultivating the mood on each pick (redundant cloud spend, faster than
+      // the ~90-min drift design). Enforce the floor HERE, like engage's cadence gate: if persona is not
+      // actually DUE, skip cheaply (no cultivation) and record it — the history line then discourages the
+      // decider from re-picking. This makes the floor real regardless of what the cloud chooses.
+      const _pLast = (() => { try { return parseInt(db.getMeta(autonomy.PERSONA_ATTEND_KEY) || '0', 10) || 0; } catch { return 0; } })();
+      if (!autonomy.personaPressure({ lastAttendAt: _pLast, now }).due) {
+        autonomy.historyPush(H, { ts: now, move: 'attend-self', outcome: `skipped — tended ${_pLast ? Math.round((now - _pLast) / 60000) + 'm' : 'recently'} ago, not yet due (persona floor not reached)` });
+        console.log('[autonomy] chose=attend-self → skipped (not due — persona floor not reached)');
+        return;
+      }
       const _pName = (() => { try { return db.getMeta('user_name') || 'Lucas'; } catch { return 'Lucas'; } })();
       const res = await autonomy.personaAttend({
         now, userName: _pName,

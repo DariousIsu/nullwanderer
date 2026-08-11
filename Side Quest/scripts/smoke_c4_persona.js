@@ -25,6 +25,12 @@ const H = 3600e3;
   ok('pressure rises monotonically with neglect', A.personaPressure({ lastAttendAt: now - 12 * H, now }).pressure > A.personaPressure({ lastAttendAt: now - 7 * H, now }).pressure);
   ok('deep neglect is capped at 3× (no unbounded pressure)', A.personaPressure({ lastAttendAt: now - 100 * H, now }).pressure === 3);
 
+  // The executor gates attend-self on personaPressure(...).due (main.js) — the boot_c4 live fix that makes
+  // the 6h Goldilocks floor REAL, not advisory: when research is quota-throttled the decider kept picking
+  // attend-self every few minutes, so it must be skipped cheaply (no re-cultivation) when not actually due.
+  ok('DUE-gate: a just-tended persona is NOT due → executor SKIPS', A.personaPressure({ lastAttendAt: now - 5 * H, now }).due === false);
+  ok('DUE-gate: past the floor IS due → executor attends', A.personaPressure({ lastAttendAt: now - 6.01 * H, now }).due === true);
+
   console.log('\nthe move exists in the decider vocabulary:');
   ok('MOVES includes attend-self', A.MOVES.includes('attend-self'));
   ok('DECISION_WANT enum offers attend-self', A.DECISION_WANT.includes('attend-self'));
