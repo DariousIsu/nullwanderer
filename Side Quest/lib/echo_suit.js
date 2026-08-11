@@ -727,15 +727,17 @@ class EchoSuit {
         const r = normalizeToolResult(await c.callTool(tag.name, callArgs));
         let text = r.text;
         // CONTENT FIREWALL (lib/content_firewall) — a web-lane result is text somebody else wrote,
-        // so it arrives inside a data boundary naming its origin. Scoped by the lane classifier
-        // echo_tier ALREADY owns (WEB_LANE_RE) rather than a second list of tool names that would
-        // drift out of step with it. Her own stores (db_query, get_entity, the CRM) are not framed:
-        // that text is hers, and wrapping it would make the marker mean nothing through sheer
-        // repetition. Deep-lane readers that carry stranger-authored prose (arxiv abstracts,
-        // court opinions) are a NAMED follow-up, not covered here.
+        // so it arrives inside a data boundary naming its origin. Scoped by the lane classifiers
+        // echo_tier ALREADY owns (WEB_LANE_RE + PROSE_LANE_RE) rather than a second list of tool names
+        // that would drift out of step with them. Her own stores (db_query, get_entity, the CRM) and
+        // structured public records (fec_/census_/edgar_) are NOT framed: that text is data, and
+        // wrapping it would make the marker mean nothing through sheer repetition. PROSE_LANE_RE closes
+        // the once-named follow-up: the deep-lane readers that carry stranger-authored PROSE — arxiv /
+        // academic abstracts, court opinions, PubMed/clinical study text, StackExchange, MedlinePlus.
         if (!r.isError && text) {
           try {
-            if (require('./echo_tier').WEB_LANE_RE.test(String(tag.name || ''))) {
+            const et = require('./echo_tier');
+            if (et.WEB_LANE_RE.test(String(tag.name || '')) || et.PROSE_LANE_RE.test(String(tag.name || ''))) {
               const fw = require('./content_firewall');
               if (!fw.isFramed(text)) {
                 const f = fw.frame(text, { url: (callArgs && (callArgs.url || callArgs.query)) || tag.name, kind: 'tool' });

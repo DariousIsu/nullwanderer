@@ -11428,7 +11428,14 @@ const operatorTools = {
       const r = await require('./lib/excavate').seePage(_f, url ? { url } : {});
       if (!r || !r.ok) return `could not see ${url || 'the page'}: ${(r && r.reason) || 'failed'}`;
       if (r.text && r.url) { try { require('./lib/learning').maybeCaptureLearnings({ query: _f || 'research', content: r.text, urls: [r.url] }); } catch {} }
-      return r.text ? `SAW ${r.url}:\n${r.text.slice(0, 4000)}` : `looked at ${r.url} but saw nothing relevant${_f ? ` to "${_f.slice(0, 80)}"` : ''}`;
+      if (!r.text) return `looked at ${r.url} but saw nothing relevant${_f ? ` to "${_f.slice(0, 80)}"` : ''}`;
+      // CONTENT FIREWALL — the VISION door (content-firewall pin's named follow-up): what she SEES on an
+      // external page is stranger-authored text too, the exact analog of open_page (which is framed) — so
+      // frame it before it reaches the model. Frame AFTER the slice (the box wraps the truncated text as a
+      // unit → no closer to cut) and AFTER the raw-text DB-banking above (provenance must stay unframed).
+      let _seen = r.text.slice(0, 4000);
+      try { const fw = require('./lib/content_firewall'); if (!fw.isFramed(_seen)) _seen = fw.frame(_seen, { url: r.url, kind: 'vision' }).text; } catch {}
+      return `SAW ${r.url}:\n${_seen}`;
     } catch (e) { return 'ERROR: ' + e.message; }
   },
   // BANK the executive contacts a research pass found into PULLER (our contact-intelligence store) so its
@@ -16735,13 +16742,26 @@ async function seeImage({ io, channel, sessionId, userName, base64, label, url =
   catch (e) { vr = { ok: false, reason: e.message }; }
   if (vr && vr.ok) {
     const content = `I visually looked at ${label}${url ? ` (${url})` : ''} and SAW:\n${vr.text}`;
+    // CONTENT FIREWALL — the VISION door (content-firewall pin's named follow-up): when she SEES an EXTERNAL
+    // web page (her own browser `web-see` or a shared tab `browse-see`), the vision description can relay
+    // page text that tries to steer her — frame it as data, exactly like open_page/see_page. Lucas's OWN
+    // surfaces (his screen, an image he attached, a local file) are HIS input, not a stranger's page, and
+    // stay unframed. Frame ONLY the copy sent to the model; the monologue provenance + learning capture
+    // keep the raw text (a frame header in banked provenance would break citation matching).
+    let injected = content;
+    if (surface === 'web-see' || surface === 'browse-see') {
+      try {
+        const fw = require('./lib/content_firewall');
+        if (!fw.isFramed(vr.text)) injected = `I visually looked at ${label}${url ? ` (${url})` : ''} and SAW:\n${fw.frame(vr.text, { url: url || label, kind: 'vision' }).text}`;
+      } catch {}
+    }
     try {
       const row = db.insertMonologue({ content, model: surface, type: 'reading', query: url || label, urls: url ? [url] : null });
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(saw) ${label}`, type: 'reading', query: url || label });
     } catch {}
     try { require('./lib/learning').maybeCaptureLearnings({ query: label, content, urls: url ? [url] : null }); } catch {}
     console.log(`[main] ${surface} "${label}": ok ${vr.tier}/${vr.model}`);
-    await fireToolFollowup({ io, channel, sessionId, resultText: content });
+    await fireToolFollowup({ io, channel, sessionId, resultText: injected });
   } else {
     console.log(`[main] ${surface} "${label}": FAIL ${vr && vr.reason}`);
     await fireToolFollowup({ io, channel, sessionId, resultText: `[You tried to visually SEE ${label} but couldn't (${vr && vr.reason}). Tell ${userName} plainly you couldn't see it this time — don't invent what's there.]` });

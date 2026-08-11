@@ -255,6 +255,15 @@ const ALL_CURATED = READ_TOOLS.concat(WEB_TOOLS);
 // 'web'  = open-internet fetch/read/news (her browser + the web_* / gdelt / wiki / feed tools)
 // 'deep' = structured/authoritative databases + our own knowledge graph (the rest of the read surface)
 const WEB_LANE_RE = /^(web_|gdelt_|wayback|verify_url|mediawiki_|fetch_feed|hackernews|spaceflight_news|rag.?web|chronicling_america)/i;
+// CONTENT FIREWALL scoping (content-firewall doctrine): deep-lane READ tools that return STRANGER-AUTHORED
+// PROSE — an arxiv/academic abstract, a court opinion, a PubMed/clinical study description, a StackExchange
+// answer, a MedlinePlus article. Same threat as a web page: text somebody else wrote, read into the model.
+// Kept SEPARATE from WEB_LANE_RE (these are 'deep' lane, not fetched by her browser) but co-located here so
+// there is ONE authoritative scoping owner, never a second name-list drifting in echo_suit. DELIBERATELY
+// NARROW — only prose readers; structured record tools (fec_/usaspending_/census_/edgar_/courtlistener_docket,
+// db_query, get_*) are NOT prose and are never framed (that text is data, and framing it all makes the marker
+// mean nothing through repetition). courtlistener_opinion_ only, not the whole courtlistener_ family.
+const PROSE_LANE_RE = /^(arxiv_search|academic_search|courtlistener_opinion_|ncbi_pubmed|clinicaltrials_|stackexchange_|medlineplus_)/i;
 function laneOf(name) {
   if (classifyTool(name) !== 'read') return null;       // only read tools have a research lane
   return WEB_LANE_RE.test(String(name || '')) ? 'web' : 'deep';
@@ -293,5 +302,5 @@ module.exports = {
   classifyTool, allowedOnAuto, policyFor, operatorReadSpec, readToolByOp,
   READ_TOOLS, WEB_TOOLS, ALL_CURATED, laneOf, laneToolNames, laneSpec,
   MAINTAIN_TOOLS, maintainForcedArgs, maintainSpec,
-  LOCKED_RE, HEAVY_RE, WRITE_RE, READ_RE, WEB_LANE_RE
+  LOCKED_RE, HEAVY_RE, WRITE_RE, READ_RE, WEB_LANE_RE, PROSE_LANE_RE
 };
