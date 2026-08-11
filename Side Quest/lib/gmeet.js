@@ -462,6 +462,28 @@ async function liveLeaveMeeting(web) {
   } catch (e) { return { ok: false, reason: e.message }; }
 }
 
+// FORCE-LEAVE (live incident 2026-08-11) — a user-prompted "leave" when the meeting state has DESYNCED:
+// active() is already false (stage 'done'/'none', e.g. a prior auto-leave whose click never confirmed) but
+// she may still be IN the call. The normal leave can't fire then — the chat handler gates on active() and
+// the tick's leave gates on stage==='observing' — so the request was silently dropped and she stayed stuck.
+// This runs the SAME proven hang-up unconditionally, self-guarded by inMeeting so it's a clean no-op when
+// she is not actually in a call (never navigates a non-meeting tab). deps injectable for the smoke.
+async function forceLeave({ deps = null } = {}) {
+  const d = deps || defaultDeps();
+  let inCall = false;
+  try { inCall = await d.inMeeting(d.web); } catch {}
+  if (!inCall) return { ok: true, via: 'not-in-call', already: true };   // nothing to leave; leave the stage untouched
+  let lv = { ok: false };
+  try { lv = await d.leaveMeeting(d.web); } catch (e) { lv = { ok: false, reason: e && e.message }; }
+  // Mirror _leaveAndFinish's cleanup: clear every per-meeting timer/flag and park the stage 'done'.
+  try {
+    db.setMeta('gmeet_signoff_seen', ''); db.setMeta('gmeet_last_caption_at', ''); db.setMeta('gmeet_left_ticks', '0');
+    db.setMeta('gmeet_alone_since', ''); db.setMeta('gmeet_leave_requested', '');
+    set('done'); db.setMeta('gmeet_ended_at', String(Date.now()));
+  } catch {}
+  return { ok: !!(lv && lv.ok), via: (lv && lv.via) || null };
+}
+
 // Clear the "Do you want people to hear you in the meeting?" device-permission modal that
 // covers the pre-join controls (Join now + mic/cam toggles) and hangs the join. Escape
 // usually closes it; the X is a fallback. Closing it leaves her muted — what we want.
@@ -1077,7 +1099,7 @@ async function runTick(ctx = {}) {
 }
 
 module.exports = {
-  STAGES, CAPTION_DROUGHT_MS, get, set, active, start, reset, url, runTick, defaultDeps, synthesizeMeeting,
+  STAGES, CAPTION_DROUGHT_MS, get, set, active, start, reset, url, runTick, defaultDeps, synthesizeMeeting, forceLeave,
   // pure helpers (tested)
   detectMeetUrl, meetLinkFromEvent, introPrompt, validateIntro, ensureIntro, parseCaptions, parseAttendees,
   addressesSelf, isSelfSpeaker, selfNames, looksLikeSignOff, extractDirective, segmentTurns, parseMeetingAction,

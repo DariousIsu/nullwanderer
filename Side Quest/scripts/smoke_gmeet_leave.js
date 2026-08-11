@@ -159,6 +159,25 @@ function enterObserving() {
     ok('did NOT leave (latch was disarmed)', calls.leave === 0);
   }
 
+  // FORCE-LEAVE (live incident 2026-08-11): a user-prompted "leave" when active() is FALSE but she's still
+  // in the call (state desynced to stage 'done' after a prior unconfirmed leave) — the normal gates miss it,
+  // so forceLeave must hang up directly; and when she is NOT in a call it must be a clean no-op (never
+  // navigate a non-meeting tab).
+  {
+    gmeet.reset();
+    const fl = { inCall: true, leaves: 0 };
+    const flDeps = { web: {}, inMeeting: async () => fl.inCall, leaveMeeting: async () => { fl.leaves++; return { ok: true, via: 'leave-button' }; } };
+    gmeet.set('done'); db.setMeta('gmeet_leave_requested', '1'); db.setMeta('gmeet_ended_at', '');
+    let r = await gmeet.forceLeave({ deps: flDeps });
+    ok('forceLeave (STUCK: active()=false but inMeeting=true) → hung up once', r.ok === true && fl.leaves === 1);
+    ok('forceLeave cleared the stale leave flag', db.getMeta('gmeet_leave_requested') === '');
+    ok('forceLeave parked stage=done + stamped ended_at', gmeet.get() === 'done' && !!db.getMeta('gmeet_ended_at'));
+
+    fl.inCall = false; fl.leaves = 0;
+    r = await gmeet.forceLeave({ deps: flDeps });
+    ok('forceLeave (NOT in a call) → clean no-op, never clicked leave', r.via === 'not-in-call' && fl.leaves === 0);
+  }
+
   gmeet.reset();
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { require('fs').rmSync(path.dirname(process.env.SQ_DB_PATH), { recursive: true, force: true }); } catch {}

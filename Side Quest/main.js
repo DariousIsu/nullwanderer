@@ -6219,6 +6219,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       } else if (_tm.active && _tm.active()) {
         db.setMeta('teams_leave_requested', '1');
         console.log(`[teams] chat leave-trigger (${_leave.reason}) → leave flag set; the tick will hang up`);
+      } else if (_gm.get && _gm.get() !== 'none') {
+        // STATE-DESYNC FORCE-LEAVE (live incident 2026-08-11): a lingering gmeet session (stage 'done' from a
+        // prior auto-leave whose click never confirmed) reports active()===false, so BOTH gates above miss and
+        // a user-prompted "leave" was silently DROPPED while she stayed stuck in the call. A stale non-'none'
+        // stage is exactly that desync — honor the directive directly. forceLeave self-guards with inMeeting,
+        // so it's a clean no-op if she is not actually in a call.
+        console.log(`[gmeet] chat leave-trigger (${_leave.reason}) — state inactive (stage=${_gm.get()}) → force-leave`);
+        _gm.forceLeave().then((r) => console.log(`[gmeet] force-leave → ${r.ok ? 'left' : (r.via === 'not-in-call' ? 'not in a call (no-op)' : 'unconfirmed')}${r.via && r.via !== 'not-in-call' ? ' (' + r.via + ')' : ''}`)).catch((e) => console.error('[gmeet] force-leave failed:', e.message));
       }
     }
   } catch {}
