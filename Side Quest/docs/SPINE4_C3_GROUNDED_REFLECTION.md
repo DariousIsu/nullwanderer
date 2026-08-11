@@ -1,6 +1,6 @@
 # Spine 4 · C3 — Grounded Reflection (spec)
 
-**Written:** 2026-08-10 (sole-builder session). **Authority:** `INTEGRATED_BUILD_TRACK_2026-08-10.md` §C3 + §1 (the "Honest Lying" constraint, arXiv:2605.29463). **Status:** FOUNDATION built + gate-green; the live-loop orchestration is the remaining step (below).
+**Written:** 2026-08-10 (sole-builder session). **Authority:** `INTEGRATED_BUILD_TRACK_2026-08-10.md` §C3 + §1 (the "Honest Lying" constraint, arXiv:2605.29463). **Status:** COMPLETE — foundation + live-loop orchestration both built, gate-green (`smoke_c3_reflection` 21/21). See "DONE" below.
 
 ## The goal
 Make the significance reflection (`lib/reflection.js` `maybeSignificanceReflect`) synthesize over the **landed high-importance documents** C2 now pressures on — not just the thought/reading stream — so a day of landing deliverables and meeting notes produces episode-cited beliefs. Built to the §1 constraint: **grounded (cited external anchors) + programmatic inputs + RRR monitor + two-sided acceptance (decline unsupported generalizations).**
@@ -21,13 +21,15 @@ Make the significance reflection (`lib/reflection.js` `maybeSignificanceReflect`
 ## The pitfall this design avoids (why extraUrls, not sourceRows)
 Putting documents into `sourceRows` would corrupt two monologue-keyed mechanisms: the **provenance** block hardcodes `refTable:'monologue'` and logs `sourceRows` ids (a doc id under monologue = wrong), and **`markReadingsConsolidated`** marks `sourceRows.filter(type==='reading')` ids as consolidated monologue readings (a doc id → wrong row). Passing doc origins as `extraUrls` gives grounding + provenance-urls **without** touching the monologue refIds/markReadings paths.
 
-## REMAINING — the live-loop orchestration (the delicate step, do carefully)
-Wire `maybeSignificanceReflect` to actually pull + reflect over documents:
-1. Read a doc cursor `last_significance_doc_id`; `recentDocs = db.getReflectionWorthyDocuments({sinceId, minImportance:6, limit:5})`.
-2. **MIN_ITEMS across both:** fire when `recent.length + recentDocs.length ≥ MIN_ITEMS_FOR_SIGNIFICANCE` (currently thoughts-only). ⚠GUARD the empty-`recent` case — the current code does `recent[recent.length-1].id` for the cursor; only advance the monologue cursor when `recent.length`.
-3. **Prompt:** add a "recently landed material" section (`title` + `understanding`, capped) alongside the thought lines, so the model synthesizes over both.
-4. **Grounding:** `routeReflection(raw, recent, { extraUrls: recentDocs.map(d=>d.origin).filter(Boolean) })` — doc-derived takeaways become grounded facts (correct: documents are external material).
-5. **Advance** `last_significance_doc_id` to the newest reflected doc id (`recentDocs[0].id`, the query is DESC).
-6. Keep every existing guard: RRR loop-guard, the firewall, the decay-on-too-little path.
+## DONE — the live-loop orchestration (built, `maybeSignificanceReflect` in lib/reflection.js)
+1. Reads a doc cursor `last_significance_doc_id`; `recentDocs = db.getReflectionWorthyDocuments({ sinceId, minImportance:6, limit:5 })`.
+2. **MIN_ITEMS across both:** fires when `recent.length + recentDocs.length ≥ MIN_ITEMS_FOR_SIGNIFICANCE`. The empty-`recent` case is GUARDED by an `advanceCursors()` helper that only touches the monologue cursor when `recent.length` (docs-only windows would otherwise throw on `recent[len-1].id`). Applied at all three exit paths (taggedCount-0, dup, success); the decay path deliberately leaves both cursors so the material is retried.
+3. **Prompt:** a "recently landed material" section (`title` + `understanding`, capped) is folded in alongside the thought lines via `streamParts` (either section may be empty).
+4. **Grounding:** `routeReflection(raw, recent, { extraUrls: recentDocs.map(d=>d.origin).filter(Boolean) })` — doc-derived takeaways become grounded facts (documents are external material).
+5. **Advances** `last_significance_doc_id` to `recentDocs[0].id` (the query is DESC → newest).
+6. Every existing guard kept: RRR loop-guard, the SELF/INTEREST firewall, the decay-on-too-little path.
 
-**Acceptance (two-sided, live):** (a) a window with real landed deliverables/meeting notes synthesizes an episode-cited belief; (b) a window whose takeaways aren't supported (own-thought-only, no docs/readings) writes NO fact (stays speculation), and `self_model` is unchanged. RRR stays low (no near-duplicate belief). This is the C3 completion drive.
+**Acceptance — proven in `smoke_c3_reflection` (21/21):** (a) full loop with empty thought-stream + grounded landed docs → a grounded FACT (storeDeduped called), a reflection note written, doc cursor advanced, monologue cursor untouched, accum reset, no throw; (b) the firewall — own-thought-only takeaway with no external anchor → SPECULATION (gated proposal), never a fact. The two-sided acceptance holds.
+
+## ⚠ Test-environment gotcha (why the smoke stubs `memory.embed`/`storeDeduped`)
+The grounded fact WRITE goes through `memory.storeDeduped` → the WASM embed WORKER (`lib/embed_worker.js`). That worker is `w.unref()`'d (memory.js:69) so it NEVER keeps the process alive — correct for the app (the main loop stays alive on timers/IPC), but in a bare standalone smoke that only `await`s an embed, the loop drains and the process exits 0 *before the worker replies* (silent, mid-embed). This is why embed-dependent standalone smokes (`smoke_reflection_router`, `smoke_reflection_delaunder`) are NOT in the gate allowlist and hang if run bare. `smoke_c3_reflection` stays gate-safe by stubbing `memory.embed`→null and `memory.storeDeduped`→`{action:'add'}`, isolating the C3 ROUTING contract from the embedder — matching run_smokes' "stub embedder" rule (run_smokes.js:280).

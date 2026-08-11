@@ -185,9 +185,24 @@ async function maybeSignificanceReflect() {
 
   const lastId = parseInt(db.getMeta('last_significance_monologue_id') || '0', 10);
   const recent = db.getRecentMonologue(40).filter(m => m.id > lastId && (m.type === 'thought' || m.type === 'reading'));
-  if (recent.length < MIN_ITEMS_FOR_SIGNIFICANCE) {
-    // Threshold tripped but too little fresh material to synthesize — decay the
-    // accumulator so it doesn't sit permanently tripped, and wait for more.
+  // C3: also synthesize over the high-importance material that has LANDED since we last reflected
+  // (deliverables, meeting notes, research) — not just the thought/reading stream. Documents are
+  // EXTERNAL material: their origins ground doc-derived takeaways into facts (passed as extraUrls,
+  // never as sourceRows — see docs/SPINE4_C3_GROUNDED_REFLECTION.md for why).
+  const docCursor = parseInt(db.getMeta('last_significance_doc_id') || '0', 10);
+  let recentDocs = [];
+  try { recentDocs = db.getReflectionWorthyDocuments({ sinceId: docCursor, minImportance: 6, limit: 5 }) || []; } catch {}
+  // Advance both cursors together. The monologue cursor is only meaningful when there ARE fresh
+  // thoughts — `recent` may be empty when all the new material is documents, and recent[len-1].id
+  // would throw — so guard it. Docs come back DESC (newest first): recentDocs[0] is the newest.
+  const advanceCursors = () => {
+    if (recent.length) db.setMeta('last_significance_monologue_id', String(recent[recent.length - 1].id));
+    if (recentDocs.length) db.setMeta('last_significance_doc_id', String(recentDocs[0].id));
+  };
+  if (recent.length + recentDocs.length < MIN_ITEMS_FOR_SIGNIFICANCE) {
+    // Threshold tripped but too little fresh material (thoughts + docs) to synthesize — decay the
+    // accumulator so it doesn't sit permanently tripped, and wait for more. (Cursors NOT advanced:
+    // this same material should be retried once a bit more accumulates.)
     db.setMeta('reflection_importance_accum', String(Math.floor(accum / 2)));
     return false;
   }
@@ -195,14 +210,19 @@ async function maybeSignificanceReflect() {
   inFlight = true;
   try {
     const userName = db.getMeta('user_name') || 'them';
-    const lines = recent.slice(-20).map((m, i) => `${i + 1}. ${(m.content || '').replace(/\s+/g, ' ').slice(0, 200)}`).join('\n');
+    const thoughtLines = recent.slice(-20).map((m, i) => `${i + 1}. ${(m.content || '').replace(/\s+/g, ' ').slice(0, 200)}`).join('\n');
+    const docLines = recentDocs.map((d, i) => `${i + 1}. ${(d.title || 'untitled').replace(/\s+/g, ' ').slice(0, 120)}${d.understanding ? ' — ' + String(d.understanding).replace(/\s+/g, ' ').slice(0, 240) : ''}`).join('\n');
+    const streamParts = [];
+    if (thoughtLines) streamParts.push(`These are things ${userName}'s companion has recently thought and read on its own:\n\n${thoughtLines}`);
+    if (docLines) streamParts.push(`And material it recently worked with and landed — deliverables it produced, meeting notes, research it studied:\n\n${docLines}`);
+    const streamBlock = streamParts.join('\n\n');
     // ROUTER prompt: instead of one bucket of vague "insights", classify each durable
     // takeaway into the IDENTITY track ([SELF]) vs the CAPABILITY track ([KNOWLEDGE]/
     // [SKILL]) so browsing builds BOTH who she is AND what she can do — and so the
     // capability track captures concrete facts/methods, not introspective summaries.
     const messages = [{
       role: 'user',
-      content: `These are things ${userName}'s companion has recently thought and read on its own:\n\n${lines}\n\nExtract DURABLE takeaways worth keeping long-term. Tag each with EXACTLY one label:\n[SELF] — a trait, value, preference, or truth about WHO THE COMPANION IS (its identity/personality), e.g. "I go straight for the primary source instead of the summary". (A genuine trait stated plainly — NEVER an anxious flaw, a doubt about its own honesty, or self-criticism.)\n[KNOWLEDGE] — REAL, APPLICABLE knowledge it can USE later: a specific fact, a how-to step, a correct procedure, or a concrete rule of thumb. Capture the SUBSTANCE — the actual fact/method — NOT an abstract observation about it.\n   GOOD: "A cold pitch email should state the specific ask in the first sentence." / "DuckDuckGo's HTML results page lists each result title under a.result__a."\n   BAD (do NOT tag — drop): "exploring email guidelines reflects an interest in communication", "the tension between trust and autonomy is significant".\n[SKILL] — a procedure it refined through DOING — the correct way to do something, learned from what worked or failed, e.g. "To send email reliably, emit the staged draft→body→send tags in order; narrating the steps doesn't trigger it."\n[INTEREST] — a topic, subject, or thing it encountered (in what it read or did) that it's genuinely DRAWN TO and wants to keep exploring — a taste forming from experience, e.g. "I'm increasingly drawn to mid-century political journalism." (Only if it's a real pull, not a passing mention.)\n\nRules: a takeaway must be CONCRETE and APPLICABLE. Abstract or relational OBSERVATIONS (about trust, autonomy, communication, "deeper meaning") have no place in KNOWLEDGE/SKILL — leave them untagged (dropped) unless they name a real trait ([SELF]). Output ONLY genuinely durable, NEW, usable lines. Each line = the tag then ONE standalone sentence. If nothing qualifies, output nothing.`
+      content: `${streamBlock}\n\nExtract DURABLE takeaways worth keeping long-term. Tag each with EXACTLY one label:\n[SELF] — a trait, value, preference, or truth about WHO THE COMPANION IS (its identity/personality), e.g. "I go straight for the primary source instead of the summary". (A genuine trait stated plainly — NEVER an anxious flaw, a doubt about its own honesty, or self-criticism.)\n[KNOWLEDGE] — REAL, APPLICABLE knowledge it can USE later: a specific fact, a how-to step, a correct procedure, or a concrete rule of thumb. Capture the SUBSTANCE — the actual fact/method — NOT an abstract observation about it.\n   GOOD: "A cold pitch email should state the specific ask in the first sentence." / "DuckDuckGo's HTML results page lists each result title under a.result__a."\n   BAD (do NOT tag — drop): "exploring email guidelines reflects an interest in communication", "the tension between trust and autonomy is significant".\n[SKILL] — a procedure it refined through DOING — the correct way to do something, learned from what worked or failed, e.g. "To send email reliably, emit the staged draft→body→send tags in order; narrating the steps doesn't trigger it."\n[INTEREST] — a topic, subject, or thing it encountered (in what it read or did) that it's genuinely DRAWN TO and wants to keep exploring — a taste forming from experience, e.g. "I'm increasingly drawn to mid-century political journalism." (Only if it's a real pull, not a passing mention.)\n\nRules: a takeaway must be CONCRETE and APPLICABLE. Abstract or relational OBSERVATIONS (about trust, autonomy, communication, "deeper meaning") have no place in KNOWLEDGE/SKILL — leave them untagged (dropped) unless they name a real trait ([SELF]). Output ONLY genuinely durable, NEW, usable lines. Each line = the tag then ONE standalone sentence. If nothing qualifies, output nothing.`
     }];
 
     let raw = '';
@@ -213,10 +233,10 @@ async function maybeSignificanceReflect() {
       onToken: (t) => { raw += t; }
     });
 
-    const routed = await routeReflection(raw, recent);
+    const routed = await routeReflection(raw, recent, { extraUrls: recentDocs.map(d => d.origin).filter(Boolean) });
     if (routed.taggedCount === 0) {
       db.setMeta('reflection_importance_accum', '0');
-      db.setMeta('last_significance_monologue_id', String(recent[recent.length - 1].id));
+      advanceCursors();
       return false;
     }
     const { kept, nSelf, nKnow, nSkill, taggedCount } = routed;
@@ -230,7 +250,7 @@ async function maybeSignificanceReflect() {
     let dupRefl = false; try { dupRefl = await selfRep.isSemanticRepeat(joined, priorRefl); } catch {}
     if (dupRefl) {
       db.setMeta('reflection_importance_accum', '0');
-      db.setMeta('last_significance_monologue_id', String(recent[recent.length - 1].id));
+      advanceCursors();
       console.log('[reflection] dropped semantic-repeat note (already hold this learning)');
       return false;
     }
@@ -238,7 +258,7 @@ async function maybeSignificanceReflect() {
     try { blackboard.append({ source: 'reflection', kind: 'insight', refTable: 'reflections', refId: reflRow && reflRow.id, content: joined }); } catch {}
 
     db.setMeta('reflection_importance_accum', '0');
-    db.setMeta('last_significance_monologue_id', String(recent[recent.length - 1].id));
+    advanceCursors();
     db.setMeta('last_reflection_at', String(now));
     console.log(`[reflection] router — self:${nSelf} knowledge:${nKnow} skill:${nSkill} (from ${taggedCount} tagged)`);
     try { const win = opts.getWindow ? opts.getWindow() : null; if (win && !win.isDestroyed()) win.webContents.send('reflection:fired', { ts: now, significance: true }); } catch {}
