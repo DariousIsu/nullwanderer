@@ -1835,6 +1835,18 @@ function recentDocuments(n = 20, { unpromotedOnly = false } = {}) {
   return getDb().prepare(`SELECT * FROM documents ${where} ORDER BY id DESC LIMIT ?`).all(Math.max(1, n | 0));
 }
 
+// Spine 4 / C3 — the reflection-worthy LANDED documents: un-reflected (id > cursor) high-importance (C1's
+// documents.importance ≥ minImportance) material, newest first, capped. These are what the significance
+// reflection should synthesize OVER (alongside recent thoughts/readings), so a day of landing deliverables
+// and meeting notes produces beliefs, not just the thought-stream. Returns lightweight rows (title +
+// understanding + origin, NOT the full body — reflection reads the gist, and origins are the grounding).
+function getReflectionWorthyDocuments({ sinceId = 0, minImportance = 6, limit = 5 } = {}) {
+  return getDb().prepare(
+    `SELECT id, title, understanding, source, origin, importance FROM documents
+     WHERE id > ? AND importance >= ? AND ${LIVE} ORDER BY id DESC LIMIT ?`
+  ).all(Math.max(0, sinceId | 0), Math.max(1, minImportance | 0), Math.max(1, limit | 0));
+}
+
 // Un-promoted documents for the promotion pass (Slice 2). FAIR-SHARE across sources so NO LANE
 // STARVES — "we leave nothing behind" (Lucas, 2026-07-25).
 //
@@ -2718,6 +2730,7 @@ module.exports = {
   getDocumentByHash,
   getDocument,
   recentDocuments,
+  getReflectionWorthyDocuments,
   getDocumentById,
   listUnpromotedDocuments,
   searchDocuments,

@@ -26,6 +26,7 @@ const smokes = [
   'smoke_teams.js',
   'smoke_swarm_roster.js',
   'smoke_importance.js',
+  'smoke_c3_reflection.js',
   'smoke_salience.js',
   'smoke_owner_world.js',
   'smoke_boot_grace.js',

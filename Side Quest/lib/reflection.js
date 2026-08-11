@@ -35,11 +35,21 @@ async function nearestKnowledge(text, threshold = 0.6) {
   return (bestId && bestSim >= threshold) ? bestId : null;
 }
 
+// C3 (Spine 4) — is this reflection window GROUNDED in EXTERNAL material? A KNOWLEDGE/SKILL takeaway becomes a
+// retrievable FACT only if anchored to something outside her own head: a reading she took in, a URL, or a
+// landed DOCUMENT's origin (extraUrls). A purely own-thought window yields SPECULATION (gated to a proposal),
+// never a fact — the anti-glob / drift firewall. Pure + exported so the contract is testable without a model.
+function isGrounded(sourceRows = [], extraUrls = []) {
+  if ((sourceRows || []).some((r) => r && r.type === 'reading')) return true;
+  for (const r of (sourceRows || [])) { try { const u = r && r.urls ? JSON.parse(r.urls) : null; if (Array.isArray(u) && u.length) return true; } catch {} }
+  return (extraUrls || []).some(Boolean);
+}
+
 // Parse the router's tagged output and ROUTE each takeaway to its store: [SELF] →
 // self_model (identity), [KNOWLEDGE]/[SKILL] → knowledge (capability, linked to the
 // nearest existing note). Untagged lines are dropped — the noise filter. Exported
 // for the backtest. Returns { taggedCount, kept, nSelf, nKnow, nSkill }.
-async function routeReflection(raw, sourceRows = [], { decideFn = null } = {}) {
+async function routeReflection(raw, sourceRows = [], { decideFn = null, extraUrls = [] } = {}) {
   const tagged = [];
   for (const line of String(raw || '').split('\n')) {
     const m = line.match(/^\s*[-*\d.)]*\s*\[(SELF|KNOWLEDGE|SKILL|INTEREST)\][\s:\-–—•*]*(.+)$/i);
@@ -50,6 +60,11 @@ async function routeReflection(raw, sourceRows = [], { decideFn = null } = {}) {
   const refIds = sourceRows.map(r => r.id).filter(Boolean).slice(-8);
   const urls = [];
   for (const r of sourceRows) { try { const u = r.urls ? JSON.parse(r.urls) : null; if (Array.isArray(u)) urls.push(...u); } catch {} }
+  // C3 (Spine 4) — DOCUMENTS ground reflection too: a landed document's origin is an EXTERNAL anchor, so a
+  // takeaway drawn from recently-landed material is a real grounded fact, not own-thought speculation. The doc
+  // origins arrive as `extraUrls` (NOT as sourceRows) so the monologue provenance — refIds + the
+  // markReadingsConsolidated pass, both keyed to monologue ids — is never corrupted by document ids.
+  for (const u of (extraUrls || [])) { if (u) urls.push(String(u)); }
   const prov = refIds.length || urls.length
     ? [{ type: 'reflection', refTable: 'monologue', refId: refIds[refIds.length - 1] || null, refIds, urls: urls.slice(0, 5), label: 'distilled from recent thoughts/readings' }]
     : null;
@@ -57,8 +72,7 @@ async function routeReflection(raw, sourceRows = [], { decideFn = null } = {}) {
   // GROUNDEDNESS (anti-glob phase 2): is this reflection anchored in something EXTERNAL
   // (a reading she took in / a URL), or distilled purely from her own prior thoughts?
   // Knowledge from her own thoughts is SPECULATION and must not become a retrievable fact.
-  const hasReading = sourceRows.some(r => r && r.type === 'reading');
-  const grounded = hasReading || urls.length > 0;
+  const grounded = isGrounded(sourceRows, extraUrls);   // C3: readings, sourceRow urls, OR doc origins (extraUrls)
   const lastRefId = refIds.length ? refIds[refIds.length - 1] : null;
 
   const kept = [];
@@ -317,6 +331,7 @@ module.exports = {
   reflectIfDue,
   maybeSignificanceReflect,
   routeReflection,
+  isGrounded,
   forceReflectionIfDue: () => reflectIfDue({ force: true }),
   SIGNIFICANCE_THRESHOLD,
   MIN_ITEMS_FOR_SIGNIFICANCE
