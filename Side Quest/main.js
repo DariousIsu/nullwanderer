@@ -6397,7 +6397,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               try {
                 const asm = _lr.assembleDeliverable(_rosterState);
                 const so = require('./lib/spreadsheet_out');
-                const out = await so.deliverSpreadsheet({ dir: path.join(__dirname, 'notes'), basename: `${_rosterState}_local_roster_${new Date().toISOString().slice(0, 10)}`, rows: asm.rows, sheetName: `${_frame.state} roster` });
+                const out = await so.deliverSpreadsheet({ dir: require('./lib/files').resolvePath('notes'), basename: `${_rosterState}_local_roster_${new Date().toISOString().slice(0, 10)}`, rows: asm.rows, sheetName: `${_frame.state} roster` });
                 if (out && out.ok) sheetLine = ` → ${path.relative(__dirname, out.path)}${out.openable ? ' (openable)' : ''}`;
               } catch (e) { console.error('[swarm-roster] sheet re-assemble failed:', e.message); }
               console.log(`[swarm] DONE local-roster ${_rosterState}: coverage ${cov.filled}/${cov.denominator}${sheetLine}`);

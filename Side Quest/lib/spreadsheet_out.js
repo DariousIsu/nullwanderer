@@ -82,6 +82,11 @@ async function deliverSpreadsheet({ dir, basename, rows = [], columns = null, sh
   const cols = normalizeColumns(columns, rows);
   if (!cols.length) return { ok: false, reason: 'no columns (empty rows and no columns given)' };
   const safeBase = String(basename || 'deliverable').replace(/[^\w.\-]+/g, '_').slice(0, 80) || 'deliverable';
+  // A delivery door whose whole contract is "delivered = openable" must not silently lose the file to a
+  // missing parent dir. writeFile/writeFileSync don't create dirs, so BOTH the xlsx write and the CSV
+  // fallback would throw ENOENT and the deliverable would vanish (the swarm branch hit exactly this,
+  // targeting a non-existent notes dir). Ensure the dir exists first — recursive, fail-soft.
+  try { if (dir) fs.mkdirSync(dir, { recursive: true }); } catch {}
   const xlsxPath = path.join(dir, safeBase + '.xlsx');
   let reason = null;
   try {

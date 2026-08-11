@@ -63,6 +63,16 @@ const ROWS = [
     ok(/^Parish,Official,Email/.test(csv) && /Acadia,Ryan Turner/.test(csv), 'fallback: the CSV has the header + data');
   }
 
+  // ── a MISSING parent dir is created, not silently lost (the swarm-branch bug: Side Quest/notes didn't exist,
+  //    writeFile threw ENOENT, and BOTH xlsx + CSV vanished — a delivery door must not lose the deliverable) ──
+  {
+    const nested = path.join(dir, 'does', 'not', 'exist', 'yet');
+    ok(!fs.existsSync(nested), 'precondition: the target dir does not exist');
+    const r3 = await so.deliverSpreadsheet({ dir: nested, basename: 'la_roster', rows: ROWS, sheetName: 'LA' });
+    ok(r3.ok && r3.openable === true, 'deliver: a missing (nested) dir is created → the sheet still delivers openable');
+    ok(fs.existsSync(r3.path), 'deliver: the file exists under the freshly-created dir');
+  }
+
   // ── CSV escaping + column handling ──────────────────────────────────────────────────────────────────────
   ok(so.csvCell('a,b') === '"a,b"' && so.csvCell('say "hi"') === '"say ""hi"""', 'csvCell: commas + quotes escaped');
   {
