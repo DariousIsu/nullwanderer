@@ -5155,6 +5155,24 @@ async function buildLocalRosterDeliverable({ io, channel, sessionId, userName, s
     await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked to build a local-government roster ("${String(subject || '').slice(0, 100)}") but the STATE wasn't clear. Ask him which state (e.g. "the Louisiana parish roster"). Do NOT invent one or claim a file exists.]` });
     return;
   }
+  // R2 — SERVE-vs-REBUILD trust gate: if a held roster product for this state is still current (fresh AND no
+  // coverage gained since it was built), SERVE it instead of pointlessly re-assembling + re-writing the sheet.
+  // Rebuild when stale, gone, or the swarm/metabolism has filled more since. Denominator is always the frame
+  // count. See docs/INTEGRATED_BUILD_TRACK_2026-08-10.md §R2.
+  try {
+    const cov = _lr.coverage(state);
+    let held = null;
+    try { const raw = db.getMeta(`roster.product.${state}`); if (raw) held = JSON.parse(raw); } catch {}
+    if (held && held.path && !require('fs').existsSync(held.path)) held = null;   // the file is gone → must rebuild
+    const decision = _lr.decideServeOrRebuild({ held: held ? { ts: held.ts, filled: held.filled } : null, currentFilled: cov.filled });
+    if (decision.action === 'serve' && held) {
+      const relHeld = require('path').relative(__dirname, held.path).replace(/\\/g, '/');
+      const ageMin = Math.round((Date.now() - held.ts) / 60000);
+      console.log(`[roster-door] ${state}: SERVE held product (${decision.reason}) — ${held.filled}/${held.denominator} at ${relHeld} (${ageMin}m old)`);
+      await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${state} roster already exists and is current — ${held.filled} of ${held.denominator} localities verified, saved as an openable spreadsheet at "${relHeld}" (built ${ageMin} minute(s) ago). Nothing has changed since, so I'm SERVING the existing sheet rather than rebuilding it. Point Lucas to the file and the honest ${held.filled}/${held.denominator} count, and offer to refresh it if he wants a rebuild.]` });
+      return;
+    }
+  } catch (e) { console.error('[roster-door] serve-vs-rebuild check failed (rebuilding):', e.message); }
   let del, filePath = null, format = null, openable = false;
   try {
     del = _lr.assembleDeliverable(state);
@@ -5165,6 +5183,8 @@ async function buildLocalRosterDeliverable({ io, channel, sessionId, userName, s
       rows: del.rows, sheetName: `${state} roster`,
     });
     if (out && out.ok) { filePath = out.path; format = out.format; openable = out.openable; }
+    // R2: record the held-product meta so a later build request can serve-vs-rebuild against it.
+    if (filePath) { try { db.setMeta(`roster.product.${state}`, JSON.stringify({ ts: Date.now(), filled: del.filled, denominator: del.denominator, path: filePath })); } catch {} }
   } catch (e) {
     await fireToolFollowup({ io, channel, sessionId, resultText: `[Building the ${state} local roster FAILED (${e.message}). Tell Lucas plainly it didn't produce a file; never claim one exists.]` });
     return;

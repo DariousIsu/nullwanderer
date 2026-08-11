@@ -134,4 +134,18 @@ async function drainSwarm({ tasks = [], workers = 2, runTask, onResult = null } 
   return results;
 }
 
-module.exports = { enqueueState, coverage, assembleDeliverable, bodyTitle, openTasks, drainSwarm };
+// R2 — the serve-vs-rebuild TRUST GATE (pure). A roster BUILD request when a held product already exists:
+// SERVE the held sheet if it's still current, REBUILD if it's stale, gone, or coverage has GROWN since it was
+// built (the swarm/metabolism filled more localities → the held sheet is now behind). The denominator is
+// ALWAYS the independent frame count — never the found count — so `held.filled`/`currentFilled` are both
+// measured against the same frame. held = { ts, filled } | null; currentFilled = the civic store's verified
+// count NOW. Returns { action:'serve'|'rebuild', reason }. Runtime glue (meta read/write, fs.existsSync) lives
+// in main.js's buildLocalRosterDeliverable; this is the offline-testable decision core.
+function decideServeOrRebuild({ held = null, currentFilled = 0, now = Date.now(), ttlMs = 6 * 3600 * 1000 } = {}) {
+  if (!held || held.ts == null) return { action: 'rebuild', reason: 'none-held' };
+  if ((currentFilled | 0) > (held.filled | 0)) return { action: 'rebuild', reason: 'coverage-improved' };
+  if ((now - held.ts) >= ttlMs) return { action: 'rebuild', reason: 'stale' };
+  return { action: 'serve', reason: 'fresh' };
+}
+
+module.exports = { enqueueState, coverage, assembleDeliverable, bodyTitle, openTasks, drainSwarm, decideServeOrRebuild };

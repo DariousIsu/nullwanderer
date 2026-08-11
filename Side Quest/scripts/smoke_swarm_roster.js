@@ -70,6 +70,18 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     ok(/Acadia Parish/.test(prompt), 'R3 guardrail: the prompt is locality-scoped (Acadia Parish)');
   }
 
+  // ── R2 serve-vs-rebuild trust gate (pure decision) ───────────────────────────────────────────────────────
+  {
+    const now = 1_000_000_000;
+    ok(lr.decideServeOrRebuild({ held: null, currentFilled: 3, now }).action === 'rebuild', 'R2: no held product → rebuild');
+    ok(lr.decideServeOrRebuild({ held: { ts: now - 60000, filled: 3 }, currentFilled: 3, now }).action === 'serve', 'R2: fresh held + unchanged coverage → serve');
+    const grew = lr.decideServeOrRebuild({ held: { ts: now - 60000, filled: 3 }, currentFilled: 5, now });
+    ok(grew.action === 'rebuild' && grew.reason === 'coverage-improved', 'R2: coverage grew since build (5 > 3) → rebuild');
+    ok(lr.decideServeOrRebuild({ held: { ts: now - 7 * 3600 * 1000, filled: 3 }, currentFilled: 3, now }).action === 'rebuild', 'R2: stale (older than the 6h TTL) → rebuild');
+    ok(lr.decideServeOrRebuild({ held: { ts: now - 60000, filled: 3 }, currentFilled: 3, now, ttlMs: 1000 }).action === 'rebuild', 'R2: custom short TTL → stale → rebuild');
+    ok(lr.decideServeOrRebuild({ held: { ts: now, filled: 0 }, currentFilled: 0, now }).reason === 'fresh', 'R2: serve reason reported (fresh)');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
