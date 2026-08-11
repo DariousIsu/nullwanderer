@@ -58,6 +58,21 @@ const deps = {
   ok('session cleared after finalize', scribe.hasPending() === false && scribe.minutes() === '');
   ok('finalize is idempotent (no second recap)', (await scribe.finalize({ deps })) === '' && recapCalls === 1);
 
+  // RE-ENTRANCY (live incident 2026-08-11): the sequential idempotency above only covers a SECOND finalize
+  // AFTER the first cleared. The real bug was CONCURRENT: finalize()'s ~20s digest ran while scribe_active
+  // stayed '1', so overlapping heartbeat ticks each started ANOTHER finalize → ~11 duplicate notes docs +
+  // stacked main-thread stalls that failed live turns. The fix claims scribe_active='finalizing' SYNCHRONOUSLY
+  // (before the first await), so a racing finalize hits the guard and returns ''. Deterministic: Promise.all
+  // invokes the first synchronously up to its first await (past the claim) before the second even starts.
+  recapCalls = 0; minutesCalls = 0;
+  for (let i = 0; i < 7; i++) db.insertTranscriptLine({ meeting: 'abc', speaker: 'Ann', text: `second-meeting line ${i} with enough words here to matter for the digest`, ts: 9000 + i });
+  await scribe.tick({ deps });
+  ok('re-armed a second pending session', scribe.hasPending() === true);
+  recapCalls = 0;
+  const [ra, rb] = await Promise.all([scribe.finalize({ deps }), scribe.finalize({ deps })]);
+  ok('CONCURRENT finalize: exactly ONE ran (no duplicate digest/notes — the re-entrancy claim holds)', ((ra ? 1 : 0) + (rb ? 1 : 0)) === 1 && recapCalls === 1);
+  ok('concurrent finalize: hasPending() false + not stuck (loop stops)', scribe.hasPending() === false);
+
   console.log(`\n${fail ? 'FAIL' : 'ALL PASS'} — ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

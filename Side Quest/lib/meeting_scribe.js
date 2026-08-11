@@ -316,6 +316,15 @@ function appendSegment(seg) {
 async function finalize(ctx = {}) {
   const d = ctx.deps || defaultDeps();
   if (db.getMeta('scribe_active') !== '1') return '';
+  // RE-ENTRANCY CLAIM (live incident 2026-08-11): the digest below is a ~20s whole-transcript pass, and
+  // scribe_active was only cleared at the END (line ~361) — so while it ran, hasPending() stayed true and
+  // every heartbeat tick re-entered the meeting-end block and started ANOTHER concurrent finalize: ~11
+  // duplicate notes docs landed and each 20s digest stacked a main-thread stall that failed live user turns.
+  // CLAIM the finalize synchronously now (single-threaded → lands before any other tick is scheduled): a
+  // concurrent call hits the `!== '1'` guard above and returns '', and hasPending() (=== '1') goes false so
+  // the tick can't re-enter mid-digest. Still cleared to '0' at the end; on a throw it stays out of '1', so
+  // the loop STOPS rather than re-firing (strictly safer than the old stuck-at-'1' behavior).
+  db.setMeta('scribe_active', 'finalizing');
   const cfg = require('./config');
   // Flush the tail window into a final segment so the close of the meeting is never the part lost.
   const buffer = db.getMeta('scribe_buffer') || '';
