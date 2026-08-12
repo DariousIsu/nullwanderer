@@ -15108,6 +15108,15 @@ function _surfaceSteeringNote(focus, msg, label, { force = false } = {}) {
     // steering notes NEVER reach chat — the surfacing contract (unprompted = fully-formed thought
     // or expected deliverable, never background churn). Logged so the live test can still see them.
     try { if (require('./lib/focus').originOf(focus) === 'beat') { console.log(`[user-work] steering note (beat-origin → log only) — ${label}: ${String(msg).replace(/\s+/g, ' ').slice(0, 160)}`); return false; } } catch {}
+    // NEVER MID-EXCHANGE. A steering note is an UNPROMPTED interjection (research progress, a re-entry
+    // audit) — the surfacing contract is "surface in a LULL, never mid-exchange", the same _conversationActive()
+    // guard every other autonomous surface already uses (the idle "still owe you X" note, the directed-pass
+    // starter, autonomy). This path was the one exception, so a directed run's "Tactics update… / I re-read
+    // the document I'm continuing… / Object if this is the wrong turn" landed as a NON-SEQUITUR the instant
+    // Lucas asked something else (measured 2026-08-12, session 1080 — his 'chat turns failing' report).
+    // Applies even to force: force only bypasses the pacing THROTTLE, never a live exchange. The run still
+    // does its work (revise the doc, advance the plan); only the chat surfacing waits for a lull.
+    if (_conversationActive()) { console.log(`[user-work] steering note HELD — live conversation, never mid-exchange (${label})`); return false; }
     if (!_surfaceAllowed(focus.id)) return false;
     const k = `focus.${focus.id}.pivot_surfaced_at`;
     // force: a re-entry audit verdict must never be swallowed by an earlier note's throttle — it is
