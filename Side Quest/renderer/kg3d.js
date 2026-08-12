@@ -547,7 +547,7 @@ try {
     // is the operator's — a surface that re-aims itself while you are reading it is worse than a loose fit.
     // (no mode test here on purpose — `mode` is declared below and this is the third temporal-dead-zone trap
     // this file has sprung on me. The one-shot flag is consumed by the initial overview cooldown anyway.)
-    if (_fitOnCool) { _fitOnCool = false; fitView(1000, true); }
+    if (_fitOnCool) { _fitOnCool = false; if (SHAPE !== 'skin') fitView(1000, true); }   // skin is posed by the viewer — never auto-reframe it (that read as the camera "zooming in and out")
     settleLayout();                        // the cloud cooled — freeze it + drop the heavy forces (block below)
     setLinksHot(false);                    // whatever hid the links during a hot morph/settle, they're back now
   });
@@ -2457,6 +2457,16 @@ const ANIM_CLIPS = {
   } },
 };
 let animCur = 'idle', animPrev = null, animT = 0, animPrevT = 0, animMix = 1, animFadeDur = 0.45, animHoldUntil = 0;
+// ---- GAZE: she looks at YOU (Lucas, 2026-08-10, the interactive/animated piece) --------------------------
+// The body-clip menu makes her ANIMATED, but she only ever responded to her own activity bus, never to the
+// viewer. Gaze is the first genuinely INTERACTIVE beat: her head + neck turn toward the camera as you orbit,
+// the eyes finish the look via three-vrm's lookAt, and it all rides ON TOP of whatever clip is playing (the
+// breathing continues underneath). Damped + clamped so it's a natural glance, not a rigid stare or an owl.
+let GAZE_ON = true; try { GAZE_ON = localStorage.getItem('kg3d.gaze') !== '0'; } catch (e) {}
+const _gaze = { yaw: 0, pitch: 0 };            // current damped head-share angles (radians)
+let _gazeTarget = null, _gazeLinked = false;   // scene proxy at the camera, handed to vrm.lookAt for the eyes
+const _gzHead = new THREE.Vector3(), _gzCam = new THREE.Vector3(), _gzDir = new THREE.Vector3(), _gzPQ = new THREE.Quaternion();
+const GAZE_YAW_MAX = 0.62, GAZE_PITCH_MAX = 0.42;   // ~36° / 24° — how far the head+neck will turn to keep you
 // sample one clip's track at time t (linear between keys, eased so nothing starts or stops abruptly)
 function animSample(clip, bone, t) {
   const ks = clip.tracks[bone]; if (!ks || !ks.length) return null;
@@ -2499,6 +2509,7 @@ function animUpdate(dt) {
   const bones = new Set(Object.keys(BASE_POSE));
   if (cur) for (const b of Object.keys(cur.tracks)) bones.add(b);
   if (prv) for (const b of Object.keys(prv.tracks)) bones.add(b);
+  bones.add('head'); bones.add('neck');           // gaze rides these every frame, whether or not a clip animates them
   for (const name of bones) {
     let node = null;
     try { node = H.getNormalizedBoneNode(name); } catch (e) {}
@@ -2512,6 +2523,36 @@ function animUpdate(dt) {
     else if (a) { const m = prv ? animMix : 1; ox = a[0] * m; oy = a[1] * m; oz = a[2] * m; }
     else if (b) { const n = 1 - animMix; ox = b[0] * n; oy = b[1] * n; oz = b[2] * n; }
     node.rotation.set(base[0] + ox, base[1] + oy, base[2] + oz);
+    // GAZE rides on top of the clip: the head carries most of the turn, the neck a share, so the look travels
+    // through the chain like a real one instead of the head snapping alone. _gaze damps to 0 when gaze is off.
+    if (name === 'head') { node.rotation.y += _gaze.yaw * 0.6; node.rotation.x += _gaze.pitch * 0.6; }
+    else if (name === 'neck') { node.rotation.y += _gaze.yaw * 0.4; node.rotation.x += _gaze.pitch * 0.4; }
+  }
+}
+// Aim the head/neck (and, via vrm.lookAt, the eyes) at the camera. Runs BEFORE animUpdate each frame so the
+// clip pass can add its share on top; the angles are computed in the head-parent frame, clamped to a natural
+// range, and damped so she follows you smoothly rather than snapping. VRM faces +z, so yaw = atan2(x, z).
+function updateGaze(dt) {
+  const k = Math.min(1, dt * 5);                        // ~0.2s follow
+  if (!GAZE_ON || !vrmReady || SHAPE !== 'skin' || !vrmModel.humanoid) {
+    _gaze.yaw += (0 - _gaze.yaw) * k; _gaze.pitch += (0 - _gaze.pitch) * k; return;   // ease back to neutral when off
+  }
+  const head = vrmModel.humanoid.getNormalizedBoneNode('head'), cam = Graph.camera();
+  if (!head || !head.parent || !cam) { _gaze.yaw += (0 - _gaze.yaw) * k; _gaze.pitch += (0 - _gaze.pitch) * k; return; }
+  head.getWorldPosition(_gzHead); cam.getWorldPosition(_gzCam);
+  _gzDir.copy(_gzCam).sub(_gzHead).normalize();
+  head.parent.getWorldQuaternion(_gzPQ).invert();
+  _gzDir.applyQuaternion(_gzPQ);                         // camera direction in the neck's local frame
+  let yaw = Math.atan2(_gzDir.x, _gzDir.z);
+  let pitch = -Math.atan2(_gzDir.y, Math.hypot(_gzDir.x, _gzDir.z));
+  yaw = Math.max(-GAZE_YAW_MAX, Math.min(GAZE_YAW_MAX, yaw));
+  pitch = Math.max(-GAZE_PITCH_MAX, Math.min(GAZE_PITCH_MAX, pitch));
+  _gaze.yaw += (yaw - _gaze.yaw) * k; _gaze.pitch += (pitch - _gaze.pitch) * k;
+  // Eyes: three-vrm rotates them toward a scene object during vrm.update() — a proxy pinned to the camera.
+  if (vrmModel.lookAt) {
+    if (!_gazeTarget) { _gazeTarget = new THREE.Object3D(); scene.add(_gazeTarget); }
+    _gazeTarget.position.copy(_gzCam);
+    if (!_gazeLinked) { try { vrmModel.lookAt.target = _gazeTarget; } catch (e) {} _gazeLinked = true; }
   }
 }
 // the deterministic half of the menu: what she is doing decides how her body moves
@@ -2548,19 +2589,28 @@ function animOnActivity(evt) {
  * keys on the model itself, so swapping avatars rebuilds it; a model without the morph is simply a no-op and
  * the viseme carries on alone.
  */
-let _jaw = { model: null, targets: [] };
-function setJawOpen(v) {
+let _jaw = { model: null, m: {} };
+// THE MOUTH ACTUALLY OPENS NOW (Lucas, 2026-08-10: "her mouth doesn't open at all and most of the motion pushes
+// out the bottom of her chin"). On this CC/Reallusion rig Jaw_Open does NOT part the lips — it just distends the
+// chin — so driving it was all chin-push, no opening. What opens the mouth is the LIP-PART set: V_Lip_Open +
+// Mouth_Drop_Lower/Upper pull the lips apart so the mouth cavity shows (verified live — the interior appears).
+// Jaw_Open is pinned to 0. The aa/V_Open viseme (driven by the expressionManager) carries the vowel LIP SHAPE on
+// top. These morphs are bound to no VRM expression, so a direct write each frame holds; set AFTER vrm.update().
+let MOUTH_GAIN = 1.0;   // overall open scale — live-tunable via face({mouth})
+function setMouthOpen(v) {
   if (_jaw.model !== vrmModel) {
-    _jaw = { model: vrmModel, targets: [] };
+    _jaw = { model: vrmModel, m: {} };
+    const names = ['V_Lip_Open', 'Mouth_Drop_Lower', 'Mouth_Drop_Upper', 'Jaw_Open'];
+    for (const nm of names) _jaw.m[nm] = [];
     try {
       vrmModel.scene.traverse((o) => {
-        const d = o.morphTargetDictionary;
-        if (d && d.Jaw_Open != null && o.morphTargetInfluences) _jaw.targets.push({ inf: o.morphTargetInfluences, i: d.Jaw_Open });
+        const d = o.morphTargetDictionary; if (!d || !o.morphTargetInfluences) return;
+        for (const nm of names) if (d[nm] != null) _jaw.m[nm].push({ inf: o.morphTargetInfluences, i: d[nm] });
       });
     } catch (e) {}
   }
-  const w = Math.max(0, Math.min(1, v));
-  for (const t of _jaw.targets) t.inf[t.i] = w;
+  const w = Math.max(0, Math.min(1, v)), set = (nm, val) => { const a = _jaw.m[nm]; if (a) for (const t of a) t.inf[t.i] = val; };
+  set('V_Lip_Open', w * 0.9); set('Mouth_Drop_Lower', w * 0.85); set('Mouth_Drop_Upper', w * 0.5); set('Jaw_Open', 0);
 }
 function updateVRMFace(now, dt) {
   if (!vrmReady || SHAPE !== 'skin') return;
@@ -2575,9 +2625,10 @@ function updateVRMFace(now, dt) {
     try { em.setValue('blink', AS ? AS.blinkMultiplier(now) < 0.5 ? 1 : 0 : 0); } catch (e) {}
     try { em.setValue('happy', Math.max(0, face.cur.mouthCurve)); } catch (e) {}
   }
+  updateGaze(dt);                     // aim head/neck/eyes at the viewer, so the clip pass can add its share on top
   animUpdate(dt);                     // body clips first — vrm.update() normalises them into the raw bones
   try { vrmModel.update(dt); } catch (e) {}
-  setJawOpen(face.mouthOpen);         // the viseme shapes the lips; THIS is what actually opens her mouth
+  setMouthOpen(face.mouthOpen * MOUTH_GAIN);   // lip-part morphs actually open the mouth; Jaw_Open (chin-push) is pinned to 0
 }
 // Base weight is structural (how connected), the bonus is evidential (how corroborated). They are genuinely
 // different facts about a node and both belong on screen: a hub everyone links to but nobody sourced should
@@ -3834,7 +3885,7 @@ async function applyShape(next) {
       setOverlay(n ? null : 'no nodes to bind', n ? 0 : 2000);
       updateSkin(); buildRoutedLinks(); setRoutedVisible(true); setLinksHot(false);
       try { Graph.d3ReheatSimulation(); } catch (e) {}
-      _fitOnCool = true;
+      fitView(900, false);                 // frame her ONCE on entry; onEngineStop then never auto-fits skin, so the camera stays where you leave it
       return;
     }
     setOverlay('VRM unavailable — data/avatars/zoe.vrm missing or loader not built', 3200);
@@ -3881,14 +3932,18 @@ window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () =
   face: (o) => { if (o && typeof o === 'object') { if (o.on != null) { FACE_ON = !!o.on; if (!FACE_ON) face.strength = 0; }
       if (o.expression) faceExpression(o.expression); if (o.say != null) faceSpeak(o.say);
       if (o.strength != null) { face.target = o.strength; face.strength = o.strength; }
-      if (o.mouthOpen != null) face.mouthOpen = o.mouthOpen; }
-    return { on: FACE_ON, model: !!AS, strength: +face.strength.toFixed(3), mouthOpen: +face.mouthOpen.toFixed(3),
+      if (o.mouthOpen != null) face.mouthOpen = o.mouthOpen; if (o.mouth != null) MOUTH_GAIN = o.mouth; }
+    return { on: FACE_ON, model: !!AS, strength: +face.strength.toFixed(3), mouthOpen: +face.mouthOpen.toFixed(3), mouth: MOUTH_GAIN,
       speaking: performance.now() < face.speakUntil || !!face.analyser, realAudio: !!face.analyser, cur: face.cur }; },
   // "more actions in the log than on the visual" — measurable now instead of arguable. Per kind: how many the
   // bus delivered vs how many produced a gesture. Any row where drawn < seen names a real remaining gap.
   actStats: () => ({ seen: _act.seen, drawn: _act.drawn,
     kinds: [..._act.byKind.entries()].map(([k, v]) => ({ kind: k, seen: v.seen, drawn: v.drawn })).sort((a, b) => b.seen - a.seen) }),
   shape: (s) => { if (s) { applyShape(s); if (shapeEl) shapeEl.value = s; } return SHAPE; },
+  // GAZE — she looks at the viewer. Toggle + read the live head-share angles and whether the eyes are wired.
+  gaze: (o) => { if (o && typeof o === 'object' && o.on != null) { GAZE_ON = !!o.on; try { localStorage.setItem('kg3d.gaze', GAZE_ON ? '1' : '0'); } catch (e) {} }
+    return { on: GAZE_ON, yaw: +_gaze.yaw.toFixed(3), pitch: +_gaze.pitch.toFixed(3), eyes: !!(vrmModel && vrmModel.lookAt),
+      head: { x: Math.round(_gzHead.x), y: Math.round(_gzHead.y), z: Math.round(_gzHead.z) } }; },
   // THE ANIMATION MENU — the takeover surface. Anything that can name a clip can drive her body, which is the
   // hook a small cloud model plugs into: `anim()` lists what exists, `anim({play:'think', hold:6})` moves her.
   anim: (o) => { if (o && typeof o === 'object' && o.play) animPlay(o.play, o.hold, o.fade);
