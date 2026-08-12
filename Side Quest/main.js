@@ -5267,15 +5267,28 @@ async function buildSplitFromOrder({ io, channel, sessionId, labels }) {
     let n = 0;
     try { await canvasUpsertBlock({ focusId: splitFocusId, blockId: `header-${cs.slug(doc.label)}`, title: doc.label, tabMode: 'RESEARCH', blockType: 'heading', data: { level: 1, text: doc.label } }); } catch {}
     for (const b of doc.blocks) {
-      try { await canvasUpsertBlock({ focusId: splitFocusId, blockId: b.block_id, title: doc.label, tabMode: 'RESEARCH', blockType: b.block_type || 'paragraph', data: JSON.parse(b.data || '{}') }); n++; } catch (e) { console.error('[split] block copy failed:', e.message); }
+      // DESTINATION-NAMESPACED block id (2026-08-12 review H3, CONFIRMED live): reusing the SOURCE
+      // block_id routed every copy through the tab-blind _canvasBlocks Set → saga_canvas_update_block
+      // on a tab that never had the block → the engine silently no-op'd (returns ok:true regardless)
+      // while chat claimed success, and the mirror's block_id-PK upsert re-homed the SOURCE row
+      // instead of copying. A fresh id per destination makes the ADD branch fire live and the mirror
+      // INSERT a real copy. The source document is deliberately LEFT INTACT (a split is a copy-out,
+      // never a gutting — Lucas closes the original himself if he wants it gone).
+      const destId = `sec-${splitFocusId}-${(String(b.block_id).replace(/^sec-[^-]*-?/, '') || 'section').slice(0, 40)}`;
+      try {
+        // Count LANDINGS, not attempts: canvasUpsertBlock returns false (no throw) on failure, and
+        // the old `n++` after a non-throwing call told Lucas "the two documents now exist" when
+        // potentially nothing landed — the exact confabulated action this builder exists to kill.
+        if (await canvasUpsertBlock({ focusId: splitFocusId, blockId: destId, title: doc.label, tabMode: 'RESEARCH', blockType: b.block_type || 'paragraph', data: JSON.parse(b.data || '{}') })) n++;
+      } catch (e) { console.error('[split] block copy failed:', e.message); }
     }
     if (n) made++;
     summary.push(`"${doc.label}" (${n} section${n === 1 ? '' : 's'})`);
-    console.log(`[split] materialized "${doc.label}" → tab directed-${splitFocusId} (${n} section(s))`);
+    console.log(`[split] materialized "${doc.label}" → tab directed-${splitFocusId} (${n}/${doc.blocks.length} section(s) landed)`);
   }
   // 4) REPORT — honest either way.
   if (made) {
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[You SPLIT the research into two separate canvas documents: ${summary.join(' and ')}. The two documents now exist on the canvas. State this plainly and briefly; do not claim more than the ${sections.length} sections that were split.]` });
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[You SPLIT the research into two separate canvas documents: ${summary.join(' and ')}. The original document is untouched — the sections were COPIED out. State this plainly and briefly; do not claim more than the ${sections.length} sections that were split.]` });
   } else {
     await fireToolFollowup({ io, channel, sessionId, resultText: `[The split into "${labA}" and "${labB}" did not materialize any sections. Say plainly it did not work and you'll retry — never claim it landed.]` });
   }
@@ -5510,6 +5523,17 @@ async function replayCanvasFromStore() {
     const store = require('./lib/canvas_docs');
     let docs = []; try { docs = store.all(); } catch (e) { console.error('[canvas] replay read failed:', e.message); return 0; }
     if (!docs.length) return 0;
+    // ADOPTED-ENGINE GUARD (2026-08-12 review M3): the replay assumes a BLANK engine board, but the
+    // boot path deliberately ADOPTS a still-running external engine — and its in-memory board
+    // SURVIVED, so re-adding every mirrored block would duplicate the entire workspace (add_block
+    // has no dedupe). Seed the session Sets from the mirror instead (so live-grow PATCHES in place)
+    // and skip the re-emit. A spawned-fresh engine replays exactly as before.
+    if (engineSupervisor && engineSupervisor.adopted) {
+      let seeded = 0;
+      for (const d of docs) { _canvasTabsOpened.add(d.tabKey); for (const b of d.blocks) { _canvasBlocks.add(b.blockId); seeded++; } }
+      console.log(`[canvas] replay SKIPPED — adopted a surviving engine (board already live; re-adding would duplicate). Seeded ${seeded} block id(s) so live-grow patches in place.`);
+      return docs.length;   // report the board as restored — it is, it never died
+    }
     const callTool = pollCallTool();
     let tabs = 0, blocks = 0;
     for (const d of docs) {
@@ -5519,6 +5543,11 @@ async function replayCanvasFromStore() {
         _canvasTabsOpened.add(d.tabKey);
         tabs++;
         for (const b of d.blocks) {
+          // PRE-REPLAY MINT RACE (review M3, second window): a block minted THIS session before the
+          // replay landed (engine-late boot: the directed pass can beat it) is already on the live
+          // board — re-adding it here would duplicate it. The session Set is the truth of what this
+          // process already emitted.
+          if (_canvasBlocks.has(b.blockId)) continue;
           await callTool('saga_canvas_add_block', { tab_key: d.tabKey, block_type: b.blockType, data: repairFileUrls(b.data) || {}, block_id: b.blockId });
           _canvasBlocks.add(b.blockId);
           blocks++;
@@ -15841,9 +15870,14 @@ async function runDirectedResearchPass(focus) {
       }
       if (_plan) {
         const cb = ce.contractBlock(_plan, goal);
-        await canvasUpsertBlock({ focusId: focus.id, blockId: ce.contractBlockId(focus.id), title: goal, tabMode: 'RESEARCH', blockType: cb.blockType, data: cb.data });
-        await canvasUpsertBlock({ focusId: focus.id, blockId: ce.todoBlockId(focus.id), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: ce.facetTodoMarkdown(_plan, []) } });
-        console.log(`[contract] canvas doc started for #${focus.id} (backstop — contract block was absent, ${ce.portionsFromPlan(_plan).length} portions)`);
+        // HONEST LOG (2026-08-12 review M11): the old line fired unconditionally — canvasUpsertBlock
+        // returns false without throwing (beat-gated render, engine down), so for every BEAT-origin
+        // focus this logged "canvas doc started" while NOTHING landed, poisoning the log as evidence.
+        // Log what actually happened, both ways.
+        const _mintedContract = await canvasUpsertBlock({ focusId: focus.id, blockId: ce.contractBlockId(focus.id), title: goal, tabMode: 'RESEARCH', blockType: cb.blockType, data: cb.data });
+        const _mintedTodo = await canvasUpsertBlock({ focusId: focus.id, blockId: ce.todoBlockId(focus.id), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: ce.facetTodoMarkdown(_plan, []) } });
+        if (_mintedContract || _mintedTodo) console.log(`[contract] canvas doc started for #${focus.id} (backstop — contract block was absent, ${ce.portionsFromPlan(_plan).length} portions)`);
+        else console.log(`[contract] backstop mint for #${focus.id} did NOT land (beat-gated or engine down) — no canvas doc claimed`);
       }
     }
   } catch (e) { console.error('[contract] directed-pass mint failed:', e.message); }

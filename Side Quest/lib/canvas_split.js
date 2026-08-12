@@ -46,6 +46,14 @@ function parseSplitInstruction(instruction) {
   const a = cleanLabel(m[1]);
   const b = cleanLabel(m[2]);
   if (!a || !b || a.length < 2 || b.length < 2 || a.toLowerCase() === b.toLowerCase()) return { isSplit: false, labels: [] };
+  // GARBAGE-LABEL GUARD (2026-08-12 review M14): the loose "into A and B" arm resolved scaffolding
+  // as subjects — "split this into two docs and keep the sources" parsed as labels ['two','keep the
+  // sources']. A label that is a bare counter/quantifier, or that STARTS with an instruction verb,
+  // is not a subject; the ask falls through to null (bias-toward-clarifying: she asks, never mints
+  // a doc named "keep the sources").
+  const _JUNK = /^(?:one|two|three|1|2|3|both|each|them|it|several|separate|halves?|half|parts?|pieces?|sections?|copies|versions?)$/i;
+  const _VERBY = /^(?:keep|keeping|save|saving|leave|leaving|drop|dropping|add|adding|put|putting|make|making|use|using|include|including|preserve|retain|move|moving|copy|copying|delete|remove|removing)\b/i;
+  if (_JUNK.test(a) || _JUNK.test(b) || _VERBY.test(a) || _VERBY.test(b)) return { isSplit: false, labels: [] };
   return { isSplit: true, labels: [a, b] };
 }
 

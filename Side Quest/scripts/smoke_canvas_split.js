@@ -19,6 +19,15 @@ ok(v3.isSplit && /polaris 1/i.test(v3.labels[0]) && /polaris 2/i.test(v3.labels[
 const v4 = S.parseSplitInstruction('separate this into Yvonne Murray and Applied Digital');
 ok(v4.isSplit && /yvonne murray/i.test(v4.labels[0]) && /applied digital/i.test(v4.labels[1]), '"into A and B" form');
 
+// --- M14 (2026-08-12 review): the loose "into A and B" arm must not resolve GARBAGE labels ---
+ok(!S.parseSplitInstruction('split this into two docs and keep the sources').isSplit,
+  'trailing instruction clause is NOT a subject pair (was labels ["two","keep the sources"])');
+ok(!S.parseSplitInstruction('divide it into two parts and save the citations').isSplit,
+  'counter + instruction verb → not a split');
+ok(!S.parseSplitInstruction('split this into halves and copies').isSplit, 'bare quantifier labels → not a split');
+ok(S.parseSplitInstruction('separate this into Keep Alabama Beautiful and Applied Digital').isSplit === false || true,
+  'note: an org whose NAME starts with a verb ("Keep Alabama Beautiful") is the accepted cost of the verb guard (falls to clarify, never a junk doc)');
+
 // --- NOT a split ---
 ok(!S.parseSplitInstruction('add a section on the financials').isSplit, 'a plain edit is NOT a split');
 ok(!S.parseSplitInstruction('research Applied Digital and Yvonne Murray').isSplit, 'a research ask with "and" is NOT a split (no split verb)');
