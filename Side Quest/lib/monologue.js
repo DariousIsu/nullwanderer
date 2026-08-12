@@ -68,6 +68,7 @@ const DISCOVER_LAST_KEY = 'pullerwalk.discover.lastAt';
 // Bounded + low-volume (one org / 5min, like social-enrich); shares the puller spend pool.
 const ORG_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const ORG_LAST_KEY = 'orgwalk.lastAt';
+const ORG_DONE_KEY = 'orgwalk.done';   // durable set of researched hosts (capped) — the "already researched" marker
 const _PROC_START_TS = Date.now();   // the idle-gate's floor when no user-turn stamp exists yet
 // Audible idle-deferral for the puller lanes — deduped per reason so the idle tick can't spam it.
 const _pullerDeferLogAt = {};
@@ -2457,24 +2458,26 @@ async function runSocialEnrichMove(preferIds = null) {
 }
 
 // --- ORG RESEARCH lane helpers (docs/ORG_RESEARCH_LANE.md) ----------------------------------------
-// The P856 host map (host → account Website), fetched from the CRM once and cached 1h — the register
-// that CORROBORATES a target's person-lane domain. One 2k-row query/hour, not per tick.
-const _ORG_P856 = { at: 0, hosts: null };
-async function _p856HostSet() {
+// The P856 ACCOUNTS (host → { url, name }), fetched from the CRM once and cached 1h. These accounts ARE
+// the org population with an ADMISSIBLE url — a Wikidata-P856 Website is the register itself, provenance
+// 'register' by construction — so the lane researches them directly (2,179 of them: think tanks, unions,
+// advocacy, legislatures…), not the thin/person-polluted puller org targets. One 2k-row query/hour.
+const _ORG_P856 = { at: 0, map: null };
+async function _p856Accounts() {
   const nowTs = Date.now();
-  if (_ORG_P856.hosts && (nowTs - _ORG_P856.at) < 60 * 60 * 1000) return _ORG_P856.hosts;
+  if (_ORG_P856.map && (nowTs - _ORG_P856.at) < 60 * 60 * 1000) return _ORG_P856.map;
   const map = new Map();
   try {
     if (echoSuit && echoSuit.connected) {
-      const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql: `SELECT Website FROM electoral.account WHERE deleted=0 AND Website IS NOT NULL AND Website != ''` } });
+      const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql: `SELECT Name, Website FROM electoral.account WHERE deleted=0 AND Website IS NOT NULL AND Website != ''` } });
       if (r && r.ok) {
         let j; try { j = JSON.parse(r.text); } catch {}
         const orgWalk = require('./org_walk');
-        for (const row of (j && j.rows) || []) { const h = orgWalk.hostOf(row.Website); if (h && !map.has(h)) map.set(h, String(row.Website)); }
+        for (const row of (j && j.rows) || []) { const url = orgWalk.normalizeSiteUrl(row.Website); const h = orgWalk.hostOf(url); if (h && url && !map.has(h)) map.set(h, { url, name: String(row.Name || '') }); }
       }
     }
-  } catch (e) { console.error('[org-research] P856 host fetch failed:', e.message); }
-  _ORG_P856.at = nowTs; _ORG_P856.hosts = map;
+  } catch (e) { console.error('[org-research] P856 account fetch failed:', e.message); }
+  _ORG_P856.at = nowTs; _ORG_P856.map = map;
   return map;
 }
 // Crude HTML → readable text (feeds the extractor, which reads prose) — mirrors scripts/research_org.js.
@@ -2502,11 +2505,28 @@ function _fetchOrgPage(url, { depth = 0 } = {}) {
     req.on('timeout', () => req.destroy(new Error('timeout')));
   });
 }
+// Fetch with a BROWSER fallback: some org sites (Cato → 403) block a bare GET; her own Chrome gets
+// through (open→read the page). Only fires when the cheap https fetch came back short/blocked.
+async function _fetchOrgPageWithFallback(url) {
+  let r = null;
+  try { r = await _fetchOrgPage(url); } catch { r = null; }
+  if (r && r.text && r.text.length >= 200 && !(r.status >= 400)) return r;
+  try {
+    const ownBrowser = require('./web');
+    if (!ownBrowser.isConnected()) { await ownBrowser.ensure(); }
+    await ownBrowser.open(url);
+    const rd = await ownBrowser.read();
+    const text = (rd && rd.text) || '';
+    if (text && text.length >= 200) return { text, status: 200, via: 'browser' };
+  } catch (e) { console.error('[org-research] browser fetch failed:', e && e.message); }
+  return r || { text: '', status: 0 };
+}
 
-// LANE — ORG RESEARCH. Picks ONE org target whose person-lane domain a Wikidata-P856 account CORROBORATES
-// (register provenance — never a bare-domain guess), fetches its own site, verifies it's theirs, lands it
-// as an org_research document (the decompose lane extracts entities/relations — no second stack), and marks
-// it researched (an official_site belief → listOrgTargets drops it). Bounded, low-volume, idle-leash gated.
+// LANE — ORG RESEARCH. Researches ONE org from the CRM's P856 accounts (each Website is the register, so
+// provenance 'register' — never a bare-domain guess), fetching its own site (browser fallback for blockers),
+// proving it's theirs (org_site.verifyPage), landing it as an org_research document (the decompose lane
+// extracts entities/relations — no second stack), and marking it done (a durable host set + an official_site
+// belief on any matching puller org target, so listOrgTargets stays clean). Bounded, low-volume, idle-gated.
 async function runOrgResearchStage() {
   const nowTs = Date.now();
   try { const last = parseInt(db.getMeta(ORG_LAST_KEY) || '0', 10) || 0; if (nowTs - last < ORG_MIN_INTERVAL_MS) return false; } catch {}
@@ -2518,30 +2538,37 @@ async function runOrgResearchStage() {
   try { db.setMeta(ORG_LAST_KEY, String(nowTs)); } catch {}
 
   const orgWalk = require('./org_walk');
-  const pdb = require('./puller_db'); pdb.init();
-  const rows = pdb.listOrgTargets({ limit: 80 }) || [];
-  if (!rows.length) return false;
-  const hostMap = await _p856HostSet();
-  if (!hostMap || !hostMap.size) return false;
+  const accts = await _p856Accounts();
+  if (!accts || !accts.size) return false;
 
-  // enrich each org row with a P856-CORROBORATED url; keep the workable ones (bounded per tick)
+  // durable done-set (researched hosts) + a host→pullerTargetId map so a researched account can mark its
+  // matching person-lane org target done too (keeps listOrgTargets meaningful — it drops linked orgs).
+  let done = new Set(); try { done = new Set(JSON.parse(db.getMeta(ORG_DONE_KEY) || '[]')); } catch {}
+  const pdb = require('./puller_db'); pdb.init();
+  const orgTargetByHost = new Map();
+  try { for (const t of pdb.listOrgTargets({ limit: 3000 })) { const h = orgWalk.hostOf(t.domain); if (h && !orgTargetByHost.has(h)) orgTargetByHost.set(h, t.id); } } catch {}
+
+  // candidates = un-researched P856 accounts; a HIS-ORG match (a puller org target on this host) sorts first.
   const cands = [];
-  for (const t of rows) {
-    const acc = orgWalk.corroborateDomain(t.domain, hostMap);
-    if (acc) cands.push({ id: t.id, name: t.name, domain: t.domain, crm_id: t.crm_id, status: t.status, urlCandidates: [acc] });
-    if (cands.length >= 12) break;
+  for (const [host, a] of accts) {
+    if (done.has(host)) continue;
+    cands.push({ id: host, name: a.name || host, domain: host, crm_id: orgTargetByHost.has(host) ? 1 : null, urlCandidates: [{ url: a.url, provenance: 'register' }] });
+    if (cands.length >= 120) break;
   }
   if (!cands.length) return false;
 
   const r = await orgWalk.runOrgMove({
     candidates: cands,
     getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v), now: () => Date.now(),
-    fetchPage: _fetchOrgPage,
+    fetchPage: _fetchOrgPageWithFallback,
     land: async ({ name, url, text }) => {
       const inserted = db.insertDocument({ title: `${name} — official website`, body: text, source: 'org_research', ref: url, origin: url });
       return inserted && inserted.id;
     },
-    markResearched: async (t, url) => { try { pdb.upsertBelief(t.id, 'official_site', { value: url, confidence: 1, derivation: 'org_research', status: 'active' }); } catch {} },
+    markResearched: async (t, url) => {
+      try { const d = new Set(JSON.parse(db.getMeta(ORG_DONE_KEY) || '[]')); d.add(t.domain); db.setMeta(ORG_DONE_KEY, JSON.stringify([...d].slice(-8000))); } catch {}
+      try { const tid = orgTargetByHost.get(t.domain); if (tid) pdb.upsertBelief(tid, 'official_site', { value: url, confidence: 1, derivation: 'org_research', status: 'active' }); } catch {}
+    },
     log: (m) => console.log(m),
   });
   if (r && r.did) {
