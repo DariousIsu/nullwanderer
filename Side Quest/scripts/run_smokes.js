@@ -461,6 +461,31 @@ const smokes = [
   'smoke_roster_intake.js',         // the 2026-08-05 live regression (10-person LA paste → category dump) + routing guard
   'smoke_meeting_engagement.js',    // the three live-witnessed fixes (search guard, directive capture, grounded follow-along)
   'smoke_gmeet.js',                 // base stage machine + MANDATORY disclosure + BOTH chat-door sides
+  // ── UNGATED-SMOKES AUDIT, wave 2 (2026-08-12) — 68 verified clean passers ──────────────────────
+  // Every suite below ran individually green (zero failed) before admission; all fast (<3s) except
+  // smoke_stt (~19s, noted). NOT admitted, deferred to wave 3 with the stale-vs-regression triage
+  // discipline: 8 suites with failures (act_on_page 1, canvas_view 1, curator 3, kg_view 1,
+  // meeting_research 2, news_snapshot 1, recipes_heavy 1, rumination_breaker 5) and ~14
+  // embedder/silent suites that end with no verdict line or crash tails (the unref()'d WASM embed
+  // worker class — the reason they were never gated; needs the memory.embed stub pattern from
+  // smoke_c3_reflection before they can join).
+  'smoke_actionable_gate.js', 'smoke_audit_fixes.js', 'smoke_availability.js', 'smoke_blackboard.js',
+  'smoke_blockers.js', 'smoke_browse_redirect.js', 'smoke_byline.js', 'smoke_calendar_view.js',
+  'smoke_canvas_layout.js', 'smoke_capability_doubt.js', 'smoke_caption_stream.js', 'smoke_cert_template.js',
+  'smoke_checks_contract.js', 'smoke_comfort_fixation.js', 'smoke_commit_guardrail.js', 'smoke_consolidate.js',
+  'smoke_creator.js', 'smoke_creator_proofread.js', 'smoke_creator_research.js', 'smoke_creator_sources.js',
+  'smoke_creator_stats.js', 'smoke_crm_view.js', 'smoke_curation.js', 'smoke_doc_concept_lane.js',
+  'smoke_doc_view.js', 'smoke_downtime.js', 'smoke_fixation_brake.js', 'smoke_flow_runner.js',
+  'smoke_gaps.js', 'smoke_graph_extract.js', 'smoke_graph_memory.js', 'smoke_graph_phase3.js',
+  'smoke_graph_phase4.js', 'smoke_inbox_junk.js', 'smoke_inbox_voice.js', 'smoke_intent.js',
+  'smoke_interweave.js', 'smoke_leg_view.js', 'smoke_memory_gap.js', 'smoke_memory_phase2.js',
+  'smoke_models.js', 'smoke_open_questions.js', 'smoke_permissions.js', 'smoke_play_runtick.js',
+  'smoke_play_session.js', 'smoke_play_startchat.js', 'smoke_poll_view.js', 'smoke_query_class.js',
+  'smoke_recipes.js', 'smoke_recorder.js', 'smoke_register_gate.js', 'smoke_retrieval.js',
+  'smoke_self_check.js', 'smoke_shared_link.js', 'smoke_sheet_view.js', 'smoke_snapback.js',
+  'smoke_stt.js', 'smoke_super_search_card.js', 'smoke_super_search_external.js', 'smoke_super_search_ingest.js',
+  'smoke_super_search_ledger.js', 'smoke_super_search_modelio.js', 'smoke_super_search_recipes.js', 'smoke_super_search_run.js',
+  'smoke_touchpoint.js', 'smoke_variety.js', 'smoke_web.js', 'smoke_web_downloads.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
@@ -533,15 +558,17 @@ function runSuite(s, { quiet = false } = {}) {
   // bug the comment above describes, one dialect later. A green suite counted as red is not the safe
   // direction it looks like: it trains everyone to read past a red gate.
   else if (!m && /^\s*SMOKE PASSED\s*$/m.test(out)) { ok = true; label = '(no count reported)'; }
-  // FIFTH dialect (2026-08-12 review M6 follow-through): `smoke_name: N passed, M failed` — a whole
-  // suite family (meeting_leave, the puller core, canvas_emit, salience, test_port, artifact_intent,
-  // ~23 total) ends with a SELF-NAMED verdict line and a success-silent ok(). These were the exit-0
-  // fallback's invisible load; tightening it (below) turned them red — the cure is reading their
-  // REAL verdict, not re-widening the fallback.
-  else if (!m && /^\s*smoke_\w+(?:\.js)?\s*:\s*\d+ passed, \d+ failed\s*$/m.test(out)) {
-    const m5 = out.match(/^\s*smoke_\w+(?:\.js)?\s*:\s*(\d+) passed, (\d+) failed\s*$/m);
-    ok = Number(m5[2]) === 0; label = ok ? `(${m5[1]} ok)` : `(${m5[2]} failed)`;
+  // FIFTH dialect, GENERALIZED (2026-08-12 review M6 follow-through + the wave-2 audit's dialect
+  // zoo): the verdict is any count line `N passed, M failed` (em dash, hyphen, self-named prefix,
+  // "CURATION OK —", "COMMIT GUARDRAIL OK —", "SOME FAILURES —" — all carry it) or a bare
+  // `name: N ok`. Read the LAST count line as the suite's verdict: failed===0 → pass. This is a
+  // REAL verdict with counts, strictly stronger than the exit-0 fallback below — and one general
+  // matcher ends the dialect whack-a-mole (three specific dialects grew to six in one audit).
+  else if (!m && /\d+\s+passed,\s+\d+\s+failed/.test(out)) {
+    const g = [...out.matchAll(/(\d+)\s+passed,\s+(\d+)\s+failed/g)].pop();
+    ok = Number(g[2]) === 0; label = ok ? `(${g[1]} ok)` : `(${g[2]} failed)`;
   }
+  else if (!m && /:\s*\d+\s+ok\s*$/m.test(out) && !/✗|FAIL/i.test(out)) { ok = true; label = '(n-ok line)'; }
   // FOURTH dialect (measured 2026-08-06): Electron's piped stdout can DROP the final console.log
   // when process.exit fires before the pipe drains — a suite whose ok() is success-silent
   // (smoke_self_question) then produces ZERO output on a clean pass, and three others lose only
