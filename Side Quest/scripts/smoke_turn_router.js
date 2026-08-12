@@ -1,6 +1,9 @@
 /* Smoke: single-dispatch turn router (lib/turn_router) — one route per turn, mutually exclusive.
  * Pure logic, no DB/model. Guards the proven "who is Trump → also list 19 orgs" bug: a factual entity
- * question with a MISFIRING deliverableAggQ must route to `answer`, never `status`.
+ * question with a MISFIRING deliverableAggQ must route to a FACTUAL lane (lookup), never `status`.
+ * 2026-08-12: EXTERNAL factual → `lookup` (ground from the verified DB + search the gaps), never
+ * answer-from-memory/training — the [[db-is-foundation-no-recall-only]] principle. Only INTERNAL/self
+ * facts (personalFactQ / devQ / stateQ) stay on `answer`.
  *   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_turn_router.js
  */
 'use strict';
@@ -10,20 +13,22 @@ let pass = 0, fail = 0;
 const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++; console.log('  ✗', t); } };
 const route = (sig) => computeTurnRoute(sig).route;
 
-// ── THE REGRESSION GUARD: factual entity Q + misfiring deliverableAggQ + no active focus → answer ──
-ok(route({ factual: true, deliverableAggQ: true, hasDirectedFocus: false }) === 'answer',
-  'factual + misfiring deliverableAggQ (no focus) → answer (NOT status) — the Trump/Thune bug');
-ok(route({ factual: true, deliverableAggQ: true, hasDirectedFocus: true }) === 'answer',
+// ── THE REGRESSION GUARD: factual entity Q + misfiring deliverableAggQ → a FACTUAL lane, never status ──
+ok(route({ factual: true, deliverableAggQ: true, hasDirectedFocus: false }) === 'lookup',
+  'factual + misfiring deliverableAggQ (no focus) → lookup (NOT status) — the Trump/Thune bug');
+ok(route({ factual: true, deliverableAggQ: true, hasDirectedFocus: true }) === 'lookup',
   'factual OUTRANKS deliverableAggQ even during an active focus (no status dump on a factual Q)');
 
 // ── conversational / answer paths ──
 ok(route({ socialTurn: true }) === 'converse', 'social turn → converse');
 ok(route({}) === 'converse', 'nothing set → converse (default)');
-ok(route({ factual: true }) === 'answer', 'factual → answer');
-ok(route({ personalFactQ: true }) === 'answer', 'personal-fact question → answer');
-ok(route({ devQ: true }) === 'answer', 'dev question → answer');
-ok(route({ stateQ: true }) === 'answer', 'state question → answer');
+ok(route({ factual: true }) === 'lookup', 'EXTERNAL factual → lookup (ground from DB + search; never answer-from-memory/training)');
+ok(route({ personalFactQ: true }) === 'answer', 'personal-fact (shared history — internal) question → answer');
+ok(route({ devQ: true }) === 'answer', 'dev (self-code — internal) question → answer');
+ok(route({ stateQ: true }) === 'answer', 'state (program-state — internal) question → answer');
 ok(route({ isLiveInfo: true }) === 'lookup', 'live-info question → lookup');
+// factual OUTRANKS the self-fact bucket: an external fact never gets diverted to answer-from-memory.
+ok(route({ factual: true, personalFactQ: true }) === 'lookup', 'factual+personalFactQ → lookup (external wins; ground+search)');
 
 // ── work / status paths ──
 ok(route({ isAssignment: true }) === 'task', 'assignment → task');

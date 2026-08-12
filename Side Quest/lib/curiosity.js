@@ -215,21 +215,6 @@ function isResearchCommand(msg) {
     || /^\s*research\b/i.test(s);
 }
 
-// CONTACT-FETCH ASK — an explicit directive to GO GET contact info (email/phone/address) for people:
-// "find emails for those members", "look up their phone numbers", "pull up contact info for the mayor".
-// This is a COMMAND to search (contacts DB + web), NOT a question answerable from memory — but the
-// turn-router keeps labeling it route=answer, so the operator lookup lane is vetoed and she answers from
-// grounding + promises a search that never runs (measured 2026-08-12: "find emails for those LPSC
-// members" → route=answer → a 76-token "I'll search" with no delivery). Needs both an explicit FETCH
-// verb and a CONTACT-INFO object, so it never fires on a plain question ("who is X") or "email John".
-function isContactFetchAsk(msg) {
-  const s = (msg || '').toLowerCase().trim();
-  if (s.length < 8) return false;
-  const fetchVerb = /\b(find|look ?up|looking for|pull ?up|search(?: for| our)?|get (?:me|us)|dig up|track down|hunt down|grab|gather|collect)\b/;
-  const contactObj = /\b(e-?mails?|contact (?:info|information|details?)|phone ?numbers?|phone|numbers?|addresses?|mailing address)\b/;
-  return fetchVerb.test(s) && contactObj.test(s);
-}
-
 // Build the research SUBJECT from recent USER turns (chronological, oldest→newest), since the command
 // itself carries none. Drops the command turns and tiny turns; keeps the last ~2 substantive asks so
 // pronouns ("her") still have their antecedent. Pure (turns passed in) → smoke-testable.
@@ -251,7 +236,6 @@ module.exports = {
   cleanQuery,
   isMetaQuery,
   isLiveInfoQuestion,
-  isContactFetchAsk,
   deriveLiveQuery,
   isResearchCommand,
   deriveResearchSubject

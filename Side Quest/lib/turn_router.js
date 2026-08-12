@@ -89,10 +89,19 @@ function computeTurnRoute(sig = {}) {
   // 5) LOOKUP — a live/external fact that needs the web/echo now.
   if (sig.isLiveInfo) return _r('lookup', 0.75, 'live-info');
 
-  // 6) ANSWER — factual / shared-history / self / dev / state question → answered from the object pull +
-  //    memory. This deliberately OUTRANKS a bare deliverableAggQ so a factual entity question is an
-  //    answer turn, never a status/deliverable dump.
-  if (sig.factual || sig.personalFactQ || sig.devQ || sig.stateQ) return _r('answer', 0.7, 'factual/self');
+  // 5.5) FACTUAL (EXTERNAL) → LOOKUP, never answer-from-memory. The DB is the FOUNDATION, not the
+  //      terminal answer: a question about the external world (people, orgs, data) routes to the
+  //      search/operator lane, which GROUNDS from the verified store THEN searches the gaps. Answer-from-
+  //      training is the hallucination this program exists to kill — a factual turn must NEVER terminate
+  //      at memory/training (Lucas 2026-08-12, [[db-is-foundation-no-recall-only]]). Grounding is also the
+  //      speed+cost WIN (verified read + short confirm beats a big model reasoning from training). If the
+  //      store already holds it complete+recent, the operator confirms-from-DB and stops — no web hit.
+  if (sig.factual) return _r('lookup', 0.7, 'factual-external → ground+search');
+
+  // 6) ANSWER — INTERNAL/self facts ONLY: shared history, self-code, program state. These live in the
+  //    verified self/personal store (NOT training), so memory IS their source of truth. OUTRANKS a bare
+  //    deliverableAggQ so a self-fact question is an answer turn, never a status/deliverable dump.
+  if (sig.personalFactQ || sig.devQ || sig.stateQ) return _r('answer', 0.7, 'self/internal-fact');
 
   // 7) A leftover deliverableAggQ with no active focus + not factual: treat as a weak status only if
   //    nothing above matched (rare); otherwise fall through.
