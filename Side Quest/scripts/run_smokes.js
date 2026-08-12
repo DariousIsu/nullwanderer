@@ -209,6 +209,8 @@ const smokes = [
   'smoke_compose.js',
   'smoke_canvas_ingest.js',
   'smoke_canvas_docs.js',
+  'smoke_canvas_emit.js',
+  'smoke_canvas_split.js',
   'smoke_canvas_layout_db.js',
   'smoke_sources.js',
   'smoke_doc_qa.js',

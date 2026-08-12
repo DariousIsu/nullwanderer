@@ -5197,6 +5197,74 @@ async function buildLocalRosterDeliverable({ io, channel, sessionId, userName, s
   await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${state} local-government roster is ASSEMBLED and saved as an openable ${format} spreadsheet at "${rel}". HONEST COVERAGE — lead with this: ${del.filled} of ${del.denominator} localities are VERIFIED (their governing body + officials confirmed and in the sheet); the remaining ${del.denominator - del.filled} are marked "(researching)" and ${queued} were just queued for me to fill top-down from official sources over time. Tell Lucas exactly that — the file, the ${del.filled}/${del.denominator} verified count, and that the rest fill in as I research. Do NOT claim it is complete, and do NOT invent any official you have not verified.]` });
 }
 
+// SPLIT the current research canvas doc into TWO documents, one per named subject (lib/canvas_split).
+// "split this into two docs, one for Yvonne and one for Applied Digital" was acked but never executed
+// (no handler) — this is the honest MOVE: partition the source doc's SECTION blocks between the two
+// labels (an LLM assigner, keyword fallback) and materialize each as its own canvas tab. If there is no
+// source doc / nothing to split, it SAYS so — never a confabulated "split and building".
+async function buildSplitFromOrder({ io, channel, sessionId, labels }) {
+  const cs = require('./lib/canvas_split');
+  const ce = require('./studio/canvas_emit');
+  const [labA, labB] = labels || [];
+  if (!labA || !labB) return;
+  // 1) SOURCE = the current directed focus's canvas doc.
+  const focusId = (() => { try { return db.getMeta('current_focus_id') || db.getMeta('research.last_focus_id') || ''; } catch { return ''; } })();
+  const srcTab = focusId ? ce.tabKeyForFocus(focusId) : '';
+  let blocks = [];
+  try {
+    const cdb = require('./lib/canvas_docs')._db();
+    if (srcTab && cdb) blocks = cdb.prepare('SELECT block_id, block_type, data, position FROM blocks WHERE tab_key = ? ORDER BY position').all(srcTab);
+  } catch (e) { console.error('[split] read source blocks failed:', e.message); }
+  const sections = blocks.filter((b) => /^sec-/.test(String(b.block_id || '')));   // contract/todo are per-doc scaffolding
+  if (!srcTab || !sections.length) {
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked to SPLIT the current research document into two ("${labA}" and "${labB}"), but there is no source document with sections to split yet${focusId ? ` (focus #${focusId})` : ''}. Say that plainly — you did NOT split anything — and offer to split it once the research has sections, or ask which document he means. Never claim a split happened.]` });
+    console.log(`[split] no source sections (tab=${srcTab || 'none'}) — reported honestly, nothing split`);
+    return;
+  }
+  const headOf = (b) => { try { return String(JSON.parse(b.data || '{}').markdown || '').replace(/\s+/g, ' ').slice(0, 160); } catch { return ''; } };
+  // 2) ASSIGN each section → label 0/1 (LLM batch; keyword fallback).
+  let assignMap = null;
+  try {
+    const listing = sections.map((b, i) => `${i}: ${headOf(b).slice(0, 120)}`).join('\n');
+    const raw = await require('./lib/cloud_logic').ask({
+      task: 'canvas_split_assign', v: 1, numPredict: 300, think: false,
+      input: { labelA: labA, labelB: labB, sections: listing },
+      want: `Two documents are being made from these research sections. Document A = "${labA}". Document B = "${labB}". Assign EACH numbered section to the document it belongs in. Reply ONLY strict JSON {"a":[indices for A],"b":[indices for B]} — every index 0..${sections.length - 1} appears in exactly one array.`,
+      validate: (o) => (o && Array.isArray(o.a) && Array.isArray(o.b)) ? { valid: true, value: o } : { valid: false, error: 'need {a:[],b:[]}' },
+    });
+    if (raw) { assignMap = new Map(); for (const i of raw.a || []) assignMap.set(Number(i), 0); for (const i of raw.b || []) assignMap.set(Number(i), 1); }
+  } catch (e) { console.error('[split] LLM assign failed, keyword fallback:', e.message); }
+  const kw = (lab) => new Set(String(lab).toLowerCase().match(/[a-z0-9]{3,}/g) || []);
+  const kwA = kw(labA), kwB = kw(labB);
+  const assign = (b) => {
+    const idx = sections.indexOf(b);
+    if (assignMap && assignMap.has(idx)) return assignMap.get(idx);
+    const h = headOf(b).toLowerCase();
+    let sa = 0, sb = 0; for (const w of kwA) if (h.includes(w)) sa++; for (const w of kwB) if (h.includes(w)) sb++;
+    return sb > sa ? 1 : 0;   // tie → doc A (usually the person / primary subject)
+  };
+  // 3) PLAN + MATERIALIZE the two canvas docs.
+  const plan = cs.planSplit({ sourceFocusId: focusId, sourceBlocks: sections, labels: [labA, labB], assign });
+  let made = 0; const summary = [];
+  for (const doc of plan) {
+    const splitFocusId = `${focusId}-${cs.slug(doc.label)}`;
+    let n = 0;
+    try { await canvasUpsertBlock({ focusId: splitFocusId, blockId: `header-${cs.slug(doc.label)}`, title: doc.label, tabMode: 'RESEARCH', blockType: 'heading', data: { level: 1, text: doc.label } }); } catch {}
+    for (const b of doc.blocks) {
+      try { await canvasUpsertBlock({ focusId: splitFocusId, blockId: b.block_id, title: doc.label, tabMode: 'RESEARCH', blockType: b.block_type || 'paragraph', data: JSON.parse(b.data || '{}') }); n++; } catch (e) { console.error('[split] block copy failed:', e.message); }
+    }
+    if (n) made++;
+    summary.push(`"${doc.label}" (${n} section${n === 1 ? '' : 's'})`);
+    console.log(`[split] materialized "${doc.label}" → tab directed-${splitFocusId} (${n} section(s))`);
+  }
+  // 4) REPORT — honest either way.
+  if (made) {
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[You SPLIT the research into two separate canvas documents: ${summary.join(' and ')}. The two documents now exist on the canvas. State this plainly and briefly; do not claim more than the ${sections.length} sections that were split.]` });
+  } else {
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[The split into "${labA}" and "${labB}" did not materialize any sections. Say plainly it did not work and you'll retry — never claim it landed.]` });
+  }
+}
+
 async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) {
   const t = String(topic || '').trim();
   const like = `%${t.replace(/[%_]/g, '')}%`;
@@ -10494,8 +10562,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                 buildCanvasEditFromOrder({ io, channel, sessionId, order: verdict.instruction || userMessage })
                   .catch((e) => console.error('[artifact-router] canvas edit failed:', e.message));
               } else if (verdict.intent === 'canvas_edit' || verdict.intent === 'canvas_create') {
-                buildCanvasFromOrder({ io, channel, sessionId, order: verdict.instruction || userMessage })
-                  .catch((e) => console.error('[artifact-router] canvas create failed:', e.message));
+                // SPLIT-INTO-TWO is a canvas op with its own handler — "split this into two documents, one
+                // for A and one for B" was classified canvas_create but had no split handler, so it acked
+                // and did nothing (the confabulated "split and building"). Intercept it before the generic
+                // create so it ACTUALLY partitions the source doc into two.
+                const _split = (() => { try { return require('./lib/canvas_split').parseSplitInstruction(verdict.instruction || userMessage); } catch { return { isSplit: false }; } })();
+                if (_split.isSplit) {
+                  buildSplitFromOrder({ io, channel, sessionId, labels: _split.labels })
+                    .catch((e) => console.error('[artifact-router] split failed:', e.message));
+                } else {
+                  buildCanvasFromOrder({ io, channel, sessionId, order: verdict.instruction || userMessage })
+                    .catch((e) => console.error('[artifact-router] canvas create failed:', e.message));
+                }
               } else if (verdict.intent === 'report') {
                 buildReportFromHeld({ io, channel, sessionId, userName, topic: verdict.subject || userMessage.slice(0, 120) })
                   .catch((e) => console.error('[artifact-router] report failed:', e.message));
