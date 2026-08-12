@@ -7,7 +7,7 @@
  *   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_turn_router.js
  */
 'use strict';
-const { computeTurnRoute, isConversational, allowsOperator } = require('../lib/turn_router');
+const { computeTurnRoute, isConversational, allowsOperator, lookupWantsOperator } = require('../lib/turn_router');
 
 let pass = 0, fail = 0;
 const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++; console.log('  ✗', t); } };
@@ -45,6 +45,23 @@ ok(route({ directedStopHandled: true, factual: true }) === 'control', 'stop-hand
 ok(route({ correctionHandled: true, isAssignment: true }) === 'correction', 'correction outranks assignment');
 ok(route({ docQaHandled: true, factual: true }) === 'docqa', 'doc-qa outranks factual');
 ok(route({ socialTurn: true, isAssignment: true }) === 'converse', 'social outranks a stray assignment flag');
+
+// ── lookupWantsOperator: a lookup decision is SUFFICIENT to fire ground+search (the needsExternal gap) ──
+// The live bug: "who painted the Mona Lisa" / "what is the boiling point of water" routed to lookup but the
+// narrower needsExternal regex missed the phrasing → operator never fired → answer FROM TRAINING. The route
+// must be sufficient. Carve-outs: awareness-held date/time, and personal/shared-history (memory is source).
+ok(lookupWantsOperator({ route: 'lookup', scope: 'general', isDateTimeSelf: false }) === true,
+  'lookup + external general ("who painted X") → FIRE operator (was silently answered from training)');
+ok(lookupWantsOperator({ route: 'lookup', scope: 'current', isDateTimeSelf: false }) === true,
+  'lookup + current ("who is the president now") → FIRE operator');
+ok(lookupWantsOperator({ route: 'lookup', scope: 'general', isDateTimeSelf: true }) === false,
+  'lookup + date/time self → do NOT fire (awareness block holds it; no pointless web stall)');
+ok(lookupWantsOperator({ route: 'lookup', scope: 'personal', isDateTimeSelf: false }) === false,
+  'lookup + personal/shared-history → do NOT fire (verified self/personal store is the source, not the web)');
+ok(lookupWantsOperator({ route: 'answer', scope: 'general', isDateTimeSelf: false }) === false,
+  'non-lookup route → never fires via this predicate (answer/converse stay local)');
+ok(lookupWantsOperator({ route: 'converse' }) === false && lookupWantsOperator({}) === false,
+  'converse / empty → false (fail-safe default)');
 
 // ── predicates used for the main.js gates ──
 ok(isConversational('answer') && isConversational('converse') && isConversational('lookup'), 'answer/converse/lookup are conversational');

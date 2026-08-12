@@ -115,4 +115,28 @@ function computeTurnRoute(sig = {}) {
 function isConversational(route) { return CONVERSATIONAL.has(route); }
 function allowsOperator(route) { return OPERATOR_OK.has(route); }
 
-module.exports = { computeTurnRoute, isConversational, allowsOperator, CONVERSATIONAL, OPERATOR_OK };
+// Should a `lookup`-routed turn actually FIRE the ground+search operator?
+//
+// The router decides route=lookup for a factual EXTERNAL question (classifyClaimType='factual', nothing
+// higher-priority matched). That decision is authoritative and IS the license to ground+search — a second,
+// NARROWER keyword classifier at the operator gate (main's `needsExternal` regex) must not be required to
+// independently re-agree. It was: "who painted the Mona Lisa" / "what is the boiling point of water" routed
+// to lookup but `needsExternal` missed the phrasing, so the operator never fired and the turn fell through
+// to a local answer FROM TRAINING — the exact hallucination this program exists to kill ([[db-is-foundation-
+// no-recall-only]]). This is the multi-classifier-disagreement bug the single-dispatch router was built to
+// end, resurfacing at the operator seam. Make the route sufficient.
+//
+// TWO carve-outs never want the operator, and both are passed in (pure, no I/O here):
+//   • isDateTimeSelf — the date/time/day itself lives in her awareness block every turn; searching it is a
+//     pointless stall (metacognition.DATETIME_SELF_RE). It routes lookup but must answer from awareness.
+//   • scope==='personal' — shared-history / "what did we decide" lives in the verified self/personal store;
+//     memory IS its source of truth, NOT the web. A factual+personal turn still routes lookup (factual wins
+//     the cascade) but must be answered from memory, never web-searched.
+function lookupWantsOperator({ route, scope, isDateTimeSelf } = {}) {
+  if (route !== 'lookup') return false;
+  if (isDateTimeSelf) return false;
+  if (scope === 'personal') return false;
+  return true;
+}
+
+module.exports = { computeTurnRoute, isConversational, allowsOperator, lookupWantsOperator, CONVERSATIONAL, OPERATOR_OK };

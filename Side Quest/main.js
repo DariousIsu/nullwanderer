@@ -8721,7 +8721,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // docSetBlock override: force the operator in directed mode. isAssignment stays FALSE, so the
     // research-run/focus machinery is NOT spun for a code review — this is a source-review, not a project.
     const selfCodeReview = (() => { try { return require('./lib/self_source').isSelfCodeReview(userMessage); } catch { return false; } })();
-    if (opMode !== 'off' && (routeAllowsAny('lookup', 'task') || docSetBlock || selfCodeReview) && (needsExternal || isAssignment || docSetBlock || selfCodeReview) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && !_rosterOwns && userMessage && userMessage.trim().length > 6) {
+    // DB-FOUNDATION COMPLETION (Lucas 2026-08-12, [[db-is-foundation-no-recall-only]]): the router already
+    // sent a factual EXTERNAL question to route=lookup, but the `needsExternal` regex above is narrower than
+    // the router and silently dropped whole phrasing families ("who painted X", "how does Y work", "what is
+    // the boiling point of Z") back to a LOCAL answer from training. The router's lookup decision is the
+    // license to ground+search — make it sufficient here, so the operator fires. Carve-outs (date/time self,
+    // personal/shared-history) are honored inside lookupWantsOperator. routerOn-guarded so router-off boots
+    // keep the legacy needsExternal-only behavior.
+    const _lookupWantsOp = routerOn && (() => {
+      try {
+        const _mc = require('./lib/metacognition');
+        return require('./lib/turn_router').lookupWantsOperator({
+          route: turnRoute.route,
+          scope: _mc.groundingScope(userMessage),
+          isDateTimeSelf: _mc.DATETIME_SELF_RE.test(userMessage),
+        });
+      } catch { return false; }
+    })();
+    if (opMode !== 'off' && (routeAllowsAny('lookup', 'task') || docSetBlock || selfCodeReview) && (needsExternal || isAssignment || docSetBlock || selfCodeReview || _lookupWantsOp) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && !_rosterOwns && userMessage && userMessage.trim().length > 6) {
       // directed (in-turn completion mode) when this is an assignment (intake gate, or regex
       // fallback) — or a set-analysis ask, or a self-code-review, which need the multi-step budget.
       const directed = isAssignment || !!docSetBlock || selfCodeReview;
