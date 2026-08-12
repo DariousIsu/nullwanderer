@@ -13413,8 +13413,26 @@ async function _autonomicSchedulerTick() {
                 }
               } catch (e) { console.error('[preflight] re-entry audit failed (plan proceeds without):', e.message); }
             } catch (e) { console.error('[preflight] failed (plan proceeds without):', e.message); }
-            try { await generateResearchPlan(f || cand, { goal: cand.content, targets: [], facet: '', deep: true, kind: _kind, preflight: _pfGuidance }); }
+            let _uwPlan = null;
+            try { _uwPlan = await generateResearchPlan(f || cand, { goal: cand.content, targets: [], facet: '', deep: true, kind: _kind, preflight: _pfGuidance }); }
             catch (e) { console.error('[user-work] plan gen failed:', e.message); }
+            // CONTRACT → CANVAS (parity with the DISCOVER branch, ~main.js:8800). A research thread seeded
+            // HERE must ALSO mint its living contract document — the doc that holds the current research
+            // contract and gets refreshed as passes land. It was missing on this path: a project routed to
+            // user-work (e.g. when a directed focus was already active, so the DISCOVER branch's !already
+            // guard skipped it) started researching with NO document to anchor or refresh (measured: the
+            // Applied Digital run, threads #3791/3792, seeded here → zero contract doc). Skip only when a
+            // base_doc is already being continued — that living doc IS the contract.
+            try {
+              const _hasBase = !!db.getMeta(`focus.${cand.id}.base_doc`);
+              if (_uwPlan && !_hasBase) {
+                const ce = require('./studio/canvas_emit');
+                const cb = ce.contractBlock(_uwPlan, cand.content);
+                await canvasUpsertBlock({ focusId: cand.id, blockId: ce.contractBlockId(cand.id), title: cand.content, tabMode: 'RESEARCH', blockType: cb.blockType, data: cb.data });
+                await canvasUpsertBlock({ focusId: cand.id, blockId: ce.todoBlockId(cand.id), title: cand.content, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: ce.facetTodoMarkdown(_uwPlan, []) } });
+                console.log(`[contract] canvas doc started for #${cand.id} (user-work seed, ${ce.portionsFromPlan(_uwPlan).length} portions)`);
+              }
+            } catch (e) { console.error('[contract] canvas emit failed (user-work seed):', e.message); }
           }
           kickDirectedFocusDriver();
           console.log(`[user-work] seeded HIS research thread #${cand.id} at user cadence — "${String(cand.content).slice(0, 70)}"`);
