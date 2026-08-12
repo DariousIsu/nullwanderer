@@ -187,9 +187,21 @@ function check({ lane = 'idle', st = null, spentLastHour = 0, estimate = 0 } = {
       usedPct: st.usedPct,
     };
   }
-  // Pace is a rate check, so it needs the trailing hour, not the instant. Each tier gets a slice of
-  // the sustainable rate — idle work may use a little, directed work most of it.
-  const share = tier === 'directed' ? 0.80 : tier === 'research' ? 0.45 : 0.20;
+  // PACE throttles BACKGROUND work ONLY. Directed (work Lucas explicitly assigned) is NEVER rate-limited
+  // — the burn-down restriction belongs on background tasks, never on user-directed work (Lucas 2026-08-12).
+  // This also finally honors this module's own stated intent (the TIER comment: directed is "blocked only
+  // when the pool is genuinely empty"), which the old `directed:0.80` pace share silently violated: a heavy
+  // BACKGROUND hour pushed spentLastHour past directed's share and paused HIS research (measured: the
+  // Applied Digital project #3792 deferred tick after tick at 110k/h while idle/research kept the pool hot).
+  // Directed is gated by the FLOOR reserve alone (above); when his work spends heavily the total rises and
+  // research/idle yield here — which is the correct direction: background makes room for the user, not the
+  // reverse. See [[db-is-foundation-no-recall-only]]'s sibling principle on priority. Interactive already
+  // returned at the top; directed exits here; only research/idle reach the rate check.
+  if (tier === 'directed') return { allow: true, reason: 'directed — user work, floor-gated only (never pace-throttled)', usedPct: st.usedPct, pacePerHour: st.pacePerHour };
+  // Pace is a rate check, so it needs the trailing hour, not the instant. The background tiers get a slice
+  // of the sustainable rate — autonomous research a little, idle/subconscious drift the least (throttled
+  // first + hardest, so subconscious yields before anything else Lucas cares about).
+  const share = tier === 'research' ? 0.45 : 0.20;
   const allowedThisHour = st.pacePerHour * share;
   if (num(spentLastHour) + num(estimate) > allowedThisHour) {
     return {

@@ -80,13 +80,25 @@ ok(later.pacePerHour < live.pacePerHour, '…and the sustainable rate TIGHTENS a
   ok(!q.check({ lane: 'research', st: broke, spentLastHour: 0, estimate: 10 }).allow,
     '…and so is autonomous research');
 }
-// tier ordering: idle yields before research, research before directed
+// tier ordering: idle yields before research, and directed (user work) is floor-gated only
 {
   const tight = q.state({ limit: POOL, markPct: 0.88, markAt: NOW, spentSince: 0, resetAt: NOW + 24 * H, now: NOW });
   const spend = 20_000;
   const a = q.check({ lane: 'idle', st: tight, spentLastHour: spend });
   const b = q.check({ lane: 'directed', st: tight, spentLastHour: spend });
   ok(!a.allow && b.allow, '⭐ under pressure IDLE yields first and DIRECTED work continues');
+}
+// DIRECTED IS NEVER PACE-THROTTLED (2026-08-12) — the restriction belongs on BACKGROUND work, never on
+// user-assigned research. A heavy BACKGROUND hour that pauses idle/research must NOT pause his project
+// (the measured Applied Digital #3792 bug: deferred tick after tick at 110k/h while background ran).
+{
+  const mid = q.state({ limit: POOL, markPct: 0.50, markAt: NOW, spentSince: 0, resetAt: NOW + 48 * H, now: NOW });
+  const heavyHour = 999_999;   // far over any sustainable pace
+  ok(!q.check({ lane: 'idle', st: mid, spentLastHour: heavyHour }).allow, 'a heavy hour pace-throttles IDLE (subconscious yields first)');
+  ok(!q.check({ lane: 'research', st: mid, spentLastHour: heavyHour }).allow, 'a heavy hour pace-throttles autonomous RESEARCH');
+  ok(q.check({ lane: 'directed', st: mid, spentLastHour: heavyHour }).allow, '⭐ DIRECTED (user work) is NEVER pace-throttled — floor-gated only; background yields to it');
+  const nearEmpty = q.state({ limit: POOL, markPct: 0.98, markAt: NOW, spentSince: 0, resetAt: NOW + 48 * H, now: NOW });
+  ok(!q.check({ lane: 'directed', st: nearEmpty, spentLastHour: 0 }).allow, 'directed STILL stops at the FLOOR (pool genuinely empty — the interactive reserve is protected)');
 }
 
 // --- fail-open, because a missing config must not brick her ------------------------------------
