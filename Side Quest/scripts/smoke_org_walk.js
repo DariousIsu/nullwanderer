@@ -120,6 +120,34 @@ const WRONG_PAGE = 'Welcome to Acme Widgets, the leading supplier of industrial 
     pdb.close();
   }
 
+  // ---- 7. P856 corroboration — a target's person-lane domain becomes admissible iff a register host agrees ----
+  {
+    const hostMap = new Map([
+      ['legislature.maine.gov', 'http://legislature.maine.gov/'],
+      ['cato.org', 'cato.org'],
+    ]);
+    // a domain a P856 account confirms → admissible, provenance 'register', origin = the P856 url
+    const c1 = ow.corroborateDomain('legislature.maine.gov', hostMap);
+    ok(c1 && c1.provenance === 'register' && /legislature\.maine\.gov/.test(c1.url), 'corrob: a P856-confirmed domain is admissible as register');
+    // a bare-domain P856 site is normalised to https:// (scheme added, host given — not a guess)
+    const c2 = ow.corroborateDomain('cato.org', hostMap);
+    ok(c2 && c2.url === 'https://cato.org', 'corrob: a bare P856 domain is normalised to https://');
+    // a domain NO register confirms → refused (never trust a bare person-lane domain)
+    ok(ow.corroborateDomain('raineycenter.org', hostMap) === null, 'corrob: an un-confirmed domain is refused (no guessing)');
+    ok(ow.corroborateDomain('', hostMap) === null, 'corrob: an empty domain is refused');
+    // hostOf normalises www + scheme
+    ok(ow.hostOf('https://www.Cato.org/about') === 'cato.org', 'hostOf: strips scheme/www/path, lowercased');
+    // end-to-end: a corroborated domain drives runOrgMove to research
+    const env = makeEnv();
+    let landedUrl = null;
+    const target = { id: 20, name: 'Maine Legislature', domain: 'legislature.maine.gov',
+      urlCandidates: [ow.corroborateDomain('legislature.maine.gov', hostMap)] };
+    const r = await ow.runOrgMove({ candidates: [target], getMeta: env.getMeta, setMeta: env.setMeta, now,
+      fetchPage: async () => ({ text: 'The Maine Legislature — the State Legislature of Maine. Bills, sessions, and members.', status: 200 }),
+      land: async (o) => { landedUrl = o.url; return 5150; }, markResearched: async () => {} });
+    ok(r.did && /legislature\.maine\.gov/.test(landedUrl || ''), 'corrob: a corroborated org is researched end-to-end');
+  }
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

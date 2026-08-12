@@ -64,6 +64,10 @@ const PULLER_BUDGET_KEY = 'pullerwalk.budget.window';
 // than contact: minting is cheaper to under- than over-do (backpressure already caps the backlog).
 const DISCOVER_MIN_INTERVAL_MS = 60 * 1000;
 const DISCOVER_LAST_KEY = 'pullerwalk.discover.lastAt';
+// ORG RESEARCH lane (docs/ORG_RESEARCH_LANE.md) — researches org targets from their own P856 site.
+// Bounded + low-volume (one org / 5min, like social-enrich); shares the puller spend pool.
+const ORG_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const ORG_LAST_KEY = 'orgwalk.lastAt';
 const _PROC_START_TS = Date.now();   // the idle-gate's floor when no user-turn stamp exists yet
 // Audible idle-deferral for the puller lanes — deduped per reason so the idle tick can't spam it.
 const _pullerDeferLogAt = {};
@@ -2369,6 +2373,9 @@ async function runPipelineTick(recentTurns) {
   }
   // ENRICH — deep social/OSINT facets on contacted targets (biased to the enrich queue).
   stages.push(runEnrichStage(enrich).catch((e) => console.error('[pipeline] enrich error:', e && e.message)));
+  // ORG RESEARCH — research an org target from its own P856-corroborated site (bounded, low-volume,
+  // self-cadenced so it fires at most once every ORG_MIN_INTERVAL_MS regardless of the tick rate).
+  stages.push(runOrgResearchStage().catch((e) => console.error('[pipeline] org error:', e && e.message)));
   await Promise.allSettled(stages);
 }
 
@@ -2447,6 +2454,105 @@ async function runSocialEnrichMove(preferIds = null) {
     } catch (e) { console.error('[social-enrich] sheep surface failed:', e.message); }
     return true;
   } catch (e) { console.error('[social-enrich] idle move failed:', e.message); return false; }
+}
+
+// --- ORG RESEARCH lane helpers (docs/ORG_RESEARCH_LANE.md) ----------------------------------------
+// The P856 host map (host → account Website), fetched from the CRM once and cached 1h — the register
+// that CORROBORATES a target's person-lane domain. One 2k-row query/hour, not per tick.
+const _ORG_P856 = { at: 0, hosts: null };
+async function _p856HostSet() {
+  const nowTs = Date.now();
+  if (_ORG_P856.hosts && (nowTs - _ORG_P856.at) < 60 * 60 * 1000) return _ORG_P856.hosts;
+  const map = new Map();
+  try {
+    if (echoSuit && echoSuit.connected) {
+      const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql: `SELECT Website FROM electoral.account WHERE deleted=0 AND Website IS NOT NULL AND Website != ''` } });
+      if (r && r.ok) {
+        let j; try { j = JSON.parse(r.text); } catch {}
+        const orgWalk = require('./org_walk');
+        for (const row of (j && j.rows) || []) { const h = orgWalk.hostOf(row.Website); if (h && !map.has(h)) map.set(h, String(row.Website)); }
+      }
+    }
+  } catch (e) { console.error('[org-research] P856 host fetch failed:', e.message); }
+  _ORG_P856.at = nowTs; _ORG_P856.hosts = map;
+  return map;
+}
+// Crude HTML → readable text (feeds the extractor, which reads prose) — mirrors scripts/research_org.js.
+function _orgToText(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#\d+;/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
+// Fetch an org's own site (follow redirects, cap body, time out). The url is P856-asserted; verifyPage
+// still proves the page is theirs after this returns.
+function _fetchOrgPage(url, { depth = 0 } = {}) {
+  return new Promise((resolve, reject) => {
+    if (depth > 4) return reject(new Error('too many redirects'));
+    let mod;
+    try { mod = /^http:\/\//i.test(url) ? require('http') : require('https'); } catch { mod = require('https'); }
+    const req = mod.get(url, { headers: { 'User-Agent': 'SideQuest/1.0 (civic research; contact via repo owner)' }, timeout: 12000 }, (r) => {
+      if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) {
+        try { return resolve(_fetchOrgPage(new URL(r.headers.location, url).toString(), { depth: depth + 1 })); } catch (e) { return reject(e); }
+      }
+      let b = ''; r.on('data', (c) => { b += c; if (b.length > 4_000_000) r.destroy(); });
+      r.on('end', () => resolve({ text: _orgToText(b), status: r.statusCode }));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+  });
+}
+
+// LANE — ORG RESEARCH. Picks ONE org target whose person-lane domain a Wikidata-P856 account CORROBORATES
+// (register provenance — never a bare-domain guess), fetches its own site, verifies it's theirs, lands it
+// as an org_research document (the decompose lane extracts entities/relations — no second stack), and marks
+// it researched (an official_site belief → listOrgTargets drops it). Bounded, low-volume, idle-leash gated.
+async function runOrgResearchStage() {
+  const nowTs = Date.now();
+  try { const last = parseInt(db.getMeta(ORG_LAST_KEY) || '0', 10) || 0; if (nowTs - last < ORG_MIN_INTERVAL_MS) return false; } catch {}
+  const cfg = require('./config');
+  const subc = require('./subconscious');
+  if (!subc.budgetOk((k) => db.getMeta(k), nowTs, cfg.pullerBudgetTokensPerHour(), PULLER_BUDGET_KEY)) return false;
+  if (!require('./quota_gate').allow('idle', { estimate: 1 }).allow) return false;
+  if (!echoSuit || !echoSuit.connected) return false;   // the admissible url is a P856 account Website — no CRM, no source
+  try { db.setMeta(ORG_LAST_KEY, String(nowTs)); } catch {}
+
+  const orgWalk = require('./org_walk');
+  const pdb = require('./puller_db'); pdb.init();
+  const rows = pdb.listOrgTargets({ limit: 80 }) || [];
+  if (!rows.length) return false;
+  const hostMap = await _p856HostSet();
+  if (!hostMap || !hostMap.size) return false;
+
+  // enrich each org row with a P856-CORROBORATED url; keep the workable ones (bounded per tick)
+  const cands = [];
+  for (const t of rows) {
+    const acc = orgWalk.corroborateDomain(t.domain, hostMap);
+    if (acc) cands.push({ id: t.id, name: t.name, domain: t.domain, crm_id: t.crm_id, status: t.status, urlCandidates: [acc] });
+    if (cands.length >= 12) break;
+  }
+  if (!cands.length) return false;
+
+  const r = await orgWalk.runOrgMove({
+    candidates: cands,
+    getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v), now: () => Date.now(),
+    fetchPage: _fetchOrgPage,
+    land: async ({ name, url, text }) => {
+      const inserted = db.insertDocument({ title: `${name} — official website`, body: text, source: 'org_research', ref: url, origin: url });
+      return inserted && inserted.id;
+    },
+    markResearched: async (t, url) => { try { pdb.upsertBelief(t.id, 'official_site', { value: url, confidence: 1, derivation: 'org_research', status: 'active' }); } catch {} },
+    log: (m) => console.log(m),
+  });
+  if (r && r.did) {
+    try {
+      const nm = (cands.find((c) => c.id === r.targetId) || {}).name || 'an organisation';
+      const content = `I researched "${nm}" from its own website (${r.url}) and landed it for the graph to read.`;
+      const rr = db.insertMonologue({ content, model: 'org-research', type: 'reading', query: r.url, urls: [r.url] });
+      pushSheep({ id: rr.id, ts: rr.ts, content: `(org) ${nm} → ${r.url}`, type: 'reading', query: r.url });
+    } catch {}
+  }
+  return !!(r && r.did);
 }
 
 // PROFILE-CONFIRM (face-match Slice 2b) — CONFIRM which PUBLIC social/professional profile is a contact,

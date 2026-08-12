@@ -73,6 +73,39 @@ function resolveUrl(target) {
   return null;
 }
 
+// --- pure: URL/host normalisers + the P856-CORROBORATION rule ------------------------------------
+// A puller org target's `domain` arrived through the PERSON lane — its provenance is unknown, so it is
+// NOT admissible on its own (the whole no-guessing design). But when a Wikidata-P856 account Website
+// resolves to the SAME host, the register CORROBORATES the domain, and the url becomes admissible with
+// provenance 'register' — the P856 site is the origin, the target's domain merely selected it. This is
+// how the account CRM surface (2,179 P856 Websites) feeds the lane without ever trusting a bare domain.
+
+// Bare domain or full url → 'https://…'. Adds the scheme (normalisation, NOT a guess — the host is given).
+function normalizeSiteUrl(w) {
+  const s = String(w == null ? '' : w).trim();
+  if (!s) return null;
+  const u = /^https?:\/\//i.test(s) ? s : `https://${s.replace(/^\/+/, '')}`;
+  return /^https?:\/\/[^\s]+$/i.test(u) ? u : null;
+}
+
+// The registrable host of a url or bare domain, lowercased, www-stripped. '' on failure.
+function hostOf(urlOrDomain) {
+  const u = normalizeSiteUrl(urlOrDomain);
+  if (!u) return '';
+  try { return new URL(u).hostname.replace(/^www\./i, '').toLowerCase(); } catch { return ''; }
+}
+
+// A target's domain corroborated by a P856 host map (host → full P856 url). Returns an admissible
+// { url, provenance:'register' } (the P856 url, so the ORIGIN is the register's, not the bare domain) or
+// null. hostMap comes from the CRM's account Websites (built once, cached, by the caller).
+function corroborateDomain(domain, hostMap) {
+  const h = hostOf(domain);
+  if (!h || !hostMap) return null;
+  const p856Url = (hostMap instanceof Map) ? hostMap.get(h) : hostMap[h];
+  if (!p856Url) return null;
+  return orgSite.acceptUrl(normalizeSiteUrl(p856Url), 'register');
+}
+
 // --- the MOVE — one org, dep-injected I/O (mirrors runPullerMove) ---------------------------------
 // deps: {
 //   candidates:  () => [candidate] | [candidate]     — the worklist rows, url-enriched by the caller
@@ -125,5 +158,6 @@ async function runOrgMove(deps = {}) {
 
 module.exports = {
   runOrgMove, pickOrg, resolveUrl, loadAttempted, recordAttempt, attemptKeyOf,
+  normalizeSiteUrl, hostOf, corroborateDomain,
   ATTEMPT_TTL_MS, ATTEMPT_KEY,
 };
