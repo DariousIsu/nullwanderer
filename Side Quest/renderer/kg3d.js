@@ -628,7 +628,7 @@ function shapeTarget(n) {
 function freezeCrossDeg() { try { for (const n of Graph.graphData().nodes) n.crossDegL = n.crossDeg || 0; } catch (e) {} }
 // (C) Hide the link cloud while the layout is HOT (a morph or settle in flight) so the stretched-link chaos of
 // the transition is never drawn; the links return at the settled positions.
-function setLinksHot(hot) { try { if (linkLines) linkLines.visible = !hot; } catch (e) {} }
+function setLinksHot(hot) { try { if (linkLines) linkLines.visible = SHAPE === 'skin' ? false : !hot; } catch (e) {} }   // in skin the ROUTED (body-hugging) links replace the straight cloud — never re-show the straight one there (it was the chaotic burst)
 // (B) Begin the morph. from = current position, target = new-shape home; the node is pinned so physics can't
 // fight the glide (the tween drives fx each frame). Returns false if the shape has no targets (free), so the
 // caller can fall back to a plain resettle.
