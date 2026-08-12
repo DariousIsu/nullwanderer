@@ -287,7 +287,8 @@ const smokes = [
   // subsystem could be refactored end-to-end without a single gated test running. All offline and
   // deterministic (temp DBs, mock callTool, stub embedder, no model / network / Echo).
   'smoke_doc_extract.js',
-  'smoke_file_ingest.js',
+  // (smoke_file_ingest.js was registered here a SECOND time — review M6: the "396" headline ran 395
+  // unique suites with one counted twice. Kept at its first registration above.)
   'smoke_editor_import.js',
   'smoke_editor_registry.js',
   'smoke_editor_roundtrip.js',
@@ -436,6 +437,8 @@ const smokes = [
   'smoke_api_stream.js',
   'smoke_api_landing.js',
   'smoke_api_bulk.js',
+  // Voice registry — the voice-cloning-suite foundation (migration + resolve precedence + fail-soft; temp dir, no GPU/net)
+  'smoke_voices.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
@@ -487,6 +490,7 @@ sweepOrphanedTempDbs('before the run\n');
 
 // Run ONE suite and classify its result → true (pass) | false (fail). `quiet` suppresses the
 // per-suite PASS/FAIL line (used on the retry pass, which prints its own labels).
+const fallbackPasses = [];   // M6: suites green only via the exit-0 fallback — surfaced in the summary
 function runSuite(s, { quiet = false } = {}) {
   let out = '', childOk = true;   // childOk = the child exited 0 (execFileSync throws on nonzero/timeout)
   try {
@@ -507,13 +511,27 @@ function runSuite(s, { quiet = false } = {}) {
   // bug the comment above describes, one dialect later. A green suite counted as red is not the safe
   // direction it looks like: it trains everyone to read past a red gate.
   else if (!m && /^\s*SMOKE PASSED\s*$/m.test(out)) { ok = true; label = '(no count reported)'; }
+  // FIFTH dialect (2026-08-12 review M6 follow-through): `smoke_name: N passed, M failed` — a whole
+  // suite family (meeting_leave, the puller core, canvas_emit, salience, test_port, artifact_intent,
+  // ~23 total) ends with a SELF-NAMED verdict line and a success-silent ok(). These were the exit-0
+  // fallback's invisible load; tightening it (below) turned them red — the cure is reading their
+  // REAL verdict, not re-widening the fallback.
+  else if (!m && /^\s*smoke_\w+(?:\.js)?\s*:\s*\d+ passed, \d+ failed\s*$/m.test(out)) {
+    const m5 = out.match(/^\s*smoke_\w+(?:\.js)?\s*:\s*(\d+) passed, (\d+) failed\s*$/m);
+    ok = Number(m5[2]) === 0; label = ok ? `(${m5[1]} ok)` : `(${m5[2]} failed)`;
+  }
   // FOURTH dialect (measured 2026-08-06): Electron's piped stdout can DROP the final console.log
   // when process.exit fires before the pipe drains — a suite whose ok() is success-silent
   // (smoke_self_question) then produces ZERO output on a clean pass, and three others lose only
   // their tail "PASS —" line. The EXIT CODE is the suite's own verdict (every suite ends
   // process.exit(fail ? 1 : 0)), so exit 0 with no failure marker in what DID arrive is a pass.
   // A crash/timeout still throws (childOk=false) and a lost-line FAILING suite still exits 1.
-  else if (!m && childOk && !/✗|FAIL/.test(out)) { ok = true; label = '(exit 0 — result line lost to the stdout pipe race)'; }
+  // TIGHTENED (2026-08-12 review M6): this fallback was silently load-bearing for ~23 gated suites
+  // and would have counted an ASSERT-FREE EARLY EXIT (chatter, no ✓, exit 0) as green. Exit 0 may
+  // stand in for a lost result line ONLY when the output matches the measured pipe-race shapes:
+  // completely empty (a success-silent suite) or visibly-ran asserts (✓ marks, tail line lost).
+  // Anything else exiting 0 without a recognized verdict is a FAILURE to declare loudly.
+  else if (!m && childOk && !/✗|FAIL/.test(out) && (out.trim() === '' || /✓/.test(out))) { ok = true; label = '(exit 0 — result line lost to the stdout pipe race)'; fallbackPasses.push(s); }
   else { ok = false; label = m ? `(${m[3]} failed)` : '(no result line — crashed?)'; }
   if (!quiet) console.log(`${ok ? 'PASS' : 'FAIL'}  ${s.padEnd(30)} ${label}`);
   return ok;
@@ -522,6 +540,9 @@ function runSuite(s, { quiet = false } = {}) {
 let passed = 0;
 let failures = [];
 for (const s of smokes) { if (runSuite(s)) passed++; else failures.push(s); }
+// M6 visibility: how much of the green depended on the exit-0 fallback — the gate's optimism must
+// be a NUMBER in the output, never an invisible assumption.
+if (fallbackPasses.length) console.log(`\nℹ ${fallbackPasses.length} suite(s) passed via the exit-0 fallback (no recognized result line): ${fallbackPasses.slice(0, 8).join(', ')}${fallbackPasses.length > 8 ? ` (+${fallbackPasses.length - 8} more)` : ''}`);
 
 // FLAKE-TOLERANT EXIT (2026-08-07). This 360+-suite gate spawns one Electron child per suite, back to
 // back, and when it runs as a REHEARSAL SANDBOX gate it competes with the whole live app for CPU/IO —

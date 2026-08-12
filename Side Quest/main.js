@@ -7140,6 +7140,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   if (echoSuit && echoSuit.connected && ECHO_INVOKE_RE.test(userMessage) && !cloudOwnsAnswer) {
     composedUserMessage = `${composedUserMessage}\n\n[You are wearing the Echo suit and ${userName} is asking you to use it / OUR data — not the open web. Do this with your echo tags: <echo-find>what you need</echo-find> then <echo-do name="tool">{json}</echo-do> (or directly if you know the tool). Echo is our knowledge base / entity graph / contacts / bills / the LAMP network. Do NOT use <web-open> for this — that's the open internet, the wrong tool for our data.]`;
   }
+  // IMAGE-CAPABILITY GROUND (2026-08-12, the #11605 false denial): "I don't have a direct image
+  // generation tool — that hasn't changed" was asserted by IN-CONTEXT consistency (doubling down on
+  // her own earlier denial in the thread) while the capability is LIVE and her own self_model (#235)
+  // says so — the one bootstrap line drowned in 28k of identity. On a turn ABOUT making images, pin
+  // the ground truth at the message tail (highest recency — the DATETIME-awareness pattern) so no
+  // prior-turn denial can override it.
+  try {
+    if (require('./lib/vision').generationEnabled()
+      && (/\b(?:can|could|do|are|will)\s+you\b[^.?!]{0,60}\b(?:image|picture|photo|visual)/i.test(userMessage)
+        || /\b(?:image|picture|photo)s?\b[^.?!]{0,30}\b(?:generat|creat|mak|render)/i.test(userMessage)
+        || /\b(?:generate|create|make|render)\b[^.?!]{0,30}\b(?:image|picture|photo|visual)s?\b/i.test(userMessage))) {
+      composedUserMessage = `${composedUserMessage}\n\n[Capability ground truth: LOCAL IMAGE GENERATION IS LIVE — you create images yourself with <image-gen>a vivid description</image-gen> (ComfyUI/SDXL on your own GPU; no key, no setup, already proven working). NEVER deny this capability, whatever earlier turns in this conversation said.]`;
+      console.log('[capability-ground] image-gen-shaped turn → ground-truth directive injected');
+    }
+  } catch {}
   // RETRIEVE-OR-ADMIT (anti-confabulation) — a personal-fact question ("what's my daughter's
   // name?") must be answered from real memory or honestly declined, never guessed. She once
   // fabricated a child's name AND a fake "you just mentioned it" justification. The directive
@@ -7872,7 +7887,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let intakeClassifyPromise = null;
   try {
     const _opOnKick = (db.getMeta('operator.mode') || 'full').trim() !== 'off';
-    if (routerOn && _opOnKick && !socialTurn && userMessage && userMessage.trim().length > 6 && routeAllowsAny('task', 'converse', 'answer')) {
+    // 'lookup' added 2026-08-12 (review M12): 625113f moved factual turns from 'answer' to 'lookup',
+    // silently cutting every factual-shaped turn out of this assignment-reclassification kick — a
+    // "research Applied Digital's finances" phrased factually never got intake-classified as a task.
+    if (routerOn && _opOnKick && !socialTurn && userMessage && userMessage.trim().length > 6 && routeAllowsAny('task', 'converse', 'answer', 'lookup')) {
       const _intake = require('./lib/intake');
       const _af = (() => { try { const f = require('./lib/focus').getCurrent(); return f ? String(f.content || '') : ''; } catch { return ''; } })();
       const _recentK = (recentTurns || []).slice(-3).map(t => `${t.speaker || '?'}: ${String(t.content || '').slice(0, 120)}`).join(' | ');
@@ -8783,6 +8801,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // pulling up the files and running a diagnostic — report shortly", nothing ever comes). Mirror the
     // docSetBlock override: force the operator in directed mode. isAssignment stays FALSE, so the
     // research-run/focus machinery is NOT spun for a code review — this is a source-review, not a project.
+    // ROUTE RECONCILIATION (2026-08-12 review M2): the router's control/correction/docqa tier is
+    // computed ~500 lines BEFORE those flags exist, so on control turns the route log lied
+    // ('converse') and any late consumer read a stale route. One re-stamp point, after every control
+    // flag has settled. The flags themselves still gate the machinery — this is route/log honesty.
+    if (routerOn) {
+      const _late = (directedStopHandled || expandHandled) ? 'control' : correctionHandled ? 'correction' : docQaHandled ? 'docqa' : null;
+      if (_late && turnRoute.route !== _late) {
+        console.log(`[turn-router] route re-stamped ${turnRoute.route} → ${_late} (control flag fired after the initial route)`);
+        turnRoute = { route: _late, confidence: 1, reason: `${_late}-late-flag` };
+      }
+    }
     const selfCodeReview = (() => { try { return require('./lib/self_source').isSelfCodeReview(userMessage); } catch { return false; } })();
     // DB-FOUNDATION COMPLETION (Lucas 2026-08-12, [[db-is-foundation-no-recall-only]]): the router already
     // sent a factual EXTERNAL question to route=lookup, but the `needsExternal` regex above is narrower than
@@ -8842,6 +8871,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         }
         try { db.insertMonologue({ content: `operator drove the turn [${(opRes.toolsUsed || []).join('+') || 'no tools'}]: ${operatorAnswer.slice(0, 200)}`, model: 'operator', type: 'reading' }); } catch {}
         console.log(`[operator] drove turn (${(opRes.toolsUsed || []).join('+') || 'no tools'}) → "${operatorAnswer.slice(0, 80)}"`);
+      } else if (turnRoute.route === 'lookup') {
+        // M1 (2026-08-12 review): the operator FIRED on a factual-external turn but came back
+        // null/empty (cloud down, a leaked-JSON step, a failed force-final) — the old path fell
+        // SILENTLY through to the local voice answering FROM TRAINING, with no hedge and no log,
+        // right after an "on it" busy line. That is the answer-from-training disease re-entering
+        // through the failure door ([[db-is-foundation-no-recall-only]]). The turn still gets an
+        // answer, but an HONEST one: the lookup failed and she says so.
+        composedUserMessage = `${composedUserMessage}\n\n[Calibration: you tried to LOOK THIS UP and the search did NOT complete (a tool failure — not "no results"). Say so plainly and offer to retry in a moment. You may give general background you genuinely hold, but LABEL it as unverified-from-memory and do not state live/specific values as fact.]`;
+        console.log('[operator] EMPTY on a lookup-routed turn → honest-hedge directive injected (never a silent training answer)');
       }
     }
   } catch (e) { console.error('[main] operator turn failed:', e.message); }
@@ -9069,7 +9107,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let _artifactAckAppended = false;
   if (_artifactVerdictEarly && _artifactVerdictEarly.intent && _artifactVerdictEarly.intent !== 'none'
     && !followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled && (!_discoverAssignment || _rosterOwns)) {
-    composedUserMessage = `${composedUserMessage}\n\n[A deterministic door (${_artifactVerdictEarly.intent}) is handling this order and will report its own outcome — landed, rejected, or failed — in a separate message. Your reply: ONE short sentence acknowledging you're on it. Do NOT describe steps or sources, do NOT promise specifics, and do NOT claim anything landed — the door's report is the only truth about the outcome.]`;
+    composedUserMessage = `${composedUserMessage}\n\n[A deterministic door (${_artifactVerdictEarly.intent}) is handling this order and will report its own outcome — landed, rejected, or failed — in a separate message. Your reply: ONE short sentence acknowledging you're on it — phrased as STARTING ("on it", "let me get that going"), NEVER as the action already underway or finished (no "splitting/building/done" — live 2026-08-12: "split and building" preceded a split that did not happen). Do NOT describe steps or sources, do NOT promise specifics, and do NOT claim anything landed — the door's report is the only truth about the outcome.]`;
     _artifactAckAppended = true;
     console.log(`[one-voice] ack directive reached the reply writer (intent=${_artifactVerdictEarly.intent})`);
   }

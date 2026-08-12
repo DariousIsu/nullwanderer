@@ -44,6 +44,14 @@ function _computeSince(since, now) {
   } catch { return 0; }
 }
 
+// M13 (2026-08-12 review): the usage meter's ring retains 26h (usage_meter.js RETAIN_MS). Once the
+// mark is OLDER than that (scrape signed-out / parse-refused / ZOE_QUOTA_SCRAPE=0 — all real,
+// handled states), everything before the horizon falls out of _computeSince and the governor
+// silently UNDER-COUNTS — the 07-31 silent-drain class re-opened through the metering seam. The
+// arithmetic can't be fixed without persisting the ring; what MUST NOT happen is the degradation
+// staying invisible. Warn once an hour while degraded.
+const RING_RETAIN_MS = 26 * 3600 * 1000;
+let _ringWarnAt = 0;
 function state(now = Date.now()) {
   const limit = _num('quota.limit_compute', 0);
   const markAt = _num('quota.mark_at', 0);
@@ -52,6 +60,10 @@ function state(now = Date.now()) {
     // COMPUTE since the mark: the meter records tokens PER MODEL, so weight each model's tokens by
     // its size. Counting calls or raw tokens both mis-rank the lanes — see lib/quota's header.
     spentSince = _computeSince(markAt, now);
+    if (markAt && (now - markAt) > RING_RETAIN_MS && (now - _ringWarnAt) > 3600 * 1000) {
+      _ringWarnAt = now;
+      console.warn(`[quota] mark is ${(Math.round((now - markAt) / 3600000))}h old — OLDER than the 26h meter ring, so spentSince UNDER-COUNTS (scrape down?). Pace readings are advisory until the next true-up.`);
+    }
   } catch {}
   return quota.state({
     limit, markPct: _num('quota.mark_pct', 0), markAt, spentSince,
