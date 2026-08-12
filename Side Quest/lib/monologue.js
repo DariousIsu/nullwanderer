@@ -69,6 +69,7 @@ const DISCOVER_LAST_KEY = 'pullerwalk.discover.lastAt';
 const ORG_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const ORG_LAST_KEY = 'orgwalk.lastAt';
 const ORG_DONE_KEY = 'orgwalk.done';   // durable set of researched hosts (capped) — the "already researched" marker
+let _orgForcedOnce = false;            // one-shot guard for the ZOE_ORG_FORCE_FIRE validation affordance
 const _PROC_START_TS = Date.now();   // the idle-gate's floor when no user-turn stamp exists yet
 // Audible idle-deferral for the puller lanes — deduped per reason so the idle tick can't spam it.
 const _pullerDeferLogAt = {};
@@ -2528,13 +2529,19 @@ async function _fetchOrgPageWithFallback(url) {
 // extracts entities/relations — no second stack), and marking it done (a durable host set + an official_site
 // belief on any matching puller org target, so listOrgTargets stays clean). Bounded, low-volume, idle-gated.
 async function runOrgResearchStage() {
+  // ONE-SHOT FORCE (ZOE_ORG_FORCE_FIRE=1) — a validation affordance, OFF by default: the FIRST tick after
+  // boot bypasses the cadence/budget/quota gates so the lane can be proven end-to-end under the compute
+  // burn-down (which otherwise defers idle indefinitely). echoSuit is still required (the url source IS the
+  // CRM). Self-clears after one fire, so it never turns into an un-throttled loop.
+  const force = (!_orgForcedOnce && process.env.ZOE_ORG_FORCE_FIRE === '1');
   const nowTs = Date.now();
-  try { const last = parseInt(db.getMeta(ORG_LAST_KEY) || '0', 10) || 0; if (nowTs - last < ORG_MIN_INTERVAL_MS) return false; } catch {}
+  if (!force) { try { const last = parseInt(db.getMeta(ORG_LAST_KEY) || '0', 10) || 0; if (nowTs - last < ORG_MIN_INTERVAL_MS) return false; } catch {} }
   const cfg = require('./config');
   const subc = require('./subconscious');
-  if (!subc.budgetOk((k) => db.getMeta(k), nowTs, cfg.pullerBudgetTokensPerHour(), PULLER_BUDGET_KEY)) return false;
-  if (!require('./quota_gate').allow('idle', { estimate: 1 }).allow) return false;
+  if (!force && !subc.budgetOk((k) => db.getMeta(k), nowTs, cfg.pullerBudgetTokensPerHour(), PULLER_BUDGET_KEY)) return false;
+  if (!force && !require('./quota_gate').allow('idle', { estimate: 1 }).allow) return false;
   if (!echoSuit || !echoSuit.connected) return false;   // the admissible url is a P856 account Website — no CRM, no source
+  if (force) { _orgForcedOnce = true; console.log('[org-research] FORCED one-shot fire (ZOE_ORG_FORCE_FIRE) — cadence/budget/quota bypassed for this tick only'); }
   try { db.setMeta(ORG_LAST_KEY, String(nowTs)); } catch {}
 
   const orgWalk = require('./org_walk');
