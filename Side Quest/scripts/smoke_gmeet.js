@@ -133,8 +133,28 @@ function mockDeps(over = {}) {
   ok('isSelfSpeaker matches her own caption', g.isSelfSpeaker('Zoe Lane', g.selfNames()));
   ok('isSelfSpeaker false for another speaker', !g.isSelfSpeaker('Lucas Overby', g.selfNames()));
 
-  console.log('\nobserving → addressed → autonomous reply in the meeting chat:');
+  // UPDATED 2026-08-12 (ungated-smokes audit): the address-reply is now gated by THE CHAT DOOR
+  // (meetChatOpen — ZOE_MEET_CHAT, default OFF): closed → the reply is WITHHELD and surfaced to
+  // Lucas loudly with the draft (his judgement call before the room hears her); open → posted. The
+  // old asserts pinned the pre-door always-posts world and went stale unseen. Both sides pinned now.
+  console.log('\nobserving → addressed, chat door CLOSED (default) → withheld + surfaced to Lucas:');
   g.start(URL1); g.set('observing');
+  delete process.env.ZOE_MEET_CHAT;
+  let surfacedToLucas = '';
+  const mHeld = mockDeps({
+    captionsRef: { text: 'Alice: Zoe, can you pull up the latest polling numbers?' },
+    streamChat: async ({ onToken }) => onToken('The latest poll has support at 52%, up 3 points week-over-week — sharing the source now.'),
+  });
+  mHeld.deps.retrieve = async () => [{ content: 'Latest poll: 52% support, +3 wk/wk (internal tracker).' }];
+  const hr = await g.runTick({ userName: 'Lucas', deps: mHeld.deps, onSurface: (m) => { surfacedToLucas = m; } });
+  ok('door closed: reply WITHHELD (named in the note)', hr.ok && /WITHHELD/i.test(hr.note) && /Alice/.test(hr.note));
+  ok('door closed: nothing posted to the meeting chat', mHeld.calls.posts.length === 0);
+  ok('door closed: the draft went to Lucas loudly (who asked + what she would have said)', /Alice/.test(surfacedToLucas) && /52%/.test(surfacedToLucas));
+  g.reset();
+
+  console.log('\nobserving → addressed, chat door OPEN → autonomous reply in the meeting chat:');
+  g.start(URL1); g.set('observing');
+  process.env.ZOE_MEET_CHAT = 'on';
   const mAns = mockDeps({
     captionsRef: { text: 'Alice: Zoe, can you pull up the latest polling numbers?' },
     streamChat: async ({ onToken }) => onToken('The latest poll has support at 52%, up 3 points week-over-week — sharing the source now.'),
@@ -145,6 +165,7 @@ function mockDeps(over = {}) {
   ok('the reply was posted to the meeting chat', mAns.calls.posts.length === 1 && /52%/.test(mAns.calls.posts[0]));
   const ar2 = await g.runTick({ userName: 'Lucas', deps: mAns.deps });
   ok('the same address is not answered twice (dedup)', mAns.calls.posts.length === 1);
+  delete process.env.ZOE_MEET_CHAT;
   g.reset();
 
   console.log('\nstay-in: recipe imperfect but actually in-meeting → joins anyway (anti-wander):');
@@ -200,6 +221,7 @@ function mockDeps(over = {}) {
 
   console.log('\npull-up-information seam: thin knowledge → web lookup grounds the reply:');
   g.start(URL1); g.set('observing');
+  process.env.ZOE_MEET_CHAT = 'on';   // this section pins the FETCH+POST path — door open (the withheld side is pinned above)
   let webAsked = '';
   const mWeb = mockDeps({
     captionsRef: { text: 'Bob: Zoe, what was the final vote count on the appropriations bill?' },
@@ -210,6 +232,7 @@ function mockDeps(over = {}) {
   const wr = await g.runTick({ userName: 'Lucas', deps: mWeb.deps });
   ok('she goes and fetches when knowledge is thin', /appropriations bill/i.test(webAsked));
   ok('the fetched answer is posted to chat', wr.ok && mWeb.calls.posts.length === 1 && /218/.test(mWeb.calls.posts[0]));
+  delete process.env.ZOE_MEET_CHAT;   // door back to the default (closed) for everything after
   g.reset();
 
   console.log('\nA1 caption-drought → honest surface, keeps attending (G3 gmeet variant):');

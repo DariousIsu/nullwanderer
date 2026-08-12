@@ -439,6 +439,28 @@ const smokes = [
   'smoke_api_bulk.js',
   // Voice registry — the voice-cloning-suite foundation (migration + resolve precedence + fail-soft; temp dir, no GPU/net)
   'smoke_voices.js',
+  // ── UNGATED-SMOKES AUDIT, wave 1 (2026-08-12 review follow-through) ─────────────────────────────
+  // A read-only audit classified all 109 ungated suites: 106 gate-worthy, 3 live-integration, 0 stale.
+  // These are the top live-incident-coverage candidates, each VERIFIED passing offline before
+  // admission (the array's own rule). Three of them FAILED first verification — all three were
+  // STALE-ASSERT (zero regressions): roster_intake pinned pre-refactor main.js source text (the
+  // cascade moved to lib/contact_finders), meeting_engagement pinned the old 90s leave window
+  // (300s since "far too eager"), smoke_gmeet pinned the pre-CHAT-DOOR always-posts world. Each
+  // updated to the CURRENT contract (gmeet now pins BOTH door sides) and admitted. The remaining
+  // ~93 gate-worthy suites are mapped in the audit — admit in waves, verified, never in bulk.
+  'smoke_meeting_recall.js',        // post-meeting awareness must say she ATTENDED (anti-confabulation window)
+  'smoke_meeting_transcript.js',    // durable timestamped transcript + segmentTurns
+  'smoke_meeting_episodic.js',      // first-class episodic meeting memory
+  'smoke_echo_suit.js',             // all 5 dispatch verbs incl. malformed-JSON self-correct (offline mock client)
+  'smoke_echo_client.js',           // real socket-reuse incidents (UND_ERR_SOCKET, PARAGRAPH SEPARATOR)
+  'smoke_choke_gate.js',            // the ollama choke-point spend gate's MUTE-SAFETY invariant
+  'smoke_usage_meter_durable.js',   // the meter survives reboot (persist/restore)
+  'smoke_contact_finders.js',       // single finder source-of-truth (order/escalation)
+  'smoke_contact_cascade.js',       // the fill cascade over injected fakes
+  'smoke_domain_resolve.js',        // org→domain resolver
+  'smoke_roster_intake.js',         // the 2026-08-05 live regression (10-person LA paste → category dump) + routing guard
+  'smoke_meeting_engagement.js',    // the three live-witnessed fixes (search guard, directive capture, grounded follow-along)
+  'smoke_gmeet.js',                 // base stage machine + MANDATORY disclosure + BOTH chat-door sides
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.

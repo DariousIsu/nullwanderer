@@ -90,7 +90,7 @@ const now = () => CLOCK;
     ok('chatter was NOT captured as a directive', !dirs.some(d => /thanks everyone/.test(d)));
 
     console.log('\n[B] exit → directive stored durably + preserved in recap:');
-    CLOCK += 95000;
+    CLOCK += 305000;   // > LEAVE_SILENCE_MS (300s since the "90s was far too eager" fix — the old 95s here went stale unseen because this suite was ungated)
     const r2 = await gmeet.runTick(ctx);
     ok('left + done', gmeet.get() === 'done' && calls.leave === 1);
     ok('directive stored as its own durable meeting_action note', calls.stores.some(s => s.kind === 'meeting_action' && /make a column/.test(s.content)));

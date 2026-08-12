@@ -57,11 +57,21 @@ ok(/recallResult\.ambiguous[\s\S]{0,160}?&& !_rosterAsk\.ok\)/.test(src),
   'the ambiguity ASK gate is guarded by !_rosterAsk.ok (roster asks are not derailed)');
 ok(/const _ros = _rosterAsk;/.test(src), 'the roster handler REUSES the single parse (no double-parse drift)');
 
-// CASCADE WIRING (the fill uses ALL tools + Puller escalation, Lucas 2026-08-05) — source-pinned so the
-// finders can't silently drop out of _defaultListLookup.
-ok(/runContactCascade\(person, \{ finders: \[pullerdbFinder, patternFinder, hunterFinder, webFinder\]/.test(src),
-  'fill cascade runs finders [pullerdb, pattern, hunter, web] in order');
-ok(/name: 'hunter'[\s\S]{0,900}?hunter_find_email/.test(src), 'the hunter finder dispatches Echo hunter_find_email');
+// CASCADE WIRING (the fill uses ALL tools + Puller escalation, Lucas 2026-08-05). UPDATED 2026-08-12
+// (ungated-smokes audit): the finder set moved from an inline main.js array into lib/contact_finders
+// (THE single source of truth) — the old source-pins asserted the pre-refactor text and went stale
+// unseen because this suite was ungated. Now pinned BEHAVIORALLY (the built finder order) + on the
+// lib's own source for the hunter dispatch, with main.js pinned only on wiring THROUGH the lib.
+ok(/buildContactFinders\(\{ webSearch, echoSuit/.test(src) && /runContactCascade\(person, \{ finders, escalate/.test(src),
+  'main.js wires the fill through lib/contact_finders (single source of truth) + runContactCascade');
+{
+  const cf = require('../lib/contact_finders');
+  const { finders } = cf.buildContactFinders({ webSearch: async () => [], echoSuit: null, fetchPage: async () => '', log: () => {} });
+  ok(finders.map((f) => f.name).join(',') === 'pullerdb,pattern,hunter,web',
+    'fill cascade runs finders [pullerdb, pattern, hunter, web] in order (behavioral, not source-text)');
+}
+ok(/name: 'hunter'[\s\S]{0,900}?hunter_find_email/.test(fs.readFileSync(path.join(__dirname, '..', 'lib', 'contact_finders.js'), 'utf8')),
+  'the hunter finder dispatches Echo hunter_find_email');
 ok(/createTarget\(\{ kind: 'person'/.test(src), 'a total miss escalates the person to the Puller (createTarget)');
 // The Echo-side Hunter tool exists + is exported.
 try {
