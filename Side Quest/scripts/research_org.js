@@ -100,11 +100,10 @@ function toText(html) {
   console.log(`\nfirst 220 chars: ${text.slice(0, 220)}`);
   if (!APPLY) { console.log(`\nDry run — nothing written. Re-run with --apply.`); process.exit(0); }
 
-  // 4. LAND IT as an ordinary document. insertDocument computes the content hash itself and normalises
-  //    the origin, so this cannot forge either. From here the existing decompose lane does the work.
-  // insertDocument returns { id, ts } — NOT a bare id. Passing the object straight into getDocument
-  // made better-sqlite3 read it as named parameters ("Too few parameter values were provided").
-  const inserted = db.insertDocument({
+  // 4. LAND IT through doc_store.land (2026-08-12 review H6 family) — the SAME door the live org
+  //    lane uses since 7990c4b, so the manual one-shot and the autonomous stage cannot drift apart:
+  //    importance stamped (org_research=6, feeds C2/C3), content-dedup, hash + origin normalised.
+  const inserted = require('../lib/doc_store').land({
     title: `${NAME} — official website`,
     body: text,
     source: 'org_research',

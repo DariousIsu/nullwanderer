@@ -430,7 +430,10 @@ function _ingestReading(rawUrl, title, pageText, now = Date.now()) {
     } catch {}
   }
   if (!docId) {
-    try { const r = db.insertDocument({ title: title || url, body, source: 'web_page', origin: rawUrl, fetchUrl: rawUrl }); docId = r && r.id; } catch {}
+    // THROUGH THE LAND DOOR (2026-08-12 review H6 family): raw insert left web_page docs with
+    // importance=null (invisible to C2/C3) and no content dedup. The refresh UPDATE above is a
+    // re-encounter of the SAME doc, not a landing — it stays raw by design.
+    try { const r = require('./doc_store').land({ title: title || url, body, source: 'web_page', origin: rawUrl, fetchUrl: rawUrl }); docId = r && r.id; } catch {}
   }
   sl.record(rawUrl, { kind: 'page', chars: body.length, docId });
 }

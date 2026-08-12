@@ -16,7 +16,8 @@ const ollama = require('../lib/ollama');
 // reflection is required (reflection destructures streamChat at load) to emit a canned GROUNDED takeaway,
 // so the live loop runs deterministically with no model.
 const CANNED_TAKEAWAY = "[KNOWLEDGE] Acadia Parish's police jury meets on the second Tuesday of each month.";
-ollama.streamChat = async ({ onToken } = {}) => { if (onToken) onToken(CANNED_TAKEAWAY); };
+const CANNED = { text: CANNED_TAKEAWAY };   // mutable so the M9 case below can simulate an EMPTY completion
+ollama.streamChat = async ({ onToken } = {}) => { if (onToken && CANNED.text) onToken(CANNED.text); };
 const reflection = require('../lib/reflection');
 const docStore = require('../lib/doc_store');
 const memory = require('../lib/memory');
@@ -81,6 +82,20 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
   ok('doc cursor ADVANCED past 0', parseInt(D.getMeta('last_significance_doc_id') || '0', 10) > 0);
   ok('monologue cursor untouched (no fresh thoughts to mark)', (D.getMeta('last_significance_monologue_id') || '0') === '0');
   ok('accumulator reset to 0', (D.getMeta('reflection_importance_accum') || '') === '0');
+
+  // M9 (2026-08-12 review): an EMPTY model completion is a FAILED synthesis, not "nothing
+  // qualifies" — it must NOT zero the accumulator or advance the cursors (the material stays
+  // retryable); the accum halves (anti-thrash) and the door is named in the log.
+  console.log('\nM9 — empty completion → cursors kept, accum halved (material retryable):');
+  for (let i = 5; i < 8; i++) docStore.land({ title: `worked deliverable ${i}`, body: `Deliverable ${i}: fresh distinct content on parish body number ${i}, clause ${i}${i}. `.repeat(150), source: 'deliverable', ref: `c3-loop-${i}`, origin: `https://acadiaparishpolicejury.org/doc${i}` });
+  const docCursorBefore = D.getMeta('last_significance_doc_id') || '0';
+  D.setMeta('reflection_importance_accum', '200');
+  CANNED.text = '';                                            // the model emits NOTHING (cloud failure shape)
+  const didEmpty = await reflection.maybeSignificanceReflect();
+  ok('returned false (no reflection fired)', didEmpty === false);
+  ok('accum HALVED to 100, not zeroed', (D.getMeta('reflection_importance_accum') || '') === '100');
+  ok('doc cursor NOT advanced (the window is not consumed)', (D.getMeta('last_significance_doc_id') || '0') === docCursorBefore);
+  CANNED.text = CANNED_TAKEAWAY;                               // restore for any later cases
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { D.getDb().close(); } catch {}

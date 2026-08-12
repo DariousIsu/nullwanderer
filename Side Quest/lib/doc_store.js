@@ -20,7 +20,7 @@ const str = (v) => (v == null ? '' : String(v));
 // Pass it whenever the lane genuinely has one. NULL is the honest value for SYNTHESISED documents — a
 // research dossier is derived from many pages, not fetched from one — and must never be faked to fill
 // the column, because a wrong origin corrupts independence counting worse than a missing one.
-function land({ title = null, body = '', source = null, ref = null, understanding = null, origin = null, fetchUrl = null, deps = {} } = {}) {
+function land({ title = null, body = '', source = null, ref = null, understanding = null, origin = null, fetchUrl = null, parentId = null, deps = {} } = {}) {
   const db = deps.db || require('./db');
   if (!str(body).trim()) return { id: null, landed: false };
   try {
@@ -44,7 +44,7 @@ function land({ title = null, body = '', source = null, ref = null, understandin
     // rather than blocking the landing. Consumed by promotion triage (C2) + the reflection trigger (C3).
     let importance = null;
     try { importance = require('./importance').scoreDocument({ source, body, title, origin }); } catch (e) { console.error('[doc_store] importance score failed:', e.message); }
-    const r = db.insertDocument({ title, body, source, ref, understanding, origin, fetchUrl, importance });
+    const r = db.insertDocument({ title, body, source, ref, understanding, origin, fetchUrl, parentId, importance });
     // C2 (Spine 4) — a genuinely-important NEW landing builds reflection pressure (Park's significance
     // trigger, reflection.js). Value-triaged by C1's score: bulk (browser_download/news) contributes 0, so
     // scraped volume never drives reflection — substance does. Mirrors monologue.bumpReflectionAccum for the

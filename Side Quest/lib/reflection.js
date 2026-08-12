@@ -233,6 +233,19 @@ async function maybeSignificanceReflect() {
       onToken: (t) => { raw += t; }
     });
 
+    // EMPTY-COMPLETION GUARD (2026-08-12 review M9): a stream that resolves with ZERO tokens is a
+    // documented cloud failure mode (reasoning models burning num_predict on hidden thinking), NOT a
+    // verdict of "nothing qualifies" — the prompt's "output nothing" verdict still emits SOMETHING
+    // (whitespace/refusal text) in practice, and a dead model emits nothing at all. The old path fell
+    // through to taggedCount===0 → zeroed the accumulator + advanced BOTH cursors, silently consuming
+    // the doc window with no log. A failed synthesis leaves the material RETRYABLE: halve the accum
+    // (same anti-thrash shape as the too-little-material branch), keep the cursors, name the door.
+    if (!raw.trim()) {
+      db.setMeta('reflection_importance_accum', String(Math.floor(accum / 2)));
+      console.log('[reflection] EMPTY model completion — synthesis FAILED (not "nothing qualifies"); cursors kept + accum halved so the same material retries');
+      return false;
+    }
+
     const routed = await routeReflection(raw, recent, { extraUrls: recentDocs.map(d => d.origin).filter(Boolean) });
     if (routed.taggedCount === 0) {
       db.setMeta('reflection_importance_accum', '0');

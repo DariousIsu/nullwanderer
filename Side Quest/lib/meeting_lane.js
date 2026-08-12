@@ -64,10 +64,15 @@ function land({ minutes = '', recap = '', audioTranscript = '', dateStr = '', de
     const transcriptText = (String(audioTranscript || '').trim().length >= 40) ? String(audioTranscript).trim() : formatTranscript(rows);
     const { notes, transcript } = buildArtifacts({ title: meetingTitle({ url, dateStr }), minutes, recap, transcriptText });
     if (!notes) return { landed: false };
-    const n = _db.insertDocument({ title: notes.title, body: notes.body, source: notes.source, ref: `meeting:${startedAt}`, understanding: notes.understanding });
+    // THROUGH THE LAND DOOR (2026-08-12 review H6, CONFIRMED): raw insertDocument left every meeting
+    // doc with importance=null and ZERO reflection pressure — the flagship above-ordinary source C2
+    // names ('meeting' base 8, 'meeting_transcript' 7) was invisible to C3. doc_store.land stamps
+    // importance, bumps the accumulator, and adds content-dedup for free.
+    const ds = require('./doc_store');
+    const n = ds.land({ title: notes.title, body: notes.body, source: notes.source, ref: `meeting:${startedAt}`, understanding: notes.understanding, deps: { db: _db } });
     let transcriptId = null;
     if (transcript && n && n.id) {
-      const t = _db.insertDocument({ title: transcript.title, body: transcript.body, source: transcript.source, ref: `meeting-transcript:${startedAt}`, parentId: n.id });
+      const t = ds.land({ title: transcript.title, body: transcript.body, source: transcript.source, ref: `meeting-transcript:${startedAt}`, parentId: n.id, deps: { db: _db } });
       transcriptId = t && t.id;
     }
     return { landed: !!(n && n.id), notesId: n && n.id, transcriptId, hasTranscript: !!transcript };
