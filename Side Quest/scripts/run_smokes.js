@@ -167,6 +167,7 @@ const smokes = [
   'smoke_puller_ipc.js',
   'smoke_puller_negatives.js',
   'smoke_puller_org_door.js',
+  'smoke_org_walk.js',
   'smoke_puller_priors.js',
   'smoke_puller_variants.js',
   'smoke_owner_identity.js',

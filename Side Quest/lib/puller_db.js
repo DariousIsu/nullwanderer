@@ -298,6 +298,21 @@ function listValueScopedTargets({ limit = 500, crmShare = 300, bulkMin = BULK_CO
   return a.concat(c);
 }
 
+// The ORG worklist (docs/ORG_RESEARCH_LANE.md) — the mirror of listValueScopedTargets for kind='org'.
+// Orgs are few (~1.5k) so no bulk-company scoping. Excludes orgs already RESEARCHED — an active
+// 'official_site' belief is the durable done-marker, exactly as a live 'email' belief signals a
+// person is filled (the person lane checks that in JS; here it is the NOT EXISTS below so the query
+// never returns already-done orgs). CRM-linked (his actual orgs) first, then promoted, then recency.
+function listOrgTargets({ limit = 200 } = {}) {
+  return _db().prepare(
+    `SELECT * FROM targets t
+       WHERE t.merged_into IS NULL AND t.kind = 'org'
+         AND NOT EXISTS (SELECT 1 FROM beliefs b WHERE b.target_id = t.id AND b.type = 'official_site' AND b.status = 'active')
+     ORDER BY (t.crm_id IS NOT NULL) DESC, (t.status = 'promoted') DESC, t.last_accessed_at DESC
+     LIMIT ?`
+  ).all(Math.max(1, limit | 0));
+}
+
 // Stream just the dedup KEYS (id, name, company) for non-merged targets — the ingest seen-set builder.
 // ⭐NEVER SELECT * the whole population here: loading FULL rows for the ~271k-target store synchronously pegged
 // the main thread ~16s on every doc-decomp ingest (profiler-confirmed: puller_ingest.ingestRows → listTargets;
@@ -642,7 +657,7 @@ function splitTarget(fromId, { obsIds = [], name, company = null, domain = null,
 
 module.exports = {
   init, close,
-  createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, bulkCompanies, eachTargetKey, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName, backfillOrgKinds,
+  createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, listOrgTargets, bulkCompanies, eachTargetKey, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName, backfillOrgKinds,
   addObservation, listObservations, observationCounts, failedAddresses,
   upsertBelief, getBelief, beliefValuesByType, listBeliefs, markSendState, listBeliefsBySendState,
   getPatternState, savePatternState,
