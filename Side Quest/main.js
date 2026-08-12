@@ -8653,10 +8653,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // docSetBlock override: force the operator in directed mode. isAssignment stays FALSE, so the
     // research-run/focus machinery is NOT spun for a code review — this is a source-review, not a project.
     const selfCodeReview = (() => { try { return require('./lib/self_source').isSelfCodeReview(userMessage); } catch { return false; } })();
-    if (opMode !== 'off' && (routeAllowsAny('lookup', 'task') || docSetBlock || selfCodeReview) && (needsExternal || isAssignment || docSetBlock || selfCodeReview) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && !_rosterOwns && userMessage && userMessage.trim().length > 6) {
+    // CONTACT-FETCH override (2026-08-12): "find/look up emails|contact info|phone for <people>" is an
+    // explicit COMMAND to search, but the turn-router labels it route=answer, so — exactly like docSetBlock
+    // and selfCodeReview — the operator lookup lane was vetoed and she answered from grounding + promised a
+    // search that never ran (Lucas's "76-token, tells me nothing" LPSC reply). Force the operator so it
+    // actually searches (contacts DB + web) and DELIVERS the enumerated result this turn.
+    const contactFetch = (() => { try { return require('./lib/curiosity').isContactFetchAsk(userMessage); } catch { return false; } })();
+    if (opMode !== 'off' && (routeAllowsAny('lookup', 'task') || docSetBlock || selfCodeReview || contactFetch) && (needsExternal || isAssignment || docSetBlock || selfCodeReview || contactFetch) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && !_rosterOwns && userMessage && userMessage.trim().length > 6) {
       // directed (in-turn completion mode) when this is an assignment (intake gate, or regex
-      // fallback) — or a set-analysis ask, or a self-code-review, which need the multi-step budget.
-      const directed = isAssignment || !!docSetBlock || selfCodeReview;
+      // fallback) — or a set-analysis ask, a self-code-review, or a contact-fetch, which need the
+      // multi-step budget + the DELIVER contract (enumerate every result, do not summarize).
+      const directed = isAssignment || !!docSetBlock || selfCodeReview || contactFetch;
       // Immediate feedback — the agent loop can take a few seconds. Use a REQUEST-SERVING placeholder
       // ("on it — starting on that now"), NOT the self-focused "I'm in the middle of something" busy
       // line, which reads as brushing Lucas off the instant he hands her a task.

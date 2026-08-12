@@ -5,7 +5,7 @@
  *
  * Run: ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_live_info.js
  */
-const { isLiveInfoQuestion, deriveLiveQuery, detectCuriosity, isResearchCommand, deriveResearchSubject, isBareCuriositySeed } = require('../lib/curiosity');
+const { isLiveInfoQuestion, deriveLiveQuery, detectCuriosity, isResearchCommand, deriveResearchSubject, isBareCuriositySeed, isContactFetchAsk } = require('../lib/curiosity');
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.log('  ✗', m); } };
@@ -54,6 +54,15 @@ const subj = deriveResearchSubject('do some research then', [
 ok(/zoe barnes/i.test(subj) && /personality|daring/i.test(subj), 'subject pulled from recent user turns (Zoe Barnes + personality)');
 ok(!/do some research/i.test(subj), 'the command turns are excluded from the subject');
 ok(deriveResearchSubject('research it', ['research it']) === null, 'no prior topic → null (nothing to look up)');
+
+// --- CONTACT-FETCH ASK (2026-08-12: route-override so "find emails for X" runs the lookup + delivers) ---
+ok(isContactFetchAsk('Can we find emails for those LPSC members you listed?'), 'the live miss: "find emails for those members" → contact-fetch');
+ok(isContactFetchAsk('look up their phone numbers'), '"look up their phone numbers" → contact-fetch');
+ok(isContactFetchAsk('pull up contact info for the mayor'), '"pull up contact info for X" → contact-fetch');
+ok(isContactFetchAsk('gather emails for the commissioners'), '"gather emails for X" → contact-fetch');
+ok(!isContactFetchAsk('who is Brandon Frey?'), 'a plain question is NOT a contact-fetch (no fetch verb)');
+ok(!isContactFetchAsk('find out what you think about this'), '"find out what you think" is NOT a contact-fetch (no contact object)');
+ok(!isContactFetchAsk('can you email John for me?'), '"email John" is NOT a contact-fetch (no fetch verb)');
 
 // --- BARE CURIOSITY SEED SUPPRESSION (idle-stream de-bloat) ---
 // These bare "I want to know X" seeds are the QUERY half of a curiosity tick — not mentation.
