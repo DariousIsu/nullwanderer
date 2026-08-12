@@ -2467,6 +2467,11 @@ const _gaze = { yaw: 0, pitch: 0 };            // current damped head-share angl
 let _gazeTarget = null, _gazeLinked = false;   // scene proxy at the camera, handed to vrm.lookAt for the eyes
 const _gzHead = new THREE.Vector3(), _gzCam = new THREE.Vector3(), _gzDir = new THREE.Vector3(), _gzPQ = new THREE.Quaternion();
 const GAZE_YAW_MAX = 0.62, GAZE_PITCH_MAX = 0.42;   // ~36° / 24° — how far the head+neck will turn to keep you
+// Micro-saccades: living eyes never hold perfectly still — they dart in small steps and occasionally flick
+// further, then settle. Applied to the EYE target only (the head holds steady toward you), so the eyes read as
+// alive/thinking instead of two locked lamps. Amplitude is an angle, scaled by distance at apply time.
+const _sacc = { t: 0, tx: 0, ty: 0, x: 0, y: 0 };
+const SACC_AMP = 0.022;   // ~1.3° base dart, up to ~3° on an occasional big flick
 // sample one clip's track at time t (linear between keys, eased so nothing starts or stops abruptly)
 function animSample(clip, bone, t) {
   const ks = clip.tracks[bone]; if (!ks || !ks.length) return null;
@@ -2548,10 +2553,16 @@ function updateGaze(dt) {
   yaw = Math.max(-GAZE_YAW_MAX, Math.min(GAZE_YAW_MAX, yaw));
   pitch = Math.max(-GAZE_PITCH_MAX, Math.min(GAZE_PITCH_MAX, pitch));
   _gaze.yaw += (yaw - _gaze.yaw) * k; _gaze.pitch += (pitch - _gaze.pitch) * k;
-  // Eyes: three-vrm rotates them toward a scene object during vrm.update() — a proxy pinned to the camera.
+  // Eyes: three-vrm rotates them toward a scene object during vrm.update() — a proxy pinned to the camera,
+  // plus a micro-saccade so they never sit dead still.
   if (vrmModel.lookAt) {
     if (!_gazeTarget) { _gazeTarget = new THREE.Object3D(); scene.add(_gazeTarget); }
-    _gazeTarget.position.copy(_gzCam);
+    _sacc.t -= dt;
+    if (_sacc.t <= 0) { _sacc.t = 0.5 + Math.random() * 2.0; const big = Math.random() < 0.15 ? 2.4 : 1; _sacc.tx = (Math.random() - 0.5) * SACC_AMP * big; _sacc.ty = (Math.random() - 0.5) * SACC_AMP * big; }
+    const ks = Math.min(1, dt * 9);
+    _sacc.x += (_sacc.tx - _sacc.x) * ks; _sacc.y += (_sacc.ty - _sacc.y) * ks;
+    const dist = _gzHead.distanceTo(_gzCam) || 1000;
+    _gazeTarget.position.set(_gzCam.x + _sacc.x * dist, _gzCam.y + _sacc.y * dist, _gzCam.z);
     if (!_gazeLinked) { try { vrmModel.lookAt.target = _gazeTarget; } catch (e) {} _gazeLinked = true; }
   }
 }
