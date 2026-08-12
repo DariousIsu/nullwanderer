@@ -20,6 +20,22 @@ ok('stay-put: "keep taking notes in the meeting"', !detectChatLeave('keep taking
 ok('unrelated: "the meeting notes look great"', !detectChatLeave('the meeting notes look great'));
 ok('unrelated: "leave that for later"', !detectChatLeave('leave that for later'));
 
+// ── H5 (2026-08-12 review, CONFIRMED live-shaped): the FIRST-PERSON leaver — Lucas leaving is NOT
+// an order for HER to leave. All three reproduced on trace pre-fix and hung her up exactly when he
+// wanted her to stay and cover the meeting. MUST NOT fire. ────────────────────────────────────────
+ok('first-person: "I have to leave the meeting early"', !detectChatLeave('I have to leave the meeting early'));
+ok('first-person + stay cue: "I need to leave the meeting, keep taking notes for me"', !detectChatLeave('I need to leave the meeting, keep taking notes for me'));
+ok('first-person + you stay: "im going to leave the meeting now but you stay"', !detectChatLeave('im going to leave the meeting now but you stay'));
+ok('first-person we: "we\'re going to leave the call"', !detectChatLeave("we're going to leave the call"));
+ok('bare stay cue: "keep taking notes for me"', !detectChatLeave('keep taking notes for me'));
+ok('bare stay cue: "you stay"', !detectChatLeave('you stay'));
+ok('stay cue with order shape: "leave the meeting? no — you stay and cover it"', !detectChatLeave('leave the meeting? no — you stay and cover it'));
+
+// ── H5 counterpart: a first-person exit WITH an explicit second-person order still fires ─────────
+ok('FP + second-person order: "I\'m heading out — you can leave the meeting too"', !!detectChatLeave("I'm heading out — you can leave the meeting too"));
+ok('FP + want-you-to: "I want you to leave the meeting"', !!detectChatLeave('I want you to leave the meeting'));
+ok('FP + declared over still fires: "I\'m leaving, the meeting is over"', !!detectChatLeave("I'm leaving, the meeting is over"));
+
 // ── genuine directives — MUST fire ──────────────────────────────────────────────────────────────
 ok('order: "leave the meeting"', !!detectChatLeave('leave the meeting'));
 ok('order: "you can leave the call now"', !!detectChatLeave('you can leave the call now'));

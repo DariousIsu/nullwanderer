@@ -462,8 +462,11 @@ async function runTick(ctx = {}) {
         if (_present == null || _present >= 2) {
           db.setMeta('teams_dry_notified', '1');
           const audioOn = (() => { try { return require('./config').meetingAudioConfig().enabled; } catch { return false; } })();
+          // HONEST TEXT (2026-08-12 review M8): the old audio-on line promised "I'll still have the
+          // transcript afterward" — no Teams code path delivers that transcript. Never promise a
+          // deliverable no door produces; say what is actually true.
           const msg = audioOn
-            ? `I'm in the Teams meeting but not getting any live captions, so I can't follow it in the moment — audio capture is on, though, so I'll still have the transcript afterward.`
+            ? `I'm in the Teams meeting but not getting any live captions, so I can't follow it in the moment. Audio capture is running, but I don't have a way to turn that into a Teams transcript yet — turn captions on if you'd like me to actually follow along.`
             : `I'm in the Teams meeting but not getting any captions, and audio capture isn't set up — so I can't follow this one live. Turn captions on if you'd like me to follow along.`;
           try { ctx.onSurface && ctx.onSurface(msg); } catch {}
           return { stage, ok: true, note: `caption drought (${Math.round((tNow - _startedAt) / 1000)}s, none ever, ${audioOn ? 'audio-on' : 'no-audio'}) → honest surface, staying` };
@@ -527,8 +530,30 @@ async function runTick(ctx = {}) {
   return { stage: 'none', ok: false, note: 'no active meeting' };
 }
 
+// FORCE-LEAVE (2026-08-12 review M8 — Teams parity with gmeet's c056db7): a user-prompted "leave"
+// when the Teams state has DESYNCED (stage 'done'/'waiting' while she may still be in the call) was
+// silently dropped — the chat handler gates on active() and the tick's leave gates on 'observing',
+// the SAME failure mode as the 08-11 Meet incident, and Teams had no door at all. Runs the proven
+// hang-up unconditionally, self-guarded by inMeeting so it's a clean no-op when not actually in a
+// call. Teams is canvas-native (defaultDeps = canvasTeamsDeps) — no host switch needed here.
+async function forceLeave({ deps = null } = {}) {
+  const d = deps || defaultDeps();
+  let inCall = false;
+  try { inCall = await d.inMeeting(d.web); } catch {}
+  if (!inCall) return { ok: true, via: 'not-in-call', already: true };   // nothing to leave; stage untouched
+  let lv = { ok: false };
+  try { lv = await d.leaveMeeting(d.web); } catch (e) { lv = { ok: false, reason: e && e.message }; }
+  // Mirror the tick's leave cleanup: clear the per-meeting flags and park the stage 'done'.
+  try {
+    db.setMeta('teams_signoff_seen', ''); db.setMeta('teams_last_caption_at', ''); db.setMeta('teams_left_ticks', '0');
+    db.setMeta('teams_leave_requested', '');
+    set('done'); db.setMeta('teams_ended_at', String(Date.now()));
+  } catch {}
+  return { ok: !!(lv && lv.ok), via: (lv && lv.via) || null };
+}
+
 module.exports = {
-  STAGES, get, set, active, start, reset, url, runTick, defaultDeps, synthesizeMeeting,
+  STAGES, get, set, active, start, reset, url, runTick, defaultDeps, synthesizeMeeting, forceLeave,
   detectTeamsUrl, teamsLinkFromEvent, meetingCode, ledgerAdd, ledgerRows,
   meetChatOpen, meetIntroOn, TEAMS_URL_RE,
 };

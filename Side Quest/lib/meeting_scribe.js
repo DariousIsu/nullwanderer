@@ -275,6 +275,11 @@ async function tick(ctx = {}) {
     const startTs = parseInt(db.getMeta('gmeet_started_at') || '0', 10) || d.now();
     db.setMeta('scribe_active', '1'); db.setMeta('scribe_cursor', String(startTs));
     db.setMeta('scribe_minutes', ''); db.setMeta('scribe_buffer', ''); db.setMeta('scribe_pending', '0');
+    // Fresh session = EMPTY segment list (2026-08-12 review M15): a crash mid-finalize left the
+    // OLD meeting's scribe_segments behind, and minutes() prefers segments — so the crashed
+    // meeting's notes contaminated the next meeting's live panel. Segments are per-session state;
+    // init them like the rest.
+    db.setMeta('scribe_segments', '[]');
   }
   const cursor = parseInt(db.getMeta('scribe_cursor') || '0', 10);
   const rows = d.getTranscriptSince(cursor, 800) || [];
@@ -412,8 +417,18 @@ function reset() {
   db.setMeta('scribe_segments', '[]');
 }
 
+// BOOT RECOVERY (2026-08-12 review M15): a process crash during the ~20-60s finalize digest leaves
+// scribe_active='finalizing' FOREVER — hasPending() stays false and nothing else ever clears it.
+// The crashed meeting's polished notes died with the process (the raw transcript survives); what
+// must not survive is the stale claim. Called once at startup; returns true if it recovered.
+function recoverBoot() {
+  if (db.getMeta('scribe_active') !== 'finalizing') return false;
+  db.setMeta('scribe_active', '0');
+  return true;
+}
+
 module.exports = {
-  tick, finalize, hasPending, lastRecap, lastMinutes, minutes, segments, reset, defaultDeps,
+  tick, finalize, hasPending, lastRecap, lastMinutes, minutes, segments, reset, recoverBoot, defaultDeps,
   cleanModelText, buildMinutesPrompt, buildSegmentPrompt, buildDigestPrompt, buildPartPrompt, buildMergePrompt,
   planChunks, inputBudgetChars, digestWhole, peopleBlock, appendSegment, rawTranscriptForMeeting,
   UPDATE_EVERY_LINES, buildRecapPrompt,

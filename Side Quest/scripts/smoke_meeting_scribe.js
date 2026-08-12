@@ -73,6 +73,21 @@ const deps = {
   ok('CONCURRENT finalize: exactly ONE ran (no duplicate digest/notes — the re-entrancy claim holds)', ((ra ? 1 : 0) + (rb ? 1 : 0)) === 1 && recapCalls === 1);
   ok('concurrent finalize: hasPending() false + not stuck (loop stops)', scribe.hasPending() === false);
 
+  // ---- M15 (2026-08-12 review): crash-mid-finalize recovery ----
+  // A process kill during the ~20-60s digest left scribe_active='finalizing' forever, and the
+  // crashed meeting's scribe_segments contaminated the NEXT meeting's live minutes panel.
+  db.setMeta('scribe_active', 'finalizing');
+  db.setMeta('scribe_segments', JSON.stringify([{ at: '10:00', text: 'stale segment from the crashed meeting' }]));
+  ok('recoverBoot: stuck "finalizing" → recovered (returns true)', scribe.recoverBoot() === true);
+  ok('recoverBoot: scribe_active cleared to 0', db.getMeta('scribe_active') === '0');
+  ok('recoverBoot: idempotent — second call is a no-op (returns false)', scribe.recoverBoot() === false);
+  db.setMeta('scribe_active', '1');
+  ok('recoverBoot: never touches a LIVE session (active=1 → false, unchanged)', scribe.recoverBoot() === false && db.getMeta('scribe_active') === '1');
+  db.setMeta('scribe_active', '0');
+  // The next meeting's auto-init must start with an EMPTY segment list (stale segments still set from above).
+  await scribe.tick({ deps });
+  ok('tick auto-init clears STALE scribe_segments (no cross-meeting contamination)', db.getMeta('scribe_segments') === '[]' || scribe.segments().every((s) => !/crashed meeting/.test(s.text)));
+
   console.log(`\n${fail ? 'FAIL' : 'ALL PASS'} — ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

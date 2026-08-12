@@ -185,6 +185,42 @@ function enterObserving() {
     ok('forceLeave (NOT in a call) → clean no-op, never clicked leave', r.via === 'not-in-call' && fl.leaves === 0);
   }
 
+  // H4 (2026-08-12 review, CONFIRMED): forceLeave with NO injected deps must select the surface the
+  // meeting actually lives on. Production meetings are CANVAS-hosted (gmeet_host='canvas'), and the
+  // old defaultDeps()-only path asked the idle Playwright browser → 'not-in-call' → the user-prompted
+  // leave was dropped AGAIN on the exact motivating incident. Register a fake canvas driver and call
+  // forceLeave BARE — the canvas driver's hang-up must fire.
+  {
+    gmeet.reset();
+    const mc = require('../lib/meet_canvas');
+    const cv = { inCalls: 0, leaves: 0 };
+    mc.setLiveDriver({
+      inMeeting: async () => { cv.inCalls++; return true; },
+      leave: async () => { cv.leaves++; return { ok: true, via: 'leave-button' }; },
+    });
+    db.setMeta('gmeet_host', 'canvas');
+    gmeet.set('done'); db.setMeta('gmeet_ended_at', '');
+    const r = await gmeet.forceLeave({});   // NO deps — the host switch must find the canvas driver
+    ok('forceLeave (canvas-hosted, NO injected deps) → asked the CANVAS surface', cv.inCalls >= 1);
+    ok('forceLeave (canvas-hosted) → hung up via the canvas driver', r.ok === true && cv.leaves === 1);
+    mc.setLiveDriver(null);
+    db.setMeta('gmeet_host', '');
+  }
+
+  // M8 (2026-08-12 review): TEAMS forceLeave parity — same desync door, self-guarded by inMeeting.
+  {
+    const teams = require('../lib/teams');
+    const tf = { inCall: true, leaves: 0 };
+    const tDeps = { web: {}, inMeeting: async () => tf.inCall, leaveMeeting: async () => { tf.leaves++; return { ok: true, via: 'leave-button' }; } };
+    teams.set('done'); db.setMeta('teams_leave_requested', '1'); db.setMeta('teams_ended_at', '');
+    let r = await teams.forceLeave({ deps: tDeps });
+    ok('teams.forceLeave (desync: stage done but in-call) → hung up once', r.ok === true && tf.leaves === 1);
+    ok('teams.forceLeave cleared the stale flag + stamped ended_at', db.getMeta('teams_leave_requested') === '' && !!db.getMeta('teams_ended_at'));
+    tf.inCall = false; tf.leaves = 0;
+    r = await teams.forceLeave({ deps: tDeps });
+    ok('teams.forceLeave (NOT in a call) → clean no-op', r.via === 'not-in-call' && tf.leaves === 0);
+  }
+
   gmeet.reset();
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { require('fs').rmSync(path.dirname(process.env.SQ_DB_PATH), { recursive: true, force: true }); } catch {}

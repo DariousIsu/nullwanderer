@@ -35,6 +35,21 @@ const STATE_QUESTION = new RegExp(String.raw`^\s*(?:is|are|was|were|has|have|had
 // 2b) …but a second-person modal request to leave IS an order, question mark or not.
 const MODAL_REQUEST = new RegExp(String.raw`\b(?:can|could|would|will)\s+you\b[^.?!]{0,30}\b(?:${LEAVE_VERB}\s+${MEETING}|end\s+${MEETING})`, 'i');
 
+// 2c) FIRST-PERSON LEAVER (2026-08-12 review H5, confirmed live-shaped): "I have to leave the
+// meeting early", "im going to leave the call now but you stay" — the leaver is LUCAS, not her.
+// LEAVE_ORDER's second-person prefix is OPTIONAL, so these fired 'ordered' and she hung up exactly
+// when he wanted her to stay and cover — the most natural real-world use of the lane. A first-person
+// subject shortly before the leave verb vetoes the order — unless the message ALSO carries an
+// explicit second-person order ("I'm heading out — you can drop off too").
+const FIRST_PERSON_LEAVER = new RegExp(String.raw`\b(?:i|i'?m|i'?ve|i'?ll|we|we'?re)\b[^.?!]{0,25}\b${LEAVE_VERB}\s+${MEETING}\b`, 'i');
+const SECOND_PERSON_ORDER = new RegExp(String.raw`\b(?:you\s+(?:can|may|should|go\s+ahead)|please|(?:want|need)\s+you\s+to)\b[^.?!]{0,25}\b(?:${LEAVE_VERB}|end)\b`, 'i');
+
+// 2d) STAY-PUT CUES that don't mention the meeting (H5's second hole): "keep taking notes for me",
+// "…but you stay" — the old NEGATED stay-branch required "in/on … meeting" AFTER the cue, so a bare
+// trailing "you stay" could never rescue. An explicit stay instruction vetoes everything (asymmetric
+// doctrine: staying on a contradiction costs a minute; leaving on one ends her attendance).
+const STAY_PUT = new RegExp(String.raw`\byou\s+stay\b|\bstay\s+(?:on|in|put|till|until)\b|\bkeep\s+(?:taking\s+notes|listening|watching|covering|recording)\b|\btake\s+notes\s+for\s+me\b|\bcover\s+(?:for\s+me|the\s+rest)\b`, 'i');
+
 // 3) The directive shapes.
 const LEAVE_ORDER = new RegExp(String.raw`\b(?:you\s+can\s+|you\s+may\s+|please\s+|go\s+ahead\s+and\s+)?${LEAVE_VERB}\s+${MEETING}\b|\bend\s+${MEETING}\b`, 'i');
 const DECLARED_OVER = new RegExp(String.raw`\b${MEETING}(?:'?s|\s+is|\s+was)?\s*${OVER}\b|\bwe(?:'re| are)\s+${OVER}\s*(?:here|now)?\b|\bthat'?s\s+a\s+wrap\b`, 'i');
@@ -47,7 +62,11 @@ function detectChatLeave(text) {
   const t = str(text).trim();
   if (!t || t.length > 400) return null;
   if (NEGATED.test(t)) return null;
+  if (STAY_PUT.test(t)) return null;                    // an explicit "you stay / keep taking notes" wins over everything (H5)
   if (MODAL_REQUEST.test(t)) return { reason: 'ordered' };
+  // The LEAVER IS LUCAS ("I have to leave the meeting") → not a directive to her, unless a
+  // second-person order rides along in the same message (H5).
+  if (FIRST_PERSON_LEAVER.test(t) && !SECOND_PERSON_ORDER.test(t)) return null;
   // A question about state never triggers — unless it carried the modal request handled above.
   if (STATE_QUESTION.test(t)) return null;
   if (/\?\s*$/.test(t) && !MODAL_REQUEST.test(t)) {

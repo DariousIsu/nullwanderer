@@ -469,7 +469,16 @@ async function liveLeaveMeeting(web) {
 // This runs the SAME proven hang-up unconditionally, self-guarded by inMeeting so it's a clean no-op when
 // she is not actually in a call (never navigates a non-meeting tab). deps injectable for the smoke.
 async function forceLeave({ deps = null } = {}) {
-  const d = deps || defaultDeps();
+  // HOST-AWARE deps (2026-08-12 review H4, confirmed): with no injected deps this checked the
+  // PLAYWRIGHT browser (defaultDeps) — but every production meeting is CANVAS-hosted
+  // (startCanvasMeeting sets gmeet_host='canvas'), so on the exact motivating incident it asked the
+  // idle Playwright page, saw "not in call", and dropped the user-prompted leave AGAIN with a
+  // falsely reassuring log. Select the surface the meeting actually lives on — the same switch the
+  // monologue tick uses (monologue.js ~960). Canvas driver absent → fall back to Playwright deps
+  // (never a throw on the leave path).
+  const d = deps || (((db.getMeta('gmeet_host') || 'browser') === 'canvas')
+    ? (() => { try { return require('./meet_canvas').canvasMeetDeps(); } catch { return defaultDeps(); } })()
+    : defaultDeps());
   let inCall = false;
   try { inCall = await d.inMeeting(d.web); } catch {}
   if (!inCall) return { ok: true, via: 'not-in-call', already: true };   // nothing to leave; leave the stage untouched

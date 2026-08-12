@@ -5573,6 +5573,9 @@ let scribeTimer = null;
 const SCRIBE_TICK_MS = 20 * 1000;
 function startScribeHeartbeat() {
   if (scribeTimer) return;
+  // M15 boot recovery (2026-08-12 review): a crash mid-finalize left scribe_active='finalizing'
+  // forever with no owner. Recover BEFORE the first tick so the stale claim can't confuse it.
+  try { if (require('./lib/meeting_scribe').recoverBoot()) console.log('[scribe] boot recovery — a finalize died mid-digest last run (scribe_active was stuck "finalizing"); cleared. The crashed meeting\'s record survives in the raw transcript.'); } catch {}
   scribeTimer = setInterval(() => { markActivity('scribe'); scribeHeartbeatTick().catch(() => {}).finally(() => markActivity('idle')); }, SCRIBE_TICK_MS);   // stall-attrib: finalize digest is heavy-sync
   setTimeout(() => { scribeHeartbeatTick().catch(() => {}); }, 4000);
   console.log('[scribe] heartbeat started (own cadence, every 20s)');
@@ -6311,6 +6314,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // so it's a clean no-op if she is not actually in a call.
         console.log(`[gmeet] chat leave-trigger (${_leave.reason}) — state inactive (stage=${_gm.get()}) → force-leave`);
         _gm.forceLeave().then((r) => console.log(`[gmeet] force-leave → ${r.ok ? 'left' : (r.via === 'not-in-call' ? 'not in a call (no-op)' : 'unconfirmed')}${r.via && r.via !== 'not-in-call' ? ' (' + r.via + ')' : ''}`)).catch((e) => console.error('[gmeet] force-leave failed:', e.message));
+      } else if (_tm.get && _tm.get() !== 'none') {
+        // TEAMS DESYNC DOOR (2026-08-12 review M8): the Meet-only force-leave left the SAME failure
+        // mode open on Teams — a stale non-'none' stage with active()===false silently dropped a
+        // user-prompted leave. Same cure: honor the directive directly; forceLeave self-guards with
+        // inMeeting, so it's a clean no-op if she is not actually in a call.
+        console.log(`[teams] chat leave-trigger (${_leave.reason}) — state inactive (stage=${_tm.get()}) → force-leave`);
+        _tm.forceLeave().then((r) => console.log(`[teams] force-leave → ${r.ok ? 'left' : (r.via === 'not-in-call' ? 'not in a call (no-op)' : 'unconfirmed')}${r.via && r.via !== 'not-in-call' ? ' (' + r.via + ')' : ''}`)).catch((e) => console.error('[teams] force-leave failed:', e.message));
       }
     }
   } catch {}
