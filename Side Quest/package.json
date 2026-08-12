@@ -18,6 +18,7 @@
   "type": "commonjs",
   "dependencies": {
     "@pixiv/three-vrm": "^3.5.4",
+    "@pixiv/three-vrm-animation": "^3.5.4",
     "@tiptap/core": "^3.27.1",
     "@tiptap/pm": "^3.27.1",
     "@tiptap/starter-kit": "^3.27.1",

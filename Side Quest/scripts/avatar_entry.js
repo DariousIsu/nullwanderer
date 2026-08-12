@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from '@pixiv/three-vrm-animation';
 
 const vrmState = require('../lib/vrm_state');
 
@@ -39,6 +40,7 @@ function create(canvas, opts = {}) {
     vrm: null, raf: null, analyser: null, buf: null, audioCtx: null,
     mouth: 0, blinkPhase: opts.blinkPhase || 0,
     curEmo: {}, tgtEmo: {}, feeling: 'warm and content', lookUp: 0,
+    mixer: null, clips: {}, action: null,   // full-body clip layer (VRMA driven by an AnimationMixer)
   };
   for (const e of vrmState.VRM_EMOTIONS) { st.curEmo[e] = 0; st.tgtEmo[e] = 0; }
 
@@ -125,6 +127,7 @@ function create(canvas, opts = {}) {
           }
         } catch {}
         st.vrm = vrm;
+        st.mixer = new THREE.AnimationMixer(vrm.scene);   // body clips run here, layered UNDER the face/mouth/blink
         resolve(api);
       },
       undefined,
@@ -146,6 +149,7 @@ function create(canvas, opts = {}) {
       try { em.setValue('lookUp', st.lookUp); } catch {}
       try { em.setValue('aa', st.mouth); } catch {}
       try { em.setValue('blink', vrmState.blinkWeight(now, { phase: st.blinkPhase })); } catch {}
+      if (st.mixer) { try { st.mixer.update(dt); } catch {} }   // body clip writes bone rotations BEFORE vrm.update normalizes them
       try { st.vrm.update(dt); } catch {}
     }
     renderer.render(scene, camera);
@@ -157,7 +161,32 @@ function create(canvas, opts = {}) {
   function captureStream(fps = 30) { return canvas.captureStream(fps); }
   function resize(w, h) { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); return api; }
 
-  api = { loaded, setFeeling, setMood, pushAmplitude, attachAudio, start, stop, renderOnce, captureStream, resize, _state: st };
+  // FULL-BODY CLIPS. A .vrma retargets to this vrm's humanoid by bone name; the mixer crossfades between clips.
+  // The clip is the BASE BODY layer — the face/mouth/blink expressions in draw() ride on top of it.
+  const _vrmaLoader = () => { const l = new GLTFLoader(); l.register((p) => new VRMAnimationLoaderPlugin(p)); return l; };
+  async function loadClip(name, url, o = {}) {
+    await loaded;
+    const gltf = await _vrmaLoader().loadAsync(url);
+    const va = gltf.userData.vrmAnimations && gltf.userData.vrmAnimations[0];
+    if (!va) throw new Error('no VRM animation in ' + url);
+    const clip = createVRMAnimationClip(va, st.vrm); clip.name = name;
+    st.clips[name] = clip;
+    if (o.play) play(name, o);
+    return api;
+  }
+  function play(name, o = {}) {
+    const clip = st.clips[name]; if (!clip || !st.mixer) return api;
+    const next = st.mixer.clipAction(clip);
+    next.loop = (o.loop === false) ? THREE.LoopOnce : THREE.LoopRepeat;
+    next.clampWhenFinished = true;
+    const fade = (o.fade != null) ? o.fade : 0.4;
+    next.reset().setEffectiveWeight(1).play();
+    if (st.action && st.action !== next) st.action.crossFadeTo(next, fade, false);
+    else next.fadeIn(fade);
+    st.action = next;
+    return api;
+  }
+  api = { loaded, setFeeling, setMood, pushAmplitude, attachAudio, loadClip, play, start, stop, renderOnce, captureStream, resize, _state: st };
   setFeeling(st.feeling);
   return api;
 }
