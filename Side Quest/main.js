@@ -15681,7 +15681,28 @@ async function runDirectedResearchPass(focus) {
   // tree; contacts → the Puller email-pattern+verify pattern), not one web search. Slice 2 = after each pass
   // refresh the contract TODO from what the deliverable now covers, so portions check off live.
   let planFacets = [];
-  try { const pl = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || 'null'); planFacets = (pl && Array.isArray(pl.facets) && pl.facets.length) ? pl.facets : (pl && Array.isArray(pl.targets) ? pl.targets : []); } catch {}
+  let _plan = null;
+  try { _plan = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || 'null'); } catch {}
+  // ENSURE THE CONTRACT DOCUMENT EXISTS (the backstop, parity with the DISCOVER branch + the user-work
+  // seed). A focus can reach a directed pass with NO plan/contract: one RESUMED after a restart, or one
+  // seeded before the contract-emit existed (measured: Applied Digital #3792 — driven HERE by the directed
+  // driver, never through the user-work seed path, so its living contract doc was never minted). If there's
+  // no plan and we're not continuing a base_doc, author the plan now and mint the contract canvas doc so the
+  // passes below have a document to refresh. One-time per focus (the plan is persisted by generateResearchPlan).
+  if (!_plan && !db.getMeta(`focus.${focus.id}.base_doc`)) {
+    try {
+      const _deep = (() => { try { return db.getMeta(`focus.${focus.id}.deep`) === '1'; } catch { return false; } })();
+      _plan = await generateResearchPlan(focus, { goal, targets: [], facet: '', deep: _deep, kind });
+      if (_plan) {
+        const ce = require('./studio/canvas_emit');
+        const cb = ce.contractBlock(_plan, goal);
+        await canvasUpsertBlock({ focusId: focus.id, blockId: ce.contractBlockId(focus.id), title: goal, tabMode: 'RESEARCH', blockType: cb.blockType, data: cb.data });
+        await canvasUpsertBlock({ focusId: focus.id, blockId: ce.todoBlockId(focus.id), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: ce.facetTodoMarkdown(_plan, []) } });
+        console.log(`[contract] canvas doc started for #${focus.id} (directed-pass backstop, ${ce.portionsFromPlan(_plan).length} portions)`);
+      }
+    } catch (e) { console.error('[contract] directed-pass mint failed:', e.message); }
+  }
+  try { planFacets = (_plan && Array.isArray(_plan.facets) && _plan.facets.length) ? _plan.facets : (_plan && Array.isArray(_plan.targets) ? _plan.targets : []); } catch {}
   const coveragePlan = (() => { try { return rs.buildCoveragePlan(planFacets); } catch { return ''; } })();
   // THE LIVING DOCUMENT, resolved ONCE for the whole pass. Hoisted here because it was previously
   // read only inside the synthesis block — so a spawned thread got its parent's conclusions at
