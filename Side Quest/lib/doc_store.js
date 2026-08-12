@@ -41,7 +41,9 @@ function land({ title = null, body = '', source = null, ref = null, understandin
     if (dup) return { id: dup.id, landed: false, duplicateOf: dup.id };
     // Spine 4 / C1 — stamp importance ("poignancy") at landing, deterministically (no model call; the
     // browser_download flood scores low by shape). Fail-open: a scoring hiccup lands the doc unscored (null)
-    // rather than blocking the landing. Consumed by promotion triage (C2) + the reflection trigger (C3).
+    // rather than blocking the landing. Consumed TODAY by the reflection trigger (C3, below); promotion
+    // triage is the INTENDED second consumer but no promotion path reads documents.importance yet
+    // (2026-08-12 review — an honest ledger beats an aspirational comment; wire it, then say so).
     let importance = null;
     try { importance = require('./importance').scoreDocument({ source, body, title, origin }); } catch (e) { console.error('[doc_store] importance score failed:', e.message); }
     const r = db.insertDocument({ title, body, source, ref, understanding, origin, fetchUrl, parentId, importance });

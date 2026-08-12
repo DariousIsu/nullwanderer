@@ -9517,6 +9517,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             })
             .filter(Boolean).join('\n');
           if (readings) g.push('THINGS SHE READ BETWEEN TURNS (a [dN] handle = the full stored document — pull it with <recall ref="dN"/> when you need to quote or verify it):\n' + readings);
+          // REPLY CONTEXT-POLLUTION (2026-08-12, seen live twice: reply #11605 opened by re-answering
+          // the PRIOR image thread — restating a false claim — before the new question): the newest
+          // message owns the reply. Context is context; a voice-level line, not machinery.
+          g.push('THE NEWEST MESSAGE IS THE ASK — answer what he JUST said. Earlier turns and the context above are background: never re-answer a previous ask or re-assert an earlier claim of yours unless the new message returns to it. If an open thread genuinely needs closing, one short clause AFTER the new answer, not before it.');
           groundingSec = g.join('\n\n');
           const m = [];
           const threads = _fmtRows(openThreads, 8); if (threads) m.push('OPEN THREADS:\n' + threads);

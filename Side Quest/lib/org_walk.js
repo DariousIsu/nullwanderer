@@ -112,7 +112,7 @@ function corroborateDomain(domain, hostMap) {
 //   getMeta, setMeta:  the meta store (cooldown)
 //   now:         () => ms                              — injectable clock
 //   fetchPage:   async (url) => { text, status }       — fetch + strip-to-text (caller owns network)
-//   land:        async ({name,url,text,provenance}) => docId   — db.insertDocument(source:'org_research')
+//   land:        async ({name,url,text,provenance}) => docId   — doc_store.land(source:'org_research') since 7990c4b (importance + C2 pressure + dedup; a raw insertDocument here is the PRE-Phase-3 bug)
 //   markResearched: async (target, url, docId) => void — upsertBelief(id,'official_site',…) done-marker
 //   log:         (msg) => void
 // }

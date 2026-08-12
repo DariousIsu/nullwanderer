@@ -4,8 +4,11 @@
  * THE DISEASE (census fresh51, reproduced across ≥4 lanes): a content lane picks ONE primary reader, the
  * primary fails, and the lane reports "couldn't" instead of descending to a working alternative that would
  * have answered. The fix already landed ONCE for vision — lib/excavate.js (commit 9cbdf83): headful vision
- * miss → web_extract → web_fetch → distil. This lifts that pattern out of excavate into a reusable shape so
- * the caption/meeting lanes (media_cc / gmeet / teams: DOM captions → av_transcribe) get the same descent.
+ * miss → web_extract → web_fetch → distil. This lifts that pattern out of excavate into a reusable shape.
+ * WIRED CONSUMERS (honest ledger, corrected 2026-08-12 review): media_cc's caption cascade. The MEETING
+ * lanes (gmeet/teams) deliberately do NOT descend to av_transcribe mid-call (in-lane comments own that
+ * choice — a live meeting can't block on a download+transcribe); their caption-drought path surfaces
+ * honestly and stays instead (A1 steps 3-4). If a lane later earns the descent, wire it here.
  *
  * THE CONTRACT (inherited from the excavate floor, non-negotiable):
  *   - Try readers in order; the FIRST whose result passes ok() wins.
