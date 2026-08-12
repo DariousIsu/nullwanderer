@@ -1684,7 +1684,7 @@ app.whenReady().then(() => {
     } catch (e) { console.error('[warm] tick failed:', e.message); }
   };
   setTimeout(runWarmKeeper, 15 * 1000);                          // first warm ~15s after boot
-  setInterval(runWarmKeeper, _warm.intervalMs(db)).unref?.();    // then on the configured cadence (default 75s)
+  setInterval(() => { markActivity('warm-keeper'); runWarmKeeper().finally(() => markActivity('idle')); }, _warm.intervalMs(db)).unref?.();    // then on the configured cadence (default 75s); stall-attrib (a cold model load can block)
 
   // Email: surface a credential problem early rather than at first send.
   if (emailLib.isConfigured()) {
@@ -5489,7 +5489,7 @@ let scribeTimer = null;
 const SCRIBE_TICK_MS = 20 * 1000;
 function startScribeHeartbeat() {
   if (scribeTimer) return;
-  scribeTimer = setInterval(() => { scribeHeartbeatTick().catch(() => {}); }, SCRIBE_TICK_MS);
+  scribeTimer = setInterval(() => { markActivity('scribe'); scribeHeartbeatTick().catch(() => {}).finally(() => markActivity('idle')); }, SCRIBE_TICK_MS);   // stall-attrib: finalize digest is heavy-sync
   setTimeout(() => { scribeHeartbeatTick().catch(() => {}); }, 4000);
   console.log('[scribe] heartbeat started (own cadence, every 20s)');
 }
@@ -6383,13 +6383,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // local-roster prompt → applyOutcome → civic_store (the e45085b guardrail: never a generic pass). Only a
         // Lucas-commissioned completion un-throttles (lane:'interactive'); background metabolism stays paced.
         // Otherwise fall through to the beat swarm. See docs/INTEGRATED_BUILD_TRACK_2026-08-10.md §R4.
-        const _rosterState = (() => { try { return require('./lib/local_frame').resolveState(mOn[1]); } catch { return null; } })();
+        // PER-RUN WORKER OVERRIDE (commissioned swarms): "swarm louisiana with 4 workers" / "swarm 4 workers on X".
+        // Strip the "[with] N worker(s)" phrase from the target so state resolution isn't polluted; clamp 1..8.
+        let _workerOverride = null;
+        let _swarmTarget = mOn[1];
+        {
+          const _wm = _swarmTarget.match(/\b(?:with\s+)?(\d{1,2})\s+workers?\b/i);
+          if (_wm) { _workerOverride = Math.max(1, Math.min(8, parseInt(_wm[1], 10) || 1)); _swarmTarget = _swarmTarget.replace(_wm[0], ' ').replace(/\s+/g, ' ').trim(); }
+        }
+        const _rosterState = (() => { try { return require('./lib/local_frame').resolveState(_swarmTarget); } catch { return null; } })();
         const _rq = require('./lib/recheck_queue');
         const _lr = require('./lib/local_roster');
         const _rosterTasks = _rosterState ? _lr.openTasks(_rosterState, { rq: _rq }) : [];
         if (_rosterState && _rosterTasks.length) {
           const _frame = require('./lib/local_frame').buildFrame(_rosterState);
-          const _workers = Math.max(1, Math.min(_workerCount(), _rosterTasks.length));
+          const _workers = Math.max(1, Math.min(_workerOverride || _workerCount(), _rosterTasks.length));
           say = `On it — swarming the ${_frame.state} roster: ${_workers} worker(s) draining ${_rosterTasks.length} localities in parallel (directed, un-throttled). I'll re-assemble the sheet and give you the honest count when it lands.`;
           console.log(`[swarm] START local-roster ${_rosterState}: ${_rosterTasks.length} tasks across ${_workers} worker(s) (directed, un-throttled)`);
           // Fire-and-forget: the turn returns the ack immediately; completion surfaces via a followup.
@@ -6413,7 +6421,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             } catch (e) { console.error('[swarm-roster] directed completion failed:', e.message); }
           })();
         } else {
-          const r = await startSwarm({ target: mOn[1], requestedBy: 'chat' });
+          const r = await startSwarm({ target: _swarmTarget, requestedBy: 'chat' });
           say = r.ok
             ? `On it — swarming ${r.beatId}: ${r.workers} worker(s) splitting ${r.targets} targets in parallel. I'll fold each dossier in as it lands.`
             : `I couldn't start that swarm — ${r.reason}.`;
@@ -13871,6 +13879,7 @@ function startAutonomicScheduler() {
   // drives POST /turn like any outside caller — what is tested is what runs.
   const PATHWAY_TICK_MS = 60 * 60 * 1000;
   setInterval(() => {
+    markActivity('pathway');   // stall-attrib (diagnostic — self-test cadence can run heavy)
     (async () => {
       await require('./lib/pathway_cadence').tick({
         getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v),
@@ -13879,7 +13888,7 @@ function startAutonomicScheduler() {
         appDir: __dirname,
         recordNeed: (need, o) => require('./lib/capability_need').record(need, o),
       });
-    })().catch((e) => console.error('[pathway] tick failed:', e.message));
+    })().catch((e) => console.error('[pathway] tick failed:', e.message)).finally(() => markActivity('idle'));
   }, PATHWAY_TICK_MS).unref?.();
   console.log('[pathway] nightly self-test cadence armed (02-06h ET, quota-governed, idle-gated; ZOE_PATHWAY_CADENCE=0 disables)');
 }
@@ -15293,7 +15302,7 @@ async function _reviewFanoutTick() {
   } catch (e) { console.error('[review-fanout] tick failed:', e.message); }
   finally { _fanoutCompiling = false; }
 }
-setInterval(() => { _reviewFanoutTick().catch(() => {}); }, 60 * 1000).unref?.();
+setInterval(() => { markActivity('review-fanout'); _reviewFanoutTick().catch(() => {}).finally(() => markActivity('idle')); }, 60 * 1000).unref?.();   // stall-attrib (diagnostic)
 
 function surfaceResearchPivot(focus, novel) {
   const qs = (Array.isArray(novel) ? novel : []).slice(0, 2)

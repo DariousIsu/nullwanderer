@@ -355,6 +355,20 @@ async function runTick(ctx = {}) {
       surface(`Got it — you said the meeting's done, so I've left the Teams call.${recap ? ` Here's what I took from it — ${recap}` : ''}`, '(teams) left on request');
       return { stage, ok: true, note: `left on request → done${recap ? ' + recap' : ''}` };
     }
+    // LEAVE TRIGGER — MAX DURATION backstop (gmeet parity, g.MAX_MEETING_MS = 3h): teams historically had
+    // NO max-duration ceiling (comment below), so a stuck 'observing' from an ended-but-not-detected call
+    // could sit forever. Never sit in a Teams call past MAX_MEETING_MS whatever the captions do.
+    {
+      const _tStarted = parseInt(db.getMeta('teams_started_at') || '0', 10) || 0;
+      if (_tStarted && (nowMs() - _tStarted) >= g.MAX_MEETING_MS) {
+        try { await d.leaveMeeting(d.web); } catch {}
+        const recap = await synthesizeMeeting(d, ctx).catch(() => '');
+        set('done');
+        db.setMeta('teams_ended_at', String(Date.now()));
+        surface(`We've been in this Teams meeting a long while — I've stepped out to free myself up. Say the word if you want me back in.${recap ? ` Here's what I took from it — ${recap}` : ''}`, '(teams) max duration → left');
+        return { stage, ok: true, note: `max duration → left → done${recap ? ' + recap' : ''}` };
+      }
+    }
     if (!(await d.inMeeting(d.web))) {
       const n = parseInt(db.getMeta('teams_left_ticks') || '0', 10) + 1;
       db.setMeta('teams_left_ticks', String(n));
@@ -435,9 +449,10 @@ async function runTick(ctx = {}) {
     }
 
     // A1 FALL-THROUGH FLOOR (teams variant, docs/INTEGRATED_BUILD_TRACK §A1): captions are teams' only LIVE
-    // perception — and they historically scraped EMPTY (fix d7b2c99). teams has NO max-duration/alone backstop
-    // (unlike gmeet), so a caption-less call is observed silently with even less bound (the census G3 disease,
-    // un-backstopped). Once captions have been dry for CAPTION_DROUGHT_MS with others present AND none EVER
+    // perception — and they historically scraped EMPTY (fix d7b2c99). teams now HAS a max-duration backstop
+    // (the g.MAX_MEETING_MS ceiling added above, gmeet parity), but no alone-check, so a caption-less call is
+    // observed with less bound than gmeet until that 3h ceiling. Once captions have been dry for
+    // CAPTION_DROUGHT_MS with others present AND none EVER
     // arrived (teams_cap_ever), SAY SO ONCE (audio-aware) via onSurface and KEEP attending (Lucas's pick).
     // Checked AFTER this tick's caption handling so cap_ever is current; latched via teams_dry_notified.
     if (db.getMeta('teams_cap_ever') !== '1' && !db.getMeta('teams_dry_notified')) {

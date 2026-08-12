@@ -31,6 +31,10 @@ const echoSuit = require('./echo_suit');
 const { buildAwarenessBlock, BASE_PERSONA } = require('./context');
 
 const MODEL = require('./config').frontModel();   // her VOICE model (front)
+// The model that actually produced the most recent generateThought() output — the CLOUD subconscious
+// (kimi) when it's up, else the local front (MODEL). generateThought-DERIVED thought rows label with THIS,
+// not the bare MODEL constant, so a cloud-written thought isn't mis-attributed to the demoted local front.
+let _lastThoughtModel = MODEL;
 const TICK_INTERVAL_MS = 10 * 1000;     // 10s between ticks while idle
 const CAPTION_INTERVAL_MS = Math.max(2000, Math.round(TICK_INTERVAL_MS / 2));  // half-tick caption heartbeat
 const TICK_INTERVAL_BUSY_MS = 30 * 1000; // back off when conversation is active
@@ -825,6 +829,7 @@ async function generateThought({ messages, options = {}, signal, deps = {} } = {
         const usage = (r && typeof r === 'object' && r.usage) ? r.usage : null;
         if (text && String(text).trim()) {
           if (deps.onUsage) { try { deps.onUsage(usage, { model: subModel }); } catch {} }
+          _lastThoughtModel = subModel;
           return String(text).trim();
         }
         console.warn('[monologue] cloud subconscious returned empty — falling back to local');
@@ -838,6 +843,7 @@ async function generateThought({ messages, options = {}, signal, deps = {} } = {
   let out = '';
   const sc = deps.streamChat || streamChat;
   await sc({ model: MODEL, messages, options, onToken: (t) => { out += t; }, signal });
+  _lastThoughtModel = MODEL;
   return out;
 }
 
@@ -1570,7 +1576,7 @@ async function _runOneTick() {
     if (clean) {
       const imp = await importanceLib.score(clean, { userName, kind: 'thought' });
       bumpReflectionAccum(imp);
-      const frow = db.insertMonologue({ content: clean, model: MODEL, feedContext, type: 'thought', importance: imp });
+      const frow = db.insertMonologue({ content: clean, model: _lastThoughtModel, feedContext, type: 'thought', importance: imp });
       pushSheep({ id: frow.id, ts: frow.ts, content: clean, type: 'thought' });
       try { blackboard.append({ source: 'monologue', kind: 'thought', focusId: activeFocus.id, refTable: 'monologue', refId: frow.id, content: clean }); }
       catch (e) { console.error('[monologue] focus thought append failed:', e.message); }
@@ -1696,7 +1702,7 @@ async function _runOneTick() {
   bumpReflectionAccum(importance);
   const row = db.insertMonologue({
     content: trimmed,
-    model: MODEL,
+    model: _lastThoughtModel,
     feedContext,
     type: 'thought',
     importance

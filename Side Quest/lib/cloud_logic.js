@@ -44,8 +44,10 @@ function dailyCap() {
 // ---- the cloud primitive (resolve cloud tier + curator model → ollama.complete) ----
 // Returns { text, model } or null when no cloud tier/model is configured (fail-safe).
 // TTL, not a permanent latch: this cache was set once and never invalidated, so a model swap via
-// db meta (models.setModelFor) was ignored until reboot — and since model.replier is unset, the
-// REPLY writer and its resolveWindow budget rode the stale value too. 10 min matches models._ctxCache.
+// db meta (models.setModelFor) was ignored until reboot. (Historically model.replier was unset, so the
+// REPLY writer fell back through here and rode the stale value too; model.replier is now SET to
+// kimi-k2.6, so the reply writer resolves that directly and no longer depends on this fallback.)
+// 10 min matches models._ctxCache.
 let _modelCache = null, _modelCacheAt = 0;
 const MODEL_CACHE_TTL_MS = 10 * 60 * 1000;
 async function _resolveModel(models, cloud) {

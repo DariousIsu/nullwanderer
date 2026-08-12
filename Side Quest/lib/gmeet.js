@@ -1099,7 +1099,7 @@ async function runTick(ctx = {}) {
 }
 
 module.exports = {
-  STAGES, CAPTION_DROUGHT_MS, get, set, active, start, reset, url, runTick, defaultDeps, synthesizeMeeting, forceLeave,
+  STAGES, CAPTION_DROUGHT_MS, MAX_MEETING_MS, get, set, active, start, reset, url, runTick, defaultDeps, synthesizeMeeting, forceLeave,
   // pure helpers (tested)
   detectMeetUrl, meetLinkFromEvent, introPrompt, validateIntro, ensureIntro, parseCaptions, parseAttendees,
   addressesSelf, isSelfSpeaker, selfNames, looksLikeSignOff, extractDirective, segmentTurns, parseMeetingAction,
