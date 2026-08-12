@@ -35,6 +35,8 @@ const STRUCTURAL = new Set([
   'FUNDS', 'CREATED', 'REGULATES', 'ATTENDED', 'CITES', 'MET_WITH', 'APPOINTED', 'REPRESENTED',
   'SPONSORED', 'SPONSOR', 'FOUNDED', 'SUCCEEDS', 'PRECEDES', 'DISTRIBUTED', 'PARTNERED_WITH',
   'SIGNED', 'HOLDS_OFFICE', 'EXTENDS', 'RESOLVES',
+  // Org-structural affiliation — "X is a c4 arm/sister/subsidiary of Y" is checkable, not a judgement.
+  'AFFILIATE_OF', 'SUBSIDIARY_OF',
 ]);
 
 // A fact about a person that accumulates and is never overwritten (§5b) — history, not current state.

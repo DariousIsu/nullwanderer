@@ -68,6 +68,11 @@ const REL_VOCAB = [
   'REGULATES', 'FUNDS', 'OPPOSES', 'SUPPORTS', 'MET_WITH', 'RESPONSIBLE_FOR', 'SUCCEEDS', 'PRECEDES',
   'CITES', 'SPONSORED', 'AFFECTS', 'BORN_IN', 'DIED_IN', 'MARRIED_TO', 'PARENT_OF', 'FOUNDED',
   'REPRESENTED', 'APPOINTED', 'ATTENDED', 'PARTICIPATED_IN',
+  // Org-STRUCTURAL affiliation (sister / arm / parent). ORG_TARGET_REL + echo_suit's arm→primary
+  // clustering already CONSUME these, but the prompt never offered them, so corporate sisterhood
+  // (Rainey Center ↔ Rainey Freedom Project) landed as the weak interpretive RELATED_TO. Naming them
+  // lets an org's own site assert its structure as a durable edge. See docs/ORG_RESEARCH_LANE.md.
+  'AFFILIATE_OF', 'SUBSIDIARY_OF',
 ];
 
 // A field is a NAMED ENTITY, not a pronoun / sentence / clause. Mirrors graph_extract's slop rejection.
@@ -112,7 +117,7 @@ Extract ALL of these kinds of objects — a document is more than its people:
 
 <type> is one of: ${ENTITY_TYPES.join(', ')} (use "other" only if genuinely none fit).
 <one-line what-it-is> is a SHORT factual gloss from the text (≤ 12 words) — what this object is or does. Leave it empty only if the text gives nothing.
-<RELATION> is UPPER_SNAKE from: ${REL_VOCAB.join(', ')} (use RELATED_TO if none fit). Capture the CLAIMS the document makes — e.g. "glass interposer ENABLES chiplet integration", "borosilicate PART_OF glass substrate".
+<RELATION> is UPPER_SNAKE from: ${REL_VOCAB.join(', ')} (use RELATED_TO if none fit). Capture the CLAIMS the document makes — e.g. "glass interposer ENABLES chiplet integration", "borosilicate PART_OF glass substrate". When ONE ORGANIZATION is a sister/arm/chapter/DBA/c3-or-c4 of ANOTHER, use AFFILIATE_OF; when it is a subsidiary or division, use SUBSIDIARY_OF — not the vague RELATED_TO.
 <when> is the year or year-range the text says this became/was true (e.g. "2023", "2015–2019"). Leave EMPTY if the text gives no date — never guess.
 A name is a CONCRETE OBJECT (a person, org, place, event, bill, technology, material, method, or named concept) — never a pronoun, never a whole sentence. Only what the text STATES — do NOT infer, generalize, or invent. Every REL's source and target should also appear as an ENTITY line.
 Max ${maxLines} ENTITY lines and ${maxLines} REL lines. If there are none, output exactly: NONE

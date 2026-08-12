@@ -64,6 +64,10 @@ function run() {
   ok('synthesized research (no origin) beats a fetched page (with origin)', importance.scoreDocument({ source: 'research', body: 'x'.repeat(9000), origin: null }) > importance.scoreDocument({ source: 'browser_download', body: 'x'.repeat(9000), origin: 'https://x.com' }));
   ok('always clamped 1..10', (() => { const s = importance.scoreDocument({ source: 'deliverable', body: 'x'.repeat(50000) }); return s >= 1 && s <= 10; })());
   ok('bulk stays below deliverable (the triage signal C2/C3 use)', importance.scoreDocument({ source: 'browser_download', body: 'x'.repeat(3000) }) < importance.scoreDocument({ source: 'deliverable', body: 'x'.repeat(3000) }));
+  // Phase 3 — an org's OWN researched site is above-ordinary, so a substantive one feeds C3 (was landing
+  // importance=null via a bare insertDocument). A rich homepage (>8k) → 7 → pressure 2; a thin stub → 0.
+  ok('org_research (substantive) scores above ordinary → builds reflection pressure', importance.reflectionPressure(importance.scoreDocument({ source: 'org_research', body: 'x'.repeat(9000) })) > 0);
+  ok('org_research thin stub does NOT build pressure', importance.reflectionPressure(importance.scoreDocument({ source: 'org_research', body: 'tiny' })) === 0);
 
   console.log('\ndocuments.importance stamped at landing (doc_store.land → column round-trip):');
   const docStore = require('../lib/doc_store');

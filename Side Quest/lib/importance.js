@@ -113,6 +113,7 @@ const _DOC_BASE = {
   deliverable: 8, research: 8,
   meeting: 8, meeting_transcript: 7,
   conversation: 6,
+  org_research: 6,       // an org's OWN site — a deliberate research landing, primary but self-interested
   canvas_drop: 5, notes: 5, media_watch: 5,
   newsletter: 3, news: 3,
   browser_download: 2,   // the flood — legible-low by shape, no inference spent on it

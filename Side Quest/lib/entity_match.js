@@ -35,6 +35,21 @@ const NICK = {
 function _canonGiven(g) { const s = String(g || '').toLowerCase().replace(/\.$/, '').trim(); return NICK[s] || s; }
 function _isInitial(g) { const s = String(g || '').replace(/\./g, '').trim(); return s.length === 1; }
 
+// CORPORATE-FORM FOLD (org variant-form dedup). A leading article and a trailing corporate suffix are
+// legal-form decoration, not identity: "THE RAINEY CENTER FREEDOM PROJECT" and "RAINEY CENTER FREEDOM
+// PROJECT, INC." are the same org filed twice under different lda registrations. nameKey keeps both
+// (so they read as name-DIFFERS and never surface); orgKey folds the decoration so the variant pair
+// reaches REVIEW for adjudication. NON-PERSON ONLY (a person's surname is never a corporate suffix) and
+// it never AUTO-merges — a conflicting strong id still holds it (matchPair), so this only makes a real
+// dup VISIBLE, never merges "Johnson Ltd" into "Johnson Corp" on its own.
+const _CORP_SUFFIX = new Set(['inc', 'incorporated', 'corp', 'corporation', 'co', 'company', 'llc', 'llp', 'lllp', 'ltd', 'limited', 'plc', 'lp', 'pllc']);
+function _orgKey(nameKey) {
+  let toks = String(nameKey || '').split(' ').filter(Boolean);
+  if (toks.length > 1 && toks[0] === 'the') toks = toks.slice(1);                                   // leading article
+  while (toks.length > 1 && _CORP_SUFFIX.has(toks[toks.length - 1])) toks = toks.slice(0, -1);       // trailing corporate form(s)
+  return toks.join(' ');
+}
+
 function parseEntity(rec = {}) {
   const raw = String((rec && rec.name) || '').trim();
   const ids = {};
@@ -70,7 +85,7 @@ function parseEntity(rec = {}) {
   const isPerson = type === 'person' || (!type && toks.length >= 2 && toks.length <= 4);
   return {
     __parsed: true,
-    display: raw, nameKey: clean.toLowerCase(), normKey: normalizeCivic(raw), tokens: toks, type, isPerson,
+    display: raw, nameKey: clean.toLowerCase(), normKey: normalizeCivic(raw), orgKey: !isPerson ? _orgKey(clean.toLowerCase()) : null, tokens: toks, type, isPerson,
     given: isPerson && toks.length >= 2 ? toks[0] : null,   // a single-token person name is a SURNAME, not a given
     surname: isPerson && toks.length ? toks[toks.length - 1] : null,
     jurisdiction: jurisdiction ? String(jurisdiction).toUpperCase() : null,
@@ -212,12 +227,15 @@ function matchPair(recA, recB) {
   // name-agree on the EXACT nameKey OR the abbreviation-folded normKey ("U.S. Senate" ≡ "United States Senate").
   // Still only REVIEW without a shared strong id — surfacing a variant-form dup for adjudication, never an
   // auto-merge (precision unchanged; the merge comes from a strong id or the collective tie-break).
-  if ((a.nameKey && a.nameKey === b.nameKey) || (a.normKey && a.normKey === b.normKey)) {
+  // orgKey agreement (corporate-form fold: leading article + trailing corporate suffix) is a THIRD name
+  // axis, non-person only — it surfaces "THE X" ≡ "X, INC." variant dups that nameKey/normKey keep apart.
+  const orgKeyAgree = !a.isPerson && !b.isPerson && a.orgKey && a.orgKey === b.orgKey;
+  if ((a.nameKey && a.nameKey === b.nameKey) || (a.normKey && a.normKey === b.normKey) || orgKeyAgree) {
     if (conflict) return { decision: 'review', tier: 'probabilistic', reason: `name-agree/${conflict}-id-conflict`, confidence };
     // still only REVIEW (never auto-merge on name), but TAG the type relation so a downstream sweep/collective
     // step can target compatible-type same-name variants (safe-ish dups) vs disjoint-type ones (hold — likely
     // different, or a mistype needing a human).
-    const base = (a.nameKey && a.nameKey === b.nameKey) ? 'name-agree' : 'normkey-agree';
+    const base = (a.nameKey && a.nameKey === b.nameKey) ? 'name-agree' : (a.normKey && a.normKey === b.normKey) ? 'normkey-agree' : 'orgform-agree';
     const tr = typeRelation(a, b);
     return { decision: 'review', tier: 'probabilistic', reason: `${base}/${tr}-type/no-shared-id`, confidence, typeRel: tr };
   }

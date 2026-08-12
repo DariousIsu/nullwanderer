@@ -61,6 +61,16 @@ ok(dec(O('CITY OF SACRAMENTO [lda_client:119039]'), O('CITY OF SACRAMENTO [lda_c
 ok(dec(O('CITY OF SACRAMENTO'), O('CITY OF WEST SACRAMENTO')) === 'no-match', 'org: "CITY OF SACRAMENTO" ≠ "CITY OF WEST SACRAMENTO" → NO-MATCH');
 ok(dec(O('CITY OF SACRAMENTO [lda_client:5]'), O('CITY OF SACRAMENTO [lda_client:5]')) === 'match', 'org: same lda id → MATCH (strong-id)');
 ok(dec(O('Acme Corp'), O('Acme Corp')) === 'review', 'org: identical name, no id on either side → REVIEW');
+// --- Phase 3: corporate-form fold (leading article + trailing suffix) surfaces variant-form org dups ---
+// The real pair: two lda registrations of the same org, kept apart by "THE" + ", INC." until orgKey folds them.
+ok(dec(O('RAINEY CENTER FREEDOM PROJECT, INC. [lda_client:66270]'), O('THE RAINEY CENTER FREEDOM PROJECT [lda_client:73224]')) === 'review',
+  'org corp-form: "…, INC." ≡ "THE …" (orgKey fold) with CONFLICTING lda → REVIEW (surfaced for adjudication, was name-differs=invisible)');
+ok(M.matchPair(O('THE RAINEY CENTER FREEDOM PROJECT'), O('RAINEY CENTER FREEDOM PROJECT, INC.')).reason.startsWith('orgform-agree'),
+  'org corp-form: no ids on either side → reason names the orgform-agree axis');
+ok(dec(O('Acme Ltd'), O('Beacon Ltd')) === 'no-match',
+  'org corp-form GUARD: a shared corporate suffix does NOT match distinct bases ("Acme Ltd" ≠ "Beacon Ltd")');
+ok(dec(P('Tom Cook'), P('Tim Cook')) === 'no-match',
+  'org corp-form does NOT touch persons: "Tom Cook" ≠ "Tim Cook" (given-name conflict, Cook not folded as a suffix)');
 
 // --- resolveAgainst: the ANTI-FAN rule --------------------------------------------------------------
 console.log('== resolveAgainst (anti-fan) ==');

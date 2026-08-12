@@ -2569,8 +2569,13 @@ async function runOrgResearchStage() {
     getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v), now: () => Date.now(),
     fetchPage: _fetchOrgPageWithFallback,
     land: async ({ name, url, text }) => {
-      const inserted = db.insertDocument({ title: `${name} — official website`, body: text, source: 'org_research', ref: url, origin: url });
-      return inserted && inserted.id;
+      // doc_store.land (NOT a bare db.insertDocument): it content-dedups (a re-fetched site is one
+      // encounter, not a second source), C1-scores the landing (importance._DOC_BASE.org_research=6),
+      // and bumps the C3 reflection accumulator on a substantive site — so a researched org finally
+      // feeds restlessness instead of landing importance=null. The decompose sweep still reads it (it
+      // watches the documents table by source='org_research', independent of the insert path).
+      const r = require('./doc_store').land({ title: `${name} — official website`, body: text, source: 'org_research', ref: url, origin: url });
+      return r && r.id;
     },
     markResearched: async (t, url) => {
       try { const d = new Set(JSON.parse(db.getMeta(ORG_DONE_KEY) || '[]')); d.add(t.domain); db.setMeta(ORG_DONE_KEY, JSON.stringify([...d].slice(-8000))); } catch {}

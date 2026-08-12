@@ -199,7 +199,15 @@ const pj = (s, dflt) => { if (s == null) return dflt; try { return JSON.parse(s)
 // ('church' deliberately absent — Frank Church-class surnames are certain in a civic CRM, and an org
 // named for a church nearly always carries another token here.)
 const _ORG_NAME_RE = /\b(?:center|centre|institute|institution|foundation|university|college|committee|association|council|coalition|federation|alliance|society|bureau|agency|department|ministry|corporation|corp|incorporated|inc|llc|llp|ltd|company|holdings|fund|pac|project|caucus|commission|authority|league|union|academy|museum|library|laboratory|labs|senate|legislature|assembly|office|board|county|parish|campaign|partners|group)\b/i;
-function orgShapedName(name) { return _ORG_NAME_RE.test(String(name || '')); }
+// A HYPHENATED SURNAME can embed an org token: the door mis-kinded Maine legislator "Pinny Beebe-Center"
+// (center → org), and org_site.verifyPage then correctly refused to research a person. A real org's
+// designator is a FREE-STANDING word ("Rainey Center", "Center for American Progress"); a compound
+// surname binds it with a hyphen. So drop hyphen-joined word-groups before testing — "Beebe-Center"
+// disappears, leaving "Pinny" (no org token = person), while free-standing designators survive intact.
+function orgShapedName(name) {
+  const freed = String(name || '').replace(/\b[A-Za-z]+(?:-[A-Za-z]+)+\b/g, ' ');
+  return _ORG_NAME_RE.test(freed);
+}
 
 // M4.4 FOLLOW-UP (2026-08-07) — re-kind the PRE-DOOR stock. The org door below stops NEW org-shaped
 // names from enrolling as persons, but the rows enrolled before it existed (measured 271,334, 100%
