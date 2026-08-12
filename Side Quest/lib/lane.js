@@ -52,4 +52,24 @@ function isAutonomous(explicit) {
   return !!current().autonomous;
 }
 
-module.exports = { run, current, isAutonomous };
+// ── SPEND TIER (2026-08-12 review H2/M5) ─────────────────────────────────────────────────────────
+// The quota tier a cloud call bills to. The old default in runCloudOperator keyed 'directed' on
+// GLOBAL focus state (_userDirectedActive), so background passes that ran ALONGSIDE Lucas's
+// standing focus self-labeled 'directed' and — post-cf2b5ef — escaped the pace governor entirely
+// (a large share of the measured 300-516k/hr hot burn). And condenseComplete (~20 sites incl. the
+// autonomous research organize/merge/topical steps on the 120B) passed no lane at all, defaulting
+// 'interactive' and bypassing the choke-point gate. The cure is this module's own doctrine:
+// AMBIENT over plumbed. An orchestrator declares its tier ONCE via run({spendTier}), every cloud
+// call it awaits inherits it, and the resolution order is pure and testable:
+//   explicit (the call site knows best) → ambient (the run declared it) → autonomous ? 'research'
+//   (an unattended run NEVER defaults to an ungated tier) → undefined (interactive/legacy).
+// 'directed' is EARNED by the focus being driven (user-origin, not beat) — never inferred from
+// what happens to be globally current.
+function resolveSpendTier({ explicit, ambient, autonomous } = {}) {
+  if (explicit != null) return explicit;
+  if (ambient != null) return ambient;
+  return autonomous ? 'research' : undefined;
+}
+function ambientSpendTier() { return current().spendTier; }
+
+module.exports = { run, current, isAutonomous, resolveSpendTier, ambientSpendTier };

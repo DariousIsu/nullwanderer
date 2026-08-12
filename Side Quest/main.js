@@ -467,16 +467,32 @@ function createCompanionWindow() {
 // (hidden = muted). Fire-and-forget + fail-soft: never blocks or breaks the chat turn.
 async function speakThroughCompanion(text) {
   try {
-    if (!companionWindow || companionWindow.isDestroyed() || !companionWindow.isVisible()) return;
     const tc = config.ttsConfig();
     if (!tc.enabled || !tc.configured) return;
+    // Companion path stays intact (avatar surface, when present + visible, plays + lip-syncs). When it's
+    // absent (ZOE_COMPANION=0), fall back to OS audio so she's still audible. The fan-out below still fires
+    // either way so any lip-sync surface can analyse the wav.
+    const hasCompanion = companionWindow && !companionWindow.isDestroyed() && companionWindow.isVisible();
     const tts = require('./lib/tts');
     const clean = tts.prepareText(text);
     if (!clean || clean.length < 2) return;
     const res = await tts.synthesize(clean, { voice: tc.voice, speaker: tc.speaker, wallMs: tc.wallMs });
-    if (!res || !res.ok) { if (res && res.error) console.error('[companion] tts failed:', res.error); return; }
+    if (!res || !res.ok) { if (res && res.error) console.error('[voice] tts failed:', res.error); return; }
     const fileUrl = require('url').pathToFileURL(res.out).href;
-    if (companionWindow && !companionWindow.isDestroyed()) companionWindow.webContents.send('companion:speak', { url: fileUrl });
+    if (hasCompanion) {
+      companionWindow.webContents.send('companion:speak', { url: fileUrl });
+    } else {
+      // No visible companion → play the wav through the OS default output (fire-and-forget, fail-soft).
+      try {
+        const { execFile } = require('child_process');
+        if (process.platform === 'win32') {
+          const ps = `(New-Object Media.SoundPlayer '${res.out.replace(/'/g, "''")}').PlaySync();`;
+          execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], () => {});
+        } else {
+          execFile('aplay', [res.out], (e) => { if (e) execFile('afplay', [res.out], () => {}); });
+        }
+      } catch (e) {}
+    }
     // Fan the same wav out to every other surface so anything that wants to lip-sync can. The 3D graph paints
     // her face across the point cloud and needs the real amplitude envelope to move the mouth; the companion
     // stays the only one that AUDIBLY plays it (every other listener analyses without connecting to
@@ -6472,7 +6488,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           (async () => {
             try {
               const runTask = async (item) => {
-                const res = await runCloudOperator({ userMessage: _rq.buildPrompt(item), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'interactive', budgetMult: 0.75 });
+                // lane 'directed' (2026-08-12 review M4): a Lucas-commissioned swarm IS his work — the
+                // honest tier is 'directed' (floor-gated only, never pace-throttled, post-cf2b5ef), which
+                // gives the intended un-throttling WITHOUT bypassing the 97% interactive reserve the old
+                // 'interactive' claim jumped over. Its own log line already said "directed" — now true.
+                const res = await runCloudOperator({ userMessage: _rq.buildPrompt(item), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'directed', budgetMult: 0.75 });
                 return _rq.applyOutcome(item, res && res.answer ? String(res.answer) : '');
               };
               await _lr.drainSwarm({ tasks: _rosterTasks, workers: _workers, runTask });
@@ -11687,7 +11707,13 @@ try {
 // synchronous one from the require below — surfaces as a REJECTION, which several call sites
 // handle with a bare .catch(() => null).
 async function runCloudOperator(opts) {
-  return require('./lib/lane').run({ autonomous: !!(opts && opts.autonomous) }, () => _runCloudOperator(opts || {}));
+  const laneLib = require('./lib/lane');
+  const o = opts || {};
+  // SPEND TIER resolved ONCE here (2026-08-12 review H2): explicit → ambient (an orchestrator like
+  // the directed pass declared it for the run) → autonomous 'research' → undefined (interactive).
+  // Carried as ambient spendTier so every nested cloud call (condenseComplete etc.) inherits it.
+  const spendTier = laneLib.resolveSpendTier({ explicit: o.lane, ambient: laneLib.ambientSpendTier(), autonomous: !!o.autonomous });
+  return laneLib.run({ autonomous: !!o.autonomous, spendTier }, () => _runCloudOperator({ ...o, lane: spendTier }));
 }
 
 async function _runCloudOperator({ userMessage, context, task = false, autonomous = false, maintain = false, toolNames = null, model = null, toolSpec = null, budgetMult = 1, review = false, lane = undefined }) {
@@ -11738,18 +11764,15 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
       maxMs: _maxMs,
       numPredict: task ? config.sectionNumPredict() : undefined,   // a list/write-up can be long — don't truncate it at generation (cloud-leverage: deeper write-ups)
       model, toolSpec,                        // per-lane model + tool menu (null = single-lane defaults)
-      // SPEND TIER (dial-in 2026-08-06): autonomous operator work opts into the choke-point quota
-      // gate — Lucas's directed runs on the big-share 'directed' tier, background/beat work on
-      // 'research' (45% of pace). In-turn user replies stay interactive (never throttled). This is
-      // where the beats' 400k+/h ungated burn actually flowed; a deferral reads as a cloud-miss to
-      // the fail-soft pass and the thread resumes when pace recovers.
-      // An explicit lane wins; else the autonomous default (directed if a user task is live, else
-      // research). NOTE (08-08): metabolism used to pass 'interactive' here to sit above the gate —
-      // that was the quota-tier hole (it crawled counties + wrote CRM rows at 99% of an empty pool
-      // while every governed tier deferred). It now passes 'research' (stops at 90%, above idle),
-      // so NO autonomous caller reaches this with 'interactive'. Interactive stays reserved for
-      // Lucas typing; an autonomous lane is never ungated.
-      lane: lane !== undefined ? lane : (autonomous ? (_userDirectedActive() ? 'directed' : 'research') : undefined),
+      // SPEND TIER (dial-in 2026-08-06; re-cut 2026-08-12 review H2): resolved ONCE in the
+      // runCloudOperator wrapper (explicit → ambient run tier → autonomous 'research' → undefined)
+      // and passed down pre-resolved. The old default here keyed 'directed' on GLOBAL focus state
+      // (_userDirectedActive), so autonomy-tick/dig passes running ALONGSIDE Lucas's standing focus
+      // self-labeled 'directed' and escaped the pace governor — a large share of the measured
+      // 300-516k/hr hot burn. 'directed' is now EARNED per-run by the focus being driven
+      // (_focusSpendTier via the directed-pass ambient), never inferred from what's current.
+      // NOTE (08-08) still holds: NO autonomous caller reaches this with 'interactive'.
+      lane,
     });
     // GROWTH — "Zoe" IS the memory, not the model: the operator only grows her if what it gathers
     // ACCRETES back into her knowledge. Capture the web findings it pulled as durable learnings, so
@@ -12849,7 +12872,9 @@ async function autonomyTick() {
 function startAutonomyDriver() {
   if (autonomyTimer) return;
   if (!_autonomyEnabled()) { console.log('[autonomy] disabled (ZOE_AUTONOMY / autonomy.enabled) — driver not started'); return; }
-  autonomyTimer = setInterval(() => { autonomyTick().catch((e) => console.error('[autonomy] tick failed:', e.message)); }, AUTONOMY_TICK_MS);
+  // The tick runs under an ambient 'research' spend tier (2026-08-12 review H2): its direct cloud
+  // calls (rehearse genFn etc.) inherit an honest gated tier instead of the ungated legacy default.
+  autonomyTimer = setInterval(() => { require('./lib/lane').run({ autonomous: true, spendTier: 'research' }, () => autonomyTick()).catch((e) => console.error('[autonomy] tick failed:', e.message)); }, AUTONOMY_TICK_MS);
   console.log(`[autonomy] driver started — decides every ~${Math.round(_autonomyCadenceMs() / 60000)}min when idle`);
 }
 
@@ -13650,6 +13675,19 @@ function _userDirectedActive() {
     return focusLib.originOf(f) !== 'beat';
   } catch { return false; }
 }
+// HONEST SPEND TIER for a pass driving `focus` (2026-08-12 review H2): 'directed' is EARNED by THIS
+// focus being HIS work — same user-vs-beat test as _userDirectedActive, but on the focus the pass
+// actually drives, never the globally-current one (the global coupling let background passes running
+// alongside his standing focus self-label 'directed' and escape the pace governor). Declared as the
+// run's ambient spendTier at the pass call sites, so every nested cloud call inherits it.
+function _focusSpendTier(focus) {
+  try {
+    const focusLib = require('./lib/focus');
+    if (!focus || !focusLib.isDirected(focus)) return 'research';
+    if ((db.getMeta(`focus.${focus.id}.beat`) || '').trim()) return 'research';
+    return focusLib.originOf(focus) !== 'beat' ? 'directed' : 'research';
+  } catch { return 'research'; }
+}
 let _preemptLogAt = 0;
 function _pauseAllWorkers(state, why) {
   let paused = 0;
@@ -13745,7 +13783,7 @@ async function backgroundWorkerPass(focusId) {
   _bgInFlight.add(focusId);
   markActivity('bg-worker');   // stall-attrib (diagnostic — same embed-on-main work as directed-tick)
   try {
-    const outcome = await runDirectedResearchPass(t);           // routes its outcome to recordOutcomeBackground (bg flag set)
+    const outcome = await require('./lib/lane').run({ autonomous: true, spendTier: _focusSpendTier(t) }, () => runDirectedResearchPass(t));           // routes its outcome to recordOutcomeBackground (bg flag set); tier earned by THIS focus (H2)
     if (outcome && outcome.action && outcome.action !== 'continue') {
       try { await condenseRun(t, { reason: outcome.action }); } catch {}   // fold into the dossier; NO chat announce (not the primary/user focus)
     }
@@ -14051,7 +14089,7 @@ async function _directedFocusTick() {
   markActivity('directed-tick');   // stall-attrib (diagnostic — a research pass embeds new findings on the main thread)
   if (_focusOrigin === 'beat') { try { db.setMeta('research.beat_last_pass_at', String(Date.now())); } catch {} }
   try {
-    const outcome = await runDirectedResearchPass(focus);   // depth-first state machine; records the focus outcome
+    const outcome = await require('./lib/lane').run({ autonomous: true, spendTier: _focusSpendTier(focus) }, () => runDirectedResearchPass(focus));   // depth-first state machine; records the focus outcome; tier earned by THIS focus (H2)
     if (outcome && outcome.action && outcome.action !== 'continue') {
       stopDirectedFocusDriver();
       // CONSOLIDATE — the run is closing; fold the per-target sections into one clean dossier (+ recall

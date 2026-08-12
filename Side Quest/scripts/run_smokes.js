@@ -75,6 +75,8 @@ const smokes = [
   'smoke_tier_gate.js',
   'smoke_quota.js',
   'smoke_quota_scrape.js',
+  'smoke_lane_tier.js',        // H2/M5 (2026-08-12 review): spend-tier resolution + ambient carriage
+
   'smoke_review_fanout.js',
   'smoke_double_reply.js',
   'smoke_self_question.js',
@@ -168,6 +170,8 @@ const smokes = [
   'smoke_puller_negatives.js',
   'smoke_puller_org_door.js',
   'smoke_org_walk.js',
+  'smoke_org_fetch.js',        // H1 (2026-08-12 review): every fetch exit SETTLES — the subconscious-killing hang
+
   'smoke_puller_priors.js',
   'smoke_puller_variants.js',
   'smoke_owner_identity.js',
@@ -329,6 +333,8 @@ const smokes = [
   'smoke_roster_watch.js',
   'smoke_meeting_leave.js',
   'smoke_gmeet_leave.js',
+  'smoke_meeting_scribe.js',   // H7 (2026-08-12 review): carries the 5c6ba20 finalize re-entrancy regression asserts — was offline-green but UNGATED
+
   'smoke_canvas_command.js',
   'smoke_org_backfill.js',
   'smoke_recheck_queue.js',

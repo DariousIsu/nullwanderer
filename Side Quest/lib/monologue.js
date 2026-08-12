@@ -2490,6 +2490,13 @@ function _orgToText(html) {
 }
 // Fetch an org's own site (follow redirects, cap body, time out). The url is P856-asserted; verifyPage
 // still proves the page is theirs after this returns.
+// EVERY exit SETTLES (2026-08-12 review H1): the old truncation branch destroyed the socket without
+// resolving — 'end' never fires after destroy, the inactivity timer dies WITH the socket, and the
+// promise hung forever. org_walk bare-awaits this and the tick latches inFlight around it, so ONE
+// oversized page permanently killed the whole subconscious until restart (reproduced live-shaped).
+// Now: truncation RESOLVES with what was buffered (4MB of an org's homepage is plenty for the
+// extractor), and 'close' settles any other no-end death (server drop mid-stream).
+const ORG_FETCH_MAX_BYTES = 4_000_000;
 function _fetchOrgPage(url, { depth = 0 } = {}) {
   return new Promise((resolve, reject) => {
     if (depth > 4) return reject(new Error('too many redirects'));
@@ -2499,28 +2506,50 @@ function _fetchOrgPage(url, { depth = 0 } = {}) {
       if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) {
         try { return resolve(_fetchOrgPage(new URL(r.headers.location, url).toString(), { depth: depth + 1 })); } catch (e) { return reject(e); }
       }
-      let b = ''; r.on('data', (c) => { b += c; if (b.length > 4_000_000) r.destroy(); });
+      let b = '';
+      r.setEncoding('utf8');
+      r.on('data', (c) => {
+        b += c;
+        if (b.length > ORG_FETCH_MAX_BYTES) { resolve({ text: _orgToText(b), status: r.statusCode, truncated: true }); r.destroy(); }
+      });
       r.on('end', () => resolve({ text: _orgToText(b), status: r.statusCode }));
+      r.on('close', () => reject(new Error('connection closed before end')));   // no-op if already settled
     });
     req.on('error', reject);
     req.on('timeout', () => req.destroy(new Error('timeout')));
   });
 }
+// Whole-chain deadline (belt for H1's suspenders): no fetch — plain OR browser-fallback — may wedge
+// the tick past this, whatever a future edit does inside. Resolves the failure shape, never throws.
+const ORG_FETCH_DEADLINE_MS = 90_000;
+function _withFetchDeadline(p, url) {
+  let t;
+  const deadline = new Promise((res) => {
+    t = setTimeout(() => {
+      console.error(`[org-research] fetch DEADLINE (${ORG_FETCH_DEADLINE_MS / 1000}s) — abandoning ${String(url).slice(0, 120)} (tick must never wedge)`);
+      res({ text: '', status: 0, deadline: true });
+    }, ORG_FETCH_DEADLINE_MS);
+    if (t && t.unref) t.unref();
+  });
+  return Promise.race([p, deadline]).finally(() => clearTimeout(t));
+}
 // Fetch with a BROWSER fallback: some org sites (Cato → 403) block a bare GET; her own Chrome gets
 // through (open→read the page). Only fires when the cheap https fetch came back short/blocked.
 async function _fetchOrgPageWithFallback(url) {
-  let r = null;
-  try { r = await _fetchOrgPage(url); } catch { r = null; }
-  if (r && r.text && r.text.length >= 200 && !(r.status >= 400)) return r;
-  try {
-    const ownBrowser = require('./web');
-    if (!ownBrowser.isConnected()) { await ownBrowser.ensure(); }
-    await ownBrowser.open(url);
-    const rd = await ownBrowser.read();
-    const text = (rd && rd.text) || '';
-    if (text && text.length >= 200) return { text, status: 200, via: 'browser' };
-  } catch (e) { console.error('[org-research] browser fetch failed:', e && e.message); }
-  return r || { text: '', status: 0 };
+  return _withFetchDeadline((async () => {
+    let r = null;
+    try { r = await _fetchOrgPage(url); } catch { r = null; }
+    if (r && r.text && r.text.length >= 200 && !(r.status >= 400)) return r;
+    try {
+      const ownBrowser = require('./web');
+      if (!ownBrowser.isConnected()) { await ownBrowser.ensure(); }
+      await ownBrowser.open(url);
+      const rd = await ownBrowser.read();
+      const text = (rd && rd.text) || '';
+      if (text && text.length >= 200) return { text, status: 200, via: 'browser' };
+    } catch (e) { console.error('[org-research] browser fetch failed:', e && e.message); }
+    return r || { text: '', status: 0 };
+  })(), url);
 }
 
 // LANE — ORG RESEARCH. Researches ONE org from the CRM's P856 accounts (each Website is the register, so
@@ -3050,6 +3079,8 @@ module.exports = {
   isBusy,
   markUserActivity,
   isRepeatOfRecentSearch,  // exported for smoke test
+  _fetchOrgPage,           // exported for smoke test (H1: every exit settles — truncation/close)
+  _withFetchDeadline,      // exported for smoke test (H1: whole-chain deadline never wedges the tick)
   assessSearchNovelty,     // exported for smoke test (R4 cluster-density brake)
   nextNovelGap,            // exported for smoke test (R7 swirl→iterate: novel agenda gap)
   splitIdleBrowserTags,    // exported for smoke test

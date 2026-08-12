@@ -6,7 +6,12 @@ const OLLAMA_BASE = process.env.OLLAMA_BASE || 'http://localhost:11434';
 // simply had no way to point this at it or to attach the bearer token. That mattered once the cloud
 // started writing the user-facing reply — a long generation with no token flow is indistinguishable
 // from a hang, and the stall watchdog below only works if tokens are actually arriving to reset it.
-async function streamChat({ model, messages, options = {}, onToken, onThinking, signal, inactivityMs = 90000, maxMs = 0, think, base = OLLAMA_BASE, headers = {}, lane = 'interactive' }) {
+async function streamChat({ model, messages, options = {}, onToken, onThinking, signal, inactivityMs = 90000, maxMs = 0, think, base = OLLAMA_BASE, headers = {}, lane = undefined }) {
+  // AMBIENT SPEND-TIER FALLBACK (2026-08-12 review M5): a caller that doesn't know its tier inherits
+  // the run's ambient spendTier (declared once by the orchestrator via lane.run) before the legacy
+  // 'interactive' default. Explicit lane always wins; a bare legacy call outside any run stays
+  // interactive — the mute-safety invariant below is unchanged.
+  if (lane == null) { try { lane = require('./lane').ambientSpendTier() || 'interactive'; } catch { lane = 'interactive'; } }
   const body = {
     model,
     messages,
@@ -186,7 +191,12 @@ function _noteThinkingSalvage(model) {
 const _REASONING_RE = /(?:^|[\/:_-])(?:gpt-oss|qwen3|qwq|kimi|deepseek-r1|magistral|o1|o3)\b|:think\b/i;
 function isReasoningModel(name) { return _REASONING_RE.test(String(name || '')); }
 
-async function completeDetailed({ model, messages, options = {}, base = OLLAMA_BASE, headers = {}, signal, timeoutMs = 180000, think, lane = 'interactive' }) {
+async function completeDetailed({ model, messages, options = {}, base = OLLAMA_BASE, headers = {}, signal, timeoutMs = 180000, think, lane = undefined }) {
+  // AMBIENT SPEND-TIER FALLBACK (2026-08-12 review M5): same as streamChat — condenseComplete's ~20
+  // sites (incl. the autonomous research organize/merge/topical steps on the 120B) passed no lane
+  // and silently billed 'interactive', bypassing the choke-point gate. They now inherit the
+  // orchestrator's declared tier; explicit lane wins; bare legacy calls stay interactive.
+  if (lane == null) { try { lane = require('./lane').ambientSpendTier() || 'interactive'; } catch { lane = 'interactive'; } }
   base = base || OLLAMA_BASE;          // coalesce explicit null (default params only fill undefined)
   headers = headers || {};
   // M1.1b SPEND GATE — the non-streaming twin of streamChat's choke-point gate (this door was
