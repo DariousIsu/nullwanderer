@@ -246,7 +246,13 @@ function ttsConfig() {
   // persistent sidecar: keep the loaded voice model resident, but kill the process after this many ms idle
   // so we don't hold ~63MB forever between utterances. It respawns lazily on the next call. 0 = never idle-kill.
   const idleMs = getInt('ZOE_TTS_IDLE_MS', 300000);
-  return { enabled, voice, speaker: Number.isFinite(speaker) ? speaker : null, wallMs, idleMs, configured: !!voice };
+  // provider: 'kokoro' = GPU style-vector blend (Zoe's voice, data/voices/zoe_voice.json); else local Piper.
+  const provider = /^kokoro$/i.test(get('ZOE_TTS_PROVIDER', 'piper').trim()) ? 'kokoro' : 'piper';
+  let configured = !!voice;
+  if (provider === 'kokoro') {
+    try { configured = require('fs').existsSync(require('path').join(APP_ROOT, 'data', 'voices', 'zoe_voice.json')); } catch { configured = false; }
+  }
+  return { enabled, provider, voice, speaker: Number.isFinite(speaker) ? speaker : null, wallMs, idleMs, configured };
 }
 
 // --- DESKTOP COMPANION (voice-avatar-plan, presence layer) — the floating always-on-top window that

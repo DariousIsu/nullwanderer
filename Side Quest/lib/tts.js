@@ -25,6 +25,11 @@ const VENV_PY = IS_WIN
   ? path.join(ROOT, 'sidecar', 'tts_venv', 'Scripts', 'python.exe')
   : path.join(ROOT, 'sidecar', 'tts_venv', 'bin', 'python');
 const RUNNER = path.join(ROOT, 'sidecar', 'tts_piper.py');
+// Kokoro-82M GPU blend sidecar (Zoe's voice identity) — same NDJSON protocol as the piper runner.
+const KOKORO_VENV_PY = IS_WIN
+  ? path.join(ROOT, 'sidecar', 'tts_kokoro_venv', 'Scripts', 'python.exe')
+  : path.join(ROOT, 'sidecar', 'tts_kokoro_venv', 'bin', 'python');
+const KOKORO_RUNNER = path.join(ROOT, 'sidecar', 'tts_kokoro.py');
 const OUT_DIR = path.join(ROOT, 'data', 'tts');
 
 // pure: normalize model/markdown text into something a TTS engine should actually SAY. Strips markdown
@@ -116,7 +121,7 @@ function synthesizeOneShot({ text, voice, out, speaker, python, wallMs }) {
 // responses by an incrementing id. Fail-soft: a crashed/absent sidecar fails the in-flight calls and lets
 // the next call respawn lazily. After `idleMs` with nothing pending the child is killed (frees the ~63MB
 // model); it respawns on demand. Factory form (not just a singleton) so tests can point it at a bad python.
-function createPiperService({ python = VENV_PY, idleMs = 300000 } = {}) {
+function createPiperService({ python = VENV_PY, runner = RUNNER, idleMs = 300000 } = {}) {
   const st = { child: null, buf: '', pending: new Map(), nextId: 1, ready: false, down: false, idleTimer: null };
 
   const _failAll = (err) => {
@@ -135,7 +140,7 @@ function createPiperService({ python = VENV_PY, idleMs = 300000 } = {}) {
     if (st.down || st.child) return !st.down;
     let child;
     try {
-      child = spawn(python, [RUNNER, '--serve'], { cwd: ROOT, env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn(python, [runner, '--serve'], { cwd: ROOT, env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch { return false; }
     st.child = child;
     child.stdout.on('data', (d) => {
@@ -170,10 +175,24 @@ function createPiperService({ python = VENV_PY, idleMs = 300000 } = {}) {
 }
 
 let _singleton = null;
-function _idleMs() { try { return require('./config').ttsConfig().idleMs; } catch { return 300000; } }
-function _service() { if (!_singleton || _singleton._state.down) _singleton = createPiperService({ idleMs: _idleMs() }); return _singleton; }
+let _singletonProvider = null;
+function _ttsCfg() { try { return require('./config').ttsConfig(); } catch { return {}; } }
+function _idleMs() { const v = _ttsCfg().idleMs; return Number.isFinite(v) ? v : 300000; }
+function _provider() { return String(_ttsCfg().provider || 'piper').toLowerCase() === 'kokoro' ? 'kokoro' : 'piper'; }
+// One resident sidecar, keyed by provider. Switching provider (piper<->kokoro) recycles it.
+function _service() {
+  const provider = _provider();
+  if (!_singleton || _singleton._state.down || _singletonProvider !== provider) {
+    if (_singleton && !_singleton._state.down) { try { _singleton.shutdown(); } catch {} }
+    _singleton = (provider === 'kokoro')
+      ? createPiperService({ python: KOKORO_VENV_PY, runner: KOKORO_RUNNER, idleMs: _idleMs() })
+      : createPiperService({ idleMs: _idleMs() });
+    _singletonProvider = provider;
+  }
+  return _singleton;
+}
 // stop the resident sidecar (clean app exit / tests). It respawns lazily on the next synthesize().
-function shutdownTts() { if (_singleton) { _singleton.shutdown(); _singleton = null; } }
+function shutdownTts() { if (_singleton) { _singleton.shutdown(); _singleton = null; _singletonProvider = null; } }
 
 // Synthesize `text` → a WAV file. Returns { ok, out, bytes, sampleRate } or { ok:false, error }. Never throws.
 // Routes to the PERSISTENT sidecar by default (warm, no per-call reload); opts.oneShot or an explicit
@@ -183,7 +202,8 @@ function synthesize(text, opts = {}) {
     const clean = prepareText(text, { maxChars: opts.maxChars });
     if (!clean) return resolve({ ok: false, error: 'empty text' });
     const voice = resolveVoice(opts);
-    if (!voice) return resolve({ ok: false, error: 'no voice model configured' });
+    // Piper needs an .onnx model path; the Kokoro sidecar carries its own baked blend (no voice arg).
+    if (_provider() !== 'kokoro' && !voice) return resolve({ ok: false, error: 'no voice model configured' });
     const out = _resolveOut(opts);
     const speaker = (opts.speaker === 0 || opts.speaker) ? opts.speaker : null;
     const wallMs = Number.isFinite(opts.wallMs) ? opts.wallMs : 60000;
