@@ -15683,25 +15683,27 @@ async function runDirectedResearchPass(focus) {
   let planFacets = [];
   let _plan = null;
   try { _plan = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || 'null'); } catch {}
-  // ENSURE THE CONTRACT DOCUMENT EXISTS (the backstop, parity with the DISCOVER branch + the user-work
-  // seed). A focus can reach a directed pass with NO plan/contract: one RESUMED after a restart, or one
-  // seeded before the contract-emit existed (measured: Applied Digital #3792 — driven HERE by the directed
-  // driver, never through the user-work seed path, so its living contract doc was never minted). If there's
-  // no plan and we're not continuing a base_doc, author the plan now and mint the contract canvas doc so the
-  // passes below have a document to refresh. One-time per focus (the plan is persisted by generateResearchPlan).
-  if (!_plan && !db.getMeta(`focus.${focus.id}.base_doc`)) {
-    try {
-      const _deep = (() => { try { return db.getMeta(`focus.${focus.id}.deep`) === '1'; } catch { return false; } })();
-      _plan = await generateResearchPlan(focus, { goal, targets: [], facet: '', deep: _deep, kind });
+  // ENSURE THE CONTRACT DOCUMENT EXISTS (the backstop, parity with the DISCOVER branch + the user-work seed).
+  // Gate on whether the contract BLOCK is present on the canvas — NOT on whether a plan exists. A focus can
+  // carry a (re)generated plan yet never have had its contract header minted: #3792 had its plan re-authored
+  // by the boot deliverable re-emit, but contract-<id> was absent, so the doc grew a todo + sections with no
+  // contract header (the earlier `!_plan` guard skipped it). Skip when continuing a base_doc (that living doc
+  // IS the contract). _canvasBlocks is re-populated by the boot rehydrate/replay before this pass runs.
+  try {
+    const ce = require('./studio/canvas_emit');
+    if (!db.getMeta(`focus.${focus.id}.base_doc`) && !_canvasBlocks.has(ce.contractBlockId(focus.id))) {
+      if (!_plan) {
+        const _deep = (() => { try { return db.getMeta(`focus.${focus.id}.deep`) === '1'; } catch { return false; } })();
+        _plan = await generateResearchPlan(focus, { goal, targets: [], facet: '', deep: _deep, kind });
+      }
       if (_plan) {
-        const ce = require('./studio/canvas_emit');
         const cb = ce.contractBlock(_plan, goal);
         await canvasUpsertBlock({ focusId: focus.id, blockId: ce.contractBlockId(focus.id), title: goal, tabMode: 'RESEARCH', blockType: cb.blockType, data: cb.data });
         await canvasUpsertBlock({ focusId: focus.id, blockId: ce.todoBlockId(focus.id), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: ce.facetTodoMarkdown(_plan, []) } });
-        console.log(`[contract] canvas doc started for #${focus.id} (directed-pass backstop, ${ce.portionsFromPlan(_plan).length} portions)`);
+        console.log(`[contract] canvas doc started for #${focus.id} (backstop — contract block was absent, ${ce.portionsFromPlan(_plan).length} portions)`);
       }
-    } catch (e) { console.error('[contract] directed-pass mint failed:', e.message); }
-  }
+    }
+  } catch (e) { console.error('[contract] directed-pass mint failed:', e.message); }
   try { planFacets = (_plan && Array.isArray(_plan.facets) && _plan.facets.length) ? _plan.facets : (_plan && Array.isArray(_plan.targets) ? _plan.targets : []); } catch {}
   const coveragePlan = (() => { try { return rs.buildCoveragePlan(planFacets); } catch { return ''; } })();
   // THE LIVING DOCUMENT, resolved ONCE for the whole pass. Hoisted here because it was previously

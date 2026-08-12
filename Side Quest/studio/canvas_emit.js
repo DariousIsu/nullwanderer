@@ -16,7 +16,24 @@ const clip = (s, n) => { const t = str(s).replace(/\s+/g, ' ').trim(); return t.
 // Deterministic tab key for a directed focus run, so re-opens are idempotent and the tab re-attaches
 // after a restart (saga_canvas_open_tab takes a pre-assigned tab_key for exactly this).
 function tabKeyForFocus(focusId) { return `directed-${str(focusId)}`; }
-function tabTitleForGoal(goal) { return clip(goal, 60) || 'Directed research'; }
+// A LOGICAL document title from a research goal. The raw goal ("gather comprehensive background information
+// on Yvonne Murray") is a dumb document name — strip the leading research-COMMAND preamble (verb + any
+// "comprehensive background information on"-style filler + connector) so the SUBJECT is the title
+// ("Yvonne Murray"). Deterministic; if nothing strips (the goal is already subject-first, e.g. "Applied
+// Digital Polaris facilities…"), keep it. Falls back to the clipped goal.
+const _GOAL_VERB_RE = /^(?:please\s+)?(?:can\s+you\s+|could\s+you\s+|i\s+(?:need|want|would\s+like)\s+(?:you\s+to\s+)?)?(?:do\s+(?:some\s+|a\s+(?:bit\s+of\s+|little\s+)?|deep\s+)?)?(?:gather|research|investigate|compile|find(?:\s+out)?|identify|map|analy[sz]e|understand|deep[-\s]?dive|document|catalog(?:ue)?|trace|survey|substantiate|verify|look\s+into|dig\s+into|assemble|build|write\s+up|deliver|provide|learn|get)\b/i;
+const _GOAL_FILLER_RE = /^(?:(?:a\s+|the\s+)?(?:comprehensive|detailed|thorough|full|complete|deep|extensive|general|brief|quick|basic|more|high)\s+)*(?:a\s+|the\s+)?(?:background\s+|some\s+)?(?:information|info|details?|data|dossier|profile|report|overview|research|everything|all|knowledge)?\s*(?:on|about|for|into|regarding|concerning|of|around|re|that|the)\b\s+/i;
+function tabTitleForGoal(goal) {
+  let t = str(goal).replace(/\s+/g, ' ').trim();
+  if (!t) return 'Directed research';
+  const m = _GOAL_VERB_RE.exec(t);
+  if (m) {
+    const rest = t.slice(m[0].length).trimStart().replace(_GOAL_FILLER_RE, '').trim();
+    if (rest && rest.length >= 3) t = rest;   // only adopt the stripped subject if it's substantive
+  }
+  t = t.replace(/^[a-z]/, (c) => c.toUpperCase());
+  return clip(t, 60) || 'Directed research';
+}
 
 function mode(m) { const u = String(m || '').toUpperCase(); return MODES.has(u) ? u : 'DOC'; }
 

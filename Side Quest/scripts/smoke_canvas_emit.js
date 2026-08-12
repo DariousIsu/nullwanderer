@@ -8,8 +8,14 @@ function ok(name, cond) { if (cond) pass++; else { fail++; console.error('  ✗ 
 // ---- tab key + title ----
 ok('tabKeyForFocus deterministic', E.tabKeyForFocus(2027) === 'directed-2027' && E.tabKeyForFocus('x') === 'directed-x');
 ok('tabTitleForGoal clips long goal', E.tabTitleForGoal('x'.repeat(200)).length <= 60 && E.tabTitleForGoal('x'.repeat(200)).endsWith('…'));
-ok('tabTitleForGoal collapses whitespace', E.tabTitleForGoal('  hello   world \n there ') === 'hello world there');
+ok('tabTitleForGoal collapses whitespace + title-cases', E.tabTitleForGoal('  hello   world \n there ') === 'Hello world there');
 ok('tabTitleForGoal empty fallback', E.tabTitleForGoal('') === 'Directed research' && E.tabTitleForGoal(null) === 'Directed research');
+// LOGICAL TITLE (2026-08-12): strip the research-command preamble so the SUBJECT is the doc title, not
+// the raw prompt ("gather comprehensive background information on Yvonne Murray" is a dumb document name).
+ok('tabTitleForGoal → subject (the live miss)', E.tabTitleForGoal('gather comprehensive background information on Yvonne Murray') === 'Yvonne Murray');
+ok('tabTitleForGoal strips "compile a dossier on"', E.tabTitleForGoal('compile a dossier on Southern Power Company') === 'Southern Power Company');
+ok('tabTitleForGoal strips "do some research on"', E.tabTitleForGoal('do some research on the Rainey Center') === 'The Rainey Center');
+ok('tabTitleForGoal keeps an already subject-first goal', E.tabTitleForGoal('Applied Digital Polaris 1 and Polaris 2 facilities') === 'Applied Digital Polaris 1 and Polaris 2 facilities');
 
 // ---- mode normalization ----
 ok('mode passthrough', E.mode('RESEARCH') === 'RESEARCH' && E.mode('doc') === 'DOC');
