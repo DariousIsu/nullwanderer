@@ -53,8 +53,19 @@ async function run() {
   }
   ok('a tombstone note is written when a focus closes', tombRows.length === 1 && /cold-pitch template/.test(tombRows[0].content));
 
+  // UPDATED 2026-08-12 (wave-3 triage): S3 autonomic demotion — setFromText returns null
+  // UNCONDITIONALLY under the default contract (the SCHEDULER owns the research agenda; the
+  // heartbeat self-spawn was the old fixation driver). Pin the default FIRST, then test the
+  // tombstone spawn-gate mechanics under the documented kill switch (ZOE_AUTONOMIC=0), which is
+  // the only path where they can fire.
+  console.log('\nautonomic demotion (the DEFAULT contract):');
+  reset();
+  const demoted = await focus.setFromText('<focus>research the history of the Hanseatic League</focus>');
+  ok('under autonomic ownership, a self-set focus is ALWAYS suppressed', demoted === null && focus.isActive() === false);
+  process.env.ZOE_AUTONOMIC = '0';   // the legacy/kill-switch path — where the tombstone gate lives
+
   // --- spawn gate suppresses a near-identical re-spawn within 24h ---
-  console.log('\nspawn gate (text-containment fallback):');
+  console.log('\nspawn gate (text-containment fallback, ZOE_AUTONOMIC=0):');
   reset();
   tombstone('learn to structure a cold pitch email', 'stalled', 1); // 1h ago
   const blocked = await focus.setFromText('<focus>learn to structure a cold pitch email</focus>');
@@ -76,6 +87,7 @@ async function run() {
   reset();
   const first = await focus.setFromText('<focus>understand how the governor paces autonomous actions</focus>');
   ok('first focus with no tombstones is allowed', first && focus.isActive());
+  delete process.env.ZOE_AUTONOMIC;   // back to the default (autonomic ownership) for everything after
 
   // --- curator ages stale stalled threads, keeps the rest ---
   console.log('\ncurator age-out:');

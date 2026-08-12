@@ -46,7 +46,10 @@ for (const s of ['use web read', 'web read', 'web-read', 'read it', 'use the web
   ok(`read-routes: "${s}"`, detectActOnOpenPage(s));
   ok(`not ddg: "${s}"`, detectWebIntent(s) === null || !/duckduckgo/i.test(detectWebIntent(s).target || ''));
 }
-ok('bare "use the browser" still opens (search home)', (detectWebIntent('use the browser') || {}).target === SEARCH_HOME);
+// UPDATED 2026-08-12 (wave-3 triage): the old assert pinned the BUG — "any verb+'browser' wiped her
+// open page to the DDG home" (lib/intent.js's own header names it). A mere MENTION of the browser
+// ("use the browser", "your browser is slow") must NOT navigate; only a TRUE fresh-open verb does.
+ok('bare "use the browser" does NOT navigate (mention ≠ open — the wiped-page bug)', detectWebIntent('use the browser') == null);
 
 console.log('\nNo collision with open/search intent (detectWebIntent owns those):');
 for (const s of ['open crushon.ai', 'search for housing data', 'go to https://example.com']) {

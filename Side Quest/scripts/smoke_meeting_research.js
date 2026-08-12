@@ -70,11 +70,16 @@ const FOUR = (tag) => `Tom: line one ${tag}\nTracy: line two ${tag}\nTom: line t
 
   console.log('\nCONTRIBUTE / CONNECT / QUIET:');
   {
+    // UPDATED 2026-08-12 (wave-3 triage): CONTRIBUTE is gated by THE CHAT DOOR (meetChatOpen —
+    // ZOE_MEET_CHAT, default OFF), same as the addressed-reply path. The old asserts pinned the
+    // pre-door always-posts world. Door opened for this block; closed back after.
+    process.env.ZOE_MEET_CHAT = 'on';
     const h = harness(); h.begin();
     h.capQueue.push(FOUR('q1')); h.decQueue.push('they asked for the figure.\nACTION: CONTRIBUTE: The ballroom is $4,000 non-refundable.');
     CLOCK += 5000; await gmeet.runTick(h.ctx);
-    ok('CONTRIBUTE posts to chat', h.spy.posts.some(m => /\$4,000/.test(m)));
+    ok('CONTRIBUTE posts to chat (door open)', h.spy.posts.some(m => /\$4,000/.test(m)));
     ok('CONTRIBUTE surfaced', h.spy.surfaced.some(s => /spoke up/.test(s.c)));
+    delete process.env.ZOE_MEET_CHAT;
   }
   {
     const h = harness(); h.begin();

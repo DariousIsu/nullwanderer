@@ -18,6 +18,12 @@ const blackboard = require('../lib/blackboard');
 const focus = require('../lib/focus');
 const rumination = require('../lib/rumination');
 
+// UPDATED 2026-08-12 (wave-3 triage): under the DEFAULT contract (S3 autonomic demotion) escalate →
+// setFromText returns null, and this suite CRASHED on focus.getCurrent().content (the null focus).
+// The escalation mechanics it proves exist only on the legacy path — pinned under the kill switch,
+// same treatment as smoke_curator / smoke_rumination_breaker.
+process.env.ZOE_AUTONOMIC = '0';
+
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name}`); } }
 function reset() {

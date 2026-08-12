@@ -16,6 +16,13 @@ D.init();
 const focusLib = require('../lib/focus');
 const rumination = require('../lib/rumination');
 
+// UPDATED 2026-08-12 (wave-3 triage): under the DEFAULT contract (S3 autonomic demotion),
+// escalate → setFromText returns null — the escalation valve is INERT in production (the window is
+// still consumed, so no spin; whether an inert valve is the intended end-state is flagged as an
+// open design question). The breaker MECHANICS below (cooldown after ESC_MAX, timestamps) only
+// exist on the legacy path, so this suite pins them under the documented kill switch.
+process.env.ZOE_AUTONOMIC = '0';
+
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}`); } };
 

@@ -34,7 +34,12 @@ store.insertItem({ source: 'US News', urlOrGuid: 'goog1', title: 'Google loses f
   ok(c1.items === 3, 'compression reads the 3 un-clustered items');
   ok(c1.created === 2 && c1.attached === 1, 'clusters into 2 stories (Kyiv pair merges via S≥.60, Google separate)');
   ok(c1.layerId && lane.recentLayers(5).length === 1, 'writeLayer:true persists an hourly layer');
-  ok(/\(2 outlets\)/.test(c1.briefing), 'briefing labels the corroborated Kyiv story (outlets)');
+  // UPDATED 2026-08-12 (wave-3 triage): corroboration and reach were SPLIT — "(N reports)" =
+  // independent corroboration; "(N outlets)" only when reach EXCEEDS corroboration. The Kyiv pair
+  // (corr=2, outlets=2) now correctly badges as corroboration. The old assert pinned the pre-split
+  // label and went stale unseen (ungated).
+  ok(/\(2 reports\)/.test(c1.briefing), 'briefing labels the corroborated Kyiv story (2 reports = corroboration badge)');
+  ok(!/\(2 outlets\)/.test(c1.briefing), 'no outlets badge when reach does not exceed corroboration (the split contract)');
   ok(store.unclusteredInWindow(T - 1000, NOW).length === 0, 'all items now clustered (story_id set)');
 
   // --- idempotency: re-running finds nothing to cluster ---

@@ -30,7 +30,11 @@ const c = V.normalizeBlock({ block_type: 'chart', data: {
 ok('chart kind kept', c.view.kind === 'bar' && c.view.title === 'Q');
 ok('chart height clamped', c.view.height === 600);
 ok('chart points mapped, bad y → null', c.view.points[0].rev === 10 && c.view.points[1].rev === null && c.view.points[0].x === 'Q1');
-ok('chart bad kind → line', V.normalizeBlock({ block_type: 'chart', data: { kind: 'pie' } }).view.kind === 'line');
+// UPDATED 2026-08-12 (wave-3 triage): 'pie' JOINED the supported CHART_KINDS — the old assert used
+// it as the "bad kind" example and went stale when pie became real. A genuinely unknown kind still
+// falls back to line.
+ok('chart pie is now a SUPPORTED kind', V.normalizeBlock({ block_type: 'chart', data: { kind: 'pie' } }).view.kind === 'pie');
+ok('chart bad kind → line', V.normalizeBlock({ block_type: 'chart', data: { kind: 'donut3d' } }).view.kind === 'line');
 
 // ---- image (renderable by our canvas; carried as a data URI) ----
 const img = V.normalizeBlock({ block_type: 'image', data: { src: 'data:image/png;base64,AAAA', alt: 'pic' } });

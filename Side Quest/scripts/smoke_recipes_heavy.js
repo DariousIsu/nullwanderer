@@ -123,11 +123,16 @@ const VARS = { title: 'My Title', body: 'My Body Text', query: 'my query', messa
       }
     }
 
-    // 5) TOTAL FAILURE — nothing resolves → fail localized at the first targeted step
-    if (targeted.length) {
+    // 5) TOTAL FAILURE — nothing resolves → fail localized at the first REQUIRED targeted step.
+    // UPDATED 2026-08-12 (wave-3 triage): an unresolvable OPTIONAL step is SKIPPED by the runner
+    // (that's what optional means — teams_join's step-1 pre-join click), so the failure localizes
+    // at the first targeted step that is NOT optional. The old assert used targeted[0] blindly and
+    // went stale when teams_join gained its optional pre-step.
+    const requiredTargeted = targeted.filter((x) => !x.s.optional);
+    if (requiredTargeted.length) {
       const p = mockPage({ present: new Set() });
       const res = await flow.runRecipe(p, recipe, VARS, { detect: async () => null });
-      ok(`${tag}: unresolvable → fails at first targeted step (${res.atStep})`, res.ok === false && res.atStep === targeted[0].i && /could not locate/.test(res.reason || ''));
+      ok(`${tag}: unresolvable → fails at first REQUIRED targeted step (${res.atStep})`, res.ok === false && res.atStep === requiredTargeted[0].i && /could not locate/.test(res.reason || ''));
     }
 
     // 6) BLOCKER — a needsHuman blocker on the first navigation pauses the recipe

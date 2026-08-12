@@ -486,6 +486,20 @@ const smokes = [
   'smoke_stt.js', 'smoke_super_search_card.js', 'smoke_super_search_external.js', 'smoke_super_search_ingest.js',
   'smoke_super_search_ledger.js', 'smoke_super_search_modelio.js', 'smoke_super_search_recipes.js', 'smoke_super_search_run.js',
   'smoke_touchpoint.js', 'smoke_variety.js', 'smoke_web.js', 'smoke_web_downloads.js',
+  // ── wave 3a (2026-08-12): the 7 of 8 failing candidates repaired — ALL stale-assert vs deliberate
+  // contract changes, zero regressions: act_on_page pinned the wiped-page BUG as expected behavior;
+  // canvas_view's "bad kind" example (pie) became a real kind; news_snapshot pinned the pre-split
+  // corroboration/reach label; meeting_research pinned the pre-CHAT-DOOR CONTRIBUTE; curator +
+  // rumination_breaker pinned the pre-S3 self-spawn world (now pin the autonomic default AND the
+  // legacy mechanics under ZOE_AUTONOMIC=0); recipes_heavy's targeted[0] ignored optional steps.
+  // NOT admitted: smoke_kg_view (1 fail, edge styling — the PARALLEL kg3d lane's deliberate change;
+  // theirs to reconcile) + the ~14 embedder/silent suites (need the memory.embed stub pattern).
+  // ⚠OPEN DESIGN QUESTION surfaced by this triage: rumination.escalate → setFromText is INERT under
+  // the S3 default (monologue.js ~1069 still calls it live; window consumed, nothing ever spawns) —
+  // whether the escalation valve is meant to be dead is Lucas's call.
+  'smoke_act_on_page.js', 'smoke_canvas_view.js', 'smoke_news_snapshot.js', 'smoke_meeting_research.js',
+  'smoke_curator.js', 'smoke_rumination_breaker.js', 'smoke_recipes_heavy.js',
+  'smoke_rumination.js',   // was CRASHING on the same S3 root (null focus after demoted setFromText) — repaired + kill-switch-pinned, 8/8
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
