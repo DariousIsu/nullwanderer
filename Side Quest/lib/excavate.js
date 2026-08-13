@@ -194,8 +194,8 @@ async function excavate(need, { url = null, maxSteps = 8, maxClicks = 2, deps = 
   let target = url || await _wikiUrl(n, deps);
   let nav;
   try {
-    if (target) nav = await web.open(target);
-    else { nav = await web.open(n); if (nav && nav.ok) { try { await web.openTopResult(); } catch {} } }
+    if (target) nav = await web.open(target, { source: 'excavate' });
+    else { nav = await web.open(n, { source: 'excavate-search' }); if (nav && nav.ok) { try { await web.openTopResult(); } catch {} } }
   } catch (e) { return { found: false, reason: 'open failed: ' + e.message }; }
   if (!nav || !nav.ok) return { found: false, reason: 'could not open (' + ((nav && nav.reason) || '?') + ')' };
   if (nav.blocker) return { found: false, reason: 'blocker:' + nav.blocker.type, blocker: nav.blocker };
@@ -256,7 +256,7 @@ async function seePage(focus, { url = null, maxViews = 3, deps = {} } = {}) {
   if (deps.visionModel == null && !deps.vision) { try { const cfg = require('./vision').visionModelFor('excavate'); deps = { ...deps, visionModel: cfg.model, visionTier: cfg.tier }; } catch {} }
   const f = String(focus || '').trim();   // empty is honest — _seePrompt asks for the page's own substance
   if (url) {
-    try { const nav = await web.open(url); if (!nav || !nav.ok) return { ok: false, url, reason: 'open failed: ' + ((nav && nav.reason) || '?') }; if (nav.blocker) return { ok: false, url: nav.url, reason: 'blocker:' + nav.blocker.type }; try { require('./echo_suit').markGather(); } catch {} }
+    try { const nav = await web.open(url, { source: 'see-page' }); if (!nav || !nav.ok) return { ok: false, url, reason: 'open failed: ' + ((nav && nav.reason) || '?') }; if (nav.blocker) return { ok: false, url: nav.url, reason: 'blocker:' + nav.blocker.type }; try { require('./echo_suit').markGather(); } catch {} }
     catch (e) { return { ok: false, url, reason: e.message }; }
   }
   const parts = []; let prev = null, pageUrl = url || '';

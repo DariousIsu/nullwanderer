@@ -341,7 +341,7 @@ async function maybeHeartbeat() {
       (async () => {
         const webLib = require('./web');
         for (const w of redirectedOpens) {
-          try { const r = await webLib.open(w.body); console.log(`[heartbeat] redirected <browse> open → her browser: ${w.body} (${r && r.ok ? 'ok' : 'FAIL'})`); }
+          try { const r = await webLib.open(w.body, { source: 'browse-redirect' }); console.log(`[heartbeat] redirected <browse> open → her browser: ${w.body} (${r && r.ok ? 'ok' : 'FAIL'})`); }
           catch (e) { console.error('[heartbeat] web open (redirected) failed:', e.message); }
         }
       })().catch(() => {});

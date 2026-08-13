@@ -2951,7 +2951,7 @@ async function runSearch(query, source, focusId = null) {
   }
   db.setMeta('last_search_at', String(Date.now()));
   try {
-    const opened = await webLib.open(query);
+    const opened = await webLib.open(query, { source: `search:${source}` });
     if (!opened.ok) {
       console.warn(`[monologue] browser open failed (${opened.reason}) — falling back to headless`);
       return runSearchLegacy(query, source, focusId);

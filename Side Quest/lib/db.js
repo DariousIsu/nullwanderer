@@ -1042,7 +1042,20 @@ const MIGRATIONS = [
   // two-way voice layer can read ONLY the useful/engaging classes aloud (deliveries, honesty,
   // promises) and leave the template status machinery (qa-reread / tactics / steering) on the
   // ambient rail. Stamped at insertTurn by lib/speech_class (pure, single source of truth).
-  `ALTER TABLE turns ADD COLUMN speech_class TEXT`
+  `ALTER TABLE turns ADD COLUMN speech_class TEXT`,
+
+  // BROWSER ACTIONS (2026-08-13 — the phantom "Cabinet of the United States" window): the site
+  // ledger records at CAPTURE time, so a navigation that dies before its read (reboot kills the
+  // headful Chrome, blocked SERP) left ZERO trace — an un-attributable search window on Lucas's
+  // screen. This is the NAVIGATION-time breadcrumb: who asked (source), the raw target as the
+  // caller passed it, and the URL it resolved to — written BEFORE the goto. Observability only.
+  `CREATE TABLE IF NOT EXISTS browser_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    source TEXT,
+    target TEXT,
+    url TEXT
+  )`
 ];
 
 function init() {
@@ -1068,6 +1081,18 @@ function getDb() {
 function startSession() {
   const info = getDb().prepare('INSERT INTO sessions (started_at) VALUES (?)').run(Date.now());
   return info.lastInsertRowid;
+}
+
+// Navigation-time breadcrumb (see the browser_actions migration). Fail-soft: a logging failure
+// must never block a navigation. Pruned to the newest 2000 so the table never becomes a drain.
+function recordBrowserAction({ source = null, target = null, url = null } = {}) {
+  try {
+    const d = getDb();
+    const info = d.prepare('INSERT INTO browser_actions (ts, source, target, url) VALUES (?, ?, ?, ?)')
+      .run(Date.now(), source, String(target || '').slice(0, 500), String(url || '').slice(0, 1000));
+    d.prepare('DELETE FROM browser_actions WHERE id <= ? - 2000').run(info.lastInsertRowid);
+    return info.lastInsertRowid;
+  } catch { return null; }
 }
 
 function endSession(id) {
@@ -2674,6 +2699,7 @@ module.exports = {
   getDb,
   startSession,
   endSession,
+  recordBrowserAction,
   insertTurn,
   getRecentTurns,
   turnsAfter,

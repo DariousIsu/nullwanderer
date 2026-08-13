@@ -27,7 +27,10 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
 
   console.log('load + routing surface:');
   ok('monologue module loaded', typeof mono.startMonologueScheduler === 'function');
-  ok('runSearch source uses webLib.open (browser-first)', /webLib\.open\(query\)/.test(fs.readFileSync(path.join(__dirname, '../lib/monologue.js'), 'utf8')));
+  // UPDATED 2026-08-13: the call now carries a source breadcrumb — webLib.open(query, { source: … })
+  // (browser_actions navigation-time record, the phantom-Cabinet fix). The pin is the ROUTING
+  // (webLib.open with the query as first arg), not the exact argument list.
+  ok('runSearch source uses webLib.open (browser-first)', /webLib\.open\(query[,)]/.test(fs.readFileSync(path.join(__dirname, '../lib/monologue.js'), 'utf8')));
   ok('legacy path retained as fallback', /runSearchLegacy/.test(fs.readFileSync(path.join(__dirname, '../lib/monologue.js'), 'utf8')));
 
   console.log('\nrumination brake (isRepeatOfRecentSearch):');

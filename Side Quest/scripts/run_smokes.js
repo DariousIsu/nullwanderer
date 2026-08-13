@@ -519,6 +519,10 @@ const smokes = [
   // surface, zero boot loops), replicates the dup-handler throw, and asserts the 134-channel
   // wiring: criticals per surface, lifecycle chain, crash handlers, one invokable seam.
   'smoke_main_wiring.js',
+  // ── browser-action breadcrumb (2026-08-13, the phantom Cabinet window): navigation-time record
+  // in web.open (who asked / raw target / resolved URL, BEFORE the goto) — the site ledger records
+  // at capture time, so an open killed pre-read left zero trace. + pins the %20 SERP fingerprint.
+  'smoke_browser_actions.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.

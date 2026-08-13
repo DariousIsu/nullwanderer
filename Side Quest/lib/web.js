@@ -438,7 +438,7 @@ function _ingestReading(rawUrl, title, pageText, now = Date.now()) {
   sl.record(rawUrl, { kind: 'page', chars: body.length, docId });
 }
 
-async function open(target, { autonomous = false } = {}) {
+async function open(target, { autonomous = false, source = null } = {}) {
   const url = toUrl(target);
   if (!url) return { ok: false, reason: 'empty target' };
   // RE-SPIN BRAKE: an autonomous re-open of a page read within the window is served from cache with
@@ -467,7 +467,11 @@ async function open(target, { autonomous = false } = {}) {
       }
     } catch {}
   }
-  console.log(`[web] open target=${JSON.stringify(target)} → goto ${JSON.stringify(url)}`);
+  console.log(`[web] open target=${JSON.stringify(target)} → goto ${JSON.stringify(url)}${source ? ` (source=${source})` : ''}`);
+  // NAVIGATION-TIME breadcrumb (2026-08-13, the phantom Cabinet window): the site ledger records at
+  // CAPTURE time, so an open killed before its read left no trace. Recorded BEFORE the goto, so even
+  // a navigation that dies (reboot kills Chrome, blocked page) is attributable afterward.
+  try { require('./db').recordBrowserAction({ source: source || 'web.open', target: String(target || ''), url }); } catch {}
   try {
     const p = await ensure();
     const resp = await p.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
@@ -1449,7 +1453,7 @@ module.exports = {
   chatSend, chatWatch, chatUnwatch,
   press, clearField, hover, selectOption, setChecked, uploadFile, submit, clickAt,
   forward, reload, listTabs, newTab, switchTab, closeTab, waitFor, dialog, getEl, evalJs, drag,
-  downloadPdf, grabPdfs, pdfLinksOnPage, isPdfUrl, sourceUrlForFile, provenanceForFile, _focusLeashTokens, _pdfMatchesLeash,
+  downloadPdf, grabPdfs, pdfLinksOnPage, isPdfUrl, sourceUrlForFile, provenanceForFile, _focusLeashTokens, _pdfMatchesLeash, toUrl,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,
   DOWNLOADS_DIR, downloadDest,
   respinHit, _cacheReading, _recentReads, RESPIN_WINDOW_MS,
