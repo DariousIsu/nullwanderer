@@ -34,7 +34,12 @@ const CLASSES = [
   { cls: 'promise',    speak: true,  re: /^\s*Earlier I said I'd/i },
   { cls: 'delivery',   speak: true,  re: /^\s*(?:It'?s done —|Your dossier(?:'s| is)? (?:done|saved|live)|The dossier'?s done)/i },
   { cls: 'honesty',    speak: true,  re: /I need to be straight with you|I did NOT reply|Withheld draft:/i },
-  { cls: 'identity',   speak: true,  re: /^\s*I'?ve been thinking about something I (?:said|committed)/i },
+  // 'mentioned' added 2026-08-13: the 04:10 live resurfacing reworded "said" → "mentioned" and
+  // fell to 'general' — same thought, same class, the opener anchor just needed the variant.
+  { cls: 'identity',   speak: true,  re: /^\s*I'?ve been thinking about something I (?:said|committed|mentioned)/i },
+  // Self-exploration share (lib/self_explore, 2026-08-13): "I spent some time with X … here's what
+  // I actually thought" — her voice at its best; exactly what Lucas asked to hear as she goes.
+  { cls: 'exploration', speak: true, re: /^\s*I spent (?:some )?time with/i },
 ];
 
 /** classify(content) → { cls, speak } — the durable tag + whether the voice reads it aloud. */

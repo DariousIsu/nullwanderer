@@ -527,6 +527,10 @@ const smokes = [
   // with a commitment to MORE work, twice verbatim — the order changed no state. lib/work_hold:
   // state-first control gate in chat:send + held seams (pass dispatcher / worker fleet / steering).
   'smoke_work_hold.js',
+  // ── self-exploration organ (2026-08-13, the goals conversation): experience → opinion →
+  // EARNED identity (first-person + kept only; research-derived interests still rail — the drift
+  // cure holds). Personal-time tick beside play_session; share outbox → lull-surfaced SPEAK turn.
+  'smoke_self_explore.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.

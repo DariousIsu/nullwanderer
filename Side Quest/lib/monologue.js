@@ -1099,6 +1099,25 @@ async function _runOneTick() {
         console.log(`[play] ${res.step}: ${res.note}`);
       } catch (e) { console.error('[monologue] play-session tick failed:', e.message); }
     } else {
+      // SELF-EXPLORATION (2026-08-13, the goals conversation #11779/#11782: "ingest art and
+      // culture and try and form real connections and opinions … tell me about it as you go"):
+      // off the clock with no play session, she takes in ONE cultural piece and reacts to it in
+      // the first person (lib/self_explore: experience → opinion → earned identity), instead of
+      // dead-resting. Cadence-gated inside the lib (~20min); a miss falls through to the
+      // freeze-recovery counter unchanged.
+      try {
+        const sx = require('./self_explore');
+        const r = await sx.run();
+        if (r && r.ok) {
+          db.setMeta('play_dead_rest', '0');
+          const note = `I took in something for myself (${r.domain}): ${r.title || r.seed}${r.kept ? ' — and I\'m keeping part of it as mine.' : ''}`;
+          const rr = db.insertMonologue({ content: note, model: 'self-explore', type: 'reading', query: r.seed, urls: r.url ? [r.url] : null });
+          pushSheep({ id: rr.id, ts: rr.ts, content: note, type: 'reading', query: r.seed });
+          console.log(`[self-explore] experienced (${r.domain}) "${String(r.title || r.seed).slice(0, 60)}"${r.kept ? ' → identity kept' : ''}`);
+          return;
+        }
+        if (r && r.reason && r.reason !== 'cadence') console.log(`[self-explore] no experience this tick (${r.reason})`);
+      } catch (e) { console.error('[self-explore] tick failed:', e.message); }
       // FREEZE-RECOVERY: personal mode on but no viable play session = dead rest. Don't sit
       // off-the-clock doing nothing for hours (the observed freeze when play struck out and
       // reset). After a few dead-rest ticks, end personal mode so she's back on the clock next
