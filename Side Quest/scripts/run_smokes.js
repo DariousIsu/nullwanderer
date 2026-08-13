@@ -536,6 +536,11 @@ const smokes = [
   // classes) + the WRITE-FRESH clause in the reply contract. A personality DB of replays trains
   // a parrot — this is a goals-blocker, not polish.
   'smoke_replay_gate.js',
+  // ── the FINALIZE conductor (2026-08-13, the document false-loop cure): gather fragments →
+  // harvest ONE numbered source list → FROZEN outline → per-section cited write (injected) →
+  // assemble ONE canonical file with validated inline [n] + full source list. Overwrites, never
+  // siblings; honest failure over a hollow document. Driver: scripts/finalize_paper.js.
+  'smoke_paper_finalize.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
