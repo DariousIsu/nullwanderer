@@ -531,6 +531,11 @@ const smokes = [
   // EARNED identity (first-person + kept only; research-derived interests still rail — the drift
   // cure holds). Personal-time tick beside play_session; share outbox → lull-surfaced SPEAK turn.
   'smoke_self_explore.js',
+  // ── replay gate (2026-08-13 live audit): any ai_said turn near-verbatim repeating a recent one
+  // is stamped 'replay' at insertTurn (RAIL — the voice never re-speaks it; overrides SPEAK
+  // classes) + the WRITE-FRESH clause in the reply contract. A personality DB of replays trains
+  // a parrot — this is a goals-blocker, not polish.
+  'smoke_replay_gate.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.

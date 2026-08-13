@@ -40,6 +40,12 @@ const CLASSES = [
   // Self-exploration share (lib/self_explore, 2026-08-13): "I spent some time with X … here's what
   // I actually thought" — her voice at its best; exactly what Lucas asked to hear as she goes.
   { cls: 'exploration', speak: true, re: /^\s*I spent (?:some )?time with/i },
+  // REPLAY (2026-08-13 live audit): a turn that near-verbatim repeats a recent ai_said turn. Not
+  // pattern-anchored — stamped CONTEXTUALLY by insertTurn via isReplay() below (the regex here can
+  // never match; the entry exists so speaks('replay') is authoritative). Measured 2026-08-13
+  // 02:59-03:29: the reply writer emitted the qa-reread rail text, a tactics template, and an
+  // identity musing VERBATIM as replies — a personality database of replays trains a parrot.
+  { cls: 'replay',     speak: false, re: /(?!)/ },
 ];
 
 /** classify(content) → { cls, speak } — the durable tag + whether the voice reads it aloud. */
@@ -56,4 +62,40 @@ function speaks(cls) {
   return c ? c.speak : true;   // unknown/general → speakable (fail-open for genuine free speech)
 }
 
-module.exports = { classify, speaks, CLASSES };
+// ── REPLAY DETECTION (deterministic, no embeddings) ──────────────────────────────────────────────
+// A turn is a REPLAY when it near-verbatim repeats a recent ai_said turn. Word-trigram overlap
+// against the SMALLER turn (a long reply that swallows a short old ack whole is not a replay of
+// it — the short side must be substantial too). Thresholds from the live 08-13 incidents: the
+// three observed replays are ≥0.95 overlap; honest short acks ("On it.") are under MIN_CHARS.
+const REPLAY_MIN_CHARS = 60;
+const REPLAY_OVERLAP = 0.85;
+
+function _norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function _trigrams(s) {
+  const w = _norm(s).split(' ').filter(Boolean);
+  const out = new Set();
+  for (let i = 0; i + 2 < w.length; i++) out.add(`${w[i]} ${w[i + 1]} ${w[i + 2]}`);
+  return out;
+}
+
+/** isReplay(content, priorContents[]) → true when content near-verbatim repeats any prior. Pure. */
+function isReplay(content, priors) {
+  const cn = _norm(content);
+  if (cn.length < REPLAY_MIN_CHARS) return false;
+  const ct = _trigrams(content);
+  if (!ct.size) return false;
+  for (const p of Array.isArray(priors) ? priors : []) {
+    const pn = _norm(p);
+    if (pn.length < REPLAY_MIN_CHARS) continue;
+    if (pn === cn) return true;
+    const pt = _trigrams(p);
+    if (!pt.size) continue;
+    let shared = 0;
+    const [small, big] = ct.size <= pt.size ? [ct, pt] : [pt, ct];
+    for (const g of small) if (big.has(g)) shared++;
+    if (shared / small.size >= REPLAY_OVERLAP) return true;
+  }
+  return false;
+}
+
+module.exports = { classify, speaks, isReplay, CLASSES };

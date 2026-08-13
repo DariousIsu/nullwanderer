@@ -1109,6 +1109,25 @@ function insertTurn({ sessionId, speaker, content, model = null, truncated = 0, 
   if (unprompted && speaker === 'ai_said') {
     try { speechClass = require('./speech_class').classify(content).cls; } catch {}
   }
+  // REPLAY GATE (2026-08-13 live audit): ANY ai_said turn — prompted or not — that near-verbatim
+  // repeats a recent ai_said turn is stamped 'replay' (a RAIL class: the voice never re-speaks it,
+  // and the stamp is the measurement). The live incidents: the reply writer emitted the qa-reread
+  // text, a tactics template ("clean slate…", ×3), and an identity musing verbatim as replies;
+  // the unprompted lane resurfaced the same identity thought reworded 95 minutes later. The
+  // replay stamp OVERRIDES the pattern class — repeating a SPEAK-class turn is still a replay.
+  if (speaker === 'ai_said') {
+    try {
+      const sc = require('./speech_class');
+      const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      const priors = getDb()
+        .prepare("SELECT content FROM turns WHERE speaker = 'ai_said' AND ts > ? ORDER BY id DESC LIMIT 12")
+        .all(dayAgo).map((r) => r.content);
+      if (sc.isReplay(content, priors)) {
+        speechClass = 'replay';
+        console.log(`[replay-gate] ai_said turn near-verbatim repeats a recent turn → stamped 'replay' (railed from voice): ${String(content).replace(/\s+/g, ' ').slice(0, 90)}`);
+      }
+    } catch {}
+  }
   const info = getDb()
     .prepare('INSERT INTO turns (session_id, ts, speaker, content, model, truncated, unprompted, speech_class) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(sessionId, ts, speaker, content, model, truncated, unprompted ? 1 : 0, speechClass);
