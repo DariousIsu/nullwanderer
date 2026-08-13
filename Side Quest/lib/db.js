@@ -1036,7 +1036,13 @@ const MIGRATIONS = [
   // reaching it. Measured 2026-07-20: session 589 had 247 real turns and turn_count=15, and
   // sessions of 116/88/81 turns had no summary at all. A watermark makes the fold catch up over
   // whatever it missed instead of needing a call at all ~30 sites.
-  `ALTER TABLE conversation_state ADD COLUMN last_turn_id INTEGER`
+  `ALTER TABLE conversation_state ADD COLUMN last_turn_id INTEGER`,
+
+  // SPEECH CLASS (2026-08-12 truth audit): unprompted utterances carry a durable class tag so the
+  // two-way voice layer can read ONLY the useful/engaging classes aloud (deliveries, honesty,
+  // promises) and leave the template status machinery (qa-reread / tactics / steering) on the
+  // ambient rail. Stamped at insertTurn by lib/speech_class (pure, single source of truth).
+  `ALTER TABLE turns ADD COLUMN speech_class TEXT`
 ];
 
 function init() {
@@ -1071,9 +1077,16 @@ function endSession(id) {
 
 function insertTurn({ sessionId, speaker, content, model = null, truncated = 0, unprompted = 0 }) {
   const ts = Date.now();
+  // SPEECH CLASS (2026-08-12): tag unprompted said-turns at write time so the voice layer reads a
+  // durable class instead of re-classifying. Prompted turns stay null (they're already the
+  // conversation — the voice always carries them). Fail-open: a classifier hiccup stores null.
+  let speechClass = null;
+  if (unprompted && speaker === 'ai_said') {
+    try { speechClass = require('./speech_class').classify(content).cls; } catch {}
+  }
   const info = getDb()
-    .prepare('INSERT INTO turns (session_id, ts, speaker, content, model, truncated, unprompted) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(sessionId, ts, speaker, content, model, truncated, unprompted ? 1 : 0);
+    .prepare('INSERT INTO turns (session_id, ts, speaker, content, model, truncated, unprompted, speech_class) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(sessionId, ts, speaker, content, model, truncated, unprompted ? 1 : 0, speechClass);
   // Conversation is boundary traffic (Lucas, 2026-07-22: "graphically show her thinking and communicating").
   // The KG surface draws the short-term store as a bounded region — her mind — so being spoken to and
   // speaking are its two crossings: 'hear' travels in, 'say' travels out. ai_thought turns are NOT tapped

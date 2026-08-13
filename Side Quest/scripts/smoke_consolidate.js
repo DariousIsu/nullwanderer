@@ -97,6 +97,30 @@ async function run() {
   const pa = db.getOpenThread(a1.id);
   ok('A umbrella absorbed children (still active)', pa.status !== 'abandoned' && db.getActiveOpenThreads(50).some(t => t.id === a1.id));
 
+  // ── SUBJECT-TOKEN pre-pass (2026-08-12 truth audit — the 3803-3810 fragmentation) ──
+  // The REAL fragments from the live incident: five re-phrasings of one ask must match by subject
+  // tokens alone (no embedder), so the dedup floor holds when embed hangs/fails.
+  console.log('\nsubject-token intent match (deterministic, embed-down floor):');
+  const cons2 = require('../lib/consolidate');
+  const livePool = [
+    { id: 3803, content: 'finish the research on applied digital' },
+    { id: 3808, content: 'execute the proposed Monroe project ideas' },
+  ];
+  ok('rephrasing #1 matches (complete…for Lucas)', (cons2.tokenIntentMatch('complete the research on applied digital for Lucas', livePool) || {}).id === 3803);
+  ok('rephrasing #2 matches (complete the applied digital work)', (cons2.tokenIntentMatch('complete the applied digital work', livePool) || {}).id === 3803);
+  ok('rephrasing #3 matches (add…to a project before the Monroe event → applied digital)', (cons2.tokenIntentMatch('add applied digital research to a project', livePool) || {}).id === 3803);
+  ok('tiny-subject match (work on the Monroe materials ≡ Monroe ideas)', (cons2.tokenIntentMatch('work on the Monroe materials', livePool) || {}).id === 3808);
+  ok('a genuinely different subject does NOT match', cons2.tokenIntentMatch('draft the Pelican Institute invite cross-check', livePool) === null);
+  ok('empty candidate → null (fail-safe)', cons2.tokenIntentMatch('', livePool) === null);
+  const dec = await cons2.decideForCandidate('complete the applied digital work', {
+    embedFn: async () => { throw new Error('embedder down'); },   // the EXACT live failure shape
+    classifyFn: async () => ({ action: 'ADD' }),
+  });
+  // db here is the smoke temp DB — getActiveOpenThreads returns this suite's threads, none of which
+  // share the applied-digital subject, so drive the PRE-PASS through tokenIntentMatch directly above
+  // and prove decideForCandidate stays fail-open (ADD) when both the token pass misses AND embed dies.
+  ok('embed-down + no token match → still fail-open ADD (never drops a real goal)', dec.action === 'ADD');
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { db.getDb().close(); } catch {}
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmp + ext); } catch {} }

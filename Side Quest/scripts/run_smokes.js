@@ -500,6 +500,8 @@ const smokes = [
   'smoke_act_on_page.js', 'smoke_canvas_view.js', 'smoke_news_snapshot.js', 'smoke_meeting_research.js',
   'smoke_curator.js', 'smoke_rumination_breaker.js', 'smoke_recipes_heavy.js',
   'smoke_rumination.js',   // was CRASHING on the same S3 root (null focus after demoted setFromText) — repaired + kill-switch-pinned, 8/8
+  // ── truth-audit builds (2026-08-12 late) ─────────────────────────────────────────────────────
+  'smoke_speech_class.js',  // which unprompted utterances deserve the VOICE (rail vs speak) + the insertTurn stamp
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.

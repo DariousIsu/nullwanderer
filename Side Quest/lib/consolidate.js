@@ -88,6 +88,49 @@ async function similarThreads(text, pool, { embedFn = memory.embed, limit = 5, f
   return scored.slice(0, limit);
 }
 
+// ── SUBJECT-TOKEN INTENT MATCH (2026-08-12 truth audit: the 3803-3810 fragmentation) ─────────────
+// Five re-phrasings of ONE ask ("finish/complete/work on the applied digital research/work/project")
+// minted SEVEN pending threads in four minutes. The semantic path was structurally sound but SILENT
+// when it failed: embed hung/failed → similarThreads [] → ADD with no log. This pre-pass is the
+// deterministic floor that holds when the embedder doesn't: strip the INTENT VERBS and generic
+// work-nouns (they vary per phrasing), compare the SUBJECT tokens that remain ("applied digital",
+// "monroe") — a strong subject overlap IS the same thread, whatever the verb. Pure, no I/O.
+const _INTENT_STOP = new Set([
+  'the', 'a', 'an', 'and', 'or', 'to', 'for', 'on', 'of', 'in', 'with', 'about', 'that', 'this', 'them',
+  'complete', 'finish', 'finished', 'finishing', 'work', 'working', 'works', 'research', 'researching',
+  'project', 'projects', 'add', 'adding', 'execute', 'executing', 'proposed', 'ideas', 'idea',
+  'materials', 'material', 'task', 'tasks', 'continue', 'continuing', 'round', 'back', 'before',
+  'event', 'need', 'needs', 'want', 'wants', 'get', 'getting', 'make', 'making', 'do', 'doing',
+  'please', 'also', 'more', 'new', 'his', 'her', 'our', 'your', 'my',
+]);
+function subjectTokens(s) {
+  const out = new Set();
+  for (const w of String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)) {
+    if (w.length >= 3 && !_INTENT_STOP.has(w)) out.add(w);
+  }
+  return out;
+}
+// Best same-subject thread in `pool`, or null. Match = ≥2 shared subject tokens covering ≥60% of the
+// smaller side, OR both sides reduce to the same tiny (≤2-token) subject with a substantial (≥5ch)
+// shared token — "work on the monroe materials" ≡ "execute the proposed monroe ideas". A NOOP here
+// only ever TOUCHES the existing thread (never merges/deletes), so a rare over-match costs nothing.
+function tokenIntentMatch(candidate, pool) {
+  const c = subjectTokens(candidate);
+  if (!c.size) return null;
+  let best = null;
+  for (const t of (pool || [])) {
+    const p = subjectTokens(t.content);
+    if (!p.size) continue;
+    let shared = 0, sharedLong = 0;
+    for (const w of c) if (p.has(w)) { shared++; if (w.length >= 5) sharedLong++; }
+    const minSize = Math.min(c.size, p.size);
+    const strong = shared >= 2 && shared / minSize >= 0.6;
+    const tinySame = shared >= 1 && sharedLong >= 1 && c.size <= 2 && p.size <= 2;
+    if ((strong || tinySame) && (!best || shared > best.shared)) best = { id: t.id, content: t.content, shared };
+  }
+  return best;
+}
+
 /**
  * EXTRACTOR decision for a single candidate goal: ADD (insert) or NOOP (skip,
  * it's an intent-duplicate of an existing active thread). Pure decision — does NOT
@@ -96,8 +139,18 @@ async function similarThreads(text, pool, { embedFn = memory.embed, limit = 5, f
 async function decideForCandidate(candidate, { embedFn = memory.embed, classifyFn = classifyGoal } = {}) {
   const active = db.getActiveOpenThreads(50);
   if (active.length === 0) return { action: 'ADD' };
+  // Deterministic subject-token pre-pass FIRST — holds even when the embedder is down (the silent
+  // failure that let the 3803-3810 fragmentation through).
+  const tok = tokenIntentMatch(candidate, active);
+  if (tok) return { action: 'NOOP', targetId: tok.id, via: 'subject-tokens' };
   const similar = await similarThreads(candidate, active, { embedFn });
-  if (similar.length === 0) return { action: 'ADD' };
+  if (similar.length === 0) {
+    // Name the previously-SILENT branch: an embed failure and a genuine no-match look identical
+    // here, and one of them shipped 6 duplicate threads without a single log line.
+    let embOk = false; try { embOk = !!(await embedFn(candidate)); } catch {}
+    console.log(`[open_threads] no similar thread found (embedder ${embOk ? 'OK — genuinely new' : 'FAILED — dedup was blind'}) → ADD: ${String(candidate).slice(0, 60)}`);
+    return { action: 'ADD' };
+  }
   return classifyFn(candidate, similar);
 }
 
@@ -144,4 +197,4 @@ async function consolidateThreads({ apply = false, embedFn = memory.embed, class
   return { kept: kept.map(k => ({ id: k.id, content: k.content })), merges };
 }
 
-module.exports = { classifyGoal, parseDecision, similarThreads, decideForCandidate, consolidateThreads, SIM_FLOOR };
+module.exports = { classifyGoal, parseDecision, similarThreads, decideForCandidate, consolidateThreads, SIM_FLOOR, subjectTokens, tokenIntentMatch };
