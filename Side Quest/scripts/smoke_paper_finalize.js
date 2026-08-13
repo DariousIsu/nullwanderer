@@ -27,6 +27,17 @@ fs.writeFileSync(path.join(dir, 'unrelated_topic.md'), '# Something Else\nNo acm
 const frags = pf.gatherFragments({ tokens: ['acme', 'widgets'], dir });
 ok('gather finds both acme fragments, skips the unrelated file', frags.length === 2 && !frags.some((f) => f.file === 'unrelated_topic.md'));
 
+// entity-scope veto (08-13: the VeriChip-era "Applied Digital Solutions" contamination)
+fs.writeFileSync(path.join(dir, 'acme_widgets_solutions_overview.md'), '# Acme Widgets Solutions\nA DIFFERENT company entirely (verichip era).\n');
+ok('exclude tokens VETO a wrong-entity fragment', pf.gatherFragments({ tokens: ['acme', 'widgets'], exclude: ['solutions'], dir }).length === 2);
+fs.unlinkSync(path.join(dir, 'acme_widgets_solutions_overview.md'));
+
+// org-boilerplate headings (Mission/Vision/Overview) → the DEFAULT paper shape
+ok('all-boilerplate fragments fall back to the DEFAULT paper shape', (() => {
+  const o = pf.outline([{ file: 'x', mtime: 1, text: '# Mission\nstuff\n## Vision\nstuff\n## About\nstuff\n' }]);
+  return o.join('|') === pf.DEFAULT_SECTIONS.join('|');
+})());
+
 // sources: unique + numbered, markdown links keep titles
 const srcs = pf.harvestSources(frags);
 ok('harvest numbers every unique URL (3)', srcs.length === 3 && srcs[0].n === 1);

@@ -25,13 +25,22 @@ const path = require('path');
 const NOTES_DIR = path.join(__dirname, '..', 'data', 'zoe_workspace', 'notes');
 const MAX_FRAGMENTS = 25;
 const MAX_TOTAL_CHARS = 400_000;
-const BOILER_RE = /^(research plan|research deliverable|sources|objective|approach|targets|databases|gathered on each target)/i;
+// Extended 08-13 after the first live run: fragment headings are mostly ORG-PROFILE boilerplate
+// ("Mission (from applieddigitalcares.com)", "Vision") — junk section names for a paper.
+const BOILER_RE = /^(research plan|research deliverable|sources|objective|approach|targets|databases|gathered on each target|mission|vision|values|leadership|programs?|contact|about|overview|directed research)/i;
+// The default PAPER shape — used whenever the fragments can't supply ≥3 genuinely paper-shaped
+// headings (which, measured live, they usually can't: they're org profiles and dossier scaffolds).
+const DEFAULT_SECTIONS = ['Executive Summary', 'Background', 'Projects and Facilities', 'Financing and Partnerships', 'Community and Regional Impact', 'Risks and Open Questions'];
 
 function _norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim(); }
 
-/** gatherFragments({tokens, dir}) → [{file, mtime, text}] — files whose NAME or HEAD carries every token. */
-function gatherFragments({ tokens, dir = NOTES_DIR } = {}) {
+/** gatherFragments({tokens, exclude, dir}) → [{file, mtime, text}] — files whose NAME or HEAD
+ *  carries every token. `exclude` tokens veto a file (the ENTITY-SCOPE filter, 08-13: the CRM's
+ *  near-duplicate accounts — "Applied Digital Solutions, Inc.", the unrelated Florida VeriChip
+ *  company — matched the topic tokens and contaminated the paper). */
+function gatherFragments({ tokens, exclude = [], dir = NOTES_DIR } = {}) {
   const toks = (tokens || []).map(_norm).filter(Boolean);
+  const ex = (exclude || []).map(_norm).filter(Boolean);
   if (!toks.length) return [];
   let names = [];
   try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.md')); } catch { return []; }
@@ -40,6 +49,7 @@ function gatherFragments({ tokens, dir = NOTES_DIR } = {}) {
     let st; try { st = fs.statSync(path.join(dir, f)); } catch { continue; }
     let text; try { text = fs.readFileSync(path.join(dir, f), 'utf8'); } catch { continue; }
     const probe = _norm(f + ' ' + text.slice(0, 800));
+    if (ex.some((t) => probe.includes(t))) continue;
     if (toks.every((t) => probe.includes(t))) out.push({ file: f, mtime: st.mtimeMs, text });
   }
   out.sort((a, b) => b.mtime - a.mtime);
@@ -79,8 +89,7 @@ function outline(fragments, { max = 10 } = {}) {
     }
   }
   const picked = heads.slice(0, max);
-  return picked.length >= 3 ? picked
-    : ['Overview', 'Key Findings', 'Community and Regional Impact', 'Financing and Partnerships', 'Open Questions'];
+  return picked.length >= 3 ? picked : DEFAULT_SECTIONS;
 }
 
 function sectionPrompt({ goal, heading, material, sources }) {
@@ -110,9 +119,9 @@ function assemble({ title, goal, sections, sources, dateStr }) {
  * finalize({topic, title, goal, tokens, write, dir, outDir}) → { ok, path, sections, sourceCount }
  * `write(prompt)` is the injected model pass (async → section body text). ONE canonical output file.
  */
-async function finalize({ topic, title, goal, tokens, write, dir = NOTES_DIR, outDir = NOTES_DIR, land = true } = {}) {
+async function finalize({ topic, title, goal, tokens, exclude, write, dir = NOTES_DIR, outDir = NOTES_DIR, land = true } = {}) {
   const toks = tokens && tokens.length ? tokens : _norm(topic).split(' ').filter(Boolean);
-  const fragments = gatherFragments({ tokens: toks, dir });
+  const fragments = gatherFragments({ tokens: toks, exclude, dir });
   if (!fragments.length) return { ok: false, reason: `no fragments for "${topic}"` };
   const sources = harvestSources(fragments);
   const heads = outline(fragments);
@@ -139,4 +148,4 @@ async function finalize({ topic, title, goal, tokens, write, dir = NOTES_DIR, ou
   return { ok: true, path: outPath, sections: sections.length, sourceCount: sources.length, fragments: fragments.length };
 }
 
-module.exports = { gatherFragments, harvestSources, outline, sectionPrompt, assemble, finalize, NOTES_DIR };
+module.exports = { gatherFragments, harvestSources, outline, sectionPrompt, assemble, finalize, NOTES_DIR, DEFAULT_SECTIONS };
