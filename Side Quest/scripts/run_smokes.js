@@ -513,6 +513,12 @@ const smokes = [
   'smoke_quarantine.js', 'smoke_reflection_delaunder.js', 'smoke_reflection_router.js',
   'smoke_search_routing.js', 'smoke_self_diversity.js', 'smoke_self_grounding.js',
   'smoke_self_model.js', 'smoke_self_saturation.js', 'smoke_spawn_gate.js',
+  // ── main.js wiring (2026-08-13): the FIRST suite that loads the real main.js ─────────────────
+  // The review's core finding: zero smokes loaded main.js and every recent live incident was a
+  // main.js seam bug. scripts/lib/main_harness stubs electron (held whenReady = full registration
+  // surface, zero boot loops), replicates the dup-handler throw, and asserts the 134-channel
+  // wiring: criticals per surface, lifecycle chain, crash handlers, one invokable seam.
+  'smoke_main_wiring.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
