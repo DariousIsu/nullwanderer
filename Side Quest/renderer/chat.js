@@ -362,7 +362,10 @@ window.sq.onComplete((info) => {
   if (info && info.s && info.s !== 'reply') {
     const text = (typeof info.say === 'string' && info.say.trim())
       ? info.say.trim() : cleanLiveSay(sheepBufs[info.s] || '').trim();
-    if (text && !info.silent) appendSheep({ ts: Date.now(), content: text, type: 'utterance' });
+    if (text && !info.silent) {
+      appendSheep({ ts: Date.now(), content: text, type: 'utterance' });
+      try { if (window.sq.speak) window.sq.speak(text); } catch (e) {}   // speak her unprompted utterance aloud
+    }
     sheepBufs[info.s] = '';
     return;
   }
@@ -381,7 +384,10 @@ window.sq.onComplete((info) => {
   if (!(info && info.s === 'reply') && !currentAiTurnDiv && (unpromptedActive || (info && (info.unprompted || info.silent)))) {
     const text = (info && typeof info.say === 'string' && info.say.trim())
       ? info.say.trim() : cleanLiveSay(unpromptedBuffer).trim();
-    if (text) appendSheep({ ts: Date.now(), content: text, type: 'utterance' });
+    if (text) {
+      appendSheep({ ts: Date.now(), content: text, type: 'utterance' });
+      try { if (window.sq.speak && !(info && info.silent)) window.sq.speak(text); } catch (e) {}   // speak her unprompted utterance aloud
+    }
     unpromptedActive = false;
     unpromptedBuffer = '';
     return;
@@ -604,6 +610,217 @@ input.addEventListener('keydown', (e) => {
     send();
   }
 });
+
+// --- Push-to-talk voice input (two-way, Slice 1) ---
+// Tap the mic → record → tap again → transcribe (local CPU faster-whisper) → the text is dropped into
+// the composer and sent through the EXACT existing chat path (send()). No second brain path; the reply is
+// spoken by the same speakThroughCompanion route as any typed turn. Endpointing here is the tap itself
+// (VAD/barge-in/wakeword are later slices). Fail-soft: any error drops back to the idle mic state.
+const micBtn = document.getElementById('mic-btn');
+if (micBtn && !(window.sq && window.sq.sttTranscribe)) {
+  micBtn.style.display = 'none';   // preload too old to expose STT → hide the control rather than dangle it
+} else if (micBtn) {
+  const MIC_IDLE = '🎤 speak';
+  let micStream = null, micRecorder = null, micChunks = [], micRecording = false;
+  const micReset = () => { micBtn.textContent = MIC_IDLE; micBtn.classList.remove('recording'); micBtn.style.color = ''; micBtn.disabled = false; };
+
+  async function micStart() {
+    if (micRecording || sending) return;
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) { renderEphemeral('— microphone access denied —'); return; }
+    micChunks = [];
+    try {
+      micRecorder = new MediaRecorder(micStream);
+    } catch (e) { renderEphemeral('— audio capture unavailable —'); try { micStream.getTracks().forEach((t) => t.stop()); } catch {} return; }
+    micRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size) micChunks.push(ev.data); };
+    micRecorder.onstop = micOnStop;
+    micRecorder.start();
+    micRecording = true;
+    micBtn.textContent = '● listening… (tap to send)';
+    micBtn.classList.add('recording');
+    micBtn.style.color = '#e5484d';
+  }
+
+  function micStop() {
+    if (!micRecording || !micRecorder) return;
+    micRecording = false;
+    micBtn.textContent = '… transcribing';
+    micBtn.disabled = true;
+    try { micRecorder.stop(); } catch {}
+  }
+
+  async function micOnStop() {
+    try { if (micStream) micStream.getTracks().forEach((t) => t.stop()); } catch {}
+    const blob = new Blob(micChunks, { type: (micRecorder && micRecorder.mimeType) || 'audio/webm' });
+    micChunks = [];
+    if (!blob.size) { micReset(); return; }
+    try {
+      const buf = await blob.arrayBuffer();
+      const res = await window.sq.sttTranscribe(buf);
+      if (res && res.ok && res.text && res.text.trim()) {
+        input.value = res.text.trim();
+        autosizeInput();
+        micReset();
+        send();                                   // one brain path — same as a typed message
+      } else if (res && res.ok) {
+        micReset();
+        renderEphemeral('— heard nothing —');
+      } else {
+        micReset();
+        renderEphemeral(`— transcription failed: ${(res && res.error) || 'unknown'} —`);
+      }
+    } catch (e) {
+      micReset();
+      renderEphemeral(`— voice input error: ${e.message || e} —`);
+    }
+  }
+
+  micBtn.addEventListener('click', () => (micRecording ? micStop() : micStart()));
+}
+
+// --- Full hands-free conversation mode (two-way, Slice 2, half-duplex RMS-VAD) ---
+// Toggle on → the mic listens continuously; an RMS energy gate detects utterance start/end, transcribes,
+// and fires the SAME send() a typed message uses. While she is THINKING or SPEAKING the ear is suspended
+// (half-duplex — no self-hearing; barge-in is a later slice), driven by the main-process `voice:speaking`
+// signal. A silence timeout auto-exits. Reuses the Slice-1 STT path; adds no new brain path.
+const convoBtn = document.getElementById('convo-btn');
+if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeaking)) {
+  convoBtn.style.display = 'none';   // preload too old → hide rather than dangle
+} else if (convoBtn) {
+  const CONVO_IDLE = '🎙️ conversation';
+  const RMS_START = 0.020;      // energy above this = speech onset (tunable — spec §7)
+  const RMS_END = 0.012;        // energy below this (sustained) = end of utterance
+  const START_MS = 150;         // sustained energy before it counts as speech (debounce blips)
+  const TAIL_MS = 700;          // sustained silence that ends an utterance
+  const TIMEOUT_MS = 180000;    // auto-exit after 3 min with no user speech
+  const RESUME_GUARD_MS = 350;  // settle time after she stops speaking before reopening the ear
+  const AWAIT_MAX_MS = 15000;   // safety: reopen the ear even if a reply produced no speech
+
+  let alwaysOn = true;          // ALWAYS-ON: mic auto-starts on boot and never idle-times-out (persisted pref)
+  let convoOn = false, convoStream = null, ac = null, analyser = null, tdBuf = null, loopTimer = null;
+  let rec = null, recChunks = [], capturing = false;
+  let voiceStart = 0, silenceStart = 0, lastUserSpeech = 0;
+  let sheSpeaking = false, resumeAt = 0, awaitingReply = false, awaitTimer = null;
+
+  window.sq.onVoiceSpeaking((info) => {
+    if (!convoOn) return;
+    if (info && info.on) { sheSpeaking = true; if (capturing) abortCapture(); }
+    else { sheSpeaking = false; awaitingReply = false; clearTimeout(awaitTimer); resumeAt = Date.now() + RESUME_GUARD_MS; }
+  });
+
+  const setLabel = (s) => { if (convoBtn.textContent !== s) convoBtn.textContent = s; };
+
+  async function convoStart() {
+    if (convoOn) return;
+    try {
+      convoStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    } catch (e) { renderEphemeral('— microphone access denied —'); return; }
+    try {
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      const src = ac.createMediaStreamSource(convoStream);
+      analyser = ac.createAnalyser(); analyser.fftSize = 1024;
+      tdBuf = new Float32Array(analyser.fftSize);
+      src.connect(analyser);
+    } catch (e) { renderEphemeral('— audio setup failed —'); try { convoStream.getTracks().forEach((t) => t.stop()); } catch {} return; }
+    convoOn = true; lastUserSpeech = Date.now();
+    if (micBtn) micBtn.disabled = true;   // one capture owner
+    convoBtn.classList.add('recording'); convoBtn.style.color = '#e5484d';
+    setLabel('🎙️ listening…');
+    loop();
+  }
+
+  function convoStop() {
+    convoOn = false;
+    if (loopTimer) { clearTimeout(loopTimer); loopTimer = null; }
+    clearTimeout(awaitTimer); awaitingReply = false;
+    abortCapture();
+    try { if (convoStream) convoStream.getTracks().forEach((t) => t.stop()); } catch {}
+    try { if (ac) ac.close(); } catch {}
+    convoStream = null; ac = null; analyser = null;
+    if (micBtn) micBtn.disabled = false;
+    convoBtn.classList.remove('recording'); convoBtn.style.color = '';
+    setLabel(CONVO_IDLE);
+  }
+
+  function abortCapture() {
+    if (rec && capturing) { try { rec.onstop = null; rec.stop(); } catch {} }
+    capturing = false; recChunks = [];
+  }
+
+  function rmsLevel() {
+    analyser.getFloatTimeDomainData(tdBuf);
+    let s = 0; for (let i = 0; i < tdBuf.length; i++) s += tdBuf[i] * tdBuf[i];
+    return Math.sqrt(s / tdBuf.length);
+  }
+
+  function startCapture() {
+    recChunks = [];
+    try { rec = new MediaRecorder(convoStream); } catch (e) { return; }
+    rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) recChunks.push(ev.data); };
+    rec.onstop = onCaptureStop;
+    rec.start(); capturing = true;
+    setLabel('● you\'re talking');
+  }
+
+  function endCapture() {
+    if (!rec || !capturing) return;
+    capturing = false;
+    setLabel('… transcribing');
+    try { rec.stop(); } catch {}   // → onCaptureStop
+  }
+
+  async function onCaptureStop() {
+    const blob = new Blob(recChunks, { type: (rec && rec.mimeType) || 'audio/webm' });
+    recChunks = [];
+    if (!blob.size || !convoOn) { if (convoOn) setLabel('🎙️ listening…'); return; }
+    try {
+      const ab = await blob.arrayBuffer();
+      const res = await window.sq.sttTranscribe(ab);
+      if (res && res.ok && res.text && res.text.trim() && convoOn) {
+        input.value = res.text.trim(); autosizeInput();
+        lastUserSpeech = Date.now();
+        awaitingReply = true;                       // suspend the ear through THINKING→SPEAKING
+        clearTimeout(awaitTimer); awaitTimer = setTimeout(() => { awaitingReply = false; }, AWAIT_MAX_MS);
+        send();                                     // one brain path — same as typing
+      }
+    } catch (e) { /* fail-soft: keep listening */ }
+    if (convoOn && !awaitingReply) setLabel('🎙️ listening…');
+  }
+
+  function loop() {
+    if (!convoOn) return;
+    const now = Date.now();
+    if (!alwaysOn && now - lastUserSpeech > TIMEOUT_MS) { renderEphemeral('— conversation timed out —'); convoStop(); return; }
+    // Half-duplex: suspend the ear while she is thinking or speaking, and for a short settle after.
+    if (sheSpeaking || sending || awaitingReply || now < resumeAt) {
+      if (capturing) abortCapture();
+      setLabel((sheSpeaking || sending || awaitingReply) ? 'speaking…' : '🎙️ listening…');
+      loopTimer = setTimeout(loop, 80); return;
+    }
+    const level = rmsLevel();
+    if (!capturing) {
+      if (level > RMS_START) { if (!voiceStart) voiceStart = now; if (now - voiceStart >= START_MS) { voiceStart = 0; silenceStart = 0; startCapture(); } }
+      else { voiceStart = 0; setLabel('🎙️ listening…'); }
+    } else {
+      if (level < RMS_END) { if (!silenceStart) silenceStart = now; if (now - silenceStart >= TAIL_MS) { silenceStart = 0; endCapture(); } }
+      else { silenceStart = 0; }
+    }
+    loopTimer = setTimeout(loop, 80);
+  }
+
+  // The 🎙️ button toggles always-on and PERSISTS the choice, so it survives reboots.
+  convoBtn.addEventListener('click', async () => {
+    if (convoOn) { convoStop(); alwaysOn = false; try { await window.sq.setMeta('always_on_mic', '0'); } catch {} }
+    else { alwaysOn = true; try { await window.sq.setMeta('always_on_mic', '1'); } catch {} convoStart(); }
+  });
+  // ALWAYS-ON: auto-start the mic on load unless the operator turned it off (persisted). getUserMedia is
+  // auto-granted by the default-session permission handler, so no click is needed to begin listening.
+  (async () => {
+    try { const pref = await window.sq.getMeta('always_on_mic'); alwaysOn = (pref !== '0'); } catch { alwaysOn = true; }
+    if (alwaysOn) convoStart();
+  })();
+}
 
 function showNameCapture() {
   const overlay = document.createElement('div');

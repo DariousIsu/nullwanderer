@@ -346,6 +346,22 @@ function configureZoeTeamsPartition() {
     zoeTeamsPartitionReady = true;
   } catch (e) { console.error('[teams] partition config failed:', e.message); }
 }
+// Two-way voice (Slice 1): the main chat window captures the mic via getUserMedia for push-to-talk STT.
+// The DEFAULT session (used by the main/editor/workspace/canvas windows — Zoe's own trusted local surfaces)
+// has no permission handler, so getUserMedia would hang silently. Grant the same scoped set the meeting
+// partitions use. The meeting webviews use their own persist:zoe-google/zoe-teams partitions and are
+// unaffected. Idempotent.
+let mainSessionPermsReady = false;
+function configureMainSessionPermissions() {
+  if (mainSessionPermsReady) return;
+  try {
+    const sess = session.defaultSession;
+    const ALLOW = new Set(['media', 'audioCapture', 'videoCapture', 'fullscreen', 'notifications', 'display-capture']);
+    sess.setPermissionRequestHandler((_wc, permission, cb) => cb(ALLOW.has(permission)));
+    sess.setPermissionCheckHandler((_wc, permission) => ALLOW.has(permission));
+    mainSessionPermsReady = true;
+  } catch (e) { console.error('[voice] default-session mic permission config failed:', e.message); }
+}
 
 // Zoe's Canvas — the THIRD window of the model, distinct from the operator workbench: ZOE's own
 // surface for large deliverables + visual aids (she populates it; the saga store is the system of
@@ -465,47 +481,148 @@ function createCompanionWindow() {
 // sidecar, ~sub-100ms warm) → hand the wav to the companion window, which plays it AND lip-syncs the avatar
 // to its amplitude. Gated on TTS being enabled + a voice configured + the companion being present & visible
 // (hidden = muted). Fire-and-forget + fail-soft: never blocks or breaks the chat turn.
-async function speakThroughCompanion(text) {
+// Two-way conversation mode (Slice 2): tell every renderer when Zoe is/ isn't speaking so a hands-free
+// mic loop can suspend the ear while she talks (half-duplex → no self-hearing) and reopen it when she's
+// done. Broadcast to all webContents; a receiver that ignores it is unaffected.
+function broadcastVoiceSpeaking(on) {
   try {
-    const tc = config.ttsConfig();
-    if (!tc.enabled || !tc.configured) return;
-    // Companion path stays intact (avatar surface, when present + visible, plays + lip-syncs). When it's
-    // absent (ZOE_COMPANION=0), fall back to OS audio so she's still audible. The fan-out below still fires
-    // either way so any lip-sync surface can analyse the wav.
-    const hasCompanion = companionWindow && !companionWindow.isDestroyed() && companionWindow.isVisible();
-    const tts = require('./lib/tts');
-    const clean = tts.prepareText(text);
-    if (!clean || clean.length < 2) return;
-    const res = await tts.synthesize(clean, { voice: tc.voice, speaker: tc.speaker, wallMs: tc.wallMs });
-    if (!res || !res.ok) { if (res && res.error) console.error('[voice] tts failed:', res.error); return; }
-    const fileUrl = require('url').pathToFileURL(res.out).href;
-    if (hasCompanion) {
-      companionWindow.webContents.send('companion:speak', { url: fileUrl });
-    } else {
-      // No visible companion → play the wav through the OS default output (fire-and-forget, fail-soft).
-      try {
+    for (const wc of require('electron').webContents.getAllWebContents()) {
+      try { if (!wc.isDestroyed()) wc.send('voice:speaking', { on: !!on }); } catch (e) {}
+    }
+  } catch (e) {}
+}
+
+// Play ONE synthesized wav (res from lib/tts.synthesize). Plays audibly — the companion window if present
+// + visible, else the OS default output — and fans the wav out SILENTLY to every other surface for
+// lip-sync amplitude. Returns a promise that resolves when playback finishes (exact for the OS path via
+// the player callback; estimated from wav duration for the async companion path). Does NOT touch
+// voice:speaking — the caller owns that so it can span a whole (possibly multi-chunk) utterance.
+function _playWavFile(res) {
+  return new Promise((resolve) => {
+    let done = false; const fin = () => { if (done) return; done = true; resolve(); };
+    try {
+      const fileUrl = require('url').pathToFileURL(res.out).href;
+      const durMs = (res.bytes && res.sampleRate) ? Math.ceil((res.bytes - 44) / (res.sampleRate * 2) * 1000) : 0;
+      const hasCompanion = companionWindow && !companionWindow.isDestroyed() && companionWindow.isVisible();
+      // lip-sync fan-out: every surface EXCEPT the audible companion gets a silent copy to analyse.
+      for (const wc of require('electron').webContents.getAllWebContents()) {
+        try { if (!wc.isDestroyed() && (!companionWindow || companionWindow.isDestroyed() || wc.id !== companionWindow.webContents.id)) wc.send('companion:speak', { url: fileUrl, silent: true }); } catch (e) {}
+      }
+      if (hasCompanion) {
+        try { companionWindow.webContents.send('companion:speak', { url: fileUrl }); } catch {}
+        setTimeout(fin, Math.max(400, durMs + 250));   // window plays async, no callback → estimate
+      } else {
         const { execFile } = require('child_process');
         if (process.platform === 'win32') {
           const ps = `(New-Object Media.SoundPlayer '${res.out.replace(/'/g, "''")}').PlaySync();`;
-          execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], () => {});
+          execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], () => fin());   // callback = playback finished
         } else {
-          execFile('aplay', [res.out], (e) => { if (e) execFile('afplay', [res.out], () => {}); });
+          execFile('aplay', [res.out], (e) => { if (e) execFile('afplay', [res.out], () => fin()); else fin(); });
         }
-      } catch (e) {}
+        setTimeout(fin, Math.max(1500, durMs + 1500));   // safety net if the callback never fires
+      }
+    } catch (e) { fin(); }
+  });
+}
+
+// GLOBAL SPEECH MANAGER — ONE VOICE AT A TIME. ALL spoken output (prompted reply sentences AND her
+// unprompted utterances) funnels through a single serial play queue, so she can NEVER talk over herself
+// (the "three replies at once" overlap). Synth pipelines AHEAD of playback (the sidecar is serial, but the
+// next chunk's wav is ready by the time the current finishes → gapless, no per-sentence pause). A refcount
+// with a short debounce drives voice:speaking (on while anything is queued/playing) for conversation-mode
+// ear-gating — the debounce bridges brief inter-sentence gaps so the ear doesn't flicker open mid-reply.
+const _speech = (() => {
+  let synthChain = Promise.resolve();   // serial synth, runs ahead of playback
+  let playChain = Promise.resolve();    // serial playback in enqueue order — THE anti-overlap guarantee
+  let queued = 0, offTimer = null, speakingOn = false;
+  const setOn = () => { if (offTimer) { clearTimeout(offTimer); offTimer = null; } if (!speakingOn) { speakingOn = true; broadcastVoiceSpeaking(true); } };
+  const scheduleOff = () => { if (offTimer) clearTimeout(offTimer); offTimer = setTimeout(() => { offTimer = null; if (queued === 0 && speakingOn) { speakingOn = false; broadcastVoiceSpeaking(false); } }, 400); };
+  function enqueue(text) {
+    const tc = config.ttsConfig();
+    if (!tc.enabled || !tc.configured) return;
+    const tts = require('./lib/tts');
+    const clean = tts.prepareText(text, { maxChars: 100000 });   // chunks are already sentence-sized
+    if (!clean || clean.length < 2) return;
+    setOn();
+    queued++;
+    // start synth immediately (pipelined — does NOT wait for prior playback); keep synth strictly serial.
+    const synthP = synthChain.then(() => tts.synthesize(clean, { voice: tc.voice, speaker: tc.speaker, wallMs: tc.wallMs }).catch(() => null));
+    synthChain = synthP.then(() => {}, () => {});
+    // play strictly in order: after the previous chunk's playback AND once this chunk's wav is ready.
+    playChain = playChain.then(async () => {
+      const res = await synthP;
+      if (res && res.ok) { try { await _playWavFile(res); } catch (e) {} }
+    }).finally(() => { queued--; if (queued === 0) scheduleOff(); });
+  }
+  return { enqueue, isBusy: () => queued > 0 };
+})();
+
+// Split an ALREADY-COMPLETE text into sentences (mirrors _lastSentenceEnd's boundary rule).
+function _splitSentences(s) {
+  const out = []; let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '.' || c === '!' || c === '?' || c === '\n') {
+      let j = i + 1;
+      while (j < s.length && /[)\]"'\s]/.test(s[j])) j++;
+      const chunk = s.slice(start, j).trim();
+      if (chunk) out.push(chunk);
+      start = j; i = j - 1;
     }
-    // Fan the same wav out to every other surface so anything that wants to lip-sync can. The 3D graph paints
-    // her face across the point cloud and needs the real amplitude envelope to move the mouth; the companion
-    // stays the only one that AUDIBLY plays it (every other listener analyses without connecting to
-    // destination). Additive and safe with no receiver — a surface that ignores the channel is unaffected.
-    for (const wc of require('electron').webContents.getAllWebContents()) {
-      try { if (!wc.isDestroyed() && (!companionWindow || companionWindow.isDestroyed() || wc.id !== companionWindow.webContents.id)) wc.send('companion:speak', { url: fileUrl, silent: true }); } catch (e) {}
+  }
+  const tail = s.slice(start).trim();
+  if (tail) out.push(tail);
+  return out;
+}
+
+// Speak an ALREADY-COMPLETE text (her UNPROMPTED utterances). Chunks into sentences → the global queue
+// (fast first-audio, gapless, never overlapping). `skipIfBusy` (default true): if she's already speaking,
+// DROP this utterance rather than stacking it — she won't ramble or pile up a backlog. The utterance still
+// shows as text in the sheep panel; only the VOICE is skipped when busy. Only <say> content reaches here.
+function speakStreaming(fullText, { skipIfBusy = true } = {}) {
+  try {
+    const tc = config.ttsConfig();
+    if (!tc.enabled || !tc.configured) return;
+    if (skipIfBusy && _speech.isBusy()) return;   // don't talk over herself; drop the stale unprompted voice
+    const clean = require('./lib/tts').prepareText(fullText, { maxChars: 100000 });
+    if (!clean || clean.length < 2) return;
+    const parts = _splitSentences(clean);
+    if (parts.length) for (const p of parts) _speech.enqueue(p);
+    else _speech.enqueue(clean);
+  } catch (e) { console.error('[voice] speakStreaming failed:', e.message); }
+}
+
+// Back-compat one-shot (any direct caller): speak now even if busy — it's an intentional single utterance.
+function speakThroughCompanion(text) { speakStreaming(text, { skipIfBusy: false }); }
+
+// Index just past the LAST complete sentence in `s` at/after `from` (terminator . ! ? or newline, plus
+// trailing quotes/brackets/space). Text after it is an in-progress sentence, held back until more streams.
+function _lastSentenceEnd(s, from) {
+  let last = from;
+  for (let i = from; i < s.length; i++) {
+    const c = s[i];
+    if (c === '.' || c === '!' || c === '?' || c === '\n') {
+      let j = i + 1;
+      while (j < s.length && /[)\]"'\s]/.test(s[j])) j++;
+      last = j; i = j - 1;
     }
-  } catch (e) { console.error('[companion] speak failed:', e.message); }
+  }
+  return last;
 }
 
 app.whenReady().then(() => {
   config.loadEnv();
   db.init();
+  configureMainSessionPermissions();   // two-way voice: allow getUserMedia mic on the default session
+  // Two-way voice: PRE-WARM the TTS sidecar on boot so the first (often UNPROMPTED) utterance doesn't pay
+  // the ~15-20s cold model load. Silent (synthesize writes a wav, does not play). With ZOE_TTS_IDLE_MS=0
+  // the sidecar then stays resident. Delayed + fire-and-forget so it doesn't compete with ComfyUI startup.
+  try {
+    const _tc = config.ttsConfig();
+    if (_tc.enabled && _tc.configured) {
+      setTimeout(() => { try { require('./lib/tts').synthesize('Ready.', { voice: _tc.voice, speaker: _tc.speaker, wallMs: 60000 }).catch(() => {}); } catch {} }, 5000);
+    }
+  } catch {}
   // M1.1a DURABLE USAGE LEDGER: restore the metered-spend ring so the quota gate's spentSince survives a
   // reboot (the meter was in-memory → reset to 0 every boot → the gate silently under-counted). Persist on
   // a light 60s tick (self-throttled) + a forced flush on shutdown (window-all-closed).
@@ -2752,6 +2869,35 @@ ipcMain.handle('companion:toggle', () => {
     const w = createCompanionWindow(); if (w) { w.show(); return { ok: true, visible: true }; }
     return { ok: false, error: 'companion unavailable (disabled or no zoe.vrm)' };
   } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// Two-way voice INPUT (Slice 1): the renderer captures push-to-talk mic audio (webm/opus) and hands the
+// raw bytes here; we write a temp file and run the CPU faster-whisper sidecar (lib/stt.js). Returns
+// { ok, text }. Fail-soft — never throws; the renderer drops back to idle on ok:false.
+ipcMain.handle('stt:transcribe', async (_e, audioBuf) => {
+  const fs = require('fs'), os = require('os');
+  let tmp = null;
+  try {
+    if (!audioBuf) return { ok: false, error: 'no audio' };
+    const bytes = Buffer.isBuffer(audioBuf) ? audioBuf : Buffer.from(audioBuf);
+    if (!bytes.length) return { ok: false, error: 'empty audio' };
+    tmp = path.join(os.tmpdir(), `zoe_stt_${Date.now()}_${process.pid}.webm`);
+    fs.writeFileSync(tmp, bytes);
+    const res = await require('./lib/stt').transcribe(tmp, { wallMs: 60000 });
+    return (res && res.ok) ? { ok: true, text: res.text || '', ms: res.ms, lang: res.lang } : { ok: false, error: (res && res.error) || 'stt failed' };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  } finally {
+    if (tmp) { try { fs.unlinkSync(tmp); } catch {} }
+  }
+});
+
+// Two-way UNPROMPTED speech: the renderer asks main to speak an autonomous UTTERANCE aloud. The renderer
+// is the choke point — it passes only spoken 'utterance' text (never her <think>/monologue/readings), so
+// this stays scoped to what she actually says on her own. Fire-and-forget; returns immediately.
+ipcMain.handle('voice:speak', (_e, text) => {
+  try { if (text && typeof text === 'string' && text.trim()) speakStreaming(text); } catch (e) {}   // skipIfBusy: won't talk over an in-progress utterance
+  return { ok: true };
 });
 
 // Forecasting processing side — the Forecasting STUDIO (renderer/forecast.html, a surface inside My
@@ -11195,7 +11341,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
 const CHAT_TURN_WATCHDOG_MS = 150000;
 
 ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
-  let sayBuf = '';   // accumulate her spoken tokens so the companion can voice the whole reply on complete
+  let sayBuf = '';   // accumulate her spoken tokens (voice streams sentence-by-sentence as they arrive)
+  let spokenIdx = 0;   // how much of the cleaned reply has already been queued to the global speech manager
   // Safety net for a stalled turn: force-resume the background loops (idempotent — a normal turn has
   // already resumed and clears the timer below) and surface an error so the typing indicator clears.
   // It does NOT cancel the turn (that would break legitimate streaming); it only guarantees recovery.
@@ -11210,8 +11357,26 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
       // STREAM DISCRIMINATOR (2026-07-30, reply-delivery-path root fix): every say-token now names
       // its stream — the renderer routes by FACT, not by the promptedReplyPending/latch heuristics
       // that misfiled real answers into the sheep rail when a suppressed autonomous stream leaked.
-      emit: (t) => { sayBuf += t; try { event.sender.send('chat:say-token', { t, s: 'reply' }); } catch {} },
-      onComplete: (info) => { try { event.sender.send('chat:complete', { ...(info || {}), s: 'reply' }); } catch {} try { speakThroughCompanion((info && typeof info.say === 'string' && info.say.trim()) ? info.say : sayBuf); } catch {} sayBuf = ''; },
+      emit: (t) => {
+        sayBuf += t;
+        try { event.sender.send('chat:say-token', { t, s: 'reply' }); } catch {}
+        // STREAMING voice: speak each complete sentence the moment it lands, so she starts talking almost
+        // immediately instead of after the whole reply. Only <say> reaches here — never her <think>.
+        try {
+          const clean = require('./lib/tts').prepareText(sayBuf, { maxChars: 100000 });
+          const upto = _lastSentenceEnd(clean, spokenIdx);
+          if (upto > spokenIdx) { _speech.enqueue(clean.slice(spokenIdx, upto)); spokenIdx = upto; }
+        } catch {}
+      },
+      onComplete: (info) => {
+        try { event.sender.send('chat:complete', { ...(info || {}), s: 'reply' }); } catch {}
+        // speak any trailing partial sentence (the global queue releases voice:speaking when it drains).
+        try {
+          const clean = require('./lib/tts').prepareText(sayBuf, { maxChars: 100000 });
+          if (clean.length > spokenIdx) _speech.enqueue(clean.slice(spokenIdx));
+        } catch {}
+        sayBuf = ''; spokenIdx = 0;
+      },
       onError: (e) => { try { event.sender.send('chat:error', e); } catch {} },
       busy: (text) => { try { event.sender.send('chat:busy', text); } catch {} }
     });
@@ -15304,7 +15469,7 @@ async function _surfaceOpenPromise() {
     const d = it.detail || {};
     const what = String(d.deliverable || 'that').replace(/\s+/g, ' ').trim();
     const uname = (() => { try { return db.getMeta('user_name') || 'you'; } catch { return 'you'; } })();
-    const msg = `Earlier I said I'd get ${what} together for ${uname}, and I haven't actually delivered it yet. Want me to do that now, or keep it on the list?`;
+    const msg = `Earlier I said I'd get that ${what} together for ${uname}, and I haven't actually delivered it yet. Want me to do that now, or keep it on the list?`;
     const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'delivery', unprompted: 1 });
     try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
     try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
@@ -16286,7 +16451,7 @@ async function runDirectedResearchPass(focus) {
                 db.setMeta(`focus.${focus.id}.plan_rev`, String(rev));
                 db.setMeta(`focus.${focus.id}.plan`, JSON.stringify(plan1));
                 console.log(`[user-work] plan REVALIDATED → rev ${rev}: ${notes.join('; ').slice(0, 220)}${verdict.reason ? ` (${String(verdict.reason).slice(0, 120)})` : ''}`);
-                try { _surfaceSteeringNote(focus, `Tactics update on the research (plan rev ${rev}): ${notes.join('; ')}${verdict.reason ? ` — ${String(verdict.reason).trim()}` : ''}. Object if this is the wrong turn.`, `plan rev ${rev}`); } catch {}
+                try { _surfaceSteeringNote(focus, `Tactics update on the research (plan rev ${rev}): ${notes.join('; ')}${verdict.reason ? ` — ${String(verdict.reason).trim().replace(/\.+$/, '')}` : ''}. Say the word if this is the wrong turn.`, `plan rev ${rev}`); } catch {}
               })().catch((e) => console.error('[user-work] plan revalidation failed:', e.message));
             }
           } catch { /* revalidation is additive */ }
@@ -16922,7 +17087,7 @@ Reply ONLY: {"verdict": "survives"|"refuted", "attack": "<the strongest single a
             db.setMeta(`focus.${focus.id}.plan_rev`, String(rev));
             db.setMeta(`focus.${focus.id}.plan`, JSON.stringify(plan1));
             console.log(`[topical] plan REVALIDATED → rev ${rev}: ${notes.join('; ').slice(0, 220)}`);
-            try { _surfaceSteeringNote(focus, `Tactics update on the briefing (plan rev ${rev}): ${notes.join('; ')}${verdict.reason ? ` — ${String(verdict.reason).trim()}` : ''}. Object if this is the wrong turn.`, `plan rev ${rev}`); } catch {}
+            try { _surfaceSteeringNote(focus, `Tactics update on the briefing (plan rev ${rev}): ${notes.join('; ')}${verdict.reason ? ` — ${String(verdict.reason).trim().replace(/\.+$/, '')}` : ''}. Say the word if this is the wrong turn.`, `plan rev ${rev}`); } catch {}
           })().catch((e) => console.error('[topical] plan revalidation failed:', e.message));
         }
       } catch { /* adaptation is additive — the brief lands regardless */ }

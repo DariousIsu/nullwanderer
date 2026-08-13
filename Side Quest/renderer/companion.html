@@ -49,8 +49,11 @@
   // lip-sync the avatar to its live amplitude (attachAudio → AnalyserNode → mouth). Restore mood when done.
   let speaking = false;
   try {
-    window.sq.onCompanionSpeak(({ url }) => {
+    window.sq.onCompanionSpeak(({ url, silent }) => {
       if (!url) return;
+      if (silent) return;                  // silent copies are for OTHER surfaces' lip-sync analysis — the audible
+                                           // path (this window when visible, else main-process SoundPlayer) plays.
+                                           // Ignoring this was a cause of overlapping/doubled voices.
       const a = new Audio(url);            // fresh element each utterance (createMediaElementSource is once-per-element)
       try { face.attachAudio(a); } catch {}
       speaking = true; face.setMood('talking');
