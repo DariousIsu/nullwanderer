@@ -523,6 +523,10 @@ const smokes = [
   // in web.open (who asked / raw target / resolved URL, BEFORE the goto) — the site ledger records
   // at capture time, so an open killed pre-read left zero trace. + pins the %20 SERP fingerprint.
   'smoke_browser_actions.js',
+  // ── work-hold control order (2026-08-13, turn #11783): "all work on hold until 0630" answered
+  // with a commitment to MORE work, twice verbatim — the order changed no state. lib/work_hold:
+  // state-first control gate in chat:send + held seams (pass dispatcher / worker fleet / steering).
+  'smoke_work_hold.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
