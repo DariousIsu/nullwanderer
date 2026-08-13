@@ -502,6 +502,17 @@ const smokes = [
   'smoke_rumination.js',   // was CRASHING on the same S3 root (null focus after demoted setFromText) — repaired + kill-switch-pinned, 8/8
   // ── truth-audit builds (2026-08-12 late) ─────────────────────────────────────────────────────
   'smoke_speech_class.js',  // which unprompted utterances deserve the VOICE (rail vs speak) + the insertTurn stamp
+  // ── wave 3c (2026-08-12): the embedder-suite class, ungateable until ZOE_EMBED_REF ────────────
+  // These 13 died SILENTLY in a bare smoke shell (the unref()'d WASM embed worker let the loop
+  // empty mid-await → exit 0, zero output). The runner now sets ZOE_EMBED_REF=1 so the REAL
+  // embedder is under test — no stubs. All 13 verified green. Two stale-assert repairs on the way
+  // in: smoke_reflection_router asserted the PERSONALITY-DRIFT DISEASE as expected behavior
+  // ([INTEREST]→self_model — the 06-29 root; the cure routes it to curiosity) + the decideFn
+  // boolean→verdict-string contract.
+  'smoke_episodic_recall.js', 'smoke_experience.js', 'smoke_lanes.js', 'smoke_memory_phase3.js',
+  'smoke_quarantine.js', 'smoke_reflection_delaunder.js', 'smoke_reflection_router.js',
+  'smoke_search_routing.js', 'smoke_self_diversity.js', 'smoke_self_grounding.js',
+  'smoke_self_model.js', 'smoke_self_saturation.js', 'smoke_spawn_gate.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
@@ -558,7 +569,11 @@ function runSuite(s, { quiet = false } = {}) {
   let out = '', childOk = true;   // childOk = the child exited 0 (execFileSync throws on nonzero/timeout)
   try {
     out = execFileSync(electron, [path.join(dir, s)], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      // ZOE_EMBED_REF=1 (wave 3c): in a bare smoke shell the unref()'d WASM embed worker let the
+      // event loop empty MID-AWAIT → silent exit 0 with zero output (a whole suite class was
+      // ungateable). Ref'd, the REAL embedder is testable; every suite ends with process.exit, so
+      // a ref'd worker can never hang a child. The app itself never sets this.
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ZOE_EMBED_REF: '1' },
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 300000,
     });
   } catch (e) { childOk = false; out = (e.stdout || '') + (e.stderr || ''); }

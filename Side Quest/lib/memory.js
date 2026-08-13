@@ -66,7 +66,13 @@ function _getEmbWorker() {
     w.on('message', (m) => { const p = _embPending.get(m && m.id); if (!p) return; _embPending.delete(m.id); if (m.error) p.reject(new Error(m.error)); else p.resolve(m.vector); });
     w.on('error', (e) => { _embWorkerDead = true; _embWorker = null; for (const p of _embPending.values()) { try { p.reject(e); } catch {} } _embPending.clear(); console.error('[embed] worker error → in-process fallback:', e && e.message); });
     w.on('exit', () => { _embWorker = null; });
-    w.unref();   // never keep the process alive just for the embedder
+    // SMOKE KEEP-ALIVE (2026-08-12 gate-audit wave 3c): in a bare electron-as-node smoke shell the
+    // unref()'d worker is the ONLY thing on the event loop during `await embed(...)` — the loop
+    // empties mid-await and the process exits 0 SILENTLY (measured: smoke_episodic_recall printed
+    // NOTHING; smoke_lanes died mid-suite at its first embed). ZOE_EMBED_REF=1 (set by those
+    // suites) keeps the worker ref'd so the REAL embedder is testable — far better than stubbing
+    // the very organ under test. The app never sets it, so runtime behavior is unchanged.
+    if (process.env.ZOE_EMBED_REF !== '1') w.unref();   // never keep the APP alive just for the embedder
     _embWorker = w;
   } catch (e) { _embWorkerDead = true; console.error('[embed] worker spawn failed → in-process:', e && e.message); return null; }
   return _embWorker;

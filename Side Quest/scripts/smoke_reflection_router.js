@@ -35,16 +35,25 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
   ].join('\n');
 
   const sourceRows = [{ id: 9001, urls: JSON.stringify(['https://owl.purdue.edu/x']) }, { id: 9002, urls: null }];
-  // never-dup decideFn keeps the test deterministic (no model call in storeDeduped)
-  const routed = await reflection.routeReflection(raw, sourceRows, { decideFn: async () => false });
+  // never-dup decideFn keeps the test deterministic (no model call in storeDeduped).
+  // UPDATED 2026-08-12 (wave 3c): the decideFn contract moved from boolean to a VERDICT STRING —
+  // 'distinct' = store (the gated smoke_c3_reflection pins the same contract). `false` read as
+  // duplicate → every store skipped → the routing counts went stale unseen (this suite was
+  // ungateable before the ZOE_EMBED_REF keep-alive existed).
+  const routed = await reflection.routeReflection(raw, sourceRows, { decideFn: async () => 'distinct' });
   ok('tagged lines parsed (4 valid, short/untagged ignored)', routed.taggedCount === 4);
-  ok('SELF + INTEREST routed to identity track (nSelf=2)', routed.nSelf === 2);
-  ok('1 KNOWLEDGE routed to capability track', routed.nKnow === 1);
+  // UPDATED 2026-08-12 (wave 3c): this suite was asserting THE PERSONALITY-DRIFT DISEASE as the
+  // expected behavior — [INTEREST] → self_model is exactly what flooded her identity with ~93
+  // academic "preferences" (the 2026-06-29 root). The CURE routes a research-derived interest to a
+  // low-importance CURIOSITY note (counted in nKnow), never identity. Only [SELF] reaches self_model.
+  ok('only SELF routed to identity (nSelf=1 — INTEREST is curiosity, never identity)', routed.nSelf === 1);
+  ok('KNOWLEDGE + INTEREST-as-curiosity on the capability track (nKnow=2)', routed.nKnow === 2);
   ok('1 SKILL routed to capability track', routed.nSkill === 1);
 
-  // self_model got the identity line AND the experience→interest line
+  // self_model got ONLY the identity line — the interest stays OUT (the drift firewall).
   ok('self_model has the identity statement', D.getAllSelfModel().some(r => /deeper meaning into small word/i.test(r.content)));
-  ok('self_model captured the [INTEREST] (experience→taste)', D.getAllSelfModel().some(r => /mid-century political journalism/i.test(r.content)));
+  ok('self_model did NOT absorb the [INTEREST] (the drift cure holds)', !D.getAllSelfModel().some(r => /mid-century political journalism/i.test(r.content)));
+  ok('the INTEREST lives as a curiosity note instead', D.getKnowledgeBySourceSince('reflection_%', 0).some(r => /mid-century political journalism/i.test(r.content)));
   ok('self_model did NOT absorb the email fact', !D.getAllSelfModel().some(r => /Purdue|emails/i.test(r.content)));
 
   // knowledge got the fact + skill, and the new fact LINKED to the seeded note
