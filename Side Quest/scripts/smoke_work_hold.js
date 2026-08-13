@@ -35,6 +35,15 @@ ok('"park the work until morning" → next 08:00', (() => { const d = wh.detect(
 ok('"until 2pm" honors am/pm', (() => { const d = wh.detect('put the work on hold until 2pm', NOW); return d && d.hold && d.untilTs === new Date(2026, 7, 13, 14, 0, 0).getTime(); })());
 ok('a wall-clock already past rolls to TOMORROW', (() => { const d = wh.detect('put the work on hold until 0100', NOW); return d && d.hold && d.untilTs === new Date(2026, 7, 14, 1, 0, 0).getTime(); })());
 
+// ── TIMED resume = deferred resume = HOLD (the 04:31 live incident: "get back to work around 630"
+// RE-CONFIRMED the 06:30 hold but the bare resume match CLEARED it — engine roared back in 60s) ──
+ok('the live 04:31 order "get back to work around 630" → HOLD until 06:30, NOT resume', (() => {
+  const d = wh.detect('I am going to head to bed, you can take the next couple hours to yourself, get back to work around 630.', NOW);
+  return d && d.hold && !d.resume && d.untilTs === sixThirty;
+})());
+ok('"resume at 7am" → hold until 07:00', (() => { const d = wh.detect('resume at 7am', NOW); return d && d.hold && d.untilTs === new Date(2026, 7, 13, 7, 0, 0).getTime(); })());
+ok('"back to work by 2pm" → hold until 14:00', (() => { const d = wh.detect('back to work by 2pm', NOW); return d && d.hold && d.untilTs === new Date(2026, 7, 13, 14, 0, 0).getTime(); })());
+
 // ── resume ───────────────────────────────────────────────────────────────────────────────────────
 ok('"back to work" → resume', (() => { const d = wh.detect('alright, back to work'); return d && d.resume; })());
 ok('"resume the work" → resume', (() => { const d = wh.detect('resume the work please'); return d && d.resume; })());

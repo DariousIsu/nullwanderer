@@ -69,11 +69,32 @@ function parseUntil(text, now = Date.now()) {
   return now + DEFAULT_HOLD_MS;
 }
 
+// A resume phrase that names a FUTURE time is a DEFERRED resume — i.e. a HOLD until that time.
+// Live incident (04:31 ET 08-13): "take the next couple hours to yourself, get back to work
+// around 630" RE-CONFIRMED the 06:30 hold, but the bare RESUME_RE match cleared it and the
+// engine roared back one minute later. "back to work" only means NOW when no time rides with it.
+const RESUME_TIME_RE = /\b(?:back\s+to\s+work|resume|restart)\b[^.!?]{0,40}?\b(?:around|at|by|after)\s+(\d{1,2})(?::?(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\b/i;
+
 /** detect(text) → { hold: true, untilTs } | { resume: true } | null. Resume wins on a tie
- *  ("back to work — lift the hold" must not re-arm). */
+ *  ("back to work — lift the hold" must not re-arm); a TIMED resume is a hold until that time. */
 function detect(text, now = Date.now()) {
   const t = String(text || '');
   if (!t.trim()) return null;
+  const timed = t.match(RESUME_TIME_RE);
+  if (timed) {
+    let hh = parseInt(timed[1], 10);
+    let mm = timed[2] ? parseInt(timed[2], 10) : 0;
+    // "around 630" → the \d{1,2}:?\d{2} split gives hh=6 mm=30; bare "around 6" gives hh=6 mm=0.
+    const ap = (timed[3] || '').toLowerCase();
+    if (ap.startsWith('p') && hh < 12) hh += 12;
+    if (ap.startsWith('a') && hh === 12) hh = 0;
+    if (hh <= 23 && mm <= 59) {
+      const d = new Date(now);
+      d.setHours(hh, mm, 0, 0);
+      if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+      return { hold: true, untilTs: Math.min(d.getTime(), now + MAX_HOLD_MS) };
+    }
+  }
   if (RESUME_RE.test(t)) return { resume: true };
   if (HOLD_RE.test(t)) return { hold: true, untilTs: parseUntil(t, now) };
   return null;
