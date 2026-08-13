@@ -44,6 +44,13 @@ ok('the live 04:31 order "get back to work around 630" → HOLD until 06:30, NOT
 ok('"resume at 7am" → hold until 07:00', (() => { const d = wh.detect('resume at 7am', NOW); return d && d.hold && d.untilTs === new Date(2026, 7, 13, 7, 0, 0).getTime(); })());
 ok('"back to work by 2pm" → hold until 14:00', (() => { const d = wh.detect('back to work by 2pm', NOW); return d && d.hold && d.untilTs === new Date(2026, 7, 13, 14, 0, 0).getTime(); })());
 
+// ── REPORTED SPEECH is never an order (the ~10:00 live incident: complaining about the hold
+// re-armed it until TOMORROW and the engine refused the very work being demanded) ────────────────
+ok('the live complaint "you were supposed to get back to work…at 0630" → null', wh.detect('What I am saying is, you were supposed to get back to work on that paper almost 4 hours ago, at 0630 and its still not done yet', NOW) === null);
+ok('"I said put all work on hold until 0630 last night" → null (quoted order)', wh.detect('I said put all work on hold until 0630 last night', NOW) === null);
+ok('"why is the work still on hold?" → null (question, not order)', wh.detect('why is all the work on hold', NOW) === null);
+ok('a PRESENT-tense order still detects beside past references elsewhere', (() => { const d = wh.detect('put the work on hold until 2pm', NOW); return d && d.hold; })());
+
 // ── resume ───────────────────────────────────────────────────────────────────────────────────────
 ok('"back to work" → resume', (() => { const d = wh.detect('alright, back to work'); return d && d.resume; })());
 ok('"resume the work" → resume', (() => { const d = wh.detect('resume the work please'); return d && d.resume; })());

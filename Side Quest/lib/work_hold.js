@@ -75,11 +75,20 @@ function parseUntil(text, now = Date.now()) {
 // engine roared back one minute later. "back to work" only means NOW when no time rides with it.
 const RESUME_TIME_RE = /\b(?:back\s+to\s+work|resume|restart)\b[^.!?]{0,40}?\b(?:around|at|by|after)\s+(\d{1,2})(?::?(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\b/i;
 
+// REPORTED-SPEECH GUARD (2026-08-13 ~10:00 live incident): Lucas COMPLAINING about the overnight
+// hold — "you were supposed to get back to work on that paper at 0630" / "I said put all work on
+// hold until 0630" — re-matched the hold shapes, and "0630" being past rolled the hold to
+// TOMORROW: the engine refused the very work he was demanding. A hold/resume ORDER is present
+// tense; a sentence that frames the phrase as PAST or QUOTED speech is a reference, never an order.
+const REPORTED_RE = /\b(?:was|were)\s+supposed\s+to\b|\bI\s+(?:said|told|asked)\b|\blast\s+night\b|\byesterday\b|\bhours?\s+ago\b|\bthis\s+morning\s+you\b|\bwhy\s+(?:is|are|was|were|didn'?t|haven'?t)\b|\bstill\s+not\s+done\b/i;
+
 /** detect(text) → { hold: true, untilTs } | { resume: true } | null. Resume wins on a tie
- *  ("back to work — lift the hold" must not re-arm); a TIMED resume is a hold until that time. */
+ *  ("back to work — lift the hold" must not re-arm); a TIMED resume is a hold until that time;
+ *  reported/past speech about a hold is never an order. */
 function detect(text, now = Date.now()) {
   const t = String(text || '');
   if (!t.trim()) return null;
+  if (REPORTED_RE.test(t)) return null;
   const timed = t.match(RESUME_TIME_RE);
   if (timed) {
     let hh = parseInt(timed[1], 10);
