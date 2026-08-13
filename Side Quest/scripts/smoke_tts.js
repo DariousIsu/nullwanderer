@@ -52,6 +52,11 @@ if (_envEnabled === undefined) delete process.env.ZOE_TTS_ENABLED; else process.
 if (_envVoice === undefined) delete process.env.ZOE_TTS_VOICE; else process.env.ZOE_TTS_VOICE = _envVoice;
 
 // --- fail-soft: empty text / no voice / dead interpreter → {ok:false}, never throws or hangs ---
+// Pinned to provider=piper: these asserts test the piper contract (voice model REQUIRED).
+// The kokoro provider carries its own baked blend and deliberately takes no voice arg, so a
+// live .env with ZOE_TTS_PROVIDER=kokoro would route around the no-voice guard entirely.
+const _envProvider = process.env.ZOE_TTS_PROVIDER;
+process.env.ZOE_TTS_PROVIDER = 'piper';
 (async () => {
   const empty = await tts.synthesize('   ', { voice: '/x.onnx' });
   ok(empty && empty.ok === false && /empty/.test(empty.error), 'empty text → {ok:false, empty}');
@@ -62,6 +67,7 @@ if (_envVoice === undefined) delete process.env.ZOE_TTS_VOICE; else process.env.
   const dead = await tts.synthesize('hello there', { voice: '/models/en.onnx', out: '/nope/out.wav', python: '/no/such/python', wallMs: 4000 });
   ok(dead && dead.ok === false && typeof dead.error === 'string', 'dead interpreter → {ok:false}, no throw');
 
+  if (_envProvider === undefined) delete process.env.ZOE_TTS_PROVIDER; else process.env.ZOE_TTS_PROVIDER = _envProvider;
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
