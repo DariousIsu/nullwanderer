@@ -722,6 +722,11 @@ app.whenReady().then(() => {
   // Owner-world: seed Lucas's family / org / Zoe's self-region as first-class objects (idempotent) so
   // self:zoe/* and person:owner/* coordinates dereference to real neighborhoods (KEYSTONE Slice 0).
   try { require('./lib/owner_world').seed(); } catch (e) { console.error('[owner-world] seed failed:', e.message); }
+  // FOREGROUND YIELD VALVE (2026-08-14, the 1664s-turn audit): the node-resolution gate's Echo reads
+  // (~10 per mention, every background mention lane) yield while the conversation is LIVE — the
+  // engine's capacity goes to the turn on screen, and the metabolism resumes the moment he goes
+  // quiet. See lib/resolution_live.js for the measurement and bounds.
+  try { require('./lib/resolution_live').setYieldProvider(() => _conversationActive()); } catch (e) { console.error('[resolve-gate] yield wiring failed:', e.message); }
   try { editorRegistry.init(); } catch (e) { console.error('[main] editor registry init failed:', e.message); }
   // Curator: deterministic hygiene at session start — age long-stalled threads to
   // 'abandoned', and aggressively prune spiral/prude/junk thoughts + search-junk readings
