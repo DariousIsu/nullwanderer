@@ -103,4 +103,26 @@ function shouldAutoFinalize(threadId) {
  *  clearable — freeze-once with no unfreeze would pin the mistake forever. */
 function clear(threadId) { try { db.setMeta(KEY(threadId), ''); } catch {} }
 
-module.exports = { get, freeze, clear, setOutline, anchorLine, gatherSignature, recordGatherSig, isDry, markFinalized, shouldAutoFinalize, DRY_RUN_COUNT };
+/** Parse a search_entities result into an anchor ONLY when the resolved name plausibly IS the
+ *  topic. FIRST LIVE MISFIRE (#3882, minutes after deploy): topic "search sponsor" semantically
+ *  matched "Hunt (WA)" — a legislative BILL sponsor — the naive first-line parse stored the raw
+ *  JSON blob as the "name", and the anchor steered an event-sponsor search into the WA
+ *  Legislature. Two gates: parse the JSON shape for the real name/summary, and REQUIRE a shared
+ *  distinctive token between name and topic — a resolution that doesn't name the topic is a
+ *  spurious semantic hit, and NO anchor (topic-as-written) beats a wrong one. */
+function entityAnchorFrom(topic, rawText) {
+  const raw = String(rawText || '').trim();
+  if (!raw || !topic) return null;
+  let name = '', summary = '';
+  const jm = raw.match(/\{[\s\S]*?\}/);
+  if (jm) { try { const o = JSON.parse(jm[0]); name = String(o.name || '').trim(); summary = String(o.summary || '').trim(); } catch {} }
+  if (!name) name = (raw.split('\n').map((s) => s.trim()).filter(Boolean)[0] || '').slice(0, 120);
+  if (!name || name.startsWith('[') || name.startsWith('{')) return null;   // never a raw blob as a name
+  const toks = (s) => new Set(String(s).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length >= 3));
+  const t = toks(topic), n = toks(name);
+  let shared = 0; for (const w of t) if (n.has(w)) shared++;
+  if (shared === 0) return null;
+  return { name: name.slice(0, 120), evidence: (summary || name).replace(/\s+/g, ' ').slice(0, 300) };
+}
+
+module.exports = { get, freeze, clear, setOutline, anchorLine, entityAnchorFrom, gatherSignature, recordGatherSig, isDry, markFinalized, shouldAutoFinalize, DRY_RUN_COUNT };

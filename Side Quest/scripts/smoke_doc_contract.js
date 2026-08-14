@@ -61,6 +61,20 @@ dc.markFinalized(9001, 'sig-B');
 dc.recordGatherSig(9001, 'sig-B');
 ok('after finalize the valve is CLOSED — revisions are Lucas\'s ask', dc.shouldAutoFinalize(9001) === false && dc.isDry(9001) === true);
 
+// entityAnchorFrom — THE FIRST LIVE MISFIRE (#3882, minutes after deploy): "search sponsor"
+// semantically matched "Hunt (WA)" (a BILL sponsor) and the raw JSON blob became the "name".
+const LIVE_MISFIRE = '[{"id":1377599,"name":"Hunt (WA)","entity_type":"person","entity_subtype":"legislator","summary":"Sponsor in WA 2017-2018","confidence":0.85}]';
+ok('the live misfire anchors NOTHING (no shared token between name and topic)', dc.entityAnchorFrom('search sponsor', LIVE_MISFIRE) === null);
+ok('a real resolution anchors (name parsed from the JSON shape, not the blob)', (() => {
+  const a = dc.entityAnchorFrom('applied digital', '[{"name":"Applied Digital Corp (APLD)","summary":"US data-center company, Ellendale ND"}]');
+  return a && a.name === 'Applied Digital Corp (APLD)' && a.evidence.includes('data-center') && !a.name.startsWith('[');
+})());
+ok('a plain-text resolution line still anchors when it names the topic', (() => {
+  const a = dc.entityAnchorFrom('applied digital', 'Applied Digital Corporation — data centers in Ellendale');
+  return a && /Applied Digital Corporation/.test(a.name);
+})());
+ok('unparseable / empty resolutions anchor nothing', dc.entityAnchorFrom('applied digital', '') === null && dc.entityAnchorFrom('', 'Applied Digital') === null);
+
 // The repair door: clear → a fresh freeze takes (a wrong anchor is never pinned forever).
 dc.clear(9001);
 const c3 = dc.freeze({ threadId: 9001, topic: 'applied digital corp' });
