@@ -43,6 +43,21 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     const st0 = spk.status();
     ok(st0 && st0.enrolled === false && st0.count === 0, 'status: not enrolled, count 0');
 
+    // THRESHOLD POLICY (the stray-video defect, 2026-08-14): live calibration put Lucas's genuine
+    // turns at 0.609-0.839 and impostors (videos through his room speakers) at 0.129-0.541; the
+    // old 0.50 default sat INSIDE the impostor band — a video scored 0.541 and was ANSWERED.
+    const _envSaved = process.env.ZOE_SPEAKER_THRESHOLD;
+    delete process.env.ZOE_SPEAKER_THRESHOLD;
+    ok(spk.DEFAULT_THR === 0.575 && spk.defaultThreshold() === 0.575, 'default cut is 0.575 (above the measured impostor band)');
+    ok(spk.effectiveThreshold(null, null) === 0.575, 'no print, no env → default');
+    ok(spk.effectiveThreshold({ threshold: 0.5 }, null) === 0.5, 'the print\'s enrolled snapshot holds when nothing overrides');
+    process.env.ZOE_SPEAKER_THRESHOLD = '0.62';
+    ok(spk.effectiveThreshold({ threshold: 0.5 }, null) === 0.62, 'ENV beats the stored snapshot (live tuning without re-enrolling — the old order had this backwards)');
+    ok(spk.effectiveThreshold({ threshold: 0.5 }, { threshold: 0.7 }) === 0.7, 'explicit opts beat everything');
+    if (_envSaved === undefined) delete process.env.ZOE_SPEAKER_THRESHOLD; else process.env.ZOE_SPEAKER_THRESHOLD = _envSaved;
+    // The live incident, replayed as pure math: the 0.541 stray fails the new cut, his real 0.609 floor passes.
+    ok(!(0.541 >= 0.575) && (0.609 >= 0.575), 'the answered stray (0.541) now REJECTS; the genuine floor (0.609) still ADMITS');
+
     // ===== (B) LIVE — enroll + accept/reject, only if prerequisites exist =====
     const TTS = path.join(__dirname, '..', 'data', 'tts');
     const OP = ['cmp_jenny.wav', 'tts_1783467325554_59084_0.wav', 'v1_proof.wav'];   // same voice (operator)

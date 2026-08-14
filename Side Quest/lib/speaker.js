@@ -29,10 +29,24 @@ const RUNNER = path.join(ROOT, 'sidecar', 'speaker_verify.py');
 const STORE = process.env.ZOE_SPEAKER_STORE || path.join(ROOT, 'data', 'voices', 'operator_voiceprint.json');
 const MODEL_ID = path.basename(process.env.ZOE_SPEAKER_MODEL || '3dspeaker_campplus_en.onnx');
 
-// Cosine threshold to admit a voice as the operator. Proven separation on this box: same voice ~0.97,
-// clearly different voices ~0.2-0.33 (a synthetic same-engine confuser reached 0.61). 0.50 is a safe start
-// for REAL voices; ZOE_SPEAKER_THRESHOLD overrides, and every live score is logged so we calibrate from data.
-function defaultThreshold() { const v = Number(process.env.ZOE_SPEAKER_THRESHOLD); return Number.isFinite(v) ? v : 0.50; }
+// Cosine threshold to admit a voice as the operator. LIVE CALIBRATION 2026-08-14 (the stray-video
+// defect): across the day's real traffic Lucas's genuine turns scored 0.609–0.839 (16 turns) and
+// impostors — videos playing through his room speakers, other voices — scored 0.129–0.541 (7).
+// The original 0.50 sat INSIDE the impostor band: a prerecorded video hit 0.541 and was answered.
+// 0.575 = the midpoint of the measured gap. (Bench numbers "different voices ~0.2-0.33" missed
+// that speaker-played audio re-recorded through the SAME mic inherits the room's acoustics.)
+const DEFAULT_THR = 0.575;
+function defaultThreshold() { const v = Number(process.env.ZOE_SPEAKER_THRESHOLD); return Number.isFinite(v) ? v : DEFAULT_THR; }
+// Threshold policy in ONE place — priority: explicit opts > ZOE_SPEAKER_THRESHOLD (live tuning) >
+// the print's enrolled snapshot > default. The old order let the snapshot beat the env var, so
+// "tune live without re-enrolling" was false: the stored 0.50 always won.
+function effectiveThreshold(vp, opts) {
+  if (opts && Number.isFinite(opts.threshold)) return opts.threshold;
+  const env = Number(process.env.ZOE_SPEAKER_THRESHOLD);
+  if (Number.isFinite(env)) return env;
+  if (vp && Number.isFinite(vp.threshold)) return vp.threshold;
+  return DEFAULT_THR;
+}
 // Master switch. '0' disables the gate entirely (always admit) — for A/B without re-enrolling.
 function gateEnabled() { return String(process.env.ZOE_SPEAKER_GATE || '1') !== '0'; }
 
@@ -132,7 +146,7 @@ function status() {
   return {
     enrolled,
     count: (vp && vp.samples && vp.samples.length) || 0,
-    threshold: (vp && Number.isFinite(vp.threshold)) ? vp.threshold : defaultThreshold(),
+    threshold: effectiveThreshold(vp, null),
     dim: (vp && vp.dim) || 0,
     model: MODEL_ID,
     gate: gateEnabled(),
@@ -164,8 +178,7 @@ async function verify(inPath, opts = {}) {
   const gate = gateEnabled();
   const vp = _load();
   const enrolled = _usable(vp);
-  const threshold = (opts && Number.isFinite(opts.threshold)) ? opts.threshold
-    : (vp && Number.isFinite(vp.threshold)) ? vp.threshold : defaultThreshold();
+  const threshold = effectiveThreshold(vp, opts);
   if (!gate || !enrolled) return { ok: true, enrolled, match: true, score: null, threshold, gate };
   const r = await embed(inPath, opts);
   if (!r || !r.ok || !Array.isArray(r.emb)) return { ok: false, enrolled, match: true, score: null, threshold, gate, error: (r && r.error) || 'embed failed', failOpen: true };
@@ -173,4 +186,4 @@ async function verify(inPath, opts = {}) {
   return { ok: true, enrolled, match: score >= threshold, score: Math.round(score * 1000) / 1000, threshold, gate, dur: r.dur, peak: r.peak };
 }
 
-module.exports = { embed, enroll, verify, status, reset, shutdownSpeaker, createSpeakerService, _cosine, _centroid, VENV_PY, RUNNER, STORE, MODEL_ID };
+module.exports = { embed, enroll, verify, status, reset, shutdownSpeaker, createSpeakerService, effectiveThreshold, defaultThreshold, DEFAULT_THR, _cosine, _centroid, VENV_PY, RUNNER, STORE, MODEL_ID };
