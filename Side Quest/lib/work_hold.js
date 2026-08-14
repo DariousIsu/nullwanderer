@@ -80,7 +80,7 @@ const RESUME_TIME_RE = /\b(?:back\s+to\s+work|resume|restart)\b[^.!?]{0,40}?\b(?
 // hold until 0630" — re-matched the hold shapes, and "0630" being past rolled the hold to
 // TOMORROW: the engine refused the very work he was demanding. A hold/resume ORDER is present
 // tense; a sentence that frames the phrase as PAST or QUOTED speech is a reference, never an order.
-const REPORTED_RE = /\b(?:was|were)\s+supposed\s+to\b|\bI\s+(?:said|told|asked)\b|\blast\s+night\b|\byesterday\b|\bhours?\s+ago\b|\bthis\s+morning\s+you\b|\bwhy\s+(?:is|are|was|were|didn'?t|haven'?t)\b|\bstill\s+not\s+done\b/i;
+const REPORTED_RE = /\b(?:was|were)\s+supposed\s+to\b|\bI\s+(?:said|told|asked)\b|\blast\s+night\b|\byesterday\b|\bhours?\s+ago\b|\bthis\s+morning\s+you\b|\bwhy\s+(?:is|are|was|were|isn'?t|aren'?t|wasn'?t|weren'?t|didn'?t|haven'?t|hasn'?t)\b|\bstill\s+not\s+done\b/i;
 
 /** detect(text) → { hold: true, untilTs } | { resume: true } | null. Resume wins on a tie
  *  ("back to work — lift the hold" must not re-arm); a TIMED resume is a hold until that time;
@@ -123,4 +123,4 @@ function describe() {
   catch { return new Date(v).toISOString(); }
 }
 
-module.exports = { detect, parseUntil, set, clear, active, until, describe, HOLD_RE, RESUME_RE };
+module.exports = { detect, parseUntil, set, clear, active, until, describe, HOLD_RE, RESUME_RE, REPORTED_RE };

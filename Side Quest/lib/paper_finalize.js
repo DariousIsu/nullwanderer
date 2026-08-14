@@ -22,6 +22,12 @@
 const fs = require('fs');
 const path = require('path');
 
+// The chat-door FINALIZE verb (owned here so main.js and intake typing share ONE definition):
+// "finish/finalize/complete/produce … paper/report/briefing/document" is a CONTROL order for the
+// conductor, never a new work thread. PAPER_TOPIC_RE pulls the topic ("paper on applied digital").
+const PAPER_VERB_RE = /\b(?:finish|finalize|complete|produce)\b[^.?!]{0,50}\b(?:paper|report|briefing|document)\b/i;
+const PAPER_TOPIC_RE = /\b(?:paper|report|briefing|document)\s+(?:on|about|for)\s+([a-z0-9][a-z0-9 .&'-]{2,60})/i;
+
 const NOTES_DIR = path.join(__dirname, '..', 'data', 'zoe_workspace', 'notes');
 const MAX_FRAGMENTS = 25;
 const MAX_TOTAL_CHARS = 400_000;
@@ -148,4 +154,4 @@ async function finalize({ topic, title, goal, tokens, exclude, write, dir = NOTE
   return { ok: true, path: outPath, sections: sections.length, sourceCount: sources.length, fragments: fragments.length };
 }
 
-module.exports = { gatherFragments, harvestSources, outline, sectionPrompt, assemble, finalize, NOTES_DIR, DEFAULT_SECTIONS };
+module.exports = { gatherFragments, harvestSources, outline, sectionPrompt, assemble, finalize, NOTES_DIR, DEFAULT_SECTIONS, PAPER_VERB_RE, PAPER_TOPIC_RE };

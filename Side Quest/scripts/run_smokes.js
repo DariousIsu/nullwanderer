@@ -545,6 +545,10 @@ const smokes = [
   // assemble ONE canonical file with validated inline [n] + full source list. Overwrites, never
   // siblings; honest failure over a hollow document. Driver: scripts/finalize_paper.js.
   'smoke_paper_finalize.js',
+  // ── intake typing (2026-08-13, Block 2): only work-shaped turns reach the goal extractor.
+  // Questions, complaints ("you were supposed to…"), control orders, and acks were all minting
+  // threads; the deterministic gate vetoes those, ambiguity still fails OPEN to the extractor.
+  'smoke_intake_type.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
