@@ -567,6 +567,11 @@ const smokes = [
   // liveLookupAndAnswer funnel stops garbled STT / self-echo fragments (search history is a
   // conviction record). Errs permissive: a false reject silences a legit lookup.
   'smoke_lookup_guard.js',
+  // ── the voice guard (2026-08-14, queue #6): while Lucas is in a meeting/call (or Zoe is in one)
+  // the always-on mic does not capture the room and she does not speak aloud. One paused seat;
+  // manual (Ctrl+Alt+M) overrides auto; her-own-meeting > meeting-app window > calendar-busy;
+  // fail-soft keeps the prior state. Enforced at _speech.enqueue + stt:transcribe.
+  'smoke_voice_guard.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.

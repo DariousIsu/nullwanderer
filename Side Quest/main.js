@@ -563,6 +563,28 @@ function _playWavFile(res) {
 // next chunk's wav is ready by the time the current finishes → gapless, no per-sentence pause). A refcount
 // with a short debounce drives voice:speaking (on while anything is queued/playing) for conversation-mode
 // ear-gating — the debounce bridges brief inter-sentence gaps so the ear doesn't flicker open mid-reply.
+// VOICE GUARD (queue #6, 2026-08-14): one 'paused' seat over the always-on voice loop — while Lucas is
+// in a meeting/call (or Zoe is in one herself) the room mic is NOT captured and she does NOT speak
+// aloud. Detection is conservative (lib/voice_guard: her own Meet/Teams state > meeting-app window >
+// calendar-busy); the manual hotkey (Ctrl+Alt+M, registered at whenReady) is the reliable backstop —
+// the only thing that covers a call on his physical phone — and overrides auto. Enforcement seats:
+// _speech.enqueue below (the ONE aloud door) + stt:transcribe (the ONE mic door).
+const _voiceGuard = require('./lib/voice_guard').createGuard({
+  selfMeeting: () => {
+    try { if (require('./lib/gmeet').active()) return 'Meet'; } catch {}
+    try { if (require('./lib/teams').active()) return 'Teams'; } catch {}
+    return null;
+  },
+  calendarBusy: async () => {
+    try { const b = await require('./lib/voice_guard').isCalendarBusy(require('./lib/gcal')); return b || null; } catch { return null; }
+  },
+  onChange: (s) => console.log(`[voice-guard] ${s.paused ? `voice PAUSED — ${s.reason}` : 'voice resumed'} (mode=${s.mode})`),
+});
+let _vgHeldLogAt = 0;   // throttle the per-chunk "held" log — a streamed reply enqueues many sentences
+// Auto-detect ticks only while the voice lane is actually on (TTS configured) — no PowerShell window
+// sniffing on a voiceless install. Manual pause/resume works regardless of the tick.
+setInterval(() => { try { if (config.ttsConfig().enabled) _voiceGuard.evaluate().catch(() => {}); } catch {} }, 60 * 1000).unref?.();
+
 const _speech = (() => {
   let synthChain = Promise.resolve();   // serial synth, runs ahead of playback
   let playChain = Promise.resolve();    // serial playback in enqueue order — THE anti-overlap guarantee
@@ -572,6 +594,14 @@ const _speech = (() => {
   function enqueue(text) {
     const tc = config.ttsConfig();
     if (!tc.enabled || !tc.configured) return;
+    // VOICE GUARD: while paused (his meeting/call, her meeting, or manual) nothing plays aloud.
+    try {
+      const g = _voiceGuard.state();
+      if (g.paused) {
+        if (Date.now() - _vgHeldLogAt > 10000) { console.log(`[voice-guard] holding speech (${g.reason})`); _vgHeldLogAt = Date.now(); }
+        return;
+      }
+    } catch {}
     const tts = require('./lib/tts');
     const clean = tts.prepareText(text, { maxChars: 100000 });   // chunks are already sentence-sized
     if (!clean || clean.length < 2) return;
@@ -652,6 +682,17 @@ app.whenReady().then(() => {
   config.loadEnv();
   db.init();
   configureMainSessionPermissions();   // two-way voice: allow getUserMedia mic on the default session
+  // VOICE GUARD manual backstop — a SYSTEM-WIDE hotkey, because the moment it's needed a meeting app
+  // (not Zoe) holds focus. Toggles pause/resume; 'auto' hands back via the voice:guard-manual IPC.
+  try {
+    const ok = globalShortcut.register('Control+Alt+M', () => {
+      try {
+        const r = _voiceGuard.manual(_voiceGuard.state().paused ? 'resume' : 'pause');
+        console.log(`[voice-guard] hotkey → ${r.paused ? 'PAUSED (manual)' : 'resumed (manual)'}`);
+      } catch {}
+    });
+    if (!ok) console.log('[voice-guard] hotkey Ctrl+Alt+M unavailable (held by another app)');
+  } catch (e) { console.error('[voice-guard] hotkey registration failed:', e.message); }
   // Two-way voice: PRE-WARM the TTS sidecar on boot so the first (often UNPROMPTED) utterance doesn't pay
   // the ~15-20s cold model load. Silent (synthesize writes a wav, does not play). With ZOE_TTS_IDLE_MS=0
   // the sidecar then stays resident. Delayed + fire-and-forget so it doesn't compete with ComfyUI startup.
@@ -2931,6 +2972,9 @@ ipcMain.handle('stt:transcribe', async (_e, audioBuf) => {
   const fs = require('fs'), os = require('os');
   let tmp = null;
   try {
+    // VOICE GUARD (queue #6): while paused, the room is NOT captured — the audio drops at the door,
+    // untranscribed and unverified. The renderer already treats ok:false as an idle drop.
+    try { const g = _voiceGuard.state(); if (g.paused) return { ok: false, paused: true, reason: g.reason }; } catch {}
     if (!audioBuf) return { ok: false, error: 'no audio' };
     const bytes = Buffer.isBuffer(audioBuf) ? audioBuf : Buffer.from(audioBuf);
     if (!bytes.length) return { ok: false, error: 'empty audio' };
@@ -2981,6 +3025,9 @@ ipcMain.handle('speaker:enroll', async (_e, audioBuf) => {
 });
 ipcMain.handle('speaker:status', () => { try { return require('./lib/speaker').status(); } catch (e) { return { enrolled: false, error: e.message }; } });
 ipcMain.handle('speaker:reset', () => { try { return require('./lib/speaker').reset(); } catch (e) { return { ok: false, error: e.message }; } });
+// Voice-guard surface for any UI: current state + manual control ('pause' | 'resume' | 'auto').
+ipcMain.handle('voice:guard-status', () => { try { return _voiceGuard.state(); } catch (e) { return { paused: false, error: e.message }; } });
+ipcMain.handle('voice:guard-manual', (_e, mode) => { try { return _voiceGuard.manual(String(mode || 'auto')); } catch (e) { return { ok: false, error: e.message }; } });
 
 // Forecasting processing side — the Forecasting STUDIO (renderer/forecast.html, a surface inside My
 // Workspace) invokes these. Each widget's payload is built in lib/forecast_service (reads the poll

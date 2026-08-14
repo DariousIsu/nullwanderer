@@ -82,4 +82,42 @@ async function isCalendarBusy(gcal, opts) {
   } catch (e) { return null; }
 }
 
-module.exports = { detectMeetingApp, isCalendarBusy };
+// ── THE GUARD STATE (queue #6, 2026-08-14): one 'paused' seat over the always-on voice loop. ──────────
+// Poll-driven: main calls evaluate() on a slow tick; the mic door (stt:transcribe) and the aloud door
+// (_speech.enqueue) read state() synchronously. Manual overrides everything — 'pause'/'resume' hold until
+// 'auto' hands control back to detection. Priority in auto: her OWN meeting (in-app state, cheapest and
+// highest-confidence) > meeting-app window > calendar-busy. A detector that throws keeps the PRIOR state
+// (fail-soft — never flaps the voice on a transient error). onChange fires on TRANSITIONS only, so a
+// chatty room can't spam the log. All deps injectable for smokes.
+function createGuard({ detectApp = detectMeetingApp, calendarBusy = null, selfMeeting = null, onChange = null } = {}) {
+  const st = { mode: 'auto', paused: false, reason: null };
+  const _set = (paused, reason) => {
+    if (st.paused === paused && st.reason === reason) return;
+    st.paused = paused; st.reason = reason;
+    try { if (onChange) onChange({ ...st }); } catch {}
+  };
+  return {
+    state: () => ({ ...st }),
+    manual(mode) {
+      if (mode === 'pause') { st.mode = 'manual'; _set(true, 'manual'); }
+      else if (mode === 'resume') { st.mode = 'manual'; _set(false, null); }
+      else st.mode = 'auto';   // detection decides again on the next evaluate()
+      return { ...st };
+    },
+    async evaluate() {
+      if (st.mode !== 'auto') return { ...st };
+      try {
+        const self = selfMeeting ? selfMeeting() : null;
+        if (self) { _set(true, `her meeting (${self})`); return { ...st }; }
+        const inApp = detectApp ? await detectApp() : null;
+        if (inApp) { _set(true, `meeting app (${inApp})`); return { ...st }; }
+        const cal = calendarBusy ? await calendarBusy() : null;
+        if (cal) { _set(true, `calendar (${String(cal).slice(0, 60)})`); return { ...st }; }
+        _set(false, null);
+      } catch { /* fail-soft: keep the prior state */ }
+      return { ...st };
+    },
+  };
+}
+
+module.exports = { detectMeetingApp, isCalendarBusy, createGuard };
