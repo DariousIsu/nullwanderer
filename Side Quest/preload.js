@@ -8,6 +8,12 @@ contextBridge.exposeInMainWorld('sq', {
   sttTranscribe: (audioBuf) => ipcRenderer.invoke('stt:transcribe', audioBuf),   // two-way voice input: audio bytes → { ok, text }
   onVoiceSpeaking: (cb) => ipcRenderer.on('voice:speaking', (_e, info) => cb(info)),   // conversation mode: {on} — suspend/reopen the ear while she speaks
   speak: (text) => ipcRenderer.invoke('voice:speak', text),   // speak an unprompted utterance aloud (utterances only, never her thoughts)
+  onVoicePlay: (cb) => ipcRenderer.on('voice:play', (_e, info) => cb(info)),   // S3: play her voice IN this renderer (AEC reference + instant cancel)
+  voicePlayDone: (id, played) => ipcRenderer.send('voice:play-done', id, played),   // ack: clip finished (played=true) or couldn't play (false → OS fallback)
+  voiceBarge: () => ipcRenderer.send('voice:barge'),                            // user talked over her → flush the rest of what she was saying
+  speakerEnroll: (audioBuf) => ipcRenderer.invoke('speaker:enroll', audioBuf),  // add one enrollment sample of the operator's voice → { ok, count }
+  speakerStatus: () => ipcRenderer.invoke('speaker:status'),                     // { enrolled, count, threshold, gate, ... } for the voice-ID gate
+  speakerReset: () => ipcRenderer.invoke('speaker:reset'),                       // forget the enrolled voiceprint (re-enroll from scratch)
   getRecentMonologue: (n) => ipcRenderer.invoke('monologue:recent', n),
   getDashboardMetrics: () => ipcRenderer.invoke('dashboard:metrics'),
 

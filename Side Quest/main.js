@@ -1,5 +1,5 @@
 const path = require('path');
-const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session, globalShortcut } = require('electron');
 
 // DEV DIAGNOSTICS — expose the renderer over Chrome DevTools Protocol so a CDP client can attach to the
 // LIVE webviews (real render loop, real canvas) instead of guessing from a proxy. Localhost-only, dev-only
@@ -7,6 +7,11 @@ const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electro
 if (!app.isPackaged && process.env.KG_NO_DEBUG !== '1') {
   try { app.commandLine.appendSwitch('remote-debugging-port', '9222'); app.commandLine.appendSwitch('remote-allow-origins', '*'); } catch (e) {}
 }
+// Two-way voice: her reply plays via an Audio element in the chat renderer (so echo-cancellation can
+// subtract it from the mic for barge-in). Without this, Chromium's autoplay policy blocks Audio.play()
+// with no user gesture and she is SILENT. Must be set before app is ready. (webPreferences.autoplayPolicy
+// alone proved unreliable — this global switch is the fix.)
+try { app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required'); } catch (e) {}
 
 // CRASH SAFETY — before this there were NO global handlers, so any unhandled error/rejection killed
 // her with nothing logged (the meeting crash was invisible for exactly this reason). Log the stack
@@ -209,11 +214,15 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      autoplayPolicy: 'no-user-gesture-required'   // two-way voice: she must be able to speak (Audio.play) with no click
     }
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   windowState.track(mainWindow, 'main');
+  // Two-way voice diagnostics: surface the chat renderer's [voice] logs (playback/VAD/barge) into the main
+  // log so voice issues are debuggable without opening DevTools. Scoped to [voice] to avoid renderer noise.
+  try { mainWindow.webContents.on('console-message', (_e, _lvl, msg) => { if (typeof msg === 'string' && msg.includes('[voice]')) console.log('[renderer]', msg); }); } catch (e) {}
   // Right-click context menu in the chat window: spellcheck suggestions + cut/copy/paste.
   // Self-contained (inline require) so it stays out of the way of other edits to this file.
   mainWindow.webContents.on('context-menu', (_event, params) => {
@@ -492,10 +501,39 @@ function broadcastVoiceSpeaking(on) {
   } catch (e) {}
 }
 
-// Play ONE synthesized wav (res from lib/tts.synthesize). Plays audibly — the companion window if present
-// + visible, else the OS default output — and fans the wav out SILENTLY to every other surface for
-// lip-sync amplitude. Returns a promise that resolves when playback finishes (exact for the OS path via
-// the player callback; estimated from wav duration for the async companion path). Does NOT touch
+// Renderer-playback handshake: main routes each wav to the CHAT renderer to play audibly (so Chromium's
+// echo cancellation can subtract it from the mic → barge-in, and so playback can be cancelled instantly).
+// The renderer acks 'voice:play-done' when a clip ends (or is barged), which advances the serial queue.
+const _playPending = new Map();
+let _playSeq = 1;
+
+// OS-level audio fallback (main process, PowerShell SoundPlayer / aplay). Reliable — no autoplay/gesture
+// requirement — but NOT echo-cancellation referenced, so barge-in AEC won't apply to it. Used when there is
+// no chat window OR when the renderer reports it couldn't play, so she is NEVER silent.
+function _osPlay(res, done) {
+  const durMs = (res.bytes && res.sampleRate) ? Math.ceil((res.bytes - 44) / (res.sampleRate * 2) * 1000) : 0;
+  try {
+    const { execFile } = require('child_process');
+    if (process.platform === 'win32') {
+      const ps = `(New-Object Media.SoundPlayer '${res.out.replace(/'/g, "''")}').PlaySync();`;
+      execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], () => done());
+    } else { execFile('aplay', [res.out], (e) => { if (e) execFile('afplay', [res.out], () => done()); else done(); }); }
+    setTimeout(done, Math.max(1500, durMs + 1500));
+  } catch (e) { done(); }
+}
+// The chat renderer acks each clip: played=true (it played, possibly cut short by barge) advances the
+// queue; played=false (autoplay-blocked etc.) → OS fallback so she stays audible + a visible warning.
+try {
+  ipcMain.on('voice:play-done', (_e, id, played) => {
+    const p = _playPending.get(id); if (!p) return; _playPending.delete(id);
+    if (played === false) { console.warn('[voice] renderer playback failed (autoplay?) — using OS fallback'); _osPlay(p.res, p.fin); }
+    else p.fin();
+  });
+} catch {}
+
+// Play ONE synthesized wav (res from lib/tts.synthesize). AUDIBLE in the chat renderer (AEC reference +
+// instant cancel); fans a SILENT copy to every OTHER surface for lip-sync amplitude. OS fallback when there
+// is no chat window or the renderer can't play. Resolves when playback finishes. Does NOT touch
 // voice:speaking — the caller owns that so it can span a whole (possibly multi-chunk) utterance.
 function _playWavFile(res) {
   return new Promise((resolve) => {
@@ -503,23 +541,17 @@ function _playWavFile(res) {
     try {
       const fileUrl = require('url').pathToFileURL(res.out).href;
       const durMs = (res.bytes && res.sampleRate) ? Math.ceil((res.bytes - 44) / (res.sampleRate * 2) * 1000) : 0;
-      const hasCompanion = companionWindow && !companionWindow.isDestroyed() && companionWindow.isVisible();
-      // lip-sync fan-out: every surface EXCEPT the audible companion gets a silent copy to analyse.
+      const hasChat = mainWindow && !mainWindow.isDestroyed();
       for (const wc of require('electron').webContents.getAllWebContents()) {
-        try { if (!wc.isDestroyed() && (!companionWindow || companionWindow.isDestroyed() || wc.id !== companionWindow.webContents.id)) wc.send('companion:speak', { url: fileUrl, silent: true }); } catch (e) {}
+        try { if (!wc.isDestroyed() && (!hasChat || wc.id !== mainWindow.webContents.id)) wc.send('companion:speak', { url: fileUrl, silent: true }); } catch (e) {}
       }
-      if (hasCompanion) {
-        try { companionWindow.webContents.send('companion:speak', { url: fileUrl }); } catch {}
-        setTimeout(fin, Math.max(400, durMs + 250));   // window plays async, no callback → estimate
+      if (hasChat) {
+        const id = _playSeq++;
+        _playPending.set(id, { res, fin });
+        try { mainWindow.webContents.send('voice:play', { id, url: fileUrl }); } catch { _playPending.delete(id); _osPlay(res, fin); return; }
+        setTimeout(() => { if (_playPending.has(id)) { _playPending.delete(id); fin(); } }, Math.max(2500, durMs + 4000));   // safety: never wedge the queue
       } else {
-        const { execFile } = require('child_process');
-        if (process.platform === 'win32') {
-          const ps = `(New-Object Media.SoundPlayer '${res.out.replace(/'/g, "''")}').PlaySync();`;
-          execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], () => fin());   // callback = playback finished
-        } else {
-          execFile('aplay', [res.out], (e) => { if (e) execFile('afplay', [res.out], () => fin()); else fin(); });
-        }
-        setTimeout(fin, Math.max(1500, durMs + 1500));   // safety net if the callback never fires
+        _osPlay(res, fin);
       }
     } catch (e) { fin(); }
   });
@@ -534,7 +566,7 @@ function _playWavFile(res) {
 const _speech = (() => {
   let synthChain = Promise.resolve();   // serial synth, runs ahead of playback
   let playChain = Promise.resolve();    // serial playback in enqueue order — THE anti-overlap guarantee
-  let queued = 0, offTimer = null, speakingOn = false;
+  let queued = 0, offTimer = null, speakingOn = false, gen = 0;   // gen bumps on barge-in → pending chunks skip
   const setOn = () => { if (offTimer) { clearTimeout(offTimer); offTimer = null; } if (!speakingOn) { speakingOn = true; broadcastVoiceSpeaking(true); } };
   const scheduleOff = () => { if (offTimer) clearTimeout(offTimer); offTimer = setTimeout(() => { offTimer = null; if (queued === 0 && speakingOn) { speakingOn = false; broadcastVoiceSpeaking(false); } }, 400); };
   function enqueue(text) {
@@ -543,19 +575,25 @@ const _speech = (() => {
     const tts = require('./lib/tts');
     const clean = tts.prepareText(text, { maxChars: 100000 });   // chunks are already sentence-sized
     if (!clean || clean.length < 2) return;
+    console.log(`[voice] enqueue +${clean.length}ch "${clean.slice(0, 28).replace(/\n/g, ' ')}${clean.length > 28 ? '…' : ''}"`);
+    const myGen = gen;   // captured at enqueue; a barge-in (gen++) makes this chunk stale → skipped
     setOn();
     queued++;
     // start synth immediately (pipelined — does NOT wait for prior playback); keep synth strictly serial.
-    const synthP = synthChain.then(() => tts.synthesize(clean, { voice: tc.voice, speaker: tc.speaker, wallMs: tc.wallMs }).catch(() => null));
+    const synthP = synthChain.then(() => (gen === myGen) ? tts.synthesize(clean, { voice: tc.voice, speaker: tc.speaker, wallMs: tc.wallMs }).catch(() => null) : null);
     synthChain = synthP.then(() => {}, () => {});
     // play strictly in order: after the previous chunk's playback AND once this chunk's wav is ready.
     playChain = playChain.then(async () => {
+      if (gen !== myGen) return;   // barged since enqueue → skip
       const res = await synthP;
-      if (res && res.ok) { try { await _playWavFile(res); } catch (e) {} }
+      if (res && res.ok && gen === myGen) { try { await _playWavFile(res); } catch (e) {} }
     }).finally(() => { queued--; if (queued === 0) scheduleOff(); });
   }
-  return { enqueue, isBusy: () => queued > 0 };
+  function flush() { gen++; }   // barge-in: skip everything currently pending (the renderer stops the audible clip itself)
+  return { enqueue, isBusy: () => queued > 0, flush };
 })();
+// Barge-in: the chat renderer detected the user talking over her → drop the rest of what she was saying.
+try { ipcMain.on('voice:barge', () => { try { _speech.flush(); } catch (e) {} }); } catch {}
 
 // Split an ALREADY-COMPLETE text into sentences (mirrors _lastSentenceEnd's boundary rule).
 function _splitSentences(s) {
@@ -1985,7 +2023,20 @@ app.whenReady().then(() => {
               if (r && r.text && r.text.length >= 40) { markdown = r.text; console.log(`[canvas-ingest] "${label}" read FULL from FILE via ${r.via} (${markdown.length}ch)`); }
             } catch (e) { console.error('[canvas-ingest] file read failed:', e.message); }
           }
-          if (markdown.length < 40) { console.log(`[canvas-ingest] "${label}" too thin to ingest — skipping (still marking seen)`); }
+          if (markdown.length < 40) {
+            // THE SILENT SWALLOW, killed (2026-08-14): this branch used to mark the drop seen and
+            // say NOTHING — Lucas's approved paper vanished here and her honest "search came back
+            // empty" read as a failure. Extraction was already attempted above whenever a file src
+            // exists; what remains is the HONESTY: tell him on the chat surface, immediately (he
+            // just dropped it — this is a direct response to his action, not an autonomous note).
+            console.log(`[canvas-ingest] "${label}" too thin to ingest${fileSrc ? ' (file extraction failed)' : ' (no text blocks and no file reference in the drop)'} — marking seen + telling Lucas`);
+            try {
+              const msg = `Heads up — you dropped "${label}" on the canvas but I couldn't read it${fileSrc ? " (the file wouldn't parse)" : ' (the drop carried no readable text or file reference)'}. Attach the file in chat and I'll take it from there — I won't pretend I've seen it.`;
+              const row = db.insertTurn({ sessionId: currentSessionId, speaker: 'ai_said', content: msg, model: 'delivery', unprompted: 1 });
+              db.setMeta('last_ai_utterance_at', String(Date.now()));
+              if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg });
+            } catch (e) { console.error('[canvas-ingest] surface failed:', e.message); }
+          }
           else {
             // grounded cloud UNDERSTANDING (fail-safe to the raw doc if the cloud is down)
             let understanding = '';
@@ -2399,6 +2450,8 @@ app.whenReady().then(() => {
         if (_sw.queued) console.log(`[metabolism] swept ${_sw.queued} expired gap(s) into the queue`);
         // SPINE 3 A2.2: surface one open delivery-promise (past its grace window) so a debt is never dropped.
         await _surfaceOpenPromise();
+        // Self-exploration share outbox → chat in a lull ("tell me about it as you go").
+        await _surfaceExplorationShare();
         // M9.4 — THE TREND LINE (2026-08-08): one snapshot per day of the open-gap inventory, so
         // "the backlog must DECLINE week over week" is a measurement, not a hope. Read the series
         // back via meta keys metabolism.trend.YYYY-MM-DD.
@@ -2883,8 +2936,17 @@ ipcMain.handle('stt:transcribe', async (_e, audioBuf) => {
     if (!bytes.length) return { ok: false, error: 'empty audio' };
     tmp = path.join(os.tmpdir(), `zoe_stt_${Date.now()}_${process.pid}.webm`);
     fs.writeFileSync(tmp, bytes);
-    const res = await require('./lib/stt').transcribe(tmp, { wallMs: 60000 });
-    return (res && res.ok) ? { ok: true, text: res.text || '', ms: res.ms, lang: res.lang } : { ok: false, error: (res && res.error) || 'stt failed' };
+    // Transcribe AND verify-the-speaker on the SAME audio, in parallel. verify() is a near-zero-cost no-op
+    // (returns match:true without touching the model) unless the speaker gate is ON and the operator is
+    // enrolled — so this adds no latency until the gate is actually armed. The renderer gates send() on
+    // res.speaker.match, so a video / another person / an announcement is transcribed-but-ignored.
+    const [res, spkr] = await Promise.all([
+      require('./lib/stt').transcribe(tmp, { wallMs: 60000 }),
+      require('./lib/speaker').verify(tmp, { wallMs: 60000 }).catch((e) => ({ ok: false, match: true, failOpen: true, error: e.message })),
+    ]);
+    return (res && res.ok)
+      ? { ok: true, text: res.text || '', ms: res.ms, lang: res.lang, dur: res.dur, peak: res.peak, speaker: spkr }
+      : { ok: false, error: (res && res.error) || 'stt failed', speaker: spkr };
   } catch (e) {
     return { ok: false, error: e.message };
   } finally {
@@ -2899,6 +2961,26 @@ ipcMain.handle('voice:speak', (_e, text) => {
   try { if (text && typeof text === 'string' && text.trim()) speakStreaming(text); } catch (e) {}   // skipIfBusy: won't talk over an in-progress utterance
   return { ok: true };
 });
+
+// Speaker-ID enrollment + status for the always-on voice gate (lib/speaker.js). The renderer captures
+// enrollment utterances through the SAME mic-capture path as normal turns (VAD + pre-roll + encodeWav), so
+// the enrolled voiceprint and runtime utterances share acoustic conditioning — that's what makes the cosine
+// gate reliable. Enroll also warms the speaker sidecar, so the first real gated turn isn't cold.
+ipcMain.handle('speaker:enroll', async (_e, audioBuf) => {
+  const fs = require('fs'), os = require('os');
+  let tmp = null;
+  try {
+    if (!audioBuf) return { ok: false, error: 'no audio' };
+    const bytes = Buffer.isBuffer(audioBuf) ? audioBuf : Buffer.from(audioBuf);
+    if (!bytes.length) return { ok: false, error: 'empty audio' };
+    tmp = path.join(os.tmpdir(), `zoe_enroll_${Date.now()}_${process.pid}.webm`);
+    fs.writeFileSync(tmp, bytes);
+    return await require('./lib/speaker').enroll(tmp);
+  } catch (e) { return { ok: false, error: e.message }; }
+  finally { if (tmp) { try { fs.unlinkSync(tmp); } catch {} } }
+});
+ipcMain.handle('speaker:status', () => { try { return require('./lib/speaker').status(); } catch (e) { return { enrolled: false, error: e.message }; } });
+ipcMain.handle('speaker:reset', () => { try { return require('./lib/speaker').reset(); } catch (e) { return { ok: false, error: e.message }; } });
 
 // Forecasting processing side — the Forecasting STUDIO (renderer/forecast.html, a surface inside My
 // Workspace) invokes these. Each widget's payload is built in lib/forecast_service (reads the poll
@@ -4885,9 +4967,13 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       if (!raw.trim()) return { ok: false, error: 'empty / unreadable .html' };
       // keep the <body> if present (drop <head>/scripts noise); the renderer's sanitizeHtml strips the rest
       const bodyM = raw.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-      data = { html: bodyM ? bodyM[1] : raw }; blockType = 'document_file';
+      // `file` = the real path so the ingest poller re-reads the FULL document — NOT `src`, which
+      // the document_file renderer treats as embed-me-in-an-iframe and prefers OVER the html body
+      // (2026-08-14 second live miss: adding src blanked every rich docx card — three at once on
+      // Lucas's canvas). Same two-field pattern as the IMAGE branch: display field + file field.
+      data = { html: bodyM ? bodyM[1] : raw, file: fileUrl(filePath) }; blockType = 'document_file';
     } else if (ext === 'docx') {                           // WORD → rich HTML (tables, emphasis, inline images)
-      try { const r = await require('./lib/doc_extract').extractDocxHtml(filePath); if (r && r.html && r.html.trim()) { data = { html: r.html }; blockType = 'document_file'; } } catch {}
+      try { const r = await require('./lib/doc_extract').extractDocxHtml(filePath); if (r && r.html && r.html.trim()) { data = { html: r.html, file: fileUrl(filePath) }; blockType = 'document_file'; } } catch {}
       if (!data) {                                         // fallback: flattened markdown as a paragraph
         let markdown = ''; try { markdown = (await require('./lib/doc_extract').extractDocx(filePath)).markdown || ''; } catch {}
         if (!markdown.trim()) return { ok: false, error: 'empty / unreadable .docx' };
@@ -5587,6 +5673,90 @@ async function promiseArtifactEmit({ slug, title, markdown }) {
 // runs): pre-assign a stable block_id, add it once, then saga_canvas_update_block(patch) on each refresh.
 // _canvasBlocks tracks the ids created this session (reset on reboot — a re-add is harmless).
 const _canvasBlocks = new Set();
+// THE FINALIZE VERB (2026-08-13, the document false-loop cure — lib/paper_finalize): "finish /
+// finalize / complete the paper (on X)" runs the conductor over the topic's gathered fragments
+// and lands the FINISHED artifact where Lucas looks: ONE canonical .md + styled .docx twin on
+// disk, and the full paper as a block in the focus's OWN canvas tab (stable block id → a
+// re-finalize REVISES IN PLACE, never siblings). Honest failure surfaces as a plain sentence.
+const { PAPER_VERB_RE, PAPER_TOPIC_RE } = require('./lib/paper_finalize');
+async function runPaperFinalize({ sessionId, topic, focusId }) {
+  const pf = require('./lib/paper_finalize');
+  // Writer chain (mirrors the reply writer's proven fallback): warm gemma → kimi → 120B; a
+  // per-section CoT sniff rejects salvaged chain-of-thought (the -cloud endpoint ignores think:false).
+  const chain = [...new Set([process.env.ZOE_PAPER_MODEL, 'gemma4:31b-cloud', 'kimi-k2.6', require('./lib/config').deepReasonerModel()].filter(Boolean))];
+  const COT_SNIFF = /^\s*(?:We (?:need|must|should|have to)|Let'?s|The (?:instruction|user|task))\b/i;
+  const write = async (prompt) => {
+    for (const model of chain) {
+      try {
+        const t = String(await require('./lib/ollama').complete({ model, messages: [{ role: 'user', content: prompt }], options: { temperature: 0.4, num_predict: 900 }, lane: 'directed', think: false, timeoutMs: 240000 }) || '');
+        if (t.trim().length > 80 && !COT_SNIFF.test(t)) return t;
+      } catch {}
+    }
+    return '';
+  };
+  const exclude = (process.env.ZOE_PAPER_EXCLUDE || 'solutions inc,digital angel,verichip').split(',').map((s) => s.trim()).filter(Boolean);
+  // Resolve the destination/contract thread BEFORE writing (was the landing step): the thread's
+  // frozen outline — locked at the first finalize — binds every re-run, so a revision rewrites the
+  // SAME sections and scope never grows. The current focus at finalize time is whatever the control
+  // turn touched, so match the topic against the open threads (most-worked first) and fall back to
+  // the current focus only when nothing matches.
+  const dcLib = require('./lib/doc_contract');
+  const fid = focusId != null ? focusId : (() => {
+    try {
+      const pool = db.getActiveOpenThreads(200, { newestFirst: true }).slice().sort((a, b) => (b.action_count || 0) - (a.action_count || 0));
+      const hit = require('./lib/consolidate').tokenIntentMatch(topic, pool);
+      if (hit) { console.log(`[paper] landing in the topic's own tab (thread #${hit.id}: ${String(hit.content).slice(0, 50)})`); return hit.id; }
+    } catch {}
+    try { const f = require('./lib/focus').getCurrent(); return f && f.id; } catch { return null; }
+  })();
+  const _contract = fid != null ? dcLib.get(fid) : null;
+  const r = await pf.finalize({ topic, goal: `A complete, sourced research paper on ${topic}.`, write, exclude, frozenOutline: _contract && _contract.outline });
+  const _say = (msg) => {
+    try {
+      const row = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'delivery', unprompted: 1 });
+      db.setMeta('last_ai_utterance_at', String(Date.now()));
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg });
+    } catch (e) { console.error('[paper] announce failed:', e.message); }
+  };
+  if (!r.ok) {
+    console.log(`[paper] conductor stopped honestly: ${r.reason}`);
+    _say(`I ran the paper conductor on "${topic}" and it stopped honestly: ${r.reason}. If nothing's gathered yet, that's a research ask first — say the word and I'll open the run.`);
+    return;
+  }
+  let docxPath = '';
+  try {
+    const _md = require('fs').readFileSync(r.path, 'utf8');
+    const buf = await require('./lib/md_to_docx').buildDocxBuffer({ title: '', markdown: _md });
+    docxPath = r.path.replace(/\.md$/, '.docx');
+    require('fs').writeFileSync(docxPath, buf);
+  } catch (e) { console.warn(`[paper] docx render failed (md stands): ${e.message}`); }
+  // The finished paper RESOLVES its own order-threads (Block 3, 2026-08-14): a surviving duplicate
+  // of a finished order (#3869) kept the directed lane re-researching done work overnight.
+  try {
+    const sat = pf.threadsSatisfiedBy(topic, db.getActiveOpenThreads(200, { newestFirst: true }));
+    for (const id of sat) db.markOpenThreadStatus(id, 'resolved', { reason: `satisfied by the finished paper (${r.path})` });
+    if (sat.length) console.log(`[paper] resolved ${sat.length} order-thread(s) satisfied by the finished paper: #${sat.join(', #')}`);
+  } catch (e) { console.warn('[paper] thread-resolution sweep failed:', e.message); }
+  // THE DONE CONTRACT: record what this finalize fixed — the outline locks (write-once) and the
+  // finalized signature closes the auto-finalize valve; from here, revisions are Lucas's ask.
+  try {
+    if (fid != null) {
+      if (!dcLib.get(fid)) dcLib.freeze({ threadId: fid, topic });
+      dcLib.setOutline(fid, r.outline);
+      dcLib.markFinalized(fid, dcLib.gatherSignature(r.fragmentStats));
+    }
+  } catch (e) { console.warn('[paper] contract record failed:', e.message); }
+  try {
+    if (fid != null) {
+      const _md = require('fs').readFileSync(r.path, 'utf8');
+      await canvasUpsertBlock({ focusId: fid, blockId: `final-paper-${fid}`, title: `${topic} — FINAL paper`, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: _md } });
+      console.log(`[paper] FINAL landed on canvas (focus #${fid}, block final-paper-${fid})`);
+    } else console.log('[paper] no current focus to land on — the files stand');
+  } catch (e) { console.error('[paper] canvas landing failed:', e.message); }
+  console.log(`[paper] DONE — ${r.sections} sections, ${r.sourceCount} sources → ${r.path}`);
+  _say(`It's done — the finished ${topic} paper is on your canvas now${docxPath ? ' (styled .docx saved beside the canonical file)' : ''}: ${r.sections} sections, ${r.sourceCount} sources, every inline citation resolving in the source list.`);
+}
+
 async function canvasUpsertBlock({ focusId, blockId, title, tabMode = 'DOC', blockType = 'paragraph', data }) {
   try {
     if (!blockId) return false;
@@ -7182,10 +7352,40 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const discordConnBlock = discordLib.buildPromptBlock();   // null when unconfigured
   const browserConnBlock = browserLib.isConnected() ? browserLib.buildPromptBlock() : null;
   const browserBlock = [fileBlock, screenBlock, schedBlock, presenceBlock, emailBlock, inboxBlock, discordConnBlock, browserConnBlock].filter(Boolean).join('\n\n') || null;
-  // Pull any attachment content the renderer sent up with this turn (text/md/json)
-  const attachmentText = (Array.isArray(attachments) ? attachments : [])
-    .map(a => `${userName || 'Lucas'} attached "${a.name || 'file'}":\n${(a.text || '').slice(0, 6000)}`)
-    .join('\n\n---\n\n');
+  // THE ATTACHMENT LAND DOOR (2026-08-14, the fabricated-review audit — lib/attach_intake): a
+  // .docx used to arrive as ZIP bytes read as UTF-8, capped to 6,000 chars of mojibake, landed
+  // nowhere — and the reply reviewed it anyway (#11891, "JobsOhio case study" from thin air).
+  // Now: file-backed attachments extract through the canvas-drop organ, readable text LANDS in
+  // the doc store (coordinate + dedup), and an unreadable file says so in the composed message.
+  const _attachedDocs = [];   // [{id, title}] — landed this turn; "this document" means THESE
+  const attachmentText = (await Promise.all((Array.isArray(attachments) ? attachments : []).map((a) =>
+    require('./lib/attach_intake').composeAttachmentBlock(a, {
+      userName: userName || 'Lucas',
+      extractFile: async (p) => {
+        const fi = require('./lib/file_ingest'); const de = require('./lib/doc_extract'); const fsm = require('fs');
+        return fi.extractDroppedFile(p, { deps: {
+          extractToMarkdown: (x) => de.extractToMarkdown(x),
+          describe: async () => '',   // no vision here — an image arrives through the image path
+          readFileBase64: (x) => fsm.readFileSync(x).toString('base64'),
+          fileExists: (x) => fsm.existsSync(x),
+          log: (m) => console.log(m),
+        } });
+      },
+      landDoc: ({ title, body, ref }) => {
+        const doc = require('./lib/doc_store').land({ title, body, source: 'attachment', ref });
+        if (doc && doc.id) _attachedDocs.push({ id: doc.id, title });
+        return doc;
+      },
+      log: (m) => console.log(m),
+    })
+  ))).filter(Boolean).join('\n\n---\n\n');
+  // ATTACHMENT DEIXIS (2026-08-14, the "Reprocess this document" miss): with a doc landed THIS
+  // turn, "this document" means the ATTACHMENT — the seeding lane had bound it to the current
+  // focus's working doc and audited the WRONG document, and the turn got no direct reply at all.
+  // attach.last_doc lets the user-work seed prefer the fresh attachment as its base document.
+  if (_attachedDocs.length) {
+    try { db.setMeta('attach.last_doc', JSON.stringify({ ..._attachedDocs[_attachedDocs.length - 1], ts: Date.now() })); } catch {}
+  }
   // Pull recent turns BEFORE the just-inserted user turn; the new message is appended separately
   const recentTurnsAll = db.getRecentTurns(RECENT_TURN_LIMIT + 1);
   const recentTurns = recentTurnsAll.slice(0, -1); // drop the freshly-inserted user turn
@@ -7240,6 +7440,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   }
   if (attachmentText) {
     composedUserMessage = `${composedUserMessage}\n\n--- Attachments ---\n${attachmentText}`;
+    // The reply CONTRACT for an attachment turn: acknowledge the landing and answer about THE
+    // ATTACHMENT — "this document"/"this file" in his message means what he just attached, never
+    // a prior working document. A silent or absent acknowledgment is a failure.
+    if (_attachedDocs.length) {
+      const _names = _attachedDocs.map((x) => `doc#${x.id} "${String(x.title).replace(/^Attached: /, '').slice(0, 60)}"`).join(', ');
+      composedUserMessage += `\n\n[When ${userName || 'Lucas'} says "this document", "this file", or "it" in the message above, he means what he JUST ATTACHED (${_names}) — NOT any prior working document. Acknowledge the landing plainly (name + doc#) and answer his message about the attachment itself.]`;
+    }
   }
   // VISION IN — image attachments: actually SEE them via the vision model (cloud-first, local
   // fallback), then feed what she sees into the turn so she responds to the picture, not its
@@ -7313,6 +7520,25 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       composedUserMessage = `${composedUserMessage}\n\n${pf.groundingDirective(userName)}`;
     }
   } catch (e) { console.error('[main] personal-fact guard failed:', e.message); }
+  // WORK-HOLD CONTROL (2026-08-13, turn #11783): "put all work projects and tasks on hold until
+  // 0630" was answered with a commitment to MORE Applied Digital work — twice, verbatim — because
+  // the reply came from the mid-flight roadmap and the ORDER changed no state, so the repeat hit
+  // the same roadmap. A hold/resume order is a CONTROL MESSAGE: change the ENGINE STATE FIRST
+  // (lib/work_hold; the directed engine seams consult it), then pin the new state at the message
+  // tail (highest recency) so the reply grounds in what is NOW true, never the parked roadmap.
+  try {
+    const wh = require('./lib/work_hold');
+    const ctl = wh.detect(userMessage);
+    if (ctl && ctl.hold) {
+      wh.set(ctl.untilTs);
+      console.log(`[work-hold] REGISTERED — all directed work parked until ${wh.describe()}`);
+      composedUserMessage = `${composedUserMessage}\n\n[CONTROL — STATE ALREADY CHANGED: every work project and task is NOW ON HOLD until ${wh.describe()}. The engine is parked (directed passes, background workers, and work steering notes will not run until then). Confirm the hold in your own words. Do NOT commit to, promise, or describe doing any work task before the hold lifts — the hold is the newest order and it wins over anything mid-flight.]`;
+    } else if (ctl && ctl.resume) {
+      wh.clear();
+      console.log('[work-hold] CLEARED — work resumes');
+      composedUserMessage = `${composedUserMessage}\n\n[CONTROL — STATE ALREADY CHANGED: the work hold is lifted; projects and tasks resume normally. Confirm plainly.]`;
+    }
+  } catch (e) { console.error('[work-hold] control gate failed:', e.message); }
 
   // SELF-DEV (self-awareness Layer 2) — is Lucas asking about her own development / program /
   // what's changed? If so, her real changelog gets surfaced below so she answers from fact, not
@@ -8284,14 +8510,36 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // related to China first" — three real steerings, zero regex fires). Wide cheap trigger →
       // cloud classifies against the DISTINCTION → the regex decides only when the cloud is
       // unreachable. A cloud "not a redirect" verdict is final (no regex second-guess).
+      // THE FINALIZE VERB BEATS THE REDIRECT (live 08-13: "finish the paper on applied digital"
+      // was classified as a REDIRECT → new seed thread #3867 + thread #3868 minted — the false
+      // loop eating its own cure order). "Finish/finalize the paper" is a COMPLETION order for
+      // work already gathered, never a pivot to new research; run the conductor and stop here.
+      if (PAPER_VERB_RE.test(userMessage)) {
+        directedStopHandled = true;
+        const _pm = userMessage.match(PAPER_TOPIC_RE);
+        const _topic = (_pm && _pm[1].trim())
+          || (() => { try { const f = require('./lib/focus').getCurrent(); return f ? String(f.content).replace(/^\W*(?:complete|finish|finalize|the)\s*/i, '').slice(0, 60) : ''; } catch { return ''; } })()
+          || 'applied digital';
+        console.log(`[paper] finalize verb → conductor on "${_topic}" (redirect lane bypassed)`);
+        runPaperFinalize({ sessionId, topic: _topic })
+          .catch((e) => console.error('[paper] finalize failed:', e.message));
+        composedUserMessage += `\n\n[CONTROL — THE PAPER CONDUCTOR IS ALREADY RUNNING on "${_topic}" (started this instant: it assembles the ALREADY-GATHERED research into ONE finished, cited document and lands it on the canvas within about a minute; the delivery will announce itself). Confirm plainly that the finalize run has started. Do NOT register a pivot, do NOT open new research, do NOT promise passes.]`;
+      }
       let red = null;
-      if (uw.REDIRECT_TRIGGER_RE.test(userMessage)) {
+      if (!directedStopHandled && uw.REDIRECT_TRIGGER_RE.test(userMessage)) {
         try {
           const c = await require('./lib/cloud_logic').ask(uw.buildRedirectAsk(userMessage));
           if (c && c.redirect === true) red = { topic: c.topic, immediate: c.immediate };
           else if (c && c.redirect === false) red = false;
         } catch {}
         if (red === null) { const f = uw.detectRedirect(userMessage); if (f) red = { topic: f.topic, immediate: true }; }
+        // SEQUENCE GUARD (2026-08-14): a completion-conditioned clause ("when you've finished
+        // this, …") can never be an IMMEDIATE pivot, whatever the classifier said — the live
+        // 11:30 miss parked the commissioners run mid-pass to seed the follow-up NOW.
+        if (red && red.immediate && uw.SEQUENCED_RE.test(userMessage)) {
+          red.immediate = false;
+          console.log('[user-work] sequenced follow-up ("when/once … finished") — redirect QUEUED, live focus not parked');
+        }
       }
       if (red && red.topic) {
         const focusLib = require('./lib/focus');
@@ -9667,6 +9915,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           // the PRIOR image thread — restating a false claim — before the new question): the newest
           // message owns the reply. Context is context; a voice-level line, not machinery.
           g.push('THE NEWEST MESSAGE IS THE ASK — answer what he JUST said. Earlier turns and the context above are background: never re-answer a previous ask or re-assert an earlier claim of yours unless the new message returns to it. If an open thread genuinely needs closing, one short clause AFTER the new answer, not before it.');
+          // ANTI-REPLAY (2026-08-13, measured 3× in one hour: the reply writer emitted the
+          // qa-reread status, a tactics template, and an earlier identity musing VERBATIM as
+          // replies). Sibling of the newest-message line; the deterministic stamp in insertTurn
+          // is the backstop — this is the prevention at the source.
+          g.push('WRITE FRESH — never copy an earlier turn of yours (or a status/plan note from the context) as the reply. If the same thought genuinely answers the new message, SAY you have said it before and restate it in new words. A status note about your own work process is never an answer to him.');
           groundingSec = g.join('\n\n');
           const m = [];
           const threads = _fmtRows(openThreads, 8); if (threads) m.push('OPEN THREADS:\n' + threads);
@@ -10809,6 +11062,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // compose/retrieve doors stand down so they can't preempt the real web-researched dossier.
     if (!followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled && (!_discoverAssignment || _rosterOwns)
       && !/^(0|false|off)$/i.test(String(process.env.ZOE_ARTIFACT_ROUTER || '').trim())) {
+      // (The finalize verb is handled UPSTREAM, before the redirect lane — see the intercept at
+      // the user-work section. directedStopHandled marks the turn fully handled there.)
       try {
         const ai = require('./lib/artifact_intent');
         const _fresh = _workingCanvasFresh();
@@ -11214,6 +11469,26 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Background: extract any open-thread goals from the USER message — atomic
   // decomposition via gemma JSON call. Don't block; the extraction can land
   // after the chat response is already streaming.
+  // INTAKE TYPING (2026-08-13): only work-shaped turns reach the extractor. Questions, complaints,
+  // control orders, and acks were all minting threads ("everything gets built into a task") — the
+  // deterministic gate vetoes those; ambiguous turns still fail open to the extractor's own filter.
+  const _intake = require('./lib/intake_type').classify(userMessage);
+  // THE REFINEMENT ROUTE (2026-08-14 grove audit): a refinement-shaped turn ("add to…", "also
+  // look at…") whose subject matches an ACTIVE thread clarifies THAT thread — touched + folded
+  // into its pass guidance — and mints nothing. The 11:26 turn minted #3883/#3884 beside #3881.
+  const _refine = _intake.mints ? (() => { try { return openThreadsLib.routeRefinement(userMessage, db.getActiveOpenThreads(50, { newestFirst: true })); } catch { return null; } })() : null;
+  if (!_intake.mints) {
+    console.log(`[intake] type=${_intake.type} (${_intake.via}) — no thread extraction: ${String(userMessage).slice(0, 60)}`);
+  } else if (_refine) {
+    try { db.touchOpenThread(_refine.targetId, `refined by ${userName || 'Lucas'}: ${String(userMessage).slice(0, 80)}`); } catch {}
+    try {
+      const _rk = `focus.${_refine.targetId}.clarifications`;
+      let _rc = []; try { _rc = JSON.parse(db.getMeta(_rk) || '[]'); } catch {}
+      _rc.push(String(userMessage).slice(0, 500));
+      db.setMeta(_rk, JSON.stringify(_rc.slice(-12)));
+    } catch {}
+    console.log(`[intake] REFINEMENT → thread #${_refine.targetId} clarified ("${String(_refine.targetContent).slice(0, 50)}") — no mint`);
+  } else
   openThreadsLib.extractFromUserTurn({
     userMessage,
     sourceTurnId: userTurnRow ? userTurnRow.id : null,
@@ -13957,6 +14232,8 @@ function _pauseAllWorkers(state, why) {
 function _fillBackgroundWorkers(state, electedPool, topicPool, primaryBeatId) {
   try {
     if (_mappingPaused()) { _logMappingPaused('worker-fill'); return; }
+    // WORK HOLD (2026-08-13): a standing hold parks the fleet exactly like directed preemption does.
+    try { const wh = require('./lib/work_hold'); if (wh.active()) { if (_pauseAllWorkers(state, `work hold until ${wh.describe()}`)) _saveSchedState(state); return; } } catch {}
     if (_userDirectedActive()) { if (_pauseAllWorkers(state, 'user-directed research holds the bandwidth')) _saveSchedState(state); return; }
     if (!state.workers) state.workers = {};
     const swarmK = _maintainSwarm(state);                     // advance/release a live swarm; it consumes swarmK bg workers
@@ -15479,6 +15756,25 @@ async function _surfaceOpenPromise() {
   } catch (e) { console.error('[delivery] surface failed:', e.message); }
 }
 
+// SELF-EXPLORATION SHARE (2026-08-13, "tell me about it as you go"): lib/self_explore banks the
+// share in a meta outbox after each personal-time experience; this door surfaces it as an
+// UNPROMPTED turn in a lull. speech_class stamps it 'exploration' (a SPEAK class) at insertTurn —
+// this is her voice at its best, the opposite of the status machinery on the rail.
+async function _surfaceExplorationShare() {
+  try {
+    const sid = currentSessionId;
+    if (!sid) return;
+    if (_conversationActive()) return;   // a share waits for a lull like every unprompted surface
+    const msg = require('./lib/self_explore').takeShare();
+    if (!msg) return;
+    const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'self-explore', unprompted: 1 });
+    try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+    try { require('./lib/blackboard').append({ source: 'self-explore', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
+    console.log(`[self-explore] share surfaced to chat: ${msg.slice(0, 80)}`);
+  } catch (e) { console.error('[self-explore] share surface failed:', e.message); }
+}
+
 // surfaces the key finding + one concrete follow-up, so she doesn't just report "done" but actually opens
 // a conversation about what she found. Falls back to a DETERMINISTIC notice if the cloud is down — the
 // failure being fixed is her finishing work SILENTLY, so it must ALWAYS announce. Fully fail-soft.
@@ -15518,6 +15814,9 @@ function _surfaceSteeringNote(focus, msg, label, { force = false } = {}) {
     // Applies even to force: force only bypasses the pacing THROTTLE, never a live exchange. The run still
     // does its work (revise the doc, advance the plan); only the chat surfacing waits for a lull.
     if (_conversationActive()) { console.log(`[user-work] steering note HELD — live conversation, never mid-exchange (${label})`); return false; }
+    // WORK HOLD (2026-08-13): while a hold stands, work-progress notes stay off chat entirely —
+    // he ordered the work parked; narrating it anyway would be the order ignored in a second voice.
+    try { const wh = require('./lib/work_hold'); if (wh.active()) { console.log(`[user-work] steering note HELD — work hold until ${wh.describe()} (${label})`); return false; } } catch {}
     if (!_surfaceAllowed(focus.id)) return false;
     const k = `focus.${focus.id}.pivot_surfaced_at`;
     // force: a re-entry audit verdict must never be swallowed by an earlier note's throttle — it is
@@ -15994,6 +16293,55 @@ async function statusReport(focus) {
 // Research passes are the cloud operator. State (covered orgs, current target, file) lives in meta.
 // Records + returns the focus outcome. Fully fail-safe.
 async function runDirectedResearchPass(focus) {
+  // WORK HOLD (2026-08-13): a standing "all work on hold until X" order parks EVERY directed pass at
+  // this one dispatcher (all kinds route through here). The free lanes (curiosity/boredom/monologue)
+  // stay live — "go build yourself" is what the hold buys time for. Null = no outcome recorded.
+  try { const wh = require('./lib/work_hold'); if (wh.active()) { console.log(`[work-hold] directed pass held until ${wh.describe()} — focus #${focus && focus.id}`); return null; } } catch {}
+  // THE DONE CONTRACT (2026-08-14, Lucas: "build it"): freeze topic+entity ONCE per focus at this
+  // one dispatcher, fold the ANCHOR into the clarifications channel (every pass shape folds those),
+  // record the gather state each pass, and at DRYNESS finalize ONCE instead of running another pass.
+  // The anchor kills the #3869 class: "applied digital" read as a CONCEPT → GOV.UK Pay researched
+  // under Lucas's data-center paper.
+  try {
+    const dc = require('./lib/doc_contract');
+    const pfLib = require('./lib/paper_finalize');
+    const _goal = String(focus.content || '');
+    let contract = dc.get(focus.id);
+    if (!contract) {
+      const _tm = _goal.match(pfLib.PAPER_TOPIC_RE);
+      const _topic = _tm ? _tm[1].trim() : [...require('./lib/consolidate').subjectTokens(_goal)].join(' ');
+      let _entity = null;
+      try {
+        if (echoSuit && _topic) {
+          const e = await echoSuit.dispatch({ kind: 'do', name: 'search_entities', args: { query: _topic, top_k: 3 } });
+          // entityAnchorFrom gates the resolution: real name parsed from the JSON shape + a shared
+          // token with the topic required — the #3882 misfire ("search sponsor" → "Hunt (WA)", a
+          // BILL sponsor, raw JSON stored as the name) anchors nothing; topic-as-written stands.
+          if (e && e.ok && e.text && !/^\s*(no |0 )/i.test(e.text)) _entity = dc.entityAnchorFrom(_topic, e.text);
+        }
+      } catch {}
+      contract = dc.freeze({ threadId: focus.id, topic: _topic, entity: _entity });
+      if (contract.justFrozen && contract.topic) {
+        const _ckey = `focus.${focus.id}.clarifications`;
+        let _clar = []; try { _clar = JSON.parse(db.getMeta(_ckey) || '[]'); } catch {}
+        const _line = dc.anchorLine(contract);
+        if (_line && !_clar.includes(_line)) { _clar.push(_line); try { db.setMeta(_ckey, JSON.stringify(_clar)); } catch {} }
+        console.log(`[contract] frozen for focus #${focus.id}: topic="${contract.topic}"${_entity ? ` anchored to "${_entity.name}"` : ' (topic-as-written anchor)'}`);
+      }
+    }
+    if (contract && contract.topic) {
+      const _toks = contract.topic.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+      const _excl = (process.env.ZOE_PAPER_EXCLUDE || 'solutions inc,digital angel,verichip').split(',').map((s) => s.trim()).filter(Boolean);
+      const _sig = dc.gatherSignature(pfLib.gatherFragments({ tokens: _toks, exclude: _excl }));
+      dc.recordGatherSig(focus.id, _sig);
+      if (/\b(paper|report|briefing|document)\b/i.test(_goal) && dc.shouldAutoFinalize(focus.id)) {
+        console.log(`[contract] DRY for focus #${focus.id} — ${dc.DRY_RUN_COUNT} identical gathers; finalizing instead of another pass`);
+        dc.markFinalized(focus.id, _sig);   // claim BEFORE the async run so a racing pass can't double-fire; an honest failure surfaces via the delivery announce and re-runs on Lucas's verb
+        runPaperFinalize({ sessionId: currentSessionId, topic: contract.topic, focusId: focus.id }).catch((e) => console.error('[contract] auto-finalize failed:', e.message));
+        return null;
+      }
+    }
+  } catch (e) { console.warn('[contract] intake failed (pass continues):', e.message); }
   // MODE GATE: an ENRICH run re-enters a KNOWN set of orgs and fills one named facet across them — the
   // opposite of the discovery loop below (which avoids the covered set and opens NEW orgs). Branch early
   // so the two modes never entangle.
@@ -16105,6 +16453,22 @@ async function runDirectedResearchPass(focus) {
     _baseDocResolved = true;
     try {
       let id = parseInt(db.getMeta(`focus.${focus.id}.base_doc`) || '0', 10);
+      // ⭐⭐ A FRESH ATTACHMENT OUTRANKS EVERYTHING (2026-08-14, "Reprocess this document"): when
+      // Lucas hands a file in chat and a run seeds off that turn, the attachment IS the document.
+      // The live miss inherited the applied-digital working doc instead and audited the WRONG
+      // artifact. Bound to the seed window (±10 min of the thread's creation); consumed once.
+      let _attBound = false;
+      try {
+        const _att = JSON.parse(db.getMeta('attach.last_doc') || 'null');
+        const _thr = db.getOpenThread(focus.id);
+        if (_att && _att.id && _thr && Math.abs((_att.ts || 0) - (_thr.created_ts || 0)) < 10 * 60000) {
+          console.log(`[user-work] #${focus.id} base_doc = the JUST-ATTACHED doc #${_att.id} ("${String(_att.title || '').slice(0, 60)}") — the attachment outranks ${id ? `doc #${id}` : 'inheritance'}`);
+          id = _att.id;
+          db.setMeta(`focus.${focus.id}.base_doc`, String(id));
+          db.setMeta('attach.last_doc', '');
+          _attBound = true;
+        }
+      } catch {}
       // ⭐ LINEAGE OUTRANKS A TOPIC MATCH — and the first version of this had it backwards.
       // base_doc is written by TWO paths: the user-work driver's fuzzy topic matcher (which runs at
       // seed time) and this exact parent lookup. Resolving only `if (!id)` let the GUESS win purely
@@ -16114,7 +16478,7 @@ async function runDirectedResearchPass(focus) {
       // document from an unrelated thread. It then researched Arizona's CoRAL while building past
       // China's AISI. A parent id is exact; a topic match is a guess, and the guess must never
       // outrank it (the same lesson [[civic-body-store]] and the namesake fix both paid for).
-      const inh = require('./lib/user_work').inheritedBaseDocId(focus.id, { deps: { db } });
+      const inh = _attBound ? null : require('./lib/user_work').inheritedBaseDocId(focus.id, { deps: { db } });
       if (inh && inh.docId !== id) {
         if (id) console.log(`[user-work] #${focus.id} base_doc CORRECTED — a topic match had assigned doc #${id}, but its parent is #${inh.parentId} (doc #${inh.docId}); lineage wins`);
         else console.log(`[user-work] #${focus.id} inherits its parent run's document — doc #${inh.docId} from #${inh.parentId} ("${String(inh.title).slice(0, 60)}")`);

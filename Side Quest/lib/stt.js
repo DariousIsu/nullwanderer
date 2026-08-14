@@ -18,11 +18,13 @@ const { parseNdjson } = require('./tts');   // reuse the exact NDJSON line frame
 
 const ROOT = path.resolve(__dirname, '..');
 const IS_WIN = process.platform === 'win32';
-// Shares the Kokoro overlay venv (holds faster-whisper + av + numpy + soundfile — verified 2026-08-12).
-const VENV_PY = IS_WIN
-  ? path.join(ROOT, 'sidecar', 'tts_kokoro_venv', 'Scripts', 'python.exe')
-  : path.join(ROOT, 'sidecar', 'tts_kokoro_venv', 'bin', 'python');
-const RUNNER = path.join(ROOT, 'sidecar', 'stt_whisper.py');
+const _bin = (venv) => IS_WIN ? path.join(ROOT, 'sidecar', venv, 'Scripts', 'python.exe') : path.join(ROOT, 'sidecar', venv, 'bin', 'python');
+// STT engine (ZOE_STT_ENGINE): 'parakeet' (default) = NVIDIA Parakeet-TDT via onnx-asr in its own
+// stt_onnx_venv — a transducer that does NOT hallucinate on silence, ~160ms/utterance on CPU. 'whisper' =
+// the faster-whisper fallback in the shared tts_kokoro_venv (hallucination-prone; kept as a fallback).
+const _ENGINE = String(process.env.ZOE_STT_ENGINE || 'parakeet').toLowerCase();
+const VENV_PY = _ENGINE === 'whisper' ? _bin('tts_kokoro_venv') : _bin('stt_onnx_venv');
+const RUNNER = path.join(ROOT, 'sidecar', _ENGINE === 'whisper' ? 'stt_whisper.py' : 'stt_parakeet.py');
 
 // Resident STT sidecar service — mirrors createPiperService in lib/tts.js, but the request payload is
 // { id, in: <audio path> } and the response is { id, ok, text, ms, lang }. Factory form so tests can point

@@ -4,6 +4,9 @@ node_modules/
 sidecar/.venv/
 sidecar/maigret_venv/
 sidecar/tts_venv/
+sidecar/tts_kokoro_venv/
+sidecar/stt_onnx_venv/
+sidecar/spk_venv/
 sidecar/**/reports/
 
 # Credentials — email password, Discord bot token, API keys. NEVER commit.

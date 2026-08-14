@@ -62,16 +62,26 @@ def transcribe_one(req):
         import numpy as np
         from faster_whisper.audio import decode_audio
         audio = decode_audio(path, sampling_rate=SAMPLE_RATE)   # -> float32 mono @16k via PyAV
+        peak = 0.0 if (audio is None or audio.size == 0) else float(np.abs(audio).max())
+        dur = 0.0 if (audio is None or audio.size == 0) else round(audio.size / SAMPLE_RATE, 2)
         # Silence guard: Whisper hallucinates full sentences on pure silence. Skip the transcribe call.
-        if audio is None or audio.size == 0 or float(np.abs(audio).max()) < 1e-4:
-            return {"id": rid, "ok": True, "text": "", "ms": int((time.time() - t0) * 1000), "lang": ""}
-        segments, info = _state["model"].transcribe(audio, beam_size=BEAM_SIZE, vad_filter=False)
+        if peak < 1e-4:
+            return {"id": rid, "ok": True, "text": "", "ms": int((time.time() - t0) * 1000), "lang": "", "dur": dur, "peak": round(peak, 4)}
+        # Anti-hallucination flags (these killed the "woof woof / ho ho / thanks" repetition in the bake-off):
+        # whisper's own VAD drops non-speech; no_speech_threshold gates silence; condition_on_previous_text=False
+        # stops it looping on prior garbage; temperature=0 is deterministic; pin English. NO peak-normalize
+        # (it mangled quiet, click-y mic audio — a click became the peak and crushed the speech).
+        segments, info = _state["model"].transcribe(
+            audio, beam_size=BEAM_SIZE, language="en", vad_filter=True,
+            no_speech_threshold=0.6, condition_on_previous_text=False, temperature=0.0,
+        )
         text = "".join(s.text for s in segments).strip()   # segments is a generator — materialize once
     except Exception as e:
         return {"id": rid, "ok": False, "error": ("transcribe: " + str(e))[:200]}
     return {"id": rid, "ok": True, "text": text,
             "ms": int((time.time() - t0) * 1000),
-            "lang": getattr(info, "language", "") or ""}
+            "lang": getattr(info, "language", "") or "",
+            "dur": dur, "peak": round(peak, 4)}
 
 
 def serve():

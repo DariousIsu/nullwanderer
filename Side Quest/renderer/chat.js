@@ -141,9 +141,12 @@ if (attachInput) attachInput.addEventListener('change', async (e) => {
         });
         pendingAttachments.push({ name: f.name, mime: f.type, dataUrl, image: true });
       } else {
+        // Carry the OS path too (webUtils via preload — Electron removed File.path): main-side
+        // extraction needs it for binary formats (.docx/.pdf/.xlsx) that f.text() reads as garbage.
+        const path = (window.sq && window.sq.pathForFile) ? window.sq.pathForFile(f) : null;
         const text = await f.text();
         const truncated = text.length > 50000 ? text.slice(0, 50000) : text;
-        pendingAttachments.push({ name: f.name, text: truncated });
+        pendingAttachments.push({ name: f.name, text: truncated, path });
       }
     } catch (err) {
       console.error('attach failed:', err);
@@ -679,7 +682,31 @@ if (micBtn && !(window.sq && window.sq.sttTranscribe)) {
   micBtn.addEventListener('click', () => (micRecording ? micStop() : micStart()));
 }
 
-// --- Full hands-free conversation mode (two-way, Slice 2, half-duplex RMS-VAD) ---
+// --- Her voice plays in THIS renderer (two-way, Slice 3) ---
+// main routes every spoken wav here so Chromium's echo cancellation can subtract it from the mic (enabling
+// barge-in) and so a sentence can be cancelled instantly. Works for typed replies too, not just conversation.
+let curVoiceAudio = null, curVoiceId = null;
+if (window.sq && window.sq.onVoicePlay) {
+  window.sq.onVoicePlay(({ id, url }) => {
+    stopCurrentVoice(false);   // replace any lingering clip without acking it (queue is serial; belt-and-braces)
+    let a;
+    try { a = new Audio(url); } catch (e) { try { window.sq.voicePlayDone(id, false); } catch {} return; }
+    curVoiceAudio = a; curVoiceId = id;
+    const done = (played) => { if (curVoiceId === id) curVoiceId = null; if (curVoiceAudio === a) curVoiceAudio = null; try { window.sq.voicePlayDone(id, played); } catch {} };
+    a.addEventListener('ended', () => done(true));
+    a.addEventListener('error', () => done(false));
+    a.play().then(() => { console.log('[voice] playing clip'); }).catch((e) => { console.warn('[voice] playback blocked/failed (autoplay?):', e && e.message); done(false); });
+  });
+}
+// Stop the clip she's currently speaking. ack=true tells main the clip is "done" (it DID play, just cut
+// short by barge) so the serial queue advances — a paused element won't fire 'ended' on its own.
+function stopCurrentVoice(ack = true) {
+  try { if (curVoiceAudio) curVoiceAudio.pause(); } catch {}
+  const id = curVoiceId; curVoiceAudio = null; curVoiceId = null;
+  if (ack && id != null) { try { window.sq.voicePlayDone(id, true); } catch {} }
+}
+
+// --- Full hands-free conversation mode (two-way, Slice 2 + Slice 3 barge-in) ---
 // Toggle on → the mic listens continuously; an RMS energy gate detects utterance start/end, transcribes,
 // and fires the SAME send() a typed message uses. While she is THINKING or SPEAKING the ear is suspended
 // (half-duplex — no self-hearing; barge-in is a later slice), driven by the main-process `voice:speaking`
@@ -687,26 +714,48 @@ if (micBtn && !(window.sq && window.sq.sttTranscribe)) {
 const convoBtn = document.getElementById('convo-btn');
 if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeaking)) {
   convoBtn.style.display = 'none';   // preload too old → hide rather than dangle
+  const _eb = document.getElementById('enroll-btn'); if (_eb) _eb.style.display = 'none';
 } else if (convoBtn) {
   const CONVO_IDLE = '🎙️ conversation';
-  const RMS_START = 0.020;      // energy above this = speech onset (tunable — spec §7)
-  const RMS_END = 0.012;        // energy below this (sustained) = end of utterance
+  const RMS_START = 0.020;      // speech onset — tuned to AGC-ON levels (speech ~0.07-0.13, AGC noise floor ~0.02)
+  const RMS_END = 0.012;        // sustained below this = end of utterance
   const START_MS = 150;         // sustained energy before it counts as speech (debounce blips)
-  const TAIL_MS = 700;          // sustained silence that ends an utterance
+  const TAIL_MS = 1200;         // sustained silence that ends an utterance (raised so mid-thought pauses don't cut you off)
   const TIMEOUT_MS = 180000;    // auto-exit after 3 min with no user speech
-  const RESUME_GUARD_MS = 350;  // settle time after she stops speaking before reopening the ear
+  const RESUME_GUARD_MS = 150;  // settle after she stops before reopening the ear (short = conversationally snappy)
   const AWAIT_MAX_MS = 15000;   // safety: reopen the ear even if a reply produced no speech
+  const PREROLL_MS = 400;       // rolling pre-roll prepended on speech-start so the utterance ONSET isn't clipped
+  const BARGE_RMS = 0.055;      // energy on the AEC-cleaned mic that counts as the USER interrupting her (tunable)
+  const BARGE_MS = 140;         // sustained interrupt energy before we cut her off
+  const MIN_SPEECH_RMS = 0.030; // a capture must PEAK above this to be real speech — else it's noise and is
+                                // discarded before STT (tuned to AGC-ON: noise floor ~0.02, speech ~0.07-0.13)
 
   let alwaysOn = true;          // ALWAYS-ON: mic auto-starts on boot and never idle-times-out (persisted pref)
+  let bargeEnabled = true;      // S3 full-duplex barge-in; falls back to half-duplex if AEC can't suppress her voice
   let convoOn = false, convoStream = null, ac = null, analyser = null, tdBuf = null, loopTimer = null;
-  let rec = null, recChunks = [], capturing = false;
+  let sp = null, pcmRate = 48000, ringBuf = [], uttBuf = [], capturing = false;   // PCM pre-roll capture (no MediaRecorder)
   let voiceStart = 0, silenceStart = 0, lastUserSpeech = 0;
   let sheSpeaking = false, resumeAt = 0, awaitingReply = false, awaitTimer = null;
+  let bargeStart = 0, echoPeak = 0, bargeCapture = false;   // barge-in detection + AEC residual-echo instrumentation
+  let winMax = 0, winLogAt = 0, captureMax = 0, captureStartTs = 0;   // mic-pickup instrumentation
+
+  // Speaker-ID gate: teach her the operator's voice so the always-on ear responds ONLY to him — a video he's
+  // watching, another person, an announcement is transcribed but DROPPED (never reaches her brain). Enrollment
+  // reuses the exact VAD capture path, so enrolled + runtime audio share acoustic conditioning.
+  const ENROLL_NEED = 5;
+  let enrolling = false, enrollGot = 0, spkStatus = { enrolled: false, gate: true };
+  const enrollBtn = document.getElementById('enroll-btn');
+  const enrollLabel = () => `🎓 learning your voice ${enrollGot}/${ENROLL_NEED} — keep talking`;
+  async function refreshSpeakerStatus() {
+    try { const s = await window.sq.speakerStatus(); if (s) spkStatus = s; } catch {}
+    if (enrollBtn && !enrolling) enrollBtn.textContent = spkStatus.enrolled ? '🎓 re-learn voice' : '🎓 learn my voice';
+    return spkStatus;
+  }
 
   window.sq.onVoiceSpeaking((info) => {
     if (!convoOn) return;
-    if (info && info.on) { sheSpeaking = true; if (capturing) abortCapture(); }
-    else { sheSpeaking = false; awaitingReply = false; clearTimeout(awaitTimer); resumeAt = Date.now() + RESUME_GUARD_MS; }
+    if (info && info.on) { sheSpeaking = true; if (capturing && !bargeCapture) abortCapture(); }
+    else { sheSpeaking = false; awaitingReply = false; clearTimeout(awaitTimer); if (!capturing && !bargeCapture) resumeAt = Date.now() + RESUME_GUARD_MS; }
   });
 
   const setLabel = (s) => { if (convoBtn.textContent !== s) convoBtn.textContent = s; };
@@ -714,14 +763,32 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
   async function convoStart() {
     if (convoOn) return;
     try {
+      // autoGainControl ON: this mic is quiet — AGC boosts speech to ~0.07–0.13 (a strong signal Whisper
+      // transcribes cleanly). AGC-off left speech at ~0.014 and needed peak-normalize, which mangled it.
       convoStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     } catch (e) { renderEphemeral('— microphone access denied —'); return; }
     try {
       ac = new (window.AudioContext || window.webkitAudioContext)();
+      try { ac.resume(); } catch {}   // must be running for the ScriptProcessor to fire (autoplay policy can start it suspended)
+      pcmRate = ac.sampleRate || 48000;
       const src = ac.createMediaStreamSource(convoStream);
       analyser = ac.createAnalyser(); analyser.fftSize = 1024;
       tdBuf = new Float32Array(analyser.fftSize);
       src.connect(analyser);
+      // Raw-PCM tap for a rolling PRE-ROLL buffer: we always hold the last ~PREROLL_MS so the utterance
+      // onset (before VAD confirms speech) isn't lost. Routed through a zero-gain node so the mic never
+      // feeds back to the speakers.
+      ringBuf = []; uttBuf = [];
+      sp = ac.createScriptProcessor(4096, 1, 1);
+      const maxFrames = Math.max(1, Math.ceil((PREROLL_MS / 1000) * pcmRate / 4096));
+      sp.onaudioprocess = (e) => {
+        const frame = new Float32Array(e.inputBuffer.getChannelData(0));   // copy — the input buffer is reused
+        ringBuf.push(frame);
+        while (ringBuf.length > maxFrames) ringBuf.shift();
+        if (capturing) uttBuf.push(frame);
+      };
+      const zero = ac.createGain(); zero.gain.value = 0;
+      src.connect(sp); sp.connect(zero); zero.connect(ac.destination);
     } catch (e) { renderEphemeral('— audio setup failed —'); try { convoStream.getTracks().forEach((t) => t.stop()); } catch {} return; }
     convoOn = true; lastUserSpeech = Date.now();
     if (micBtn) micBtn.disabled = true;   // one capture owner
@@ -735,17 +802,17 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
     if (loopTimer) { clearTimeout(loopTimer); loopTimer = null; }
     clearTimeout(awaitTimer); awaitingReply = false;
     abortCapture();
+    try { if (sp) { sp.onaudioprocess = null; sp.disconnect(); } } catch {}
     try { if (convoStream) convoStream.getTracks().forEach((t) => t.stop()); } catch {}
     try { if (ac) ac.close(); } catch {}
-    convoStream = null; ac = null; analyser = null;
+    convoStream = null; ac = null; analyser = null; sp = null; ringBuf = []; uttBuf = [];
     if (micBtn) micBtn.disabled = false;
     convoBtn.classList.remove('recording'); convoBtn.style.color = '';
     setLabel(CONVO_IDLE);
   }
 
   function abortCapture() {
-    if (rec && capturing) { try { rec.onstop = null; rec.stop(); } catch {} }
-    capturing = false; recChunks = [];
+    capturing = false; uttBuf = []; bargeCapture = false;
   }
 
   function rmsLevel() {
@@ -754,30 +821,80 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
     return Math.sqrt(s / tdBuf.length);
   }
 
+  // pure: Float32 PCM → a 16-bit mono WAV Blob (the sidecar's ffmpeg resamples to 16k). Clean container —
+  // avoids the headerless-webm-chunk trap entirely.
+  function encodeWav(pcm, rate) {
+    const n = pcm.length, buf = new ArrayBuffer(44 + n * 2), dv = new DataView(buf);
+    let p = 0; const s = (t) => { for (let i = 0; i < t.length; i++) dv.setUint8(p++, t.charCodeAt(i)); };
+    s('RIFF'); dv.setUint32(p, 36 + n * 2, true); p += 4; s('WAVE'); s('fmt ');
+    dv.setUint32(p, 16, true); p += 4; dv.setUint16(p, 1, true); p += 2; dv.setUint16(p, 1, true); p += 2;
+    dv.setUint32(p, rate, true); p += 4; dv.setUint32(p, rate * 2, true); p += 4;
+    dv.setUint16(p, 2, true); p += 2; dv.setUint16(p, 16, true); p += 2; s('data'); dv.setUint32(p, n * 2, true); p += 4;
+    for (let i = 0; i < n; i++) { let v = Math.max(-1, Math.min(1, pcm[i])); dv.setInt16(p, v < 0 ? v * 0x8000 : v * 0x7FFF, true); p += 2; }
+    return new Blob([buf], { type: 'audio/wav' });
+  }
+
   function startCapture() {
-    recChunks = [];
-    try { rec = new MediaRecorder(convoStream); } catch (e) { return; }
-    rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) recChunks.push(ev.data); };
-    rec.onstop = onCaptureStop;
-    rec.start(); capturing = true;
+    uttBuf = ringBuf.slice();   // PRE-ROLL: seed with the last ~PREROLL_MS so the onset isn't clipped
+    capturing = true; captureMax = 0; captureStartTs = Date.now();
+    console.log(`[voice] capture start (+${uttBuf.length}-frame preroll)`);
     setLabel('● you\'re talking');
   }
 
   function endCapture() {
-    if (!rec || !capturing) return;
+    if (!capturing) return;
     capturing = false;
+    console.log(`[voice] capture end peak=${captureMax.toFixed(4)} ${Date.now() - captureStartTs}ms`);
     setLabel('… transcribing');
-    try { rec.stop(); } catch {}   // → onCaptureStop
+    const frames = uttBuf; uttBuf = [];
+    onCaptureStop(frames);
   }
 
-  async function onCaptureStop() {
-    const blob = new Blob(recChunks, { type: (rec && rec.mimeType) || 'audio/webm' });
-    recChunks = [];
-    if (!blob.size || !convoOn) { if (convoOn) setLabel('🎙️ listening…'); return; }
+  async function onCaptureStop(frames) {
+    bargeCapture = false;   // capture ended → normal gating resumes
+    const idleLabel = () => (enrolling ? enrollLabel() : '🎙️ listening…');
+    if (!frames || !frames.length || !convoOn) { if (convoOn) setLabel(idleLabel()); return; }
+    if (captureMax < MIN_SPEECH_RMS) {   // noise, not real speech → don't transcribe (no hallucinated turns)
+      console.log(`[voice] discard capture (peak ${captureMax.toFixed(4)} < speech floor ${MIN_SPEECH_RMS})`);
+      if (convoOn) setLabel(idleLabel()); return;
+    }
+    let total = 0; for (const f of frames) total += f.length;
+    const pcm = new Float32Array(total); let off = 0; for (const f of frames) { pcm.set(f, off); off += f.length; }
+    const blob = encodeWav(pcm, pcmRate);
+    const ab = await blob.arrayBuffer();
+
+    // ENROLLMENT MODE: this utterance is a VOICE SAMPLE, not a turn — feed it to the voiceprint, not the brain.
+    if (enrolling) {
+      try {
+        const er = await window.sq.speakerEnroll(ab);
+        if (er && er.ok) {
+          enrollGot = er.count;
+          console.log(`[voice] enroll sample ${enrollGot}/${ENROLL_NEED} (dur=${er.dur}s)`);
+          if (enrollGot >= ENROLL_NEED) return void finishEnroll();
+          setLabel(enrollLabel());
+        } else {
+          console.log('[voice] enroll sample rejected:', er && er.error);
+          setLabel(`🎓 say a full sentence… ${enrollGot}/${ENROLL_NEED}`);
+        }
+      } catch (e) { console.log('[voice] enroll error:', e && e.message); }
+      return;   // stay in the enrollment loop; the mic keeps capturing samples
+    }
+
+    // NORMAL TURN: transcribe + SPEAKER-GATE.
     try {
-      const ab = await blob.arrayBuffer();
       const res = await window.sq.sttTranscribe(ab);
+      const sp2 = res && res.speaker;
+      const spLog = sp2 ? `spk=${sp2.match ? 'MATCH' : 'REJECT'} score=${sp2.score} thr=${sp2.threshold}${sp2.enrolled ? '' : ' unenrolled'}${sp2.failOpen ? ' FAILOPEN' : ''}` : 'spk=n/a';
+      console.log(`[voice] STT ${(blob.size / 1024).toFixed(0)}KB dur=${res && res.dur}s peak=${res && res.peak} ${spLog} → ${res && res.ok ? JSON.stringify((res.text || '').slice(0, 60)) : 'FAIL ' + (res && res.error)}`);
       if (res && res.ok && res.text && res.text.trim() && convoOn) {
+        // SPEAKER GATE: only the enrolled operator's voice becomes a turn. A video, another person, or an
+        // announcement transcribes but is DROPPED here (logged, never sent to her brain). Pass-through until
+        // enrolled (spk.match defaults true), so the app still works before he teaches her his voice.
+        if (sp2 && sp2.match === false) {
+          console.log(`[voice] IGNORED — not the operator (score ${sp2.score} < ${sp2.threshold}): ${JSON.stringify((res.text || '').slice(0, 80))}`);
+          if (convoOn && !awaitingReply) setLabel('🎙️ listening…');
+          return;
+        }
         input.value = res.text.trim(); autosizeInput();
         lastUserSpeech = Date.now();
         awaitingReply = true;                       // suspend the ear through THINKING→SPEAKING
@@ -788,21 +905,74 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
     if (convoOn && !awaitingReply) setLabel('🎙️ listening…');
   }
 
+  // ── enrollment control ────────────────────────────────────────────────────────────────────────────
+  function startEnroll() {
+    if (!convoOn) convoStart();               // enrollment needs the live mic
+    enrolling = true; enrollGot = 0;
+    abortCapture();                            // drop any half-captured audio
+    renderEphemeral('— learning your voice: say a few natural sentences (5 short samples). After this I\'ll respond only to you and tune out videos, TV, and other people. —');
+    setLabel(enrollLabel());
+    if (enrollBtn) enrollBtn.textContent = '● learning… (tap to cancel)';
+  }
+  async function finishEnroll() {
+    enrolling = false;
+    await refreshSpeakerStatus();
+    renderEphemeral('— got it. I know your voice now — I\'ll ignore everything that isn\'t you. —');
+    setLabel(convoOn ? '🎙️ listening…' : CONVO_IDLE);
+    try { window.sq.speak('Got it — I know your voice now.'); } catch {}
+  }
+  function cancelEnroll() {
+    enrolling = false;
+    refreshSpeakerStatus();
+    setLabel(convoOn ? '🎙️ listening…' : CONVO_IDLE);
+  }
+
+  // The user talked over her → cut her off and capture their interruption.
+  function bargeIn() {
+    bargeStart = 0;
+    console.log(`[voice] barge-in — residual echo peak ${echoPeak.toFixed(4)} vs threshold ${BARGE_RMS}`);
+    echoPeak = 0;
+    try { window.sq.voiceBarge(); } catch {}   // flush FIRST (bump gen) so no pipelined sentence sneaks out...
+    stopCurrentVoice(true);                     // ...THEN stop the current clip + advance main's now-stale queue
+    sheSpeaking = false; awaitingReply = false; clearTimeout(awaitTimer); resumeAt = 0;
+    bargeCapture = true;
+    startCapture();                            // immediately capture the user's interrupting utterance
+  }
+
   function loop() {
     if (!convoOn) return;
     const now = Date.now();
     if (!alwaysOn && now - lastUserSpeech > TIMEOUT_MS) { renderEphemeral('— conversation timed out —'); convoStop(); return; }
-    // Half-duplex: suspend the ear while she is thinking or speaking, and for a short settle after.
-    if (sheSpeaking || sending || awaitingReply || now < resumeAt) {
+
+    // BARGE-IN window: she's speaking, and her voice plays in THIS renderer so echo-cancellation should keep
+    // the mic mostly free of her — a sustained loud input is the USER cutting in. Instrumented (echoPeak) so
+    // we can see the residual echo level and judge whether AEC is doing its job on this box.
+    if (sheSpeaking && bargeEnabled && !bargeCapture) {
+      const lvl = rmsLevel();
+      if (lvl > echoPeak) echoPeak = lvl;
+      if (lvl > BARGE_RMS) { if (!bargeStart) bargeStart = now; if (now - bargeStart >= BARGE_MS) bargeIn(); }
+      else bargeStart = 0;
+      setLabel('speaking… (talk to cut in)');
+      loopTimer = setTimeout(loop, 40); return;   // poll fast for a snappy interrupt
+    }
+
+    // Half-duplex suspend: thinking (no audio to barge), the settle window, or barge disabled while speaking.
+    // Never suspend a barge-in capture already in progress.
+    if (!bargeCapture && (sheSpeaking || sending || awaitingReply || now < resumeAt)) {
       if (capturing) abortCapture();
       setLabel((sheSpeaking || sending || awaitingReply) ? 'speaking…' : '🎙️ listening…');
       loopTimer = setTimeout(loop, 80); return;
     }
     const level = rmsLevel();
     if (!capturing) {
+      // instrumentation: log the peak level seen each ~1.5s while listening, so we can see the user's speech
+      // level vs RMS_START and calibrate pickup (the "not picking me up" diagnosis).
+      if (level > winMax) winMax = level;
+      if (now - winLogAt > 1500) { console.log(`[voice] listening max=${winMax.toFixed(4)} thr=${RMS_START}`); winMax = 0; winLogAt = now; }
       if (level > RMS_START) { if (!voiceStart) voiceStart = now; if (now - voiceStart >= START_MS) { voiceStart = 0; silenceStart = 0; startCapture(); } }
       else { voiceStart = 0; setLabel('🎙️ listening…'); }
     } else {
+      if (level > captureMax) captureMax = level;
       if (level < RMS_END) { if (!silenceStart) silenceStart = now; if (now - silenceStart >= TAIL_MS) { silenceStart = 0; endCapture(); } }
       else { silenceStart = 0; }
     }
@@ -814,11 +984,26 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
     if (convoOn) { convoStop(); alwaysOn = false; try { await window.sq.setMeta('always_on_mic', '0'); } catch {} }
     else { alwaysOn = true; try { await window.sq.setMeta('always_on_mic', '1'); } catch {} convoStart(); }
   });
+  // 🎓 learn-my-voice toggles enrollment (start / cancel). Hidden if the preload is too old to expose it.
+  if (enrollBtn && !(window.sq && window.sq.speakerEnroll)) {
+    enrollBtn.style.display = 'none';
+  } else if (enrollBtn) {
+    enrollBtn.addEventListener('click', () => { if (enrolling) cancelEnroll(); else startEnroll(); });
+  }
   // ALWAYS-ON: auto-start the mic on load unless the operator turned it off (persisted). getUserMedia is
   // auto-granted by the default-session permission handler, so no click is needed to begin listening.
   (async () => {
     try { const pref = await window.sq.getMeta('always_on_mic'); alwaysOn = (pref !== '0'); } catch { alwaysOn = true; }
+    // Barge-in defaults OFF: AEC can't cancel her voice on this box (measured residual ~0.26 » 0.055), so a
+    // live mic during her speech just self-triggers. Half-duplex (ear suspended while she talks) is the default.
+    try { const b = await window.sq.getMeta('barge_in'); bargeEnabled = (b === '1'); } catch { bargeEnabled = false; }
     if (alwaysOn) convoStart();
+    // Voice-ID: reflect enrollment state on the button, and nudge ONCE if the gate is armed but she can't yet
+    // tell his voice from the room (until enrolled the gate passes everything through — the video bug persists).
+    const st = await refreshSpeakerStatus();
+    if (alwaysOn && st && st.gate && !st.enrolled) {
+      renderEphemeral('— tip: tap "🎓 learn my voice" so I respond only to you and ignore videos, TV, and other people. —');
+    }
   })();
 }
 
