@@ -183,8 +183,11 @@ function blockContent(b) {
   }
   if (b.type === 'html') return `<div class="b-html">${sanitizeHtml(b.view.html)}</div>`;
   if (b.type === 'document_file') {
-    if (b.view.src) return `<iframe class="b-pdf" src="${esc(b.view.src)}" title="${esc(b.view.alt)}"></iframe>`;
+    // html FIRST: a rich body always renders; src is the iframe fallback (right for PDFs, which
+    // carry no html — but an iframe of a docx paints NOTHING, and src-first blanked three rich
+    // cards at once when a file reference rode along, 2026-08-14).
     if (b.view.html) return `<div class="b-html">${sanitizeHtml(b.view.html)}</div>`;
+    if (b.view.src) return `<iframe class="b-pdf" src="${esc(b.view.src)}" title="${esc(b.view.alt)}"></iframe>`;
     return `<div class="fallback"><div class="cnote">document (no embeddable content)</div></div>`;
   }
   const note = b.known ? `${esc(b.type)} — renderer arrives in a later slice.` : `unknown block type "${esc(b.type)}".`;
