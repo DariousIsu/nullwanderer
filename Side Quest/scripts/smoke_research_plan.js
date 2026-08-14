@@ -47,6 +47,24 @@ ok(d2.plan.targets.filter((t) => t.toLowerCase() === 'a').length === 1, 'an add 
 ok(/new tactics/.test(d2.plan.approach) && d2.notes.some((n) => /tactics revised/.test(n)), 'an approach update replaces tactics and is named in the notes');
 ok(base.targets.length === 2 && base.approach === 'old approach', 'applyPlanDelta never mutates its input');
 
+// --- ⭐ REV→WALK SYNC (#3890 boot_p34): a plan rev that ADDS a target must extend the WALKABLE set
+// (intended_targets) and block ALL-COVERED until the target is covered or explicitly dropped — run
+// #3890's rev-2 district seat never entered the walk, and ALL-COVERED fired at the 3 originals.
+{
+  const research = require('../lib/research');
+  const orig = ['Louisiana State Legislature', 'Louisiana State Senate', 'Louisiana House of Representatives'];
+  const seat = 'Louisiana State Senate District 14 incumbent (name, party, contact info)';
+  const s1 = rp.applyDeltaToIntended(orig, { add_targets: [seat], drop_targets: [] });
+  ok(s1.changed === true && s1.intended.length === 4 && s1.intended.includes(seat), 'a rev add extends the walkable intended set');
+  ok(orig.length === 3, 'applyDeltaToIntended never mutates its input');
+  ok(research.allTargetsCovered({ intended: s1.intended, covered: orig }) === false, '⭐ ALL-COVERED blocked while the rev-added target is unstarted');
+  ok(research.allTargetsCovered({ intended: s1.intended, covered: [...orig, seat] }) === true, '…and opens once the added target is covered');
+  const s2 = rp.applyDeltaToIntended(s1.intended, { add_targets: [], drop_targets: [seat] });
+  ok(s2.changed === true && !s2.intended.includes(seat) && research.allTargetsCovered({ intended: s2.intended, covered: orig }) === true, '…or once it is explicitly dropped');
+  const s3 = rp.applyDeltaToIntended(orig, { add_targets: ['louisiana state senate'], drop_targets: [] });
+  ok(s3.changed === false && s3.intended.length === 3, 'an add duplicating an existing intended target (case-insensitive) is a no-op');
+}
+
 // --- planValidator: accepts a real plan, rejects junk/empty ---
 ok(rp.planValidator('{"objective":"x","approach":"y","targets":["A"]}').valid === true, 'validator accepts a real plan object');
 ok(rp.planValidator('no json here').valid === false, 'validator rejects non-JSON');

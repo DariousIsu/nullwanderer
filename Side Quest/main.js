@@ -16717,7 +16717,10 @@ async function runDirectedResearchPass(focus) {
       try { consumed = JSON.parse(db.getMeta(`focus.${focus.id}.seed_consumed`) || '[]'); } catch {}
       const seedObj = rs.pickSeedTarget({ seeds, consumed, covered });
       let nextName = seedObj ? seedObj.name : null;
-      if (!nextName && scope === 'bounded') nextName = (intended || []).find(t => !covered.some(c => lc(c) === lc(t) || lc(c).includes(lc(t)) || lc(t).includes(lc(c)))) || null;
+      // Same coverage predicate as the ALL-COVERED terminus (rs.targetIsCovered) — a looser match
+      // here would skip a target the terminus still counts as pending, ending the run through the
+      // "nothing left to ground" door instead (the other half of the #3890 early-resolve).
+      if (!nextName && scope === 'bounded') nextName = (intended || []).find(t => !rs.targetIsCovered(covered, t)) || null;
       if (nextName) {
         let obj = seedObj, known = '';
         if (!obj) { try { const rm = await echoSuitLib.resolveMention(nextName); if (rm && rm.status === 'resolved') obj = rm.object; } catch {} }
@@ -16947,6 +16950,20 @@ async function runDirectedResearchPass(focus) {
                 try { db.setMeta(`focus.${focus.id}.plan_v${rev - 1}`, JSON.stringify(plan0)); } catch {}   // old revs retained — a mutation is auditable, never a scrub
                 db.setMeta(`focus.${focus.id}.plan_rev`, String(rev));
                 db.setMeta(`focus.${focus.id}.plan`, JSON.stringify(plan1));
+                // REV→WALK WIRE (#3890 boot_p34): the walk starts and terminates on intended_targets,
+                // not the plan — without this sync a rev-added target is never started and ALL-COVERED
+                // fires with it pending. Only a run that HAS a walkable set syncs (open runs don't
+                // terminate on intended, so there is nothing to extend).
+                try {
+                  let _int = []; try { _int = JSON.parse(db.getMeta(`focus.${focus.id}.intended_targets`) || '[]'); } catch {}
+                  if (Array.isArray(_int) && _int.length) {
+                    const synced = rpm.applyDeltaToIntended(_int, verdict);
+                    if (synced.changed) {
+                      db.setMeta(`focus.${focus.id}.intended_targets`, JSON.stringify(synced.intended));
+                      console.log(`[user-work] plan rev ${rev} → intended_targets synced (${_int.length} → ${synced.intended.length}) — the coverage walk now carries the revision`);
+                    }
+                  }
+                } catch { /* additive — the plan write above already landed */ }
                 console.log(`[user-work] plan REVALIDATED → rev ${rev}: ${notes.join('; ').slice(0, 220)}${verdict.reason ? ` (${String(verdict.reason).slice(0, 120)})` : ''}`);
                 try { _surfaceSteeringNote(focus, `Tactics update on the research (plan rev ${rev}): ${notes.join('; ')}${verdict.reason ? ` — ${String(verdict.reason).trim().replace(/\.+$/, '')}` : ''}. Say the word if this is the wrong turn.`, `plan rev ${rev}`); } catch {}
               })().catch((e) => console.error('[user-work] plan revalidation failed:', e.message));

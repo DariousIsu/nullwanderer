@@ -304,8 +304,21 @@ function applyPlanDelta(plan = {}, verdict = {}) {
   return { plan: p, changed: notes.length > 0, notes };
 }
 
+// REV→WALK SYNC (#3890 boot_p34): applyPlanDelta revises the PLAN, but a bounded run's coverage
+// walk starts and terminates on focus.<id>.intended_targets — a rev-added target that never
+// enters that set is never started, and ALL-COVERED fires with plan-revision work still pending.
+// Apply the SAME delta to the walkable set: adds extend it, explicit drops release it. Pure,
+// never mutates its input.
+function applyDeltaToIntended(intended = [], verdict = {}) {
+  const list = _arr(intended, 60);
+  const drop = new Set(_arr(verdict.drop_targets, 20).map((t) => t.toLowerCase()));
+  const kept = drop.size ? list.filter((t) => !drop.has(String(t).toLowerCase())) : list;
+  const adds = _arr(verdict.add_targets, 20).filter((t) => !kept.some((x) => String(x).toLowerCase() === t.toLowerCase()));
+  return { intended: kept.concat(adds).slice(0, 60), changed: adds.length > 0 || kept.length !== list.length };
+}
+
 module.exports = {
   DEFAULT_DATABASES, KIND_FACETS,
   planInput, planWant, planValidator, normalizePlan, fallbackPlan, renderPlanPage,
-  revalidateInput, revalidateWant, revalidateValidator, applyPlanDelta,
+  revalidateInput, revalidateWant, revalidateValidator, applyPlanDelta, applyDeltaToIntended,
 };

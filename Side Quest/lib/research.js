@@ -231,15 +231,31 @@ function pickSeedTarget({ seeds = [], consumed = [], covered = [] } = {}) {
   return (Array.isArray(seeds) ? seeds : []).find(o => o && o.name && !used.has(lc(o.name))) || null;
 }
 
-// Bounded-run TERMINATION (guardrails): are ALL intended targets covered? Fuzzy (case-insensitive + either-
-// contains) so "John Curtis (US)" covered satisfies intended "John Curtis". Empty intended → false (an open
-// run has no bounded terminus). This is what stops a named-entity assignment from crawling forever.
-function allTargetsCovered({ intended = [], covered = [] } = {}) {
+// Coverage identity for ONE intended target against the covered list. Exact match always counts;
+// containment counts ONLY when the residue beyond the shared name is small (an honorific, "(US)",
+// a short qualifier) — "John Curtis (US)" still satisfies intended "John Curtis". A LONG residue
+// is a genuinely narrower/different assignment, not a name variant: covered "Louisiana State
+// Senate" must NOT satisfy "Louisiana State Senate District 14 incumbent (name, party, contact
+// info)" (#3890 — the unbounded substring match let that rev-added seat read as already covered,
+// so it was never started). Pure.
+const COVERED_RESIDUE_MAX = 12;
+function targetIsCovered(covered = [], target = '') {
   const lc = s => String(s || '').toLowerCase().trim();
-  const cov = (covered || []).map(lc).filter(Boolean);
-  const want = (intended || []).map(lc).filter(Boolean);
+  const t = lc(target);
+  if (!t) return false;
+  return (covered || []).map(lc).filter(Boolean).some(c =>
+    c === t
+    || (c.includes(t) && c.length - t.length <= COVERED_RESIDUE_MAX)
+    || (t.includes(c) && t.length - c.length <= COVERED_RESIDUE_MAX));
+}
+
+// Bounded-run TERMINATION (guardrails): are ALL intended targets covered (per targetIsCovered)?
+// Empty intended → false (an open run has no bounded terminus). This is what stops a named-entity
+// assignment from crawling forever.
+function allTargetsCovered({ intended = [], covered = [] } = {}) {
+  const want = (intended || []).map(s => String(s || '').toLowerCase().trim()).filter(Boolean);
   if (!want.length) return false;
-  return want.every(t => cov.some(c => c === t || c.includes(t) || t.includes(c)));
+  return want.every(t => targetIsCovered(covered, t));
 }
 
 // SCOPE DRIFT GUARD — is `target` a single CONCRETE named entity (bounds a run) vs a CATEGORY/discovery
@@ -462,7 +478,7 @@ module.exports = {
   parsePass, newContentChars, decideAdvance, facetsSummary,
   buildUnderstandTargetPrompt, parseOpenQuestions,
   isClarification, buildGuidanceBlock, isStatusRequest,
-  buildNewTargetPrompt, buildTopicalPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, allTargetsCovered, isConcreteTarget, coverageLine,
+  buildNewTargetPrompt, buildTopicalPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, targetIsCovered, allTargetsCovered, isConcreteTarget, coverageLine,
   facetToolset, buildCoveragePlan, searchSignature,
   pickEnrichTarget, facetLabel, buildEnrichPrompt, buildOrganizeEnrichPrompt,
   buildWebLanePrompt, buildDeepLanePrompt, buildMergeLanesPrompt,

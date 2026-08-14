@@ -208,6 +208,15 @@ ok(r.allTargetsCovered({ intended: ['John Curtis'], covered: ['John Curtis (US)'
 ok(r.allTargetsCovered({ intended: ['John Curtis', 'R Street'], covered: ['John Curtis (US)'] }) === false, 'allTargetsCovered: one of two covered → false (keep going)');
 ok(r.allTargetsCovered({ intended: [], covered: ['anything'] }) === false, 'allTargetsCovered: no intended (open run) → false (no bounded terminus)');
 ok(r.allTargetsCovered({ intended: ['Curtis Auto Sales'], covered: ['John Curtis (US)'] }) === false, 'allTargetsCovered: a drift org does NOT satisfy the intended person');
+// ⭐ #3890 (boot_p34): residue-bounded containment — a NARROWER assignment is NOT satisfied by its
+// already-covered parent body. The unbounded substring match read the rev-added District 14 seat as
+// covered by "Louisiana State Senate", so ALL-COVERED fired with the seat unstarted.
+const _la3 = ['Louisiana State Legislature', 'Louisiana State Senate', 'Louisiana House of Representatives'];
+const _laSeat = 'Louisiana State Senate District 14 incumbent (name, party, contact info)';
+ok(r.targetIsCovered(_la3, _laSeat) === false, 'targetIsCovered: a covered parent body does NOT satisfy the narrower district-seat target (long residue)');
+ok(r.targetIsCovered(['John Curtis (US)'], 'John Curtis') === true, 'targetIsCovered: a small residue ("(US)") still matches — name variants keep terminating');
+ok(r.allTargetsCovered({ intended: [..._la3, _laSeat], covered: _la3 }) === false, 'allTargetsCovered: rev-added seat pending → ALL-COVERED blocked at the 3 originals');
+ok(r.allTargetsCovered({ intended: [..._la3, _laSeat], covered: [..._la3, _laSeat] }) === true, 'allTargetsCovered: seat covered → terminus opens');
 
 // --- scope drift guard: isConcreteTarget (bounds a single named entity, leaves categories open) ---
 ok(r.isConcreteTarget('Emergence Water') === true, 'isConcreteTarget: a single named company → bounded (the drift fix)');
