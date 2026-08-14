@@ -34,6 +34,74 @@ function isResearchShaped(content) {
   return RESEARCH_RE.test(c);
 }
 
+// ── THREAD LANES — typed routing (2026-08-14 worklist audit) ────────────────────────────────
+//
+// Measured live: 0 of 18 pending threads passed isResearchShaped — the ENTIRE seed queue was
+// undrainable, including deadline-carrying user asks ("complete the Applied Digit briefing for
+// Lucas by tomorrow morning", blown unstarted) and standing-queue items ("fill missing Louisiana
+// legislative districts in Lucas's roster"). The research-verb filter was built to keep junk out
+// of the browser-owning research lane; it was never meant to orphan every other kind of
+// commitment. The cure is a TYPE, not a wider regex — each lane routes to the organ that can
+// actually execute it:
+//   research    → the directed driver (unchanged)
+//   deliverable → ALSO the directed driver: gather→write→land is exactly its machinery, and
+//                 parseDeadline/augmentGuidance were built for deadline-paced work. The run
+//                 carries a DELIVERABLE guidance line so assembly outranks endless hunting.
+//   tool        → capability_need.record → the R2 rehearsal driver (the permanent-tools lane)
+//   self        → the self-exploration organ owns this standing work; the thread is stamped and
+//                 noted, never silently dropped (organ-side consumer is a NAMED follow-up)
+//   none        → genuinely not autonomously drainable (needs Lucas live — "brainstorm with
+//                 Lucas"); stamped so it stops re-entering classification
+//
+// Regex fast-path for the unambiguous shapes; the bounded cloud classifier (buildLaneAsk, same
+// contract pattern as buildRedirectAsk) decides the middle — detectors-vs-comprehension: the
+// redirect wire proved enumerating surface forms fails identically in JavaScript or English.
+// ORDER MATTERS below: tool before deliverable ("maintain a reusable conversion tool" names both
+// a verb and an artifact — the ARTIFACT KIND decides, and a tool is R2's), self before research
+// ("explore complex human emotions" is not a survey).
+const TOOL_NOUN_RE = /\b(tool|script|utility|converter|calculator|tracker|dashboard|automation|pipeline)\b/i;
+const TOOL_VERB_RE = /\b(build|create|maintain|make|develop|set up|write)\b/i;
+const SELF_NOUN_RE = /\b(identity|personality|self[- ]growth|opinions?|emotions?|social dynamics|cultural exploration|own interests)\b/i;
+const SELF_VERB_RE = /\b(develop|explore|grow|cultivate|form)\b/i;
+const DELIVERABLE_NOUN_RE = /\b(paper|papers|briefing|brief|memo|report|op[- ]?eds?|article|spreadsheet|roster|deliverable|document|docs?|presentation|deck|outline|draft|write[- ]?up|summary|dossier|profile)\b/i;
+const DELIVERABLE_VERB_RE = /\b(complete|finish|write|draft|produce|prepare|deliver|assemble|package|structure|compose|fill|finali[sz]e|build|update)\b/i;
+
+function classifyThreadLane(content) {
+  const c = String(content || '').trim();
+  if (c.split(/\s+/).length < 4) return { lane: null, confident: false };
+  if (TOOL_NOUN_RE.test(c) && TOOL_VERB_RE.test(c)) return { lane: 'tool', confident: true };
+  if (SELF_NOUN_RE.test(c) && SELF_VERB_RE.test(c)) return { lane: 'self', confident: true };
+  if (DELIVERABLE_VERB_RE.test(c) && DELIVERABLE_NOUN_RE.test(c)) return { lane: 'deliverable', confident: true };
+  if (isResearchShaped(c)) return { lane: 'research', confident: true };
+  return { lane: null, confident: false };
+}
+
+// The bounded classifier for the ambiguous middle ("work on the Monroe materials"). Same
+// invoke path as the redirect wire: require('./lib/cloud_logic').ask(buildLaneAsk(content)).
+function buildLaneAsk(content) {
+  return {
+    task: 'thread_lane', v: 1, think: false,
+    input: { thread: String(content || '').slice(0, 400) },
+    want: `This is a task on an autonomous research assistant's board. Classify which LANE can execute it:
+- "research": investigate/verify/map a question — the answer is FINDINGS.
+- "deliverable": produce a concrete artifact (a paper, briefing, roster, spreadsheet, document) — the answer is the ARTIFACT.
+- "tool": build or maintain a reusable script/tool/utility.
+- "self": develop her own identity, opinions, emotional range — standing self-growth, not a task with an end.
+- "none": cannot be worked autonomously (needs the operator live: brainstorming WITH him, awaiting his input).
+Reply ONLY: {"lane": "research"|"deliverable"|"tool"|"self"|"none"}`,
+    validate: (raw) => {
+      try {
+        const m = String(raw || '').match(/\{[\s\S]*\}/);
+        if (!m) return { valid: false, error: 'no JSON object' };
+        const o = JSON.parse(m[0]);
+        const lane = String(o.lane || '').toLowerCase();
+        if (!['research', 'deliverable', 'tool', 'self', 'none'].includes(lane)) return { valid: false, error: 'lane must be research|deliverable|tool|self|none' };
+        return { valid: true, value: { lane } };
+      } catch (e) { return { valid: false, error: e.message }; }
+    },
+  };
+}
+
 // Deadline language → { dueTs, kind: 'rush' | 'today' | 'open' } or null (no deadline named).
 // `anchorTs` is the thread's created_ts — "within an hour" means an hour from when he SAID it.
 function parseDeadline(text, anchorTs) {
@@ -92,14 +160,17 @@ function scoreThread(t, { now = 0, newsAt = 0 } = {}) {
   return s;
 }
 
-// Pick the user thread the primary should run next: pending, never-driven, research-shaped,
-// not beat-tagged (the caller filters beat tags — it has the meta). Null = nothing qualifies →
-// the sweep may have the slot.
-function pickUserThread(threads, { now = 0, newsAtOf = () => 0 } = {}) {
+// Pick the user thread the primary should run next: pending, never-driven, DRIVER-LANE
+// (research or deliverable — typed routing), not beat-tagged (the caller filters beat tags —
+// it has the meta). `laneOf(id)` returns the stamped lane or null; an UNSTAMPED thread falls
+// back to the old research-shape filter, so behavior without the stamping pass is unchanged.
+// Null = nothing qualifies → the sweep may have the slot.
+function pickUserThread(threads, { now = 0, newsAtOf = () => 0, laneOf = () => null } = {}) {
   let best = null, bestScore = -1;
   for (const t of (Array.isArray(threads) ? threads : [])) {
     if (!t || t.status !== 'pending' || (t.action_count | 0) !== 0) continue;
-    if (!isResearchShaped(t.content)) continue;
+    const lane = laneOf(t.id);
+    if (lane ? !['research', 'deliverable'].includes(lane) : !isResearchShaped(t.content)) continue;
     const s = scoreThread(t, { now, newsAt: newsAtOf(t.id) || 0 });
     if (s > bestScore || (s === bestScore && (t.created_ts || 0) > ((best && best.created_ts) || 0))) { best = t; bestScore = s; }
   }
@@ -405,6 +476,14 @@ function augmentGuidance(guidance, { focusId, content, createdTs, getMeta = () =
     else if (dl.kind === 'rush') parts.push(`DEADLINE: ~${mins} minutes left — ASSEMBLE the best available answer; cite what you have, name what's missing, do NOT keep hunting for perfection.`);
     else parts.push(`DEADLINE: about ${Math.max(1, Math.round(mins / 60))}h left — pace the depth to finish INSIDE the window with a complete draft.`);
   }
+  // DELIVERABLE LANE (typed routing): the ask is an ARTIFACT, not findings. Research serves the
+  // artifact; every pass must advance the draft itself, and "done" means the artifact exists —
+  // the done contract's definition, not a pile of notes.
+  try {
+    if (getMeta(`thread.${focusId}.lane`) === 'deliverable') {
+      parts.push('DELIVERABLE ASK: the goal is the finished ARTIFACT (the paper/briefing/roster itself), not research notes. Research only what the artifact needs, write into the draft EVERY pass, and finish it — an unwritten section beats an uncited claim, so leave gaps blank and named rather than padded.');
+    }
+  } catch { /* guidance is additive, never blocking */ }
   return parts.filter(Boolean).join('\n\n');
 }
 
@@ -511,4 +590,4 @@ When defer is false, item/when may be empty and days 0.`,
   };
 }
 
-module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, inheritedBaseDocId, priorSectionFor, priorOrgsIn, facetAppliesTo, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, SEQUENCED_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };
+module.exports = { RESEARCH_RE, isResearchShaped, classifyThreadLane, buildLaneAsk, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, inheritedBaseDocId, priorSectionFor, priorOrgsIn, facetAppliesTo, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, SEQUENCED_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };

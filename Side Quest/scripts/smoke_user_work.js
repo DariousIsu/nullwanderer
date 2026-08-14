@@ -326,5 +326,57 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
   ok(cut.length <= 520 && /truncated/.test(cut), 'a huge section is capped and SAYS it was cut');
 }
 
+// ── THREAD LANES (typed routing, 2026-08-14): the audit's real stranded threads must classify ──
+{
+  const lane = (c) => uw.classifyThreadLane(c);
+  // the blown-deadline cluster — every one sat undrainable behind the research-verb filter
+  ok(lane('complete the Applied Digit briefing for Lucas by tomorrow morning').lane === 'deliverable', 'blown-deadline briefing → deliverable');
+  ok(lane('complete the paper Lucas assigned').lane === 'deliverable', '"complete the paper" → deliverable');
+  ok(lane('fill missing Louisiana legislative districts in Lucas\'s roster').lane === 'deliverable', 'roster fill → deliverable');
+  ok(lane('determine how to structure follow-up op-eds and smaller papers for Lucas').lane === 'deliverable', 'op-ed structuring → deliverable');
+  ok(lane('slowly build the project deliverable one step at a time').lane === 'deliverable', '"build the deliverable" → deliverable');
+  // tool lane wins over deliverable when the artifact IS a tool
+  ok(lane('maintain a reusable Fahrenheit to Celsius conversion tool for Lucas').lane === 'tool', 'reusable converter → tool (R2\'s lane)');
+  ok(lane('build a tracker dashboard for the roster').lane === 'tool', 'tool noun beats deliverable noun (order pins it)');
+  // self-growth is not a survey
+  ok(lane('develop a personal identity and individual interests over time').lane === 'self', 'identity thread → self');
+  ok(lane('explore complex human emotions and social dynamics for self-growth').lane === 'self', 'emotions thread → self, not research');
+  // research unchanged
+  ok(lane('conduct deep research on the global AI arms race for Lucas').lane === 'research', 'research thread → research');
+  ok(lane('compile leadership and historical data for all Louisiana parishes').lane === 'research', 'compile → research (verb preserved)');
+  // ambiguous middle defers to the classifier — never guessed
+  const amb = lane('work on the Monroe materials');
+  ok(amb.confident === false && amb.lane === null, 'ambiguous phrasing is NOT guessed — goes to the cloud classifier');
+  ok(lane('too short').confident === false, 'short strings never classify');
+  // the ask contract validates lanes and rejects junk
+  const ask = uw.buildLaneAsk('work on the Monroe materials');
+  ok(ask.validate('{"lane":"deliverable"}').valid === true, 'lane ask accepts a valid lane');
+  ok(ask.validate('{"lane":"whatever"}').valid === false, 'lane ask rejects an unknown lane');
+  ok(ask.validate('no json here').valid === false, 'lane ask rejects non-JSON');
+}
+
+// ── pickUserThread honors lanes: deliverable seeds, tool/self/none never do ──
+{
+  const mk = (id, content) => ({ id, content, status: 'pending', action_count: 0, created_ts: NOW - H });
+  const threads = [mk(1, 'complete the Applied Digit briefing for Lucas by tomorrow morning'), mk(2, 'develop a personal identity and individual interests over time')];
+  const lanes = { 1: 'deliverable', 2: 'self' };
+  const picked = uw.pickUserThread(threads, { now: NOW, laneOf: (id) => lanes[id] || null });
+  ok(picked && picked.id === 1, 'a deliverable-lane thread SEEDS (the audit\'s cure)');
+  const noneLanes = { 1: 'none', 2: 'self' };
+  ok(uw.pickUserThread(threads, { now: NOW, laneOf: (id) => noneLanes[id] || null }) === null, 'none/self lanes never seed the driver');
+  // unstamped threads keep the old research-shape filter — no behavior change without stamps
+  const unstamped = [mk(3, 'conduct deep research on the AI arms race'), mk(4, 'complete the paper Lucas assigned')];
+  const oldPick = uw.pickUserThread(unstamped, { now: NOW });
+  ok(oldPick && oldPick.id === 3, 'without lane stamps only research-shaped seeds (backwards compatible)');
+}
+
+// ── deliverable guidance line rides augmentGuidance via the lane stamp ──
+{
+  const g = uw.augmentGuidance('base guidance', { focusId: 9, content: 'complete the briefing', createdTs: NOW - H, now: NOW, getMeta: (k) => (k === 'thread.9.lane' ? 'deliverable' : null) });
+  ok(/DELIVERABLE ASK/.test(g) && /artifact/i.test(g), 'deliverable lane adds the artifact-first guidance');
+  const g2 = uw.augmentGuidance('base guidance', { focusId: 9, content: 'research the grid', createdTs: NOW - H, now: NOW, getMeta: () => null });
+  ok(!/DELIVERABLE ASK/.test(g2), 'research lane guidance unchanged');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

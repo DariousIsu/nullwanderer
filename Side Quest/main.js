@@ -14042,6 +14042,46 @@ async function _autonomicSchedulerTick() {
         // from 210h ago won over the fresh grid cluster).
         const threads = (db.getUnstartedUserThreads(60) || [])
           .filter((t) => t && !(db.getMeta(`focus.${t.id}.beat`) || '').trim() && String(db.getMeta(`focus.${t.id}.background`) || '') !== '1');
+        // ── TYPED ROUTING (2026-08-14 worklist audit: 0 of 18 pending threads passed the
+        // research-verb filter — the whole seed queue was undrainable, including deadline-carrying
+        // deliverable asks). Stamp each unstamped thread's lane: regex fast-path is free; the
+        // ambiguous middle goes to the bounded cloud classifier (≤2 asks per tick so a backlog
+        // never bursts — the rest classify on later ticks). tool-lane threads route to R2 as
+        // capability needs HERE; self-lane threads are stamped for the self-exploration organ.
+        // An unstamped thread stays unseedable — exactly the pre-fix behavior, so a classifier
+        // outage degrades to the old world, never a wrong seed.
+        {
+          let _laneAsks = 0;
+          for (const t of threads) {
+            try {
+              if (db.getMeta(`thread.${t.id}.lane`)) continue;
+              let lane = null;
+              const fast = uw.classifyThreadLane(t.content);
+              if (fast.confident) lane = fast.lane;
+              else if (_laneAsks < 2) {
+                _laneAsks++;
+                try { const r = await require('./lib/cloud_logic').ask(uw.buildLaneAsk(t.content)); if (r && r.lane) lane = r.lane; } catch (e) { console.error(`[user-work] lane classify failed for #${t.id}:`, e.message); }
+              }
+              if (!lane) continue;
+              db.setMeta(`thread.${t.id}.lane`, lane);
+              console.log(`[user-work] thread #${t.id} lane=${lane} — "${String(t.content).slice(0, 60)}"`);
+              if (lane === 'tool') {
+                // R2's lane: mint a capability need (record() dedupes ≥0.55 similarity) and note
+                // the delegation on the thread so the board shows WHERE the work went. The thread
+                // stays open — R2 completing the need is the honest close, not this stamp.
+                try {
+                  const cn = require('./lib/capability_need');
+                  const rec = cn.record(String(t.content).slice(0, 300), { bornFrom: `thread-${t.id}` });
+                  db.touchOpenThread(t.id, `routed to the R2 tool lane as capability need${rec && rec.id ? ` #${rec.id}` : ''} — the rehearsal driver owns the build`);
+                } catch (e) { console.error(`[user-work] tool-lane mint failed for #${t.id}:`, e.message); }
+              } else if (lane === 'self') {
+                db.touchOpenThread(t.id, 'self-growth lane — standing work the self-exploration organ runs; kept open until that organ consumes thread seeds (named follow-up)');
+              } else if (lane === 'none') {
+                db.touchOpenThread(t.id, 'not autonomously drainable (needs Lucas live) — waiting on conversation, not on the driver');
+              }
+            } catch (e) { console.error(`[user-work] lane stamp failed for #${t.id}:`, e.message); }
+          }
+        }
         // EXPLICIT REDIRECT SEED (the user-redirect wire): a chat-registered pivot names the
         // next focus outright — it outranks the recency ordering ONCE, then clears. Any live
         // status qualifies (a redirect may re-promote an already-driven thread).
@@ -14057,6 +14097,7 @@ async function _autonomicSchedulerTick() {
         if (!cand) cand = uw.pickUserThread(threads, {
           now: Date.now(),
           newsAtOf: (id) => parseInt(db.getMeta(`thread.${id}.news_at`) || '0', 10) || 0,
+          laneOf: (id) => { try { return db.getMeta(`thread.${id}.lane`) || null; } catch { return null; } },
         });
         if (cand) {
           if (_curBeatId) { try { focusLib.clear('user-work-preempt'); } catch {} console.log(`[user-work] sweep yields — ${_curBeatId} paused for his thread #${cand.id}`); }
