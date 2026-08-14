@@ -24,9 +24,9 @@ const RICH_NOTES = 3;   // ≥ this many on-topic notes (or any verified_fact, o
 function _objectRich(obj) { return !!(obj && (obj.degree >= 8 || (obj.facts || []).length >= 4 || (obj.committees || []).length >= 1)); }
 function _hasObject(obj) { return !!(obj && ((obj.facts || []).length || (obj.committees || []).length || (obj.neighbors || []).length)); }
 
-async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retrieveFn = null, graphFn = null, echoFn = null, objectFn = null, prominenceFn = null, docFn = null, newsFn = null, resolveFn = null, object = true } = {}) {
+async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retrieveFn = null, graphFn = null, echoFn = null, objectFn = null, prominenceFn = null, docFn = null, newsFn = null, resolveFn = null, civicFn = null, object = true } = {}) {
   const t = String(topic || '').trim();
-  if (!t) return { topic: t, notes: [], facts: [], object: null, coverage: 'thin', echo: 0, mention: null, identityNote: null, precedenceFact: null, streamHits: [], ambiguous: null };
+  if (!t) return { topic: t, notes: [], facts: [], object: null, coverage: 'thin', echo: 0, mention: null, identityNote: null, precedenceFact: null, streamHits: [], civicHits: [], ambiguous: null };
   const retrieve = retrieveFn || ((q) => memory.retrieveScored(q, { k, minRelevance }));
   let local = []; try { local = (await retrieve(t)) || []; } catch { local = []; }
   let facts = []; try { facts = (graphFn ? graphFn(t) : _graphFacts(t)) || []; } catch { facts = []; }
@@ -105,14 +105,23 @@ async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retriev
     const news = newsFn ? (await newsFn(t)) : (retrieveFn ? [] : _newsRecall(t));
     streamHits = _docNotes(docs).concat(Array.isArray(news) ? news : []);
   } catch {}
-  const rich = _objectRich(obj) || notes.length >= RICH_NOTES || local.some(n => n.source === 'verified_fact') || facts.length >= 3 || echoHits.length >= 2;
+  // CIVIC STORE — the verified seat/roster/vacancy arm (2026-08-14, the D14 chat test: "who
+  // represents Senate District 14?" grounded WITHOUT ever seeing the held vacancy row — the civic
+  // digests serve the report/edit doors, not this pass, so the answer cost a web search she
+  // already held). civic_store.civicRecallFor matches bodies on the 2-token rule and speaks live
+  // vacancies + the asked-about district. Same live-default gating as the other stream stores.
+  let civicHits = [];
+  try { civicHits = civicFn ? ((await civicFn(t)) || []) : (retrieveFn ? [] : require('./civic_store').civicRecallFor(t)); } catch { civicHits = []; }
+  // A civic hit counts as RICH: a held roster/vacancy row IS the answer class for a seat question —
+  // re-researching what the store verifies is exactly the waste this module exists to kill.
+  const rich = _objectRich(obj) || notes.length >= RICH_NOTES || local.some(n => n.source === 'verified_fact') || facts.length >= 3 || echoHits.length >= 2 || civicHits.length >= 1;
   // PRECEDENCE — a fresh, deliberate verified_fact about this object leads over its (stale) KG dossier.
   let precedenceFact = null;
   if (obj) { try { precedenceFact = _precedenceFact(obj, notes, mentionUsed); } catch {} }
   // recall — a corpus record we already hold gets pulled inward (reference-not-copy): the Echo node lights and
   // a wave travels toward the active core. Only when a real object resolved (a thin/nil miss stays quiet).
   if (obj && obj.name) { try { kga.emit({ db: 'echo', kind: 'recall', anchor: obj.name, count: 1 }); } catch (e) {} }
-  return { topic: t, notes, facts, object: obj, coverage: rich ? 'rich' : 'thin', echo: echoHits.length, mention: mentionUsed, identityNote, precedenceFact, streamHits, ambiguous };
+  return { topic: t, notes, facts, object: obj, coverage: rich ? 'rich' : 'thin', echo: echoHits.length, mention: mentionUsed, identityNote, precedenceFact, streamHits, civicHits, ambiguous };
 }
 // Entity-shaped = a name/short phrase we can hand to quick_lookup (single-name → dossier), not a
 // full sentence. Keeps the object pull cheap + on-target.
@@ -264,7 +273,7 @@ function _tag(src) {
 // PAST what she holds, not re-derive it. (learning.buildPriorKnowledgeBlock delegates here.)
 async function knowledgeBlock(topic, opts = {}) {
   const r = await recall(topic, opts);
-  if (!r.notes.length && !r.facts.length && !_hasObject(r.object) && !(r.streamHits && r.streamHits.length)) return null;
+  if (!r.notes.length && !r.facts.length && !_hasObject(r.object) && !(r.streamHits && r.streamHits.length) && !(r.civicHits && r.civicHits.length)) return null;
   const lines = [`WHAT YOU ALREADY KNOW about "${r.topic.replace(/\s+/g, ' ').slice(0, 80)}" (from your own memory — you may already hold this without realizing):`];
   // PRECEDENCE — a fresh verified fact leads over the record and supersedes any stale role/office detail in it.
   if (r.precedenceFact) lines.push(`  [MOST CURRENT — verified${r.precedenceFact.asOf ? ` as of ${r.precedenceFact.asOf}` : ''}; supersedes older role/office details in the record below] ${r.precedenceFact.content}`);
@@ -279,6 +288,9 @@ async function knowledgeBlock(topic, opts = {}) {
     } else lines.push(`  [${_tag(n.source)}] ${s}`);
   }
   for (const f of r.facts) lines.push(`  [graph] ${f}`);
+  // CIVIC STORE — verified rosters + seat vacancies matching this topic. A vacancy line IS the
+  // answer to "who holds this seat": nobody, cited — never silence, never an invented name.
+  for (const c of (r.civicHits || [])) { const s = String(c.line || '').replace(/\s+/g, ' ').slice(0, 400); if (s) lines.push(`  [civic] ${s}`); }
   // DATA STREAMS — landed documents (meetings / dossiers / API / email) + tracked news on this topic.
   for (const sh of (r.streamHits || [])) { const s = (sh.content || '').replace(/\s+/g, ' ').slice(0, 200); if (s) lines.push(`  [${_tag(sh.source)}] ${s}`); }
   if (lines.length === 1) return null;

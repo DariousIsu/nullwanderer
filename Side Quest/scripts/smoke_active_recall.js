@@ -258,6 +258,15 @@ const noGraph = () => [];
     const rMiss = await ar.recall('Zzz Nothing', { retrieveFn: async () => [], graphFn: noGraph, objectFn: async () => null });
     ok(!rMiss.object && !rActs.some(a => a.kind === 'recall'), 'a thin/nil recall (no object resolved) emits NO recall');
     global.__emitKgActivity = undefined;   // don't leak the capture into later assertions
+
+    // ── the civic arm (2026-08-14, the D14 chat test): a held vacancy grounds the lookup ──
+    const civicHit = [{ bodyKey: 'louisiana state senate', line: 'louisiana state senate — 38 seat(s) held, 1 VACANT; District 14 — VACANT (since 2026; incumbent died in office)' }];
+    const rc = await ar.recall('who represents Louisiana Senate District 14?', { retrieveFn: async () => [], graphFn: () => [], civicFn: async () => civicHit });
+    ok(rc.civicHits.length === 1 && rc.coverage === 'rich', 'a civic hit rides recall and flips coverage RICH (the store holds the answer)');
+    const kb = await ar.knowledgeBlock('who represents Louisiana Senate District 14?', { retrieveFn: async () => [], graphFn: () => [], civicFn: async () => civicHit });
+    ok(kb && /\[civic\].*District 14 — VACANT/.test(kb), 'knowledgeBlock speaks the vacancy as a [civic] line');
+    const rcNone = await ar.recall('epistemology basics', { retrieveFn: async () => [], graphFn: () => [], civicFn: async () => [] });
+    ok(rcNone.civicHits.length === 0 && rcNone.coverage === 'thin', 'no civic match → nothing injected, coverage unchanged');
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   }

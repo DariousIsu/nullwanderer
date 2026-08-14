@@ -172,6 +172,26 @@ const T = 1785400000000;
     ok(vrow && vrow.resolved_by_membership === fill.id, 'resolution carries lineage to the FILLING membership row');
   }
 
+  // ── civicRecallFor — the lookup-grounding door (2026-08-14, the D14 chat test) ───────────────
+  {
+    // an ALL-GENERIC body_key (the class heldRostersFor can never match, by construction)
+    cs.upsertBody({ title: 'Louisiana State Senate', level: 'state', state: 'LA' }, { nowMs: T });
+    cs.recordMembership({ bodyTitle: 'Louisiana State Senate', personName: 'Test Senator', district: '5', party: 'R', sourceKind: 'official' }, { nowMs: T });
+    cs.recordVacancy({ bodyTitle: 'Louisiana State Senate', seat: '14', vacantSince: '2026', reason: 'incumbent died in office', successorNote: 'special election pending' }, { nowMs: T });
+
+    ok(cs.heldRostersFor('who represents Louisiana Senate District 14?').every((h) => h.bodyKey !== 'louisiana state senate'),
+      'heldRostersFor is structurally blind to an all-generic body key (why this door exists)');
+    const rc = cs.civicRecallFor('who represents Louisiana Senate District 14?');
+    ok(rc.length >= 1 && rc[0].bodyKey === 'louisiana state senate', 'civicRecallFor matches the chamber on the 2-token rule');
+    ok(/VACANT/.test(rc[0].line) && /District 14/.test(rc[0].line), 'the asked-about vacancy is spoken in the line');
+    const rc5 = cs.civicRecallFor('who holds Louisiana Senate District 5?');
+    ok(/District 5: Test Senator \(R\)/.test(rc5[0].line), 'a HELD district row is pulled to the front when asked');
+    const rc9 = cs.civicRecallFor('who holds Louisiana Senate District 9?');
+    ok(/District 9: no live row held/.test(rc9[0].line), 'an unheld district says so honestly — never silence');
+    ok(cs.civicRecallFor('louisiana').length === 0, 'one shared token is coincidence — no match (the 2-token rule)');
+    ok(cs.civicRecallFor('').length === 0 && cs.civicRecallFor('grid transmission pressure').length === 0, 'empty/unrelated topics recall nothing, never throw');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   try { require('../lib/db').getDb().close(); } catch {}
   try { require('fs').unlinkSync(process.env.SQ_DB_PATH); } catch {}

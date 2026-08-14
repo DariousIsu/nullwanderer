@@ -349,6 +349,53 @@ function staleRostersFor(text, { maxAgeMs = 30 * 24 * 3600 * 1000, limit = 5, no
   return out;
 }
 
+// ── LOOKUP-GROUNDING RECALL (2026-08-14, the D14 chat test) ──────────────────────────────────
+// "Who represents Louisiana Senate District 14?" routed lookup and the grounding pass never saw
+// the civic store: the digest doors serve reports/edits, and heldRostersFor requires every
+// DISTINCTIVE body_key word in the text — a state chamber's key ('louisiana state senate') is
+// ALL generic civic words, so it can never match, by construction. This door serves chat and
+// research grounding instead: the 2-token topic rule (one shared word is coincidence, two is a
+// topic — the same bar news matching uses), best-matched bodies first, a compact per-body
+// summary instead of the full name roll, the DISTRICT the text actually asks about pulled to the
+// front, and every live vacancy spoken. Returns [{bodyKey, line}], capped and fail-soft.
+function civicRecallFor(text, { limit = 3, deps = {} } = {}) {
+  const toks = [...new Set(str(text).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !_DIGEST_STOP.has(w)))];
+  if (toks.length < 2) return [];
+  let bodies = [];
+  try { bodies = _db(deps).getDb().prepare(`SELECT DISTINCT body_key FROM civic_memberships WHERE superseded_by IS NULL
+    UNION SELECT DISTINCT body_key FROM civic_vacancies WHERE superseded_by IS NULL AND resolved_ts IS NULL`).all(); } catch { return []; }
+  const dm = str(text).match(/\bdistrict\s*#?\s*(\d{1,3})\b/i);
+  const wantDistrict = dm ? dm[1] : null;
+  const scored = [];
+  for (const b of bodies) {
+    const key = String(b.body_key);
+    const hits = toks.filter((t) => key.includes(t)).length;
+    if (hits >= 2) scored.push({ key, hits });
+  }
+  scored.sort((a, z) => z.hits - a.hits);
+  const out = [];
+  for (const { key } of scored) {
+    const rows = roster(key, { deps });
+    const vac = vacancies(key, { deps });
+    if (!rows.length && !vac.length) continue;
+    const bits = [`${rows.length} seat(s) held${vac.length ? `, ${vac.length} VACANT` : ''}`];
+    // The asked-about district is probed on the BEST-matched body only — stamping "District 14: no
+    // live row held" onto every secondary match (a congressional single-seat body that matched on
+    // shared tokens) reads as a claim about a body that has no district 14 at all.
+    if (wantDistrict && out.length === 0) {
+      const hit = rows.find((r) => str(r.district).trim() === wantDistrict);
+      const vhit = vac.find((v) => str(v.seat).trim() === wantDistrict);
+      if (hit) bits.push(`District ${wantDistrict}: ${hit.person_name}${hit.party ? ` (${hit.party})` : ''}${hit.role && !/^member$/i.test(hit.role) ? `, ${hit.role}` : ''}`);
+      else if (!vhit) bits.push(`District ${wantDistrict}: no live row held`);
+      // a vacancy on the asked district needs no extra line — every live vacancy renders below
+    }
+    for (const v of vac) bits.push(_vacancyLine(v));
+    out.push({ bodyKey: key, line: `${key} — ${bits.join('; ')}` });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 // Every version of a seat, oldest first — what supersession preserves.
 function history(bodyKeyOrTitle, personName, { deps = {} } = {}) {
   try {
@@ -397,4 +444,4 @@ function incomplete({ state = null, level = null, limit = 200 } = {}, { deps = {
   } catch { return { incomplete: [], complete: 0, unknownDenominator: [] }; }
 }
 
-module.exports = { keyFor, upsertBody, getBody, recordMembership, recordSeatHolder, recordRoster, recordVacancy, vacancies, roster, heldRostersFor, staleRostersFor, civicDigestFor, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };
+module.exports = { keyFor, upsertBody, getBody, recordMembership, recordSeatHolder, recordRoster, recordVacancy, vacancies, roster, heldRostersFor, staleRostersFor, civicDigestFor, civicRecallFor, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };
