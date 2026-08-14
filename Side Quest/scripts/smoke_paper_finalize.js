@@ -86,6 +86,18 @@ ok('the full source list is in the document', doc.includes('## Sources') && doc.
     && /SECTIONS ALREADY WRITTEN/.test(prompts[prompts.length - 1])
     && /Distinct body 1/.test(prompts[prompts.length - 1]));
 
+  // A FINISHED PAPER RESOLVES ITS OWN ORDER-THREADS (the live #3869 shape) — paper-shaped +
+  // same subject only; broader research asks and other topics stay open.
+  const sat = pf.threadsSatisfiedBy('applied digital', [
+    { id: 1, content: 'finish the paper on applied digital for Lucas' },
+    { id: 2, content: 'develop a comprehensive cited paper on Applied Digital Background and Community Benefits' },
+    { id: 3, content: 'research Applied Digital Polaris facilities and their community impact' },
+    { id: 4, content: 'paper on quantum computing' },
+    { id: 5, content: 'complete the applied digital work' },
+  ]);
+  ok('finished paper resolves its order-threads (#1 #2), never the broader research (#3) or other topics (#4 #5)',
+    sat.includes(1) && sat.includes(2) && !sat.includes(3) && !sat.includes(4) && !sat.includes(5));
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { require('../lib/db').getDb().close(); } catch {}
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}

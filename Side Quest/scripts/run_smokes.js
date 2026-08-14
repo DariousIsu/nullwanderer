@@ -549,6 +549,10 @@ const smokes = [
   // Questions, complaints ("you were supposed to…"), control orders, and acks were all minting
   // threads; the deterministic gate vetoes those, ambiguity still fails OPEN to the extractor.
   'smoke_intake_type.js',
+  // ── one-canonical-artifact at the file door (2026-08-14, Block 3): a NEW .md whose filename
+  // reduces to the same subject-token set as an existing sibling FOLDS into it as a dated append
+  // (~10 applied_digital_* siblings measured). Entities/dates/directed-*/_FINAL stay distinct.
+  'smoke_canonical_note.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.

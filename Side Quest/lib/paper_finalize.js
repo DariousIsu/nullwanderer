@@ -164,4 +164,29 @@ async function finalize({ topic, title, goal, tokens, exclude, write, dir = NOTE
   return { ok: true, path: outPath, sections: sections.length, sourceCount: sources.length, fragments: fragments.length };
 }
 
-module.exports = { gatherFragments, harvestSources, outline, sectionPrompt, assemble, finalize, NOTES_DIR, DEFAULT_SECTIONS, PAPER_VERB_RE, PAPER_TOPIC_RE };
+// A FINISHED PAPER RESOLVES ITS OWN ORDER-THREADS (Block 3, 2026-08-14). Measured: stale
+// duplicates of the accepted Applied Digital order (#3869 [active]) kept the directed lane
+// RE-researching finished work all night — and drifted to a wrong entity (GOV.UK Pay). Pure
+// matcher: PAPER-SHAPED threads (paper/report/briefing/document — a bare research/work ask stays
+// open, it may be broader) whose subject tokens match the finished topic. The caller marks them
+// resolved with a reason; reversible via the progress note.
+const PAPER_NOUN_RE = /\b(?:paper|report|briefing|document)\b/i;
+const _SAT_STOP = new Set(['the', 'a', 'an', 'on', 'for', 'about', 'of', 'and', 'to', 'finish', 'finalize', 'complete', 'produce', 'develop', 'write', 'cited', 'comprehensive', 'full', 'final', 'finished', 'paper', 'report', 'briefing', 'document', 'research', 'work', 'lucas', 'zoe']);
+function _satToks(s) {
+  return new Set(String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length >= 3 && !_SAT_STOP.has(w)));
+}
+function threadsSatisfiedBy(topic, threads) {
+  const t0 = _satToks(topic);
+  if (!t0.size) return [];
+  const out = [];
+  for (const t of threads || []) {
+    if (!PAPER_NOUN_RE.test(t.content || '')) continue;
+    const tt = _satToks(t.content);
+    if (!tt.size) continue;
+    let shared = 0; for (const w of t0) if (tt.has(w)) shared++;
+    if (shared >= Math.min(2, t0.size) && shared / Math.min(t0.size, tt.size) >= 0.6) out.push(t.id);
+  }
+  return out;
+}
+
+module.exports = { gatherFragments, harvestSources, outline, sectionPrompt, assemble, finalize, threadsSatisfiedBy, NOTES_DIR, DEFAULT_SECTIONS, PAPER_VERB_RE, PAPER_TOPIC_RE };

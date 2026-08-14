@@ -48,6 +48,66 @@ function resolvePath(p) {
   return path.normalize(path.join(WORKSPACE, trimmed));
 }
 
+// ── ONE-CANONICAL-ARTIFACT (Block 3, 2026-08-14) ─────────────────────────────────────────────────
+// Measured in notes/: ~10 sibling files for ONE subject (applied_digital_overview,
+// applied-digital-overview, applied_digital_current_state, applied_digital_research_overview, …) —
+// every pass invented a fresh filename, so the topic's material scattered and no file was ever the
+// document. Cure at this door: a write to a NEW .md whose filename reduces to the SAME subject-token
+// set as an existing sibling in the same directory lands as a dated revision APPENDED to that
+// canonical file (append, never overwrite — the prior material must stay recoverable). Equality of
+// token sets, not overlap, so allen_county_INDIANA never folds into allen_county_KS and the
+// wrong-entity "…_solutions_…" stays its own file. Exempt: date-stamped names (per-day artifacts),
+// directed-* (thread-keyed), *_FINAL (the conductor owns those).
+const GENERIC_STEM_WORDS = new Set([
+  'overview', 'notes', 'note', 'research', 'context', 'state', 'current', 'brief', 'briefing',
+  'report', 'paper', 'profile', 'summary', 'info', 'information', 'general', 'misc', 'doc',
+  'document', 'file', 'new', 'updated', 'update', 'latest', 'draft', 'drafts', 'working',
+  'inc', 'llc', 'ltd', 'corp', 'company', 'co', 'the', 'and', 'of', 'on', 'for', 'a', 'an',
+]);
+function _stemTokens(fileName) {
+  const stem = String(fileName || '').replace(/\.md$/i, '');
+  const out = new Set();
+  for (const w of stem.toLowerCase().split(/[-_ .]+/)) {
+    if (w.length >= 2 && !/^\d+$/.test(w) && !GENERIC_STEM_WORDS.has(w)) out.add(w);
+  }
+  return out;
+}
+function _canonExempt(fileName) {
+  const f = String(fileName || '');
+  return /\d{4}-\d{2}-\d{2}|\d{8}/.test(f) || /^directed-/i.test(f) || /_final\.md$/i.test(f);
+}
+function findCanonicalSibling(abs) {
+  try {
+    if (!/\.md$/i.test(abs) || fs.existsSync(abs)) return null;
+    const base = path.basename(abs);
+    if (_canonExempt(base)) return null;
+    const toks = _stemTokens(base);
+    if (toks.size === 0) return null;
+    const dir = path.dirname(abs);
+    if (!fs.existsSync(dir)) return null;
+    const cands = [];
+    for (const f of fs.readdirSync(dir)) {
+      if (!/\.md$/i.test(f) || _canonExempt(f)) continue;
+      const ft = _stemTokens(f);
+      if (ft.size !== toks.size) continue;
+      let same = true; for (const w of toks) if (!ft.has(w)) { same = false; break; }
+      if (!same) continue;
+      let size = 0; try { size = fs.statSync(path.join(dir, f)).size; } catch {}
+      cands.push({ f, size });
+    }
+    if (!cands.length) return null;
+    cands.sort((a, b) => b.size - a.size);   // among existing siblings, the largest = most material
+    return path.join(dir, cands[0].f);
+  } catch { return null; }
+}
+function _appendRevision(canonAbs, requestedAbs, data) {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const block = `\n\n---\n*revision ${stamp} (arrived as "${path.basename(requestedAbs)}" — folded into this canonical note)*\n\n${data}`;
+  fs.appendFileSync(canonAbs, block, 'utf8');
+  let total = 0; try { total = fs.statSync(canonAbs).size; } catch {}
+  return total;
+}
+
 function fileWrite(p, content) {
   const abs = resolvePath(p);
   if (!abs) return { ok: false, reason: 'no path given' };
@@ -56,6 +116,12 @@ function fileWrite(p, content) {
     return { ok: false, reason: `content exceeds ${MAX_WRITE_BYTES} byte cap` };
   }
   try {
+    const canon = findCanonicalSibling(abs);
+    if (canon) {
+      const total = _appendRevision(canon, abs, data);
+      console.log(`[files] one-canonical: "${path.basename(abs)}" folded into existing "${path.basename(canon)}"`);
+      return { ok: true, path: canon, redirected: true, requested: abs, total, note: `a note on this subject already exists — your content was added to ${path.basename(canon)} as a dated revision instead of creating a sibling file` };
+    }
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, data, 'utf8');
     return { ok: true, path: abs, bytes: Buffer.byteLength(data, 'utf8') };
@@ -69,6 +135,12 @@ function fileAppend(p, content) {
   if (!abs) return { ok: false, reason: 'no path given' };
   const data = String(content == null ? '' : content);
   try {
+    const canon = findCanonicalSibling(abs);   // only fires when abs itself doesn't exist
+    if (canon) {
+      const total = _appendRevision(canon, abs, data);
+      console.log(`[files] one-canonical: append "${path.basename(abs)}" folded into existing "${path.basename(canon)}"`);
+      return { ok: true, path: canon, redirected: true, requested: abs, appended: Buffer.byteLength(data, 'utf8'), total };
+    }
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.appendFileSync(abs, data, 'utf8');
     let total = 0;
@@ -273,13 +345,15 @@ function buildPromptBlock() {
   <file-move from="drafts/old.md" to="archive/old.md"/>    — move or rename a file
   <file-copy from="notes/idea.md" to="drafts/idea.md"/>    — copy a file
   <file-search dir="notes" query="byline"/>                — find which files mention something
-A bare name like "notes/idea.md" lands in your workspace (${WORKSPACE}). An absolute path goes wherever you point it. Output of file-read/file-list/file-search arrives in your next-turn context.`;
+A bare name like "notes/idea.md" lands in your workspace (${WORKSPACE}). An absolute path goes wherever you point it. Output of file-read/file-list/file-search arrives in your next-turn context.
+ONE SUBJECT = ONE NOTE FILE. Before starting a new note, file-search for the subject and revise the existing file. A write whose filename matches an existing note's subject is folded into that file as a dated revision (the result names the real path) — sibling files like "topic-overview.md" beside "topic_current_state.md" scatter the material and are never the document.`;
 }
 
 module.exports = {
   WORKSPACE,
   ensureWorkspace, resolvePath,
   fileWrite, fileAppend, fileRead, fileReadFull, fileList, fileMove, fileCopy, fileSearch,
+  findCanonicalSibling,
   parseTags, stripTags, dispatch,
   buildPromptBlock
 };
