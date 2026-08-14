@@ -553,6 +553,10 @@ const smokes = [
   // reduces to the same subject-token set as an existing sibling FOLDS into it as a dated append
   // (~10 applied_digital_* siblings measured). Entities/dates/directed-*/_FINAL stay distinct.
   'smoke_canonical_note.js',
+  // ── THE DONE CONTRACT (2026-08-14, Lucas-approved): done = contract signed at intake, never a
+  // model judgment. Freeze-once topic+entity anchor (the GOV.UK drift cure), write-once outline,
+  // dryness (3 identical gathers) → auto-finalize ONCE; revisions only on Lucas's ask.
+  'smoke_doc_contract.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.

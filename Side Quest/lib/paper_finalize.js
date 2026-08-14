@@ -134,12 +134,14 @@ function assemble({ title, goal, sections, sources, dateStr }) {
  * finalize({topic, title, goal, tokens, write, dir, outDir}) → { ok, path, sections, sourceCount }
  * `write(prompt)` is the injected model pass (async → section body text). ONE canonical output file.
  */
-async function finalize({ topic, title, goal, tokens, exclude, write, dir = NOTES_DIR, outDir = NOTES_DIR, land = true } = {}) {
+async function finalize({ topic, title, goal, tokens, exclude, write, frozenOutline = null, dir = NOTES_DIR, outDir = NOTES_DIR, land = true } = {}) {
   const toks = tokens && tokens.length ? tokens : _norm(topic).split(' ').filter(Boolean);
   const fragments = gatherFragments({ tokens: toks, exclude, dir });
   if (!fragments.length) return { ok: false, reason: `no fragments for "${topic}"` };
   const sources = harvestSources(fragments);
-  const heads = outline(fragments);
+  // THE DONE CONTRACT (2026-08-14): a revision rewrites the SAME frozen sections — the outline
+  // locks at the first finalize and scope can never grow across re-runs.
+  const heads = (Array.isArray(frozenOutline) && frozenOutline.length >= 2) ? frozenOutline : outline(fragments);
   const material = fragments.map((f) => `--- from ${f.file} ---\n${f.text}`).join('\n\n');
   const sections = [];
   // CoT-REJECT (2026-08-13, first live run): a reasoning model that returns EMPTY content gets its
@@ -161,7 +163,7 @@ async function finalize({ topic, title, goal, tokens, exclude, write, dir = NOTE
   const outPath = path.join(outDir, `${slug}_FINAL.md`);
   fs.writeFileSync(outPath, doc, 'utf8');   // ONE canonical file — overwrites, never siblings
   if (land) { try { require('./doc_store').land({ title: docTitle, body: doc, source: 'paper_finalize', ref: outPath }); } catch {} }
-  return { ok: true, path: outPath, sections: sections.length, sourceCount: sources.length, fragments: fragments.length };
+  return { ok: true, path: outPath, sections: sections.length, sourceCount: sources.length, fragments: fragments.length, outline: heads, fragmentStats: fragments.map((f) => ({ file: f.file, len: f.text.length })) };
 }
 
 // A FINISHED PAPER RESOLVES ITS OWN ORDER-THREADS (Block 3, 2026-08-14). Measured: stale

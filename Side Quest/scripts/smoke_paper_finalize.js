@@ -86,6 +86,14 @@ ok('the full source list is in the document', doc.includes('## Sources') && doc.
     && /SECTIONS ALREADY WRITTEN/.test(prompts[prompts.length - 1])
     && /Distinct body 1/.test(prompts[prompts.length - 1]));
 
+  // THE DONE CONTRACT: a frozenOutline binds the run — sections come from the contract, not the
+  // fragments — and the result reports the outline used (the caller locks it write-once).
+  const rF = await pf.finalize({ topic: 'acme widgets', write, frozenOutline: ['Alpha Section', 'Beta Section'], dir, outDir: dir, land: false });
+  ok('frozenOutline binds the run (its sections, reported back)', rF.ok && rF.sections === 2
+    && JSON.stringify(rF.outline) === '["Alpha Section","Beta Section"]'
+    && fs.readFileSync(rF.path, 'utf8').includes('## Alpha Section'));
+  ok('fragmentStats returned for the contract signature', Array.isArray(rF.fragmentStats) && rF.fragmentStats.length >= 2 && rF.fragmentStats[0].len > 0);
+
   // A FINISHED PAPER RESOLVES ITS OWN ORDER-THREADS (the live #3869 shape) — paper-shaped +
   // same subject only; broader research asks and other topics stay open.
   const sat = pf.threadsSatisfiedBy('applied digital', [
