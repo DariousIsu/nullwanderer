@@ -665,21 +665,59 @@ class EchoSuit {
   async _dispatchRaw(tag, opts = {}) {
     if (!tag || !tag.kind) return { ok: false, text: 'no tag' };
     // TIER GATE — block a mutating/heavy/locked call before it reaches Echo.
+    //
+    // AUTONOMY IS AMBIENT (2026-08-14, defect-review fix): opts.autonomous is unset on ~98% of
+    // dispatches (the operator invokes tools from a module-level map with no knowledge of its run), so
+    // the gate used to read a near-constant `false` and never fired on the unattended loop. It now
+    // resolves through the AMBIENT LANE (lib/lane.js) exactly as the route-observation labelling
+    // already does: an explicit opts.autonomous still wins, but an unmarked call made inside
+    // lane.run({autonomous:true}) is now correctly seen as autonomous. Hardcoded maintenance writes
+    // (curation, dedup, promote, ingest) run OUTSIDE any autonomous ambient scope, so they stay
+    // interactive-classified and keep working — only calls on the reasoning loops (autonomy tick,
+    // directed research, news compression) resolve auto.
+    //
+    // STAGED ENFORCEMENT (ZOE_TIER_GATE_AUTO, default 'shadow'): LOCKED and SHELL have zero legitimate
+    // unattended use and hard-block always. WRITE/HEAVY on the autonomous loop default to SHADOW (log
+    // WOULD-BLOCK, still allow) because at least one live lane legitimately writes under an autonomous
+    // root (news compression's set_entity_temporal), and the full inventory of such TRUSTED autonomous
+    // writes must be MEASURED from the WOULD-BLOCK log before hard blocking — flip to 'enforce' once
+    // that log carries only rogue/model-authored calls. Interactive turns are unaffected: policyFor
+    // only ever denies LOCKED when !autonomous, which hard-blocks here regardless of the switch.
+    let _auto = false;
+    try { _auto = require('./lane').isAutonomous(opts.autonomous); } catch { _auto = !!opts.autonomous; }
+    let _gatedToolName = null;
+    if (tag.kind === 'do') _gatedToolName = tag.name;
+    else if (tag.kind === 'propose') _gatedToolName = 'propose_' + tag.proposeKind;
+    else if (tag.kind === 'delegate') _gatedToolName = 'spawn_agent_async';
+    // find / guide / recipe = navigation / read / curated procedure → not gated here.
     try {
-      const tier = require('./echo_tier');
-      let toolName = null;
-      if (tag.kind === 'do') toolName = tag.name;
-      else if (tag.kind === 'propose') toolName = 'propose_' + tag.proposeKind;
-      else if (tag.kind === 'delegate') toolName = 'spawn_agent_async';
-      // find / guide / recipe = navigation / read / curated procedure → not gated here.
-      if (toolName) {
-        const pol = tier.policyFor(toolName, { autonomous: !!opts.autonomous, maintain: !!opts.maintain });
+      if (_gatedToolName) {
+        const tier = require('./echo_tier');
+        const pol = tier.policyFor(_gatedToolName, { autonomous: _auto, maintain: !!opts.maintain });
         if (!pol.allow) {
-          console.log(`[echo] tier-gate BLOCKED ${toolName} (${pol.tier}, autonomous=${!!opts.autonomous})`);
-          return { ok: false, kind: tag.kind, isError: true, blocked: true, tier: pol.tier, text: `Echo tool "${toolName}" is a ${pol.tier} action — ${pol.reason}. ${opts.autonomous ? 'On the autonomous loop you may READ from Echo but not write to it or spawn agents — surface this to Lucas instead of doing it unattended.' : 'This one stays off by design.'}` };
+          // SHADOW applies ONLY to ambient-resolved autonomy (the newly-gated population, which may
+          // contain trusted hardcoded lane writes we must inventory first). An EXPLICIT autonomous:true
+          // was already live-enforced before this fix (routeNeed's cloud-picked tools — model-authored
+          // by definition), so it keeps its hard block: weakening it would be a regression, not a fix.
+          const hardBlock = pol.tier === 'locked' || pol.tier === 'shell' || !_auto
+            || opts.autonomous === true
+            || /^enforce$/i.test(String(process.env.ZOE_TIER_GATE_AUTO || 'shadow').trim());
+          if (hardBlock) {
+            console.log(`[echo] tier-gate BLOCKED ${_gatedToolName} (${pol.tier}, autonomous=${_auto})`);
+            return { ok: false, kind: tag.kind, isError: true, blocked: true, tier: pol.tier, text: `Echo tool "${_gatedToolName}" is a ${pol.tier} action — ${pol.reason}. ${_auto ? 'On the autonomous loop you may READ from Echo but not write to it or spawn agents — surface this to Lucas instead of doing it unattended.' : 'This one stays off by design.'}` };
+          }
+          console.log(`[echo] tier-gate WOULD-BLOCK ${_gatedToolName} (${pol.tier}, autonomous=${_auto}) — SHADOW (set ZOE_TIER_GATE_AUTO=enforce to block)`);
         }
       }
-    } catch (e) { console.error('[echo] tier-gate check failed (allowing):', e.message); }
+    } catch (e) {
+      // FAIL CLOSED on the autonomous loop (was: log + allow). A gate-machinery fault (bad deploy,
+      // corrupted echo_tier) must not turn the unattended allowlist into no gate at all. Interactive
+      // turns already allow write+heavy, so a fault there changes nothing and we let those through.
+      console.error('[echo] tier-gate check failed:', e && e.message);
+      if (_auto && _gatedToolName) {
+        return { ok: false, kind: tag.kind, isError: true, blocked: true, tier: 'unknown', text: `Echo tool "${_gatedToolName}" could not be tier-checked (gate fault) — blocked on the autonomous loop as a safety default. Surface to Lucas.` };
+      }
+    }
     // Self-heal: if she reaches for the suit before the warm-connect finished (or after Echo
     // dropped), try to connect now. guide connects on its own below.
     if (!this.connected && tag.kind !== 'guide') {
@@ -702,7 +740,7 @@ class EchoSuit {
         // echo-do JSON. Falls back to returning the catalog LIST (below) if cloud is unavailable.
         if (echoCloudRouteEnabled()) {
           try {
-            const routed = await this.routeNeed(tag.query, { autonomous: !!opts.autonomous, maintain: !!opts.maintain });
+            const routed = await this.routeNeed(tag.query, { autonomous: _auto, maintain: !!opts.maintain });
             if (routed && routed.routed) { if (routed.chose) console.log(`[echo] cloud-routed "${tag.query}" → ${routed.chose}`); return routed; }
           } catch (e) { console.error('[echo] cloud route failed, falling back to catalog list:', e.message); }
         }
