@@ -7184,7 +7184,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // already-open site; the idle loop drives inventory→choose→chat one step per tick
     // (visible in the sheep panel). This is the part she does reliably.
     if (webLib.isConnected() && detectPickCharacter(userMessage)) {
-      try { personal.setOn(); playSession.start(); playSession.set('inventory'); }
+      try { personal.setOn(); playSession.start({ requireSite: false }); playSession.set('inventory'); }   // site already open in her browser — no play_site_url needed (D3)
       catch (e) { console.error('[pick-char] start failed:', e.message); }
       db.setMeta('last_ai_utterance_at', String(Date.now()));
       resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
@@ -12289,6 +12289,23 @@ try {
     };
   }
 } catch (e) { console.error('[operator] echo read-tools wiring failed:', e.message); }
+// OS SURFACE (D2, 2026-08-14 — Lucas: "she is supposed to have FULL ACCESS"): os_shell becomes a
+// first-class operator tool. Wired SEPARATELY from the read/web loop above because it is the first
+// NON-READ curated tool: the dispatch call must pass the AMBIENT lane so the tier gate actually sees
+// autonomous runs (shell = operator-present only; the research-lane menus never list it anyway, but
+// a hallucinated call from a background run must hit the block, not slide through as interactive).
+// Echo's own permission gate (DEFAULT_CONFIRM + sensitive-target backstop) runs underneath.
+try {
+  for (const t of require('./lib/echo_tier').OS_TOOLS) {
+    operatorTools[t.op] = async (a = {}) => {
+      try {
+        if (!echoSuit) return 'Echo is not available right now.';
+        const r = await echoSuit.dispatch({ kind: 'do', name: t.tool, args: t.map(a) }, { autonomous: require('./lib/lane').isAutonomous(undefined) });
+        return (r && r.text) || 'no result from Echo';
+      } catch (e) { return 'ERROR: ' + e.message; }
+    };
+  }
+} catch (e) { console.error('[operator] os-tools wiring failed:', e.message); }
 
 // Run the cloud operator for a turn: the frontier model drives the tools; returns { answer, toolsUsed }
 // or null (→ caller falls back to the normal local reply). Fail-safe.

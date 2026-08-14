@@ -24,18 +24,30 @@ const MODEL = require('./config').frontModel();
 const STEPS = ['none', 'open', 'inventory', 'choose', 'startchat', 'chat'];
 const MAX_STEP_STRIKES = 3;   // consecutive failures on a step before we reset the session
 
-function siteUrl() { return db.getMeta('play_site_url') || 'https://crushon.ai'; }
+// D3 (2026-08-14, Lucas: "that can get pulled out"): NO hardcoded play site. The crushon.ai default
+// meant an unconfigured "go play" silently opened a site nobody chose that session. The site now
+// comes ONLY from the play_site_url meta; unset → null, and a session that needs a URL refuses to
+// start (personal time then falls through to self-exploration in lib/monologue — the organ built
+// for unconfigured downtime).
+function siteUrl() { return db.getMeta('play_site_url') || null; }
 
 function get() { return db.getMeta('play_step') || 'none'; }
 function set(s) { if (STEPS.includes(s)) db.setMeta('play_step', s); }
 function active() { return get() !== 'none'; }
 function character() { return db.getMeta('play_character') || ''; }
 
-function start() {
+// requireSite:false = the caller already has the site OPEN in her browser (the pick-a-character
+// path starts at 'inventory' on the live page and never consults siteUrl) — bookkeeping only.
+function start({ requireSite = true } = {}) {
+  if (requireSite && !siteUrl()) {
+    console.log('[play] no play_site_url configured — session not started (personal time → self-exploration)');
+    return false;
+  }
   set('open');
   db.setMeta('play_character', '');
   db.setMeta('play_inventory', '[]');
   db.setMeta('play_step_strikes', '0');
+  return true;
 }
 function reset() {
   set('none');
@@ -184,7 +196,9 @@ async function runTick(ctx = {}) {
   const lastReplyKey = 'play_last_reply';
 
   if (step === 'open') {
-    const r = await webLib.open(siteUrl());
+    const u = siteUrl();
+    if (!u) { reset(); return { step, ok: false, note: 'no play_site_url configured — session reset (D3: no hardcoded site)' }; }
+    const r = await webLib.open(u);
     if (r.ok) { _clearStrikes(); set('inventory'); ctx.onReading && ctx.onReading(`I opened ${r.url} to spend some downtime.`, `(opened) ${r.title || r.url}`, r.url); return { step, ok: true, note: 'opened site → inventory' }; }
     const gaveUp = _strike();
     return { step, ok: false, note: `open failed: ${r.reason}${gaveUp ? ' (session reset)' : ''}` };

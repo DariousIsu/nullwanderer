@@ -104,6 +104,20 @@ ok(fw.isFramed(gateFrame('courtlistener_opinion_get')), 'echo_suit gate FRAMES a
 ok(fw.isFramed(gateFrame('arxiv_search')), 'echo_suit gate FRAMES an arxiv result (deep-lane prose)');
 ok(!fw.isFramed(gateFrame('db_query')), 'echo_suit gate does NOT frame a db_query result (her own store — data, not stranger prose)');
 
+// --- D2 (2026-08-14, Lucas: "she is supposed to have FULL ACCESS"): the OS surface as a first-class tool ---
+// os_shell reaches os_run_powershell from the interactive operator; the tier policy itself is UNCHANGED
+// (shell = operator-present only) and the research lanes never list it.
+ok(Array.isArray(tier.OS_TOOLS) && tier.OS_TOOLS.length >= 1, 'OS_TOOLS exists');
+ok(tier.readToolByOp('os_shell') && tier.readToolByOp('os_shell').tool === 'os_run_powershell', 'readToolByOp resolves os_shell → os_run_powershell');
+ok(/os_shell/.test(tier.operatorReadSpec()) && /HER OWN MACHINE/.test(tier.operatorReadSpec()), 'operator menu lists os_shell under its own section');
+ok(/os_shell/.test(operator.TOOL_SPEC), 'the interactive operator TOOL_SPEC carries os_shell');
+ok(!tier.laneToolNames('web').includes('os_shell') && !tier.laneToolNames('deep').includes('os_shell'), 'research lanes do NOT list os_shell (interactive surface only)');
+ok(tier.ALL_CURATED.every(t => t.op !== 'os_shell'), 'os_shell is NOT in ALL_CURATED (its executor passes the ambient lane; the read/web loop must not pick it up)');
+ok(tier.policyFor('os_run_powershell', { autonomous: true }).allow === false, 'REGRESSION: shell still blocked on the autonomous loop after D2 exposure');
+ok(tier.policyFor('os_run_powershell', { autonomous: false }).allow === true, 'REGRESSION: shell still allowed interactively (Echo confirm gate underneath)');
+const osMap = tier.readToolByOp('os_shell').map({ command: 'Get-Date', timeout: 30, approval_id: 'ap1' });
+ok(osMap.script === 'Get-Date' && osMap.timeout === 30 && osMap.approval_id === 'ap1', 'os_shell map: command→script alias + timeout + approval_id pass through (the confirm loop is completable)');
+
 // --- the GATE in echo_suit.dispatch, with a mock connected suit ---
 const calls = [];
 const argsSeen = {};

@@ -248,7 +248,33 @@ const WEB_TOOLS = [
   }
 ];
 
+// --- the OS surface (D2, 2026-08-14 — Lucas: "she is supposed to have FULL ACCESS") ----------------
+// Echo's os_* surface exists and the tier gate always allowed it interactively — but no operator menu
+// ever OFFERED it, so "checking my own machine" was claimed and never executed (the sidecar "Running
+// now" pre-claim). Same disease as the quant tools above: a menu failure, not a model failure. The
+// shell is the one door that covers the whole machine (processes, disk, GPU, her own files); the rest
+// of the os_* surface (window control, UIA perception) stays reachable through the generic `echo`
+// need-router. Tier policy is UNCHANGED: os_run_powershell stays OPERATOR-PRESENT ONLY — research-lane
+// menus never list it, and its executor passes the ambient lane so an autonomous call hits the tier
+// block. Echo's own permission gate (DEFAULT_CONFIRM + SENSITIVE_TARGETS) runs underneath every call.
+const OS_TOOLS = [
+  {
+    op: 'os_shell', tool: 'os_run_powershell',
+    desc: 'run a PowerShell script on HER OWN machine and read stdout+stderr+returncode (self-diagnosis: processes, disk, GPU, her own files — the write→run→read→fix loop). It may return confirmation_required with an approval_id: tell Lucas exactly what needs approving and re-call with {"approval_id":"…"} only AFTER he approves — never claim it ran until you have its output',
+    args: '{"script":"Get-Process | Sort-Object CPU -Descending | Select-Object -First 5"}',
+    map: (a = {}) => {
+      const o = { script: String(a.script || a.command || a.cmd || '') };
+      if (Number.isFinite(a.timeout)) o.timeout = a.timeout;
+      if (a.cwd) o.cwd = String(a.cwd);
+      if (a.approval_id) o.approval_id = String(a.approval_id);
+      return o;
+    }
+  },
+];
+
 // Every curated first-class tool (read + web), so main.js can wire all executors in one loop.
+// OS_TOOLS is deliberately NOT in this list: it is the first non-read curated surface, and its
+// executor must pass the ambient lane to the tier gate — main.js wires it in its own loop.
 const ALL_CURATED = READ_TOOLS.concat(WEB_TOOLS);
 
 // --- lanes: which RESEARCH lane a tool belongs to (the two-track split) ----------------------------
@@ -292,15 +318,17 @@ function laneSpec(lane) {
 // compact so the menu stays learnable; the generic `echo` tool covers everything not listed here.
 function operatorReadSpec() {
   const lines = ALL_CURATED.map(t => `- ${t.op} ${t.args}\n    ${t.desc}`);
-  return `ECHO DATA TOOLS (OUR structured data + public records + reliable web fetch — prefer these over a raw scrape when one fits; say so honestly if a result is empty):\n${lines.join('\n')}`;
+  const osLines = OS_TOOLS.map(t => `- ${t.op} ${t.args}\n    ${t.desc}`);
+  return `ECHO DATA TOOLS (OUR structured data + public records + reliable web fetch — prefer these over a raw scrape when one fits; say so honestly if a result is empty):\n${lines.join('\n')}` +
+    `\nHER OWN MACHINE (full access per Lucas — interactive turns only, Echo's confirm gate applies):\n${osLines.join('\n')}`;
 }
 
-// Look up a curated tool by its operator-facing op name (read or web).
-function readToolByOp(op) { return ALL_CURATED.find(t => t.op === String(op || '')) || null; }
+// Look up a curated tool by its operator-facing op name (read, web, or os).
+function readToolByOp(op) { return ALL_CURATED.concat(OS_TOOLS).find(t => t.op === String(op || '')) || null; }
 
 module.exports = {
   classifyTool, allowedOnAuto, policyFor, operatorReadSpec, readToolByOp,
-  READ_TOOLS, WEB_TOOLS, ALL_CURATED, laneOf, laneToolNames, laneSpec,
+  READ_TOOLS, WEB_TOOLS, OS_TOOLS, ALL_CURATED, laneOf, laneToolNames, laneSpec,
   MAINTAIN_TOOLS, maintainForcedArgs, maintainSpec,
   LOCKED_RE, HEAVY_RE, WRITE_RE, READ_RE, WEB_LANE_RE, PROSE_LANE_RE
 };

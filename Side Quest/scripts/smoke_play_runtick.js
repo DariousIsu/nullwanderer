@@ -49,6 +49,12 @@ function installHappyStubs() {
     ok(`web.${fn} is exported`, typeof web[fn] === 'function');
   }
   installHappyStubs();
+  // D3 (2026-08-14): no hardcoded site — an unconfigured 'open' tick resets honestly, and the walk
+  // below runs against an EXPLICITLY configured play_site_url (the only source now).
+  ps.reset(); ps.start({ requireSite: false });   // force the state machine to 'open' with no site
+  let r0 = await ps.runTick({ userName: 'Lucas' });
+  ok('open tick with NO play_site_url → honest reset, no browser call', ps.get() === 'none' && calls.open === 0, r0.note);
+  D.setMeta('play_site_url', 'https://crushon.ai');
   ps.reset(); ps.start();
   ok('starts at open', ps.get() === 'open');
 

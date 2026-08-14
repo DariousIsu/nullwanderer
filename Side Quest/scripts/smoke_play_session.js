@@ -19,8 +19,15 @@ const ok = (n, c, detail) => { if (c) { pass++; console.log(`  ✓ ${n}${detail 
 console.log('State machine:');
 ps.reset();
 ok('reset → none', ps.get() === 'none' && !ps.active());
+// D3 (2026-08-14): no hardcoded play site — an unconfigured start() REFUSES (personal time falls
+// through to self-exploration), and the site comes only from the play_site_url meta.
+ok('start with NO play_site_url → refused, stays none', ps.start() === false && ps.get() === 'none');
+ok('siteUrl unset → null (no crushon.ai default)', ps.siteUrl() === null);
+ok('start({requireSite:false}) → bookkeeping only (the pick-char path, site already open)', ps.start({ requireSite: false }) === true && ps.active());
+ps.reset();
+D.setMeta('play_site_url', 'https://example-play.test');
 ps.start();
-ok('start → open + active', ps.get() === 'open' && ps.active());
+ok('start with a CONFIGURED site → open + active', ps.get() === 'open' && ps.active());
 ps.set('chat');
 ok('set advances step', ps.get() === 'chat');
 ps.set('bogus');
