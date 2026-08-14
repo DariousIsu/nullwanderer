@@ -483,7 +483,7 @@ const smokes = [
   'smoke_play_session.js', 'smoke_play_startchat.js', 'smoke_poll_view.js', 'smoke_query_class.js',
   'smoke_recipes.js', 'smoke_recorder.js', 'smoke_register_gate.js', 'smoke_retrieval.js',
   'smoke_self_check.js', 'smoke_shared_link.js', 'smoke_sheet_view.js', 'smoke_snapback.js',
-  'smoke_stt.js', 'smoke_super_search_card.js', 'smoke_super_search_external.js', 'smoke_super_search_ingest.js',
+  'smoke_stt.js', 'smoke_speaker.js', 'smoke_super_search_card.js', 'smoke_super_search_external.js', 'smoke_super_search_ingest.js',
   'smoke_super_search_ledger.js', 'smoke_super_search_modelio.js', 'smoke_super_search_recipes.js', 'smoke_super_search_run.js',
   'smoke_touchpoint.js', 'smoke_variety.js', 'smoke_web.js', 'smoke_web_downloads.js',
   // ── wave 3a (2026-08-12): the 7 of 8 failing candidates repaired — ALL stale-assert vs deliberate
@@ -536,6 +536,10 @@ const smokes = [
   // classes) + the WRITE-FRESH clause in the reply contract. A personality DB of replays trains
   // a parrot — this is a goals-blocker, not polish.
   'smoke_replay_gate.js',
+  // ── the duplicate-thread ROOT (2026-08-13): the dedup pool was the 50 STALEST threads (ASC) —
+  // a fresh sibling was never in the window. newestFirst pool + the token floor now catch the
+  // 71-second rephrase with the embedder dead.
+  'smoke_thread_pool_window.js',
   // ── the FINALIZE conductor (2026-08-13, the document false-loop cure): gather fragments →
   // harvest ONE numbered source list → FROZEN outline → per-section cited write (injected) →
   // assemble ONE canonical file with validated inline [n] + full source list. Overwrites, never

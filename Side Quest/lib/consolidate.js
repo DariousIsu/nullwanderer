@@ -137,7 +137,9 @@ function tokenIntentMatch(candidate, pool) {
  * write. embedFn/classifyFn injectable for tests.
  */
 async function decideForCandidate(candidate, { embedFn = memory.embed, classifyFn = classifyGoal } = {}) {
-  const active = db.getActiveOpenThreads(50);
+  // newestFirst (2026-08-13): the dedup pool must hold the NEWEST threads — the ASC default gave
+  // the 50 STALEST, so a rephrase 71 seconds after its sibling never saw it (the duplicate root).
+  const active = db.getActiveOpenThreads(50, { newestFirst: true });
   if (active.length === 0) return { action: 'ADD' };
   // Deterministic subject-token pre-pass FIRST — holds even when the embedder is down (the silent
   // failure that let the 3803-3810 fragmentation through).

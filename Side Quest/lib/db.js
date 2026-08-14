@@ -1336,12 +1336,16 @@ function getUnstartedUserThreads(limit = 60) {
     .all(limit);
 }
 
-function getActiveOpenThreads(limit = 10, { includeStalled = true } = {}) {
+// `newestFirst` (2026-08-13, the duplicate-thread root): the default ASC order serves the idle
+// drain (stalest first) — but as a DEDUP pool it is exactly backwards: a just-minted thread sorts
+// LAST, so with >50 open threads the pool never contained the newest siblings, and every rephrase
+// minted a duplicate beside the one it should have matched (#3823/25/27, #3826/28, #3867/68).
+function getActiveOpenThreads(limit = 10, { includeStalled = true, newestFirst = false } = {}) {
   const statuses = includeStalled ? `('pending','active','stalled')` : `('pending','active')`;
   return getDb()
     .prepare(`SELECT * FROM open_threads
       WHERE status IN ${statuses} AND parent_id IS NULL
-      ORDER BY last_touched_ts ASC LIMIT ?`)
+      ORDER BY last_touched_ts ${newestFirst ? 'DESC' : 'ASC'} LIMIT ?`)
     .all(limit);
 }
 

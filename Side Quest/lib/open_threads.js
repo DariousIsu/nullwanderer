@@ -116,7 +116,7 @@ async function extractFromUserTurn({ userMessage, sourceTurnId, userName }) {
   // ADD/NOOP decision against the semantically-nearest active threads — only
   // genuinely-new objectives get inserted. Fail-open (ADD) if the decision errors,
   // so a hiccup never silently drops a real goal.
-  const active = db.getActiveOpenThreads(50);
+  const active = db.getActiveOpenThreads(50, { newestFirst: true });   // dedup pool = NEWEST (2026-08-13)
   const activeNorms = new Set(active.map(t => normalize(t.content)));
 
   const inserted = [];
