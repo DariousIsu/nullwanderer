@@ -87,6 +87,25 @@ async function run() {
   const set2 = await rumination.escalate(rumination.recentFreeThoughts(4), 'Lucas', { nameFn: async () => 'answer the open question about Google tools' });
   ok('suppressed when theme matches a recent tombstone', set2 === null && focus.isActive() === false);
 
+  // --- S3 DEFAULT contract (D1, 2026-08-14): escalate → OPEN-THREAD queue, never the dead focus door ---
+  // Under autonomic demotion setFromText is null by design; the unswept consumer meant every spiral
+  // named a theme and self-suppressed. Now the theme joins the driver's worklist via intent-dedup.
+  console.log('\nS3 default: escalate queues a thread for the driver:');
+  process.env.ZOE_AUTONOMIC = '1';
+  reset();
+  for (let i = 0; i < 4; i++) addThought('A: circling the same open question');
+  const q1 = await rumination.escalate(rumination.recentFreeThoughts(4), 'Lucas', { nameFn: async () => 'answer the open question about Google tools' });
+  ok('S3: escalate returns queued + threadId (no focus)', !!q1 && q1.queued === true && Number.isFinite(q1.threadId) && !q1.focus);
+  ok('S3: no focus was activated', focus.isActive() === false);
+  const thr = db.getDb().prepare('SELECT * FROM open_threads WHERE id=?').get(q1.threadId);
+  ok('S3: the open thread holds the named theme', !!thr && thr.content === 'answer the open question about Google tools');
+  ok('S3: cooldown armed (no per-thought re-naming burn)', parseInt(db.getMeta('rumination_cooldown_until') || '0', 10) > Date.now());
+
+  const q2 = await rumination.escalate(rumination.recentFreeThoughts(4), 'Lucas', { nameFn: async () => 'answer the open question about Google tools' });
+  const nThreads = db.getDb().prepare('SELECT COUNT(*) AS n FROM open_threads').get().n;
+  ok('S3: an intent-duplicate theme does NOT re-mint (dedup NOOP → null)', q2 === null && nThreads === 1);
+  process.env.ZOE_AUTONOMIC = '0';   // leave the suite's legacy pin as it found it
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { db.getDb().close(); } catch {}
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmp + ext); } catch {} }

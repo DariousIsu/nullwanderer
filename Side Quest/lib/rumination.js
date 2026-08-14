@@ -101,6 +101,30 @@ async function escalate(thoughts, userName = 'them', { nameFn = nameTheme } = {}
   let goal = null;
   try { goal = await nameFn(thoughts, userName); } catch (e) { console.error('[rumination] nameTheme failed:', e.message); }
   if (!goal || goal.length < 6) return null;
+  // D1 (2026-08-14, Lucas: "looks like an unswept consumer"): under S3 the scheduler owns research
+  // and focus.setFromText is DEMOTED to null — but this caller was never swept, so every detected
+  // spiral named a theme, hit the dead door, and self-suppressed for 30min. Detection wired to
+  // nothing. The S3-native route: the theme joins the OPEN-THREAD queue (the driver's worklist)
+  // through the SAME intent-dedup every other mint passes — the spiral finally gets WORKED, paced
+  // by the driver, instead of restated forever. Cooldown either way: once the theme is known work
+  // (queued now or already queued), further circling must not burn a naming call per new thought.
+  if (String(process.env.ZOE_AUTONOMIC || '1').trim() !== '0') {
+    try {
+      const dec = await require('./consolidate').decideForCandidate(goal);
+      if (dec && dec.action === 'ADD') {
+        const row = db.insertOpenThread({ content: goal });
+        console.log(`[rumination] circling → queued as open thread #${row.id}: ${goal.slice(0, 70)}`);
+        try { db.setMeta('rumination_cooldown_until', String(Date.now() + 30 * 60 * 1000)); } catch {}
+        return { queued: true, threadId: row.id, goal };
+      }
+      console.log(`[rumination] circling theme is already queued work (${dec && dec.targetId ? 'thread #' + dec.targetId : 'intent-duplicate'}) — cooldown, no re-mint`);
+      try { db.setMeta('rumination_cooldown_until', String(Date.now() + 30 * 60 * 1000)); } catch {}
+      return null;
+    } catch (e) {
+      console.error('[rumination] thread-queue escalation failed:', e.message);
+      return null;
+    }
+  }
   const set = await focusLib.setFromText(`<focus>${goal}</focus>`);
   if (set) {
     console.log(`[rumination] escalated circling → focus #${set.focus.id}: ${goal.slice(0, 70)}`);

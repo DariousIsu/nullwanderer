@@ -1065,10 +1065,14 @@ async function _runOneTick() {
           console.log('[rumination] comfort/prude fixation → resolved with a settled note (no focus escalation)');
           return;
         }
-        console.log(`[rumination] detected (avg cosine ${rum.avg.toFixed(3)}) — escalating to a focus`);
+        console.log(`[rumination] detected (avg cosine ${rum.avg.toFixed(3)}) — escalating`);
         const set = await ruminationLib.escalate(rum.thoughts, userName);
-        if (set) activeFocus = set.focus;
-        else { console.log('[rumination] escalation suppressed (tombstoned) — skipping tick'); return; }
+        // Three outcomes now (D1, 2026-08-14): legacy focus (ZOE_AUTONOMIC=0) → drive it this tick;
+        // S3 queued-as-thread → the DRIVER works it on its own pace, this tick just stops circling;
+        // null → suppressed/duplicate/tombstoned → skip the tick (the old spin-breaker).
+        if (set && set.focus) activeFocus = set.focus;
+        else if (set && set.queued) { console.log(`[rumination] theme handed to the driver (thread #${set.threadId}) — ending this tick`); return; }
+        else { console.log('[rumination] escalation suppressed (tombstoned/duplicate) — skipping tick'); return; }
       }
     } catch (e) { console.error('[monologue] rumination guard failed:', e.message); }
   }
