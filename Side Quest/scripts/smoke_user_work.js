@@ -154,6 +154,14 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
   ok(uw.REDIRECT_TRIGGER_RE.test('Hey Zo, can you take another look at the Hartfield and Green South report please'), 'trigger fires on "take another look at the X report" (the live acceptance-test miss)');
   ok(uw.REDIRECT_TRIGGER_RE.test('revisit the Monroe dossier when you can'), 'trigger fires on "revisit"');
   ok(uw.REDIRECT_TRIGGER_RE.test('go over the funding section again'), 'trigger fires on "go over"');
+  // THE SEQUENCE GUARD (2026-08-14 grove audit): the live 11:30 turn parked the commissioners run
+  // mid-pass because a completion-conditioned follow-up registered as an IMMEDIATE redirect.
+  ok(uw.SEQUENCED_RE.test('perfect a follow up task for you. When you have completed this, draft the Ohio legislator outreach'), 'the live sequenced follow-up matches ("when you have completed this")');
+  ok(uw.SEQUENCED_RE.test("once you've finished the commissioners list, pull their emails"), 'sequenced fires on "once you\'ve finished"');
+  ok(uw.SEQUENCED_RE.test('after that is done, move to the sponsor outreach'), 'sequenced fires on "after that is done"');
+  ok(!uw.SEQUENCED_RE.test('Complete any research related to China first'), 'a plain "complete X first" is NOT sequenced (immediate stays possible)');
+  ok(!uw.SEQUENCED_RE.test('when you have a moment, look at the Monroe list'), '"when you have a moment" is not a completion condition');
+
   const spec = uw.buildRedirectAsk('move to the china research');
   ok(spec.task === 'redirect_intent' && /STEERING WHAT SHE WORKS ON/.test(spec.want), 'the prompt states the DISTINCTION, not a phrase list');
   ok(/BACK to finished or in-flight work is steering too/.test(spec.want), 'the prompt counts a re-look at existing work as steering');

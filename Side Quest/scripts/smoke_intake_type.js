@@ -39,5 +39,20 @@ t('you were supposed to finish it at 0630. this is really frustrating honestly',
 // Ambiguity fails OPEN — the extractor's own filter stays as the second gate.
 t("I've been thinking a lot about how the midterms are shaping up this cycle in the southern states", 'open', true);
 
+// THE REFINEMENT ROUTE (grove audit 08-14): the live 11:26 turn — an explicit ADDITION to the
+// Ohio-legislators thread — minted #3883/#3884 beside it. Pure route check with a fake pool.
+const ot = require('../lib/open_threads');
+const pool = [
+  { id: 3881, content: "identify Ohio legislators to anchor Lucas's Energize America event" },
+  { id: 3700, content: 'plan the Monroe hardware budget spreadsheet' },
+];
+const LIVE_REFINE = 'Hey, so something you might want to add to the Ohio legislators to anchor the Energize America event is look at districts with data centers and power generation, and also the county commissioners';
+const r1 = ot.routeRefinement(LIVE_REFINE, pool);
+ok('the live 11:26 refinement routes to the ORIGINAL thread (#3881), not a mint', r1 && r1.targetId === 3881);
+ok('a refinement phrase with NO matching thread fails open (extractor decides)',
+  ot.routeRefinement('you might want to add a section on quantum computing exports to Malaysia somewhere', [pool[1]]) === null);
+ok('a plain work-ask is NOT a refinement (no refine phrase)',
+  ot.routeRefinement('research the applied digital data centers in Ellendale', pool) === null);
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

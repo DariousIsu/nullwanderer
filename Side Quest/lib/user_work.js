@@ -440,6 +440,13 @@ function detectRedirect(message) {
 // RE-LOOK verbs added 2026-08-06 (measured live: "can you take another look at the Hartfield and
 // Green South report" fired NOTHING — the P4b acceptance-test turn never reached the classifier).
 const REDIRECT_TRIGGER_RE = /\b(pivot|shift|switch|move|focus|prioriti[sz]e|rather|instead|first|concentrate|complete|finish|revisit|re-?examine|rework|another look|look (?:at\b[^.?!]{0,60}?)?again|go (?:back )?over)\b/i;
+
+// THE SEQUENCE GUARD (2026-08-14 grove audit): "a follow-up task for you — when you have completed
+// this, draft the outreach" registered as an IMMEDIATE redirect and PARKED the commissioners run
+// mid-pass. A completion-CONDITIONED clause is a sequenced follow-up by definition: the new work
+// queues behind the live focus, whatever the redirect classifier said (deterministic contract ON
+// model output).
+const SEQUENCED_RE = /\b(?:when|after|once)\s+(?:you(?:'ve| have| are)?|that(?:'s| is)?|it(?:'s| is)?|this\s+is)\s*(?:all\s+)?(?:completed?|finished?|done|wrapped(?:\s+up)?)\b/i;
 function buildRedirectAsk(message) {
   return {
     task: 'redirect_intent', v: 1, think: false,
@@ -504,4 +511,4 @@ When defer is false, item/when may be empty and days 0.`,
   };
 }
 
-module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, inheritedBaseDocId, priorSectionFor, priorOrgsIn, facetAppliesTo, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };
+module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, inheritedBaseDocId, priorSectionFor, priorOrgsIn, facetAppliesTo, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, SEQUENCED_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };

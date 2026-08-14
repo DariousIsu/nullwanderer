@@ -87,6 +87,22 @@ function isUnboundedGoal(text) {
 const MAPPING_RE = /^\s*(?:Compile and keep current the (?:municipal|town\/township|county|parish|borough|village)\b|VALIDATE the elected officials of\b)/i;
 function isAutonomousMapping(content) { return MAPPING_RE.test(String(content || '')); }
 
+// ── THE REFINEMENT ROUTE (2026-08-14, the grove audit) ───────────────────────────────────────────
+// Lucas, 11:26: "something you might want to add to the Ohio legislators [thread] is look at…" —
+// an explicit ADDITION to an active thread — and the extractor minted TWO new threads (#3883/#3884)
+// beside it. The dedup can't catch this (related-but-distinct wording, not a duplicate), and the
+// redirect lane never saw it (no pivot verb). The missing question: does this turn REFINE a thread
+// that already exists? A refinement-shaped turn whose subject token-matches an ACTIVE thread routes
+// as a CLARIFICATION on that thread — touched, folded into its pass guidance, ZERO mints. The added
+// work still happens, under the original's umbrella. No match → null → the extractor path as ever.
+const REFINE_RE = /\b(?:add(?:ing)?\s+(?:to|onto|on\s+to)|might\s+want\s+to\s+add|you\s+might\s+add|also\s+(?:look|check|include|pull|grab|research|find|get)|in\s+addition\s+to|on\s+top\s+of\s+(?:that|the)|expand\s+(?:that|it|the)|while\s+you'?re\s+(?:at\s+it|in\s+there)|to\s+(?:that|the\s+same)\s+(?:list|project|thread|work)|same\s+(?:list|project|thread)\b)/i;
+function routeRefinement(userMessage, pool) {
+  const t = String(userMessage || '');
+  if (!REFINE_RE.test(t)) return null;
+  const hit = consolidate.tokenIntentMatch(t, pool || []);
+  return hit ? { targetId: hit.id, targetContent: hit.content } : null;
+}
+
 /**
  * Extract any goals from a user message and insert into open_threads.
  * Returns array of inserted thread objects.
@@ -417,5 +433,7 @@ module.exports = {
   parseAndApplyStatusUpdates,
   stripStatusTags,
   detectAndCountMentions,
-  STATUS_TAG_RE
+  STATUS_TAG_RE,
+  routeRefinement,
+  REFINE_RE
 };
