@@ -557,6 +557,10 @@ const smokes = [
   // model judgment. Freeze-once topic+entity anchor (the GOV.UK drift cure), write-once outline,
   // dryness (3 identical gathers) → auto-finalize ONCE; revisions only on Lucas's ask.
   'smoke_doc_contract.js',
+  // ── the attachment land door (2026-08-14, the fabricated-review audit): binary attachments
+  // extract through the canvas-drop organ + LAND with a doc# coordinate; an unreadable file
+  // engages the honesty seam (never a review of vapor — the #11891 "JobsOhio" confabulation).
+  'smoke_attach_intake.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
