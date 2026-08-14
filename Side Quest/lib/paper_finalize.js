@@ -98,15 +98,24 @@ function outline(fragments, { max = 10 } = {}) {
   return picked.length >= 3 ? picked : DEFAULT_SECTIONS;
 }
 
-function sectionPrompt({ goal, heading, material, sources }) {
+function sectionPrompt({ goal, heading, material, sources, covered = [] }) {
   const srcList = sources.map((s) => `[${s.n}] ${s.title ? s.title + ' — ' : ''}${s.url}`).join('\n');
+  // SECTION-OVERLAP CURE (2026-08-14, Block 3): the first accepted paper repeated the same
+  // CoreWeave/financing facts across sections because each write was blind to the others. The
+  // loop is sequential, so each section sees a digest of what is ALREADY ON THE PAGE.
+  const coveredBlock = covered.length
+    ? `SECTIONS ALREADY WRITTEN (their ground is COVERED — do not restate their facts; at most refer in passing):\n`
+      + covered.map((c) => `- "${c.heading}": ${c.gist}`).join('\n') + '\n\n'
+    : '';
   return `You are writing ONE section of a finished research paper. Goal of the paper: ${goal}\n`
     + `SECTION: "${heading}"\n\n`
     + `THE NUMBERED SOURCE LIST (the ONLY citable sources):\n${srcList}\n\n`
+    + coveredBlock
     + `THE GATHERED MATERIAL (the ONLY facts you may use):\n${material.slice(0, 24000)}\n\n`
     + `Write the section now, 250-450 words, polished prose (no bullet dumps unless the content is a list by nature). `
     + `EVERY factual claim that traces to a source carries an inline citation like [3] using ONLY numbers from the list above. `
     + `A claim you cannot trace to the material is OMITTED — never invented, never uncited. `
+    + `This section covers ONLY its own ground — facts already used by an earlier section are not repeated here. `
     + `No preamble, no "In this section", no heading — the body text only.`;
 }
 
@@ -139,8 +148,9 @@ async function finalize({ topic, title, goal, tokens, exclude, write, dir = NOTE
   // (an honest thin paper beats a poisoned one; the caller sees the section count).
   const COT_RE = /^\s*(?:We (?:need|must|should|have to)|Let'?s|The (?:instruction|user|task) (?:says|asks|wants))\b|\bthe numbered source list\b/i;
   for (const heading of heads) {
+    const covered = sections.map((s) => ({ heading: s.heading, gist: s.body.trim().replace(/\s+/g, ' ').slice(0, 220) }));
     let body = '';
-    try { body = String(await write(sectionPrompt({ goal: goal || topic, heading, material, sources })) || ''); } catch {}
+    try { body = String(await write(sectionPrompt({ goal: goal || topic, heading, material, sources, covered })) || ''); } catch {}
     if (COT_RE.test(body)) { body = ''; }
     if (body.trim().length > 80) sections.push({ heading, body });
   }

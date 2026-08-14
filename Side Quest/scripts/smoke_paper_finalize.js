@@ -77,6 +77,15 @@ ok('the full source list is in the document', doc.includes('## Sources') && doc.
   const r5 = await pf.finalize({ topic: 'acme widgets', write: async () => 'We need to write the section using the numbered source list. The instruction says every claim must cite. ' + 'x'.repeat(100), dir, outDir: dir, land: false });
   ok('chain-of-thought bodies are REJECTED (honest failure, never a poisoned paper)', r5.ok === false);
 
+  // SECTION-OVERLAP CURE (Block 3, 08-14): each write after the first sees a covered-ground digest
+  // of the earlier sections; the first write sees none.
+  const prompts = [];
+  await pf.finalize({ topic: 'acme widgets', write: async (p) => { prompts.push(p); return `Distinct body ${prompts.length} [1]. ${'x'.repeat(80)}`; }, dir, outDir: dir, land: false });
+  ok('first section prompt carries NO covered-ground block', !/SECTIONS ALREADY WRITTEN/.test(prompts[0]));
+  ok('later section prompts carry the earlier sections as covered ground', prompts.length >= 2
+    && /SECTIONS ALREADY WRITTEN/.test(prompts[prompts.length - 1])
+    && /Distinct body 1/.test(prompts[prompts.length - 1]));
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { require('../lib/db').getDb().close(); } catch {}
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
