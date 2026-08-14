@@ -7715,6 +7715,22 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           for (const h of recallResult.streamHits.slice(0, 5)) if (h && h.source === 'news' && h.storyId) sf.follow(h.storyId, { reason: 'discussed' });
         } catch (e) { console.error('[story-follow] discussed hook failed:', e.message); }
       }
+      // CIVIC STORE (2026-08-14, the D14 wire): held rosters + seat VACANCIES matching this turn,
+      // surfaced INDEPENDENTLY like the streams so a rich object can't hide them. A vacancy line IS
+      // the answer to "who holds this seat" — nobody, cited — and a held district row answers from
+      // the store instead of a web search re-deriving what civic_memberships verifies. This path
+      // assembles its own parts (it never calls active_recall.knowledgeBlock), which is exactly how
+      // the first D14 chat test grounded blind while the recall arm sat populated one field away.
+      if (recallResult.civicHits && recallResult.civicHits.length) {
+        const cLines = recallResult.civicHits.slice(0, 3)
+          .map(c => { const s = String((c && c.line) || '').replace(/\s+/g, ' ').trim().slice(0, 400); return s ? `  • ${s}` : ''; })
+          .filter(Boolean);
+        if (cLines.length) {
+          parts.push('From your civic store (VERIFIED seat records — answer seat/roster questions directly FROM these; a VACANT entry means the seat is genuinely empty, cited):\n' + cLines.join('\n'));
+          recallResult.civicHits.forEach(c => rkRows.unshift({ content: c.line, source: 'civic' }));
+          console.log(`[recall] civic store grounded this turn — ${cLines.length} line(s)`);
+        }
+      }
       retrievedKnowledgeBlock = parts.length ? parts.join('\n\n') : null;
     } else {
       // Broad/open turn — scored recency×relevance×importance retrieval keeps her texture (unchanged).
