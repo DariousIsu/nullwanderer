@@ -121,8 +121,84 @@ function recordMembership(m = {}, { deps = {}, nowMs = Date.now() } = {}) {
         m.crmId || null, m.pullerId || null, m.email || null, m.phone || null, m.sourceUrl || null, sourceKind,
         m.docRef || null, isFinite(Number(m.confidence)) ? Number(m.confidence) : 0.5, nowMs);
     if (cur) d.prepare('UPDATE civic_memberships SET superseded_by = ? WHERE id = ?').run(info.lastInsertRowid, cur.id);
+    // THE SELF-HEALING WIRE (vacancy-as-data): a fresh membership naming a district FILLS any live
+    // vacancy claim on that exact seat — exact-key match on (body_key, district), never fuzzy.
+    // When the D14 successor is eventually recorded, the vacancy resolves itself with lineage to
+    // the filling row; nothing has to remember to close it.
+    let resolvedVacancy = null;
+    try {
+      if (m.district != null && str(m.district).trim()) {
+        const vac = d.prepare(`SELECT id FROM civic_vacancies WHERE body_key = ? AND TRIM(seat) = TRIM(?)
+          AND superseded_by IS NULL AND resolved_ts IS NULL`).get(bodyKey, str(m.district));
+        if (vac) {
+          d.prepare('UPDATE civic_vacancies SET resolved_ts = ?, resolved_by_membership = ? WHERE id = ?')
+            .run(nowMs, info.lastInsertRowid, vac.id);
+          resolvedVacancy = vac.id;
+        }
+      }
+    } catch { /* vacancy resolution is additive, never blocks the membership write */ }
+    return { ok: true, id: info.lastInsertRowid, superseded: cur ? cur.id : null, resolvedVacancy };
+  } catch (e) { return { ok: false, reason: e.message }; }
+}
+
+// ── vacancies — the seat-state claims (2026-08-14, the D14 lesson) ───────────────────────────
+// A seat KNOWN to be empty is a fact with a citation, not a missing row: an empty cell reads as
+// "unresearched" and invites either a wasted re-research pass or (worse) a confabulated name —
+// cite-or-leave-blank correctly refused to invent the D14 senator, but the complete answer was
+// "vacant since the incumbent died, successor election pending" and the store couldn't hold it.
+// `seat` carries the SAME value civic_memberships.district uses (bare "14"), so resolution is an
+// exact-key match. Idempotent like recordMembership: an unchanged re-record touches nothing, a
+// better source regrades in place, a materially different claim supersedes with lineage.
+const _VAC_MATERIAL = ['vacant_since', 'reason', 'successor_note'];
+function recordVacancy(v = {}, { deps = {}, nowMs = Date.now() } = {}) {
+  const bodyKey = v.bodyKey ? str(v.bodyKey) : keyFor(v.bodyTitle);
+  const seat = str(v.seat).trim();
+  if (!bodyKey) return { ok: false, reason: 'no body' };
+  if (!seat) return { ok: false, reason: 'a vacancy names its SEAT (the district/role value the roster uses)' };
+  try {
+    const d = _db(deps).getDb();
+    if (!d.prepare('SELECT 1 FROM civic_bodies WHERE body_key = ?').get(bodyKey)) return { ok: false, reason: `unknown body "${bodyKey}" — upsertBody first` };
+    const incoming = { vacant_since: v.vacantSince == null ? null : str(v.vacantSince), reason: v.reason == null ? null : str(v.reason), successor_note: v.successorNote == null ? null : str(v.successorNote) };
+    const cur = d.prepare(`SELECT * FROM civic_vacancies WHERE body_key = ? AND TRIM(seat) = TRIM(?)
+      AND superseded_by IS NULL AND resolved_ts IS NULL ORDER BY observed_ts DESC LIMIT 1`).get(bodyKey, seat);
+    if (cur) {
+      const changed = _VAC_MATERIAL.some((f) => incoming[f] != null && str(incoming[f]) !== str(cur[f]));
+      if (!changed) {
+        const conf = Number(v.confidence);
+        if (isFinite(conf) && conf > Number(cur.confidence || 0)) {
+          d.prepare('UPDATE civic_vacancies SET confidence = ?, source_url = COALESCE(?, source_url), source_kind = COALESCE(?, source_kind), observed_ts = ? WHERE id = ?')
+            .run(conf, v.sourceUrl || null, v.sourceKind || null, nowMs, cur.id);
+          return { ok: true, id: cur.id, regraded: true };
+        }
+        return { ok: true, id: cur.id, unchanged: true };
+      }
+    }
+    const info = d.prepare(`INSERT INTO civic_vacancies
+      (body_key, seat, vacant_since, reason, successor_note, source_url, source_kind, confidence, observed_ts, superseded_by, resolved_ts, resolved_by_membership)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`)
+      .run(bodyKey, seat, incoming.vacant_since, incoming.reason, incoming.successor_note,
+        v.sourceUrl || null, str(v.sourceKind) || 'operator', isFinite(Number(v.confidence)) ? Number(v.confidence) : 0.5, nowMs);
+    if (cur) d.prepare('UPDATE civic_vacancies SET superseded_by = ? WHERE id = ?').run(info.lastInsertRowid, cur.id);
     return { ok: true, id: info.lastInsertRowid, superseded: cur ? cur.id : null };
   } catch (e) { return { ok: false, reason: e.message }; }
+}
+
+// Live (unresolved, unsuperseded) vacancy claims for a body.
+function vacancies(bodyKeyOrTitle, { deps = {} } = {}) {
+  const key = keyFor(bodyKeyOrTitle);
+  try {
+    return _db(deps).getDb().prepare(`SELECT * FROM civic_vacancies WHERE body_key = ?
+      AND superseded_by IS NULL AND resolved_ts IS NULL ORDER BY seat ASC`).all(key);
+  } catch { return []; }
+}
+
+// One rendered line per live vacancy — the shape digests and rosters append.
+function _vacancyLine(r) {
+  const bits = [];
+  if (r.vacant_since) bits.push(`since ${r.vacant_since}`);
+  if (r.reason) bits.push(r.reason);
+  if (r.successor_note) bits.push(r.successor_note);
+  return `District ${r.seat} — VACANT${bits.length ? ` (${bits.join('; ')})` : ''}`;
 }
 
 // SEAT-GRAIN recorder (roster-refresh organ, 2026-08-07): an elected SEAT has exactly one holder,
@@ -208,7 +284,10 @@ function heldRostersFor(text, { limit = 40, deps = {} } = {}) {
     const rows = roster(b.body_key, { deps });
     if (!rows.length) continue;
     const named = rows.map((r) => `${r.person_name}${r.role && !/^member$/i.test(r.role) ? ` (${r.role})` : ''}${r.district ? ` [${r.district}]` : ''}`);
-    out.push({ bodyKey: b.body_key, count: rows.length, line: `${b.body_key} — ${rows.length} held: ${named.join('; ')}` });
+    // Live vacancy claims ride the same line — "who holds District 14" must answer VACANT (cited),
+    // never fall silent as if the seat were unresearched.
+    const vac = vacancies(b.body_key, { deps }).map(_vacancyLine);
+    out.push({ bodyKey: b.body_key, count: rows.length, line: `${b.body_key} — ${rows.length} held${vac.length ? ` + ${vac.length} vacant` : ''}: ${named.join('; ')}${vac.length ? `; ${vac.join('; ')}` : ''}` });
     if (out.length >= limit) break;
   }
   return out;
@@ -239,7 +318,8 @@ function civicDigestFor(topic, { limit = 120, charBudget = 40000, deps = {} } = 
     const rows = roster(key, { deps });
     if (!rows.length) continue;
     const named = rows.map((r) => `${r.person_name}${r.role && !/^member$/i.test(r.role) ? ` (${r.role})` : ''}`);
-    const line = `- ${key} — ${rows.length} member(s): ${named.join('; ')}`;
+    const vac = vacancies(key, { deps }).map(_vacancyLine);
+    const line = `- ${key} — ${rows.length} member(s)${vac.length ? ` + ${vac.length} VACANT seat(s): ${vac.join('; ')}` : ''}: ${named.join('; ')}`;
     if (lines.length >= limit || used + line.length > charBudget) { dropped++; continue; }
     lines.push(line); used += line.length + 1;
   }
@@ -285,10 +365,15 @@ function completeness(bodyKeyOrTitle, { deps = {} } = {}) {
   try {
     const d = _db(deps).getDb();
     const filled = d.prepare('SELECT COUNT(*) n FROM civic_memberships WHERE body_key = ? AND superseded_by IS NULL').get(key).n;
+    // A CITED vacancy is ACCOUNTED-FOR, not missing (the D14 lesson): "seat known empty" answers
+    // the standing question as well as a name does. `missing` counts only genuinely unresearched.
+    let vacant = 0;
+    try { vacant = d.prepare('SELECT COUNT(*) n FROM civic_vacancies WHERE body_key = ? AND superseded_by IS NULL AND resolved_ts IS NULL').get(key).n; } catch {}
     let seats = null;
     try { const c = d.prepare('SELECT seats FROM cardinality WHERE body = ?').get(key); if (c) seats = c.seats; } catch {}
-    return { bodyKey: key, filled, seats, complete: seats != null ? filled >= seats : null, missing: seats != null ? Math.max(0, seats - filled) : null };
-  } catch { return { bodyKey: key, filled: 0, seats: null, complete: null, missing: null }; }
+    const accounted = filled + vacant;
+    return { bodyKey: key, filled, vacant, seats, complete: seats != null ? accounted >= seats : null, missing: seats != null ? Math.max(0, seats - accounted) : null };
+  } catch { return { bodyKey: key, filled: 0, vacant: 0, seats: null, complete: null, missing: null }; }
 }
 
 // THE STANDING QUESTION: which bodies are short of their known denominator. Bodies with no known
@@ -300,15 +385,16 @@ function incomplete({ state = null, level = null, limit = 200 } = {}, { deps = {
     if (level) { where.push('b.level = ?'); args.push(str(level)); }
     const rows = _db(deps).getDb().prepare(`
       SELECT b.body_key, b.title, b.state, b.level, c.seats,
-             (SELECT COUNT(*) FROM civic_memberships m WHERE m.body_key = b.body_key AND m.superseded_by IS NULL) filled
+             (SELECT COUNT(*) FROM civic_memberships m WHERE m.body_key = b.body_key AND m.superseded_by IS NULL) filled,
+             (SELECT COUNT(*) FROM civic_vacancies v WHERE v.body_key = b.body_key AND v.superseded_by IS NULL AND v.resolved_ts IS NULL) vacant
       FROM civic_bodies b LEFT JOIN cardinality c ON c.body = b.body_key
       WHERE ${where.join(' AND ')} ORDER BY b.state, b.title LIMIT ?`).all(...args, Math.max(1, Math.min(1000, limit)));
     return {
-      incomplete: rows.filter((r) => r.seats != null && r.filled < r.seats).map((r) => ({ ...r, missing: r.seats - r.filled })),
-      complete: rows.filter((r) => r.seats != null && r.filled >= r.seats).length,
-      unknownDenominator: rows.filter((r) => r.seats == null).map((r) => ({ body_key: r.body_key, title: r.title, filled: r.filled })),
+      incomplete: rows.filter((r) => r.seats != null && (r.filled + r.vacant) < r.seats).map((r) => ({ ...r, missing: r.seats - r.filled - r.vacant })),
+      complete: rows.filter((r) => r.seats != null && (r.filled + r.vacant) >= r.seats).length,
+      unknownDenominator: rows.filter((r) => r.seats == null).map((r) => ({ body_key: r.body_key, title: r.title, filled: r.filled, vacant: r.vacant })),
     };
   } catch { return { incomplete: [], complete: 0, unknownDenominator: [] }; }
 }
 
-module.exports = { keyFor, upsertBody, getBody, recordMembership, recordSeatHolder, recordRoster, roster, heldRostersFor, staleRostersFor, civicDigestFor, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };
+module.exports = { keyFor, upsertBody, getBody, recordMembership, recordSeatHolder, recordRoster, recordVacancy, vacancies, roster, heldRostersFor, staleRostersFor, civicDigestFor, history, completeness, incomplete, LEVELS, FUNCTIONS, RESEARCHED_KINDS };

@@ -124,6 +124,54 @@ const T = 1785400000000;
   // --- fail-soft everywhere ---
   ok(cs.roster('nothing here').length === 0 && cs.history('x', 'y').length === 0, 'unknown bodies read back empty, never throw');
 
+  // ── VACANCY-AS-DATA (2026-08-14, the LA Senate D14 lesson) ──────────────────────────────────
+  {
+    const d = require('../lib/db').getDb();
+    cs.upsertBody({ title: 'Testland State Senate', level: 'state', state: 'TS' }, { nowMs: T });
+    d.prepare('INSERT OR REPLACE INTO cardinality (body, seats, source_kind, source_ref, observed_ts) VALUES (?, ?, ?, ?, ?)').run(cs.keyFor('Testland State Senate'), 3, 'official', 'https://example.gov/senate', T);
+    cs.recordMembership({ bodyTitle: 'Testland State Senate', personName: 'Alpha One', district: '1', sourceKind: 'official' }, { nowMs: T });
+    cs.recordMembership({ bodyTitle: 'Testland State Senate', personName: 'Beta Two', district: '2', sourceKind: 'official' }, { nowMs: T });
+
+    // a vacancy needs a seat and a known body
+    ok(cs.recordVacancy({ bodyTitle: 'Testland State Senate' }).ok === false, 'a vacancy without a seat is refused');
+    ok(cs.recordVacancy({ bodyTitle: 'No Such Body', seat: '3' }).ok === false, 'a vacancy on an unknown body is refused');
+
+    // record: seat 3 vacant, cited
+    const v1 = cs.recordVacancy({ bodyTitle: 'Testland State Senate', seat: '3', vacantSince: '2026', reason: 'incumbent died in office', successorNote: 'special election pending', sourceUrl: 'https://example.gov/senate', sourceKind: 'wiki', confidence: 0.8 }, { nowMs: T + 1 });
+    ok(v1.ok && v1.id, 'a cited vacancy lands');
+    ok(cs.vacancies('Testland State Senate').length === 1, 'the live vacancy reads back');
+
+    // completeness: a CITED vacancy is accounted-for, not missing
+    const c = cs.completeness('Testland State Senate');
+    ok(c.filled === 2 && c.vacant === 1 && c.complete === true && c.missing === 0,
+      'completeness: 2 filled + 1 cited vacancy over 3 seats = COMPLETE, missing 0');
+
+    // idempotent: unchanged re-record touches nothing; a better source regrades in place
+    const v2 = cs.recordVacancy({ bodyTitle: 'Testland State Senate', seat: '3', vacantSince: '2026', reason: 'incumbent died in office', successorNote: 'special election pending' }, { nowMs: T + 2 });
+    ok(v2.ok && v2.unchanged && cs.vacancies('Testland State Senate').length === 1, 'an unchanged re-record makes no new row');
+    const v3 = cs.recordVacancy({ bodyTitle: 'Testland State Senate', seat: '3', vacantSince: '2026', reason: 'incumbent died in office', successorNote: 'special election pending', sourceKind: 'official', sourceUrl: 'https://official.gov', confidence: 0.95 }, { nowMs: T + 3 });
+    ok(v3.ok && v3.regraded, 'a better source RAISES the grade in place');
+
+    // a materially different claim supersedes with lineage
+    const v4 = cs.recordVacancy({ bodyTitle: 'Testland State Senate', seat: '3', vacantSince: '2026', reason: 'incumbent died in office', successorNote: 'special election scheduled 2026-11-03' }, { nowMs: T + 4 });
+    ok(v4.ok && v4.superseded === v1.id && cs.vacancies('Testland State Senate').length === 1, 'a changed claim supersedes, never overwrites — one live row');
+
+    // digests SPEAK the vacancy — the report door can answer "who holds seat 3": nobody, cited
+    const dg = cs.civicDigestFor('Testland senate leadership');
+    ok(/VACANT/.test(dg) && /special election scheduled/.test(dg), 'the civic digest names the vacant seat and its story');
+    const held = cs.heldRostersFor('testland senate roster check');
+    ok(held.length === 1 && /VACANT/.test(held[0].line), 'held-roster injection carries the vacancy line');
+
+    // THE SELF-HEALING WIRE: a successor membership on that district resolves the vacancy
+    const fill = cs.recordMembership({ bodyTitle: 'Testland State Senate', personName: 'Gamma Three', district: '3', sourceKind: 'official' }, { nowMs: T + 5 });
+    ok(fill.ok && fill.resolvedVacancy != null, 'a successor row on the exact seat RESOLVES the vacancy');
+    ok(cs.vacancies('Testland State Senate').length === 0, 'the resolved vacancy leaves the live set');
+    const c2 = cs.completeness('Testland State Senate');
+    ok(c2.filled === 3 && c2.vacant === 0 && c2.complete === true, 'after the fill: 3 filled, 0 vacant, still complete');
+    const vrow = d.prepare('SELECT resolved_by_membership FROM civic_vacancies WHERE id = ?').get(v4.id);
+    ok(vrow && vrow.resolved_by_membership === fill.id, 'resolution carries lineage to the FILLING membership row');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   try { require('../lib/db').getDb().close(); } catch {}
   try { require('fs').unlinkSync(process.env.SQ_DB_PATH); } catch {}

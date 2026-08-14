@@ -884,6 +884,32 @@ const MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_civic_mem_body ON civic_memberships(body_key, superseded_by)`,
   `CREATE INDEX IF NOT EXISTS idx_civic_mem_crm ON civic_memberships(crm_id)`,
 
+  // SEAT VACANCY — a first-class, CITED seat-state claim (2026-08-14, the LA Senate D14 lesson:
+  // the honest answer to "who holds this seat" was NO ONE — incumbent died in office — and the
+  // store had no way to say it, so a known-vacant seat was indistinguishable from an unresearched
+  // one). NOT a membership row: civic rule 3 says this store owns SEATS, and a vacancy is a seat
+  // fact with no person — a fake "VACANT" person would pollute rosters, digests, and the
+  // departure logic. `seat` holds the same value civic_memberships.district uses (bare "14"), so
+  // the fill-event match is exact-key, never fuzzy. Supersede-never-overwrite lineage within this
+  // table; resolved_ts + resolved_by_membership stamp the FILL when a successor membership lands
+  // (recordMembership auto-resolves on body+district match — the self-healing wire).
+  `CREATE TABLE IF NOT EXISTS civic_vacancies (
+    id INTEGER PRIMARY KEY,
+    body_key TEXT NOT NULL REFERENCES civic_bodies(body_key),
+    seat TEXT NOT NULL,
+    vacant_since TEXT,
+    reason TEXT,
+    successor_note TEXT,
+    source_url TEXT,
+    source_kind TEXT,
+    confidence REAL DEFAULT 0.5,
+    observed_ts INTEGER NOT NULL,
+    superseded_by INTEGER,
+    resolved_ts INTEGER,
+    resolved_by_membership INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_civic_vac_body ON civic_vacancies(body_key, superseded_by, resolved_ts)`,
+
   // DOC CONTACTS — people extracted from SHORT-TERM research documents, so the contacts query can see
   // what her own research already found.
   //
