@@ -127,7 +127,7 @@ function classifyTool(name) {
 
 // May the autonomous loop use this tool? READ (lookups) and PROPOSE (gated, non-committing) are
 // allowed unattended; direct WRITE / HEAVY / LOCKED are not.
-function allowedOnAuto(name) { const t = classifyTool(name); return t === 'read' || t === 'propose' || DESKTOP_CONTROL_RE.test(name); }
+function allowedOnAuto(name) { const t = classifyTool(name); return t === 'read' || t === 'propose' || DESKTOP_CONTROL_RE.test(name) || AUTO_ALLOW_RE.test(name); }
 
 // --- the curated MAINTENANCE allowlist (conductor slice 2d) ------------------------------------
 // The autonomous gate correctly blocks write/heavy — which also meant her own Python maintenance
@@ -154,6 +154,17 @@ const MAINTAIN_NAMES = new Set(MAINTAIN_TOOLS.map((t) => t.tool));
 function maintainForcedArgs(name) { const t = MAINTAIN_TOOLS.find((x) => x.tool === String(name || '')); return t ? { ...t.force } : null; }
 function maintainSpec() { return MAINTAIN_TOOLS.map((t) => `- ${t.tool}: ${t.desc}`).join('\n'); }
 
+// AUTONOMOUS-LANE ALLOWANCES (2026-08-14, the enforce flip — harvested from the shadow window
+// plus the code-read inventory; tool-by-tool with a stated WHY, never by pattern):
+//   agent_inbox — the delegation RETURN path: the autonomy tick collects finished delegate
+//     results (cursor-advance on her OWN inbox, not a system-of-record mutation). The shadow
+//     measurement window's WOULD-BLOCK log was 19/19 this one tool; blocked, delegated results
+//     rot until the 24h expiry and unattended delegation is pointless.
+//   set_entity_temporal — the temporal-stamping door the news/event lanes call with
+//     DETERMINISTIC lane-computed args (never cloud-authored JSON); the known-legit autonomous
+//     write that kept the gate in shadow. Worst case is a wrong temporal state, supersedable.
+const AUTO_ALLOW_RE = /^(agent_inbox|set_entity_temporal)$/i;
+
 // The policy for one tool call. autonomous=true → the unattended research loop (read only).
 // autonomous=false → an interactive turn with Lucas present (read+write+heavy; locked still never).
 // maintain=true (only meaningful with autonomous) → the curated maintenance allowlist above is
@@ -165,6 +176,7 @@ function policyFor(name, { autonomous = false, maintain = false } = {}) {
     if (tier === 'shell') return { allow: false, tier, reason: 'shell execution (os_run_powershell) is OPERATOR-PRESENT ONLY — it is not on the autonomous desktop-control carve; name what you need run and surface it to Lucas instead of running it unattended' };
     if (tier === 'read') return { allow: true, tier, reason: 'read tool — allowed on the autonomous loop' };
     if (tier === 'propose') return { allow: true, tier, reason: 'propose tool — allowed on the autonomous loop (non-committing; Echo gates promotion)' };
+    if (AUTO_ALLOW_RE.test(name)) return { allow: true, tier, reason: 'named autonomous-lane allowance (AUTO_ALLOW_RE: the delegation return path / deterministic temporal stamping — see the why-comments)' };
     if (DESKTOP_CONTROL_RE.test(name)) {
       return { allow: true, tier, reason: 'desktop control — operator-authorized on the autonomous loop 2026-07-27 (Echo os_* permission gate + sensitive-target confirmation still apply)' };
     }

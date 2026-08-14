@@ -195,6 +195,18 @@ async function run() {
   r = await suit.dispatch({ kind: 'do', name: 'run_integrity_audit', args: {} }, { autonomous: true });
   ok(r.blocked === true && !calls.includes('run_integrity_audit'), 'the SAME dispatch without the maintain flag stays BLOCKED');
 
+  // ── AUTONOMOUS-LANE ALLOWANCES (2026-08-14, the enforce flip) ────────────────────────────────
+  {
+    const et = require('../lib/echo_tier');
+    ok(et.policyFor('agent_inbox', { autonomous: true }).allow === true, 'agent_inbox (the delegation return path) is allowed on auto — 19/19 of the shadow window');
+    ok(et.policyFor('set_entity_temporal', { autonomous: true }).allow === true, 'set_entity_temporal (deterministic lane temporal stamping) is allowed on auto');
+    ok(et.classifyTool('agent_inbox') === 'write' && et.classifyTool('set_entity_temporal') === 'write',
+      'both KEEP their write classification — the allowance is a named policy carve, not a re-tiering');
+    ok(et.policyFor('agent_clear', { autonomous: true }).allow === false, 'sibling agent_ tools stay blocked — the allowance is tool-by-tool, never by family');
+    ok(et.policyFor('set_engagement_stage', { autonomous: true }).allow === false, 'other set_ writes stay blocked — no prefix bleed from the allowance');
+    ok(et.allowedOnAuto('agent_inbox') && !et.allowedOnAuto('agent_fire'), 'allowedOnAuto agrees with policyFor on the carve');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 }
