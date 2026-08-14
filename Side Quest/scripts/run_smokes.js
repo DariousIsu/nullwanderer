@@ -561,6 +561,12 @@ const smokes = [
   // extract through the canvas-drop organ + LAND with a doc# coordinate; an unreadable file
   // engages the honesty seam (never a review of vapor — the #11891 "JobsOhio" confabulation).
   'smoke_attach_intake.js',
+  // ── the lookup guard (2026-08-14, post-compact queue #4): the last door before an auto-derived
+  // query reaches a real search engine. Local-action promises ("pulling it from our store") veto
+  // the promised-lookup net — wrong surface, the material is held; a coherence floor at the
+  // liveLookupAndAnswer funnel stops garbled STT / self-echo fragments (search history is a
+  // conviction record). Errs permissive: a false reject silences a legit lookup.
+  'smoke_lookup_guard.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.

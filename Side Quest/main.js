@@ -11237,6 +11237,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       && !/^\s*(understood|got it|okay|ok\b|great|sure|will do|sounds good)/i.test(s)
       && !/\bi['']?ll\b/i.test(s.slice(0, 40));
     if (!followupFired && noRetrievalTag && _inProgressPromise(finalSaid || '')) {
+      // LOCAL-ACTION VETO (2026-08-14, post-compact queue #4): the promise shape matched, but if the
+      // announced retrieval's OBJECT is one of HER OWN surfaces ("pulling the report from our store",
+      // "checking the roster we built", "pulling doc #15817 back up") a web search is the WRONG
+      // surface — the material is already held, and the junk query becomes a permanent entry in the
+      // engine's history. Same reasoning as the report-cmd net above, extended to spontaneous promises.
+      const _la = require('./lib/lookup_guard').localAction(finalSaid || '');
+      if (_la) {
+        console.log(`[lookup-guard] promised-lookup vetoed — the announced action is LOCAL (${_la.via}); her own stores are not a web query`);
+      } else {
       const q = String(finalSaid || '')
         // Greeting first (live 08-06): "Morning. Pulling current 10-year Treasury yields now" kept
         // "Morning." in the query and the search engine answered with dictionary definitions of the
@@ -11250,6 +11259,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         console.log(`[main] promised-lookup net → running the lookup she announced: "${q.slice(0, 80)}"`);
         liveLookupAndAnswer({ io, channel, sessionId, userName, query: q })
           .catch(e => console.error('[main] promised-lookup failed:', e.message));
+      }
       }
     }
 
@@ -11904,6 +11914,19 @@ async function readHerBrowserDeep() {
 // Do a complete live lookup for `query` and answer Lucas in chat via one tool-followup.
 // Idle is paused around the lookup so the monologue can't grab the shared browser mid-search.
 async function liveLookupAndAnswer({ io, channel, sessionId, userName, query }) {
+  // COHERENCE FLOOR (2026-08-14, post-compact queue #4): every auto-net query — research-command,
+  // live-info, promised-lookup, tool-router web, intent→cloud web — funnels through here before it
+  // reaches a real search engine, and garbled STT / self-echo fragments were going to the engine
+  // verbatim (the search history is a conviction record). An incoherent query searches NOTHING;
+  // her main reply already went out on every calling path, so standing down is silent and safe.
+  // Deliberate tool use (operator web_search, directed research) does not pass through here.
+  try {
+    const _floor = require('./lib/lookup_guard').queryFloor(query);
+    if (!_floor.ok) {
+      console.log(`[lookup-guard] query fails the coherence floor (${_floor.why}) — no web search: "${String(query).slice(0, 80)}"`);
+      return;
+    }
+  } catch {}
   try { pauseMonologue(); pauseHeartbeat(); } catch {}
   let content = '';
   let captureText = '';   // WHOLE page for claim-extraction + citation (content stays bounded for chat)
