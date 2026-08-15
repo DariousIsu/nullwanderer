@@ -13456,15 +13456,27 @@ async function autonomyTick() {
                   console.log(`[autonomy] need #${need.id} open deferred — study-first needs a free cloud slot`);
                   return;
                 }
+                // STAGE-2 CLASS BRANCH (native self-repair, 2026-08-15): a REPAIR need (born from
+                // self-audit/self-watch — a defect in HER OWN program) gets a DIAGNOSIS pass over
+                // deterministically pre-gathered evidence (the implicated file, its git history,
+                // the live log) with a FILE:LINE validator; web study stays the SKILL shape. A
+                // repair "study" that passed the URL gate was blog reading about someone else's code.
+                const _diag = (() => { try { return require('./lib/diagnosis'); } catch { return null; } })();
+                const isRepair = !!(_diag && _diag.isRepairNeed(need));
                 try {
                   const sp = await runCloudOperator({
-                    userMessage: `RESEARCH ONLY — do not build anything. Find how existing projects, libraries, or docs implement: "${need.need}". Search the web and READ what you find (never run or copy-execute it). Reply in at most 1200 chars: the pattern to follow, the pitfalls, and 2-4 source URLs.`,
+                    userMessage: isRepair
+                      ? _diag.diagnosisPrompt(need, _diag.preGather(need))
+                      : `RESEARCH ONLY — do not build anything. Find how existing projects, libraries, or docs implement: "${need.need}". Search the web and READ what you find (never run or copy-execute it). Reply in at most 1200 chars: the pattern to follow, the pitfalls, and 2-4 source URLs.`,
                     autonomous: true,
                   });
                   study = String((sp && sp.answer) || '').trim().slice(0, 2500);
-                  // M6.3 payload contract: the prompt demands sources; a study with no URL, or one
-                  // that is process narration, is not a study — the honest unstudied path stands.
-                  if (study && (require('./lib/canvas_command').isNarration(study) || !/https?:\/\//.test(study))) {
+                  // Payload contracts, per class: a SKILL study demands source URLs (M6.3); a REPAIR
+                  // diagnosis demands FILE:LINE citations into her own code. Neither accepts narration.
+                  if (study && isRepair && !_diag.validateDiagnosis(study)) {
+                    console.log(`[autonomy] need #${need.id} DIAGNOSIS rejected (no file:line citations / narration) — opening unstudied`);
+                    study = '';
+                  } else if (study && !isRepair && (require('./lib/canvas_command').isNarration(study) || !/https?:\/\//.test(study))) {
                     console.log(`[autonomy] need #${need.id} study REJECTED (${/https?:\/\//.test(study) ? 'narration' : 'no source URLs'}) — opening unstudied`);
                     study = '';
                   }
@@ -13472,9 +13484,9 @@ async function autonomyTick() {
                 finally { try { require('./lib/board').release(studySlot); } catch {} }
                 if (study) {
                   try { db.setMeta(`need.${need.id}.study`, study); } catch {}
-                  console.log(`[autonomy] need #${need.id} study pass → ${study.length}ch, ${(study.match(/https?:\/\//g) || []).length} url(s)`);
+                  console.log(`[autonomy] need #${need.id} ${isRepair ? 'DIAGNOSIS' : 'study'} pass → ${study.length}ch, ${isRepair ? `${(study.match(/[\w./\\-]+\.(?:js|py|md):\d+/g) || []).length} file:line citation(s)` : `${(study.match(/https?:\/\//g) || []).length} url(s)`}`);
                 } else {
-                  console.log(`[autonomy] need #${need.id} study pass came back empty — opening unstudied (named as such to the picker)`);
+                  console.log(`[autonomy] need #${need.id} ${isRepair ? 'diagnosis' : 'study'} pass came back empty — opening unstudied (named as such to the picker)`);
                 }
               }
               let st = driver.start({ slug, goal, suite: useSuite, files, study, nowMs: now });
