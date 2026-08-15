@@ -783,8 +783,15 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
       const maxFrames = Math.max(1, Math.ceil((PREROLL_MS / 1000) * pcmRate / 4096));
       sp.onaudioprocess = (e) => {
         const frame = new Float32Array(e.inputBuffer.getChannelData(0));   // copy — the input buffer is reused
-        ringBuf.push(frame);
-        while (ringBuf.length > maxFrames) ringBuf.shift();
+        // PRE-ROLL stays clean of HER voice (2026-08-15 deep-dive V6): the ring used to fill
+        // unconditionally, so a capture starting right after she spoke seeded its pre-roll with her
+        // own speech tail (AEC residual 0.26 » 0.055 threshold) — dragging genuine speaker-gate
+        // scores toward the cut and minting exactly the quiet near-miss rejects V5 now counts.
+        // A barge-in capture is unaffected: uttBuf accumulates via `capturing` regardless.
+        if (!sheSpeaking) {
+          ringBuf.push(frame);
+          while (ringBuf.length > maxFrames) ringBuf.shift();
+        }
         if (capturing) uttBuf.push(frame);
       };
       const zero = ac.createGain(); zero.gain.value = 0;

@@ -101,7 +101,9 @@ function createGuard({ detectApp = detectMeetingApp, calendarBusy = null, selfMe
     manual(mode) {
       if (mode === 'pause') { st.mode = 'manual'; _set(true, 'manual'); }
       else if (mode === 'resume') { st.mode = 'manual'; _set(false, null); }
-      else st.mode = 'auto';   // detection decides again on the next evaluate()
+      else { st.mode = 'auto'; _set(false, null); }   // hand-back is an affirmative act: unpause NOW;
+      // detection re-decides on the next evaluate() (2026-08-15 deep-dive V1 — 'auto' used to leave
+      // st.paused as-is, so a hand-back during a stale pause stayed silent until the next tick).
       return { ...st };
     },
     async evaluate() {

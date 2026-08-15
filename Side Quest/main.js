@@ -584,12 +584,22 @@ const _voiceGuard = require('./lib/voice_guard').createGuard({
   calendarBusy: async () => {
     try { const b = await require('./lib/voice_guard').isCalendarBusy(require('./lib/gcal')); return b || null; } catch { return null; }
   },
-  onChange: (s) => console.log(`[voice-guard] ${s.paused ? `voice PAUSED — ${s.reason}` : 'voice resumed'} (mode=${s.mode})`),
+  onChange: (s) => {
+    console.log(`[voice-guard] ${s.paused ? `voice PAUSED — ${s.reason}` : 'voice resumed'} (mode=${s.mode})`);
+    // FLUSH ON PAUSE (2026-08-15 deep-dive V2): the guard used to gate only NEW enqueues — an
+    // unprompted utterance enqueues every sentence at once, so a pause had zero effect on the
+    // whole backlog and she kept talking into his meeting. Flushing drops all pending chunks;
+    // the one currently-audible sentence finishes (renderer owns that clip), then silence.
+    if (s.paused) { try { _speech.flush(); } catch {} }
+  },
 });
 let _vgHeldLogAt = 0;   // throttle the per-chunk "held" log — a streamed reply enqueues many sentences
-// Auto-detect ticks only while the voice lane is actually on (TTS configured) — no PowerShell window
-// sniffing on a voiceless install. Manual pause/resume works regardless of the tick.
-setInterval(() => { try { if (config.ttsConfig().enabled) _voiceGuard.evaluate().catch(() => {}); } catch {} }, 60 * 1000).unref?.();
+let _lastSttTs = 0;     // last mic-lane activity (stt:transcribe), for the guard tick below
+// Auto-detect ticks while the voice lane is on — TTS configured OR the MIC recently active
+// (2026-08-15 deep-dive V4: the tick was TTS-gated but the always-on mic isn't, so a voiceless
+// install with the mic on never auto-paused and meetings became turns). A truly voiceless+micless
+// install still does no PowerShell window sniffing. Manual pause/resume works regardless.
+setInterval(() => { try { if (config.ttsConfig().enabled || (Date.now() - _lastSttTs) < 10 * 60 * 1000) _voiceGuard.evaluate().catch(() => {}); } catch {} }, 60 * 1000).unref?.();
 
 const _speech = (() => {
   let synthChain = Promise.resolve();   // serial synth, runs ahead of playback
@@ -693,8 +703,14 @@ app.whenReady().then(() => {
   try {
     const ok = globalShortcut.register('Control+Alt+M', () => {
       try {
-        const r = _voiceGuard.manual(_voiceGuard.state().paused ? 'resume' : 'pause');
-        console.log(`[voice-guard] hotkey → ${r.paused ? 'PAUSED (manual)' : 'resumed (manual)'}`);
+        // Resume hands back to AUTO, not to a manual-unpaused hold (2026-08-15 deep-dive V1):
+        // manual('resume') locked mode='manual' forever, and the only road back — the
+        // voice:guard-manual IPC — is exposed to no surface, so ONE pause/resume cycle killed
+        // meeting auto-detect until restart, silently. The immediate evaluate() re-checks now,
+        // so resuming during a live meeting re-pauses within seconds, not a 60s tick.
+        const r = _voiceGuard.manual(_voiceGuard.state().paused ? 'auto' : 'pause');
+        console.log(`[voice-guard] hotkey → ${r.paused ? 'PAUSED (manual)' : 'resumed (auto-detect restored)'}`);
+        if (!r.paused) _voiceGuard.evaluate().catch(() => {});
       } catch {}
     });
     if (!ok) console.log('[voice-guard] hotkey Ctrl+Alt+M unavailable (held by another app)');
@@ -3001,6 +3017,7 @@ ipcMain.handle('stt:transcribe', async (_e, audioBuf) => {
   const fs = require('fs'), os = require('os');
   let tmp = null;
   try {
+    _lastSttTs = Date.now();   // the mic lane is live → the guard tick keeps auto-detect running (V4)
     // VOICE GUARD (queue #6): while paused, the room is NOT captured — the audio drops at the door,
     // untranscribed and unverified. The renderer already treats ok:false as an idle drop.
     try { const g = _voiceGuard.state(); if (g.paused) return { ok: false, paused: true, reason: g.reason }; } catch {}
@@ -3017,6 +3034,22 @@ ipcMain.handle('stt:transcribe', async (_e, audioBuf) => {
       require('./lib/stt').transcribe(tmp, { wallMs: 60000 }),
       require('./lib/speaker').verify(tmp, { wallMs: 60000 }).catch((e) => ({ ok: false, match: true, failOpen: true, error: e.message })),
     ]);
+    // REJECT TELEMETRY (2026-08-15 deep-dive V5): a quiet genuine-speaker reject was a console line
+    // and nothing else — no counter would ever surface "add enrollment samples". Count every reject;
+    // a NEAR-MISS (within 0.06 under the cut — the band the pre-roll's own-speech-tail contamination
+    // drags genuine scores into) gets its own counter and a periodic named advisory. The doctrine
+    // stays: a quiet real reject means ADD ENROLLMENT SAMPLES, never lower the cut.
+    try {
+      if (spkr && spkr.ok && spkr.match === false && typeof spkr.score === 'number') {
+        const rj = (parseInt(db.getMeta('speaker.reject_count') || '0', 10) || 0) + 1;
+        db.setMeta('speaker.reject_count', String(rj));
+        if (spkr.score >= (spkr.threshold || 0) - 0.06) {
+          const nm = (parseInt(db.getMeta('speaker.nearmiss_count') || '0', 10) || 0) + 1;
+          db.setMeta('speaker.nearmiss_count', String(nm));
+          if (nm % 5 === 0) console.warn(`[speaker] ${nm} NEAR-MISS rejects total (score just under thr ${spkr.threshold}) — if these are Lucas, ADD enrollment samples; never lower the cut`);
+        }
+      }
+    } catch {}
     return (res && res.ok)
       ? { ok: true, text: res.text || '', ms: res.ms, lang: res.lang, dur: res.dur, peak: res.peak, speaker: spkr }
       : { ok: false, error: (res && res.error) || 'stt failed', speaker: spkr };
@@ -3043,6 +3076,10 @@ ipcMain.handle('speaker:enroll', async (_e, audioBuf) => {
   const fs = require('fs'), os = require('os');
   let tmp = null;
   try {
+    // VOICE GUARD (2026-08-15 deep-dive V3): enrollment was the one audio door with no guard
+    // check — audio captured during a meeting could be embedded into the OPERATOR voiceprint,
+    // contaminating the very gate that keeps other voices out. Same refusal as the mic door.
+    try { const g = _voiceGuard.state(); if (g.paused) return { ok: false, paused: true, error: `voice guard is paused (${g.reason}) — enroll when the room is yours` }; } catch {}
     if (!audioBuf) return { ok: false, error: 'no audio' };
     const bytes = Buffer.isBuffer(audioBuf) ? audioBuf : Buffer.from(audioBuf);
     if (!bytes.length) return { ok: false, error: 'empty audio' };

@@ -80,6 +80,34 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const d = await vg.detectMeetingApp();
   ok(d === null || typeof d === 'string', `resolves to string|null without throwing (got: ${JSON.stringify(d)})`);
 
+  console.log('F) DEEP-DIVE V1 — the hand-back is an affirmative unpause; detection re-decides');
+  {
+    let live = 'Zoom';
+    const g = vg.createGuard({ detectApp: async () => live, calendarBusy: null, selfMeeting: null });
+    g.manual('pause');
+    ok(g.state().paused && g.state().mode === 'manual', 'manual pause holds');
+    const r = g.manual('auto');
+    ok(!r.paused && r.mode === 'auto', 'V1: manual(auto) unpauses IMMEDIATELY (it used to leave paused stuck until the next tick)');
+    await g.evaluate();
+    ok(g.state().paused && /Zoom/.test(g.state().reason), 'V1: a live meeting re-pauses on the next evaluate — hand-back never blinds detection');
+    live = null;
+    await g.evaluate();
+    ok(!g.state().paused, 'meeting over → auto-detect resumes the voice on its own');
+  }
+
+  console.log('G) DEEP-DIVE V1/V2 source pins — the main.js seats cannot silently regress');
+  {
+    const m = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+    ok(/_voiceGuard\.manual\(_voiceGuard\.state\(\)\.paused \? 'auto' : 'pause'\)/.test(m),
+      'V1: the hotkey resume hands back to AUTO (never a permanent manual hold)');
+    ok(/if \(s\.paused\) \{ try \{ _speech\.flush\(\); \} catch \{\} \}/.test(m),
+      'V2: a guard pause FLUSHES pending speech — she stops talking into the meeting');
+    ok(/const g = _voiceGuard\.state\(\); if \(g\.paused\) return \{ ok: false, paused: true, error:/.test(m),
+      'V3: the enrollment door refuses while the guard is paused (no voiceprint contamination)');
+    ok(/speaker\.nearmiss_count/.test(m),
+      'V5: near-miss rejects are COUNTED — "add enrollment samples" can finally surface');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
