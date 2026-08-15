@@ -4838,7 +4838,7 @@ try {
   // idle-cadence poll fires both on their OWN internal gates (dirty≥3 / 90-min TTL, + a 30-min retry
   // floor), quota-gated to the idle lane since they compose on the cloud. When not stale it no-ops
   // (a few meta reads), so the 15-min cadence can't waste budget or spam.
-  const _identityTick = setInterval(() => {
+  const _runIdentityMaintenance = () => {
     try {
       if (!require('./lib/quota_gate').allow('idle', { quiet: true }).allow) return;
       const uName = db.getMeta('user_name') || 'Lucas';
@@ -4850,7 +4850,9 @@ try {
         genFn: (prompt) => condenseComplete([{ role: 'user', content: prompt }], { numPredict: 320 }),
       }).then((m) => { if (m) console.log('[identity] mood cultivated (idle cadence):', m.feeling); }).catch(() => {});
     } catch {}
-  }, 15 * 60 * 1000);
+  };
+  setTimeout(_runIdentityMaintenance, 90 * 1000);   // refresh soon after a boot, not 15min later
+  const _identityTick = setInterval(_runIdentityMaintenance, 15 * 60 * 1000);
   if (_identityTick.unref) _identityTick.unref();
   console.log('[status_vector] Loop A (60s self-read) + Loop C (machine vitals) + Loop D (db health, 10min) + Stage-1 self-audit (daily) + ambient screen (120s) + identity maintenance (15min) armed');
 } catch (e) { console.error('[status_vector] loop arm failed:', e.message); }
