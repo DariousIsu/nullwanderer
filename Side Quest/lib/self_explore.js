@@ -119,6 +119,32 @@ function parseReaction(raw) {
  * One full experience: pick → search → read whole → react → persist (+ identity when earned)
  * → share to the outbox. Cadence-gated unless opts.force.
  */
+// THE SELF-LANE CONSUMER WIRE (2026-08-15 deep-dive B6): typed routing stamps standing
+// self-growth threads (`thread.N.lane` = 'self') and names THIS organ their consumer — but the
+// organ only ever read its own CATALOG, so stamped threads sat orphaned forever. A stamped
+// thread now supplies the SEED (the subject she explores); the catalog keeps supplying the
+// rotation when no thread is due. A thread is "due" at most every 6h (standing work has a
+// cadence, not a completion), and each consumption is noted on the thread so the board shows
+// the organ genuinely working it.
+const THREAD_SEED_GAP_MS = 6 * 3600 * 1000;
+function _threadSeed(now = Date.now()) {
+  try {
+    // Dueness keys on the organ's OWN consumption stamp (thread.N.self_explore_at), never on
+    // last_touched_ts — the lane-stamp note and every other organ's touch move that, so a fresh
+    // thread would have sat "not due" for 6h and a busy thread forever.
+    const rows = db.getDb().prepare(`SELECT t.id, t.content FROM open_threads t
+      JOIN meta m ON m.key = ('thread.' || t.id || '.lane') AND m.value = 'self'
+      WHERE t.status IN ('pending','active') ORDER BY t.id ASC LIMIT 12`).all();
+    let best = null;
+    for (const r of rows) {
+      const at = _num(db.getMeta(`thread.${r.id}.self_explore_at`), 0);
+      if ((now - at) < THREAD_SEED_GAP_MS) continue;   // consumed recently — not due
+      if (!best || at < best.at) best = { threadId: r.id, content: String(r.content || '').replace(/\s+/g, ' ').trim(), at };
+    }
+    return (best && best.content) ? best : null;
+  } catch { return null; }
+}
+
 async function run(deps = {}, { now = Date.now(), force = false } = {}) {
   if (!force) {
     const last = _num(db.getMeta(LAST_KEY), 0);
@@ -128,7 +154,14 @@ async function run(deps = {}, { now = Date.now(), force = false } = {}) {
   const fetchPage = deps.fetchPage || ((u) => { try { return require('./web_search').fetchPage(u, { maxChars: 12000, reuse: true }); } catch { return Promise.resolve(null); } });
   const complete = deps.complete || ((prompt) => { try { return require('./ollama').complete({ prompt, options: { temperature: 0.8, num_predict: 500 } }); } catch { return Promise.resolve(''); } });
 
-  const { domain, seed } = pick(now);
+  let { domain, seed } = pick(now);
+  let consumedThread = null;
+  const th = deps.threadSeed !== undefined ? deps.threadSeed : _threadSeed(now);
+  if (th && th.content) {
+    consumedThread = th.threadId;
+    seed = `${th.content.slice(0, 160)} essay`;   // reactable phrasing — the organ reacts, not researches
+    console.log(`[self-explore] consuming self-lane thread #${th.threadId} as the seed`);
+  }
   try { db.setMeta(LAST_KEY, String(now)); } catch {}
   _stamp(domain, now);
 
@@ -156,11 +189,18 @@ async function run(deps = {}, { now = Date.now(), force = false } = {}) {
   // invisible to scored recall from day one. Embed like every other knowledge write; a failed
   // embed still lands the row and the idle backfill re-embeds it.
   const body = `EXPERIENCE (${domain}) — ${title}\nFeeling: ${rx.feeling}\nStruck: ${rx.struck}\nStance: ${rx.stance}\nConnection: ${rx.connection}`;
+  const embedFn = deps.embed || ((t) => require('./memory').embed(t));
   let bodyEmb = null;
-  try { bodyEmb = JSON.stringify(await require('./memory').embed(body)); } catch {}
+  try { bodyEmb = JSON.stringify(await embedFn(body)); } catch {}
   try {
     db.insertKnowledge({ kind: 'experience', content: body, source: 'self_explore', importance: rx.keep ? 0.7 : 0.5, embedding: bodyEmb, provenance: { url, title, domain, seed } });
   } catch (e) { try { db.insertKnowledge({ kind: 'note', content: body, source: 'self_explore', importance: 0.5, embedding: bodyEmb }); } catch {} }
+  // B6: the consumed thread carries the work trail — the board can see the organ running it —
+  // and the consumption stamp starts the 6h dueness clock for its next turn.
+  if (consumedThread) {
+    try { db.setMeta(`thread.${consumedThread}.self_explore_at`, String(now)); } catch {}
+    try { db.touchOpenThread(consumedThread, `self-exploration consumed this as a seed (${domain}): reacted to "${String(title || seed).slice(0, 80)}"${rx.keep ? ' — kept part of it' : ''}`); } catch {}
+  }
 
   // Identity is EARNED: experienced + first-person + kept. (Research-derived interests still rail.)
   if (rx.keep && rx.identity) {

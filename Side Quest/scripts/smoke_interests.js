@@ -79,6 +79,20 @@ const get = (slug) => db.getDb().prepare('SELECT * FROM interests WHERE slug=?')
     try { db.getDb().close(); } catch {}
     for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.existsSync(f) && fs.unlinkSync(f); } catch {} }
   }
+  // ── B1 (2026-08-15 deep-dive): the wondering organ has a LIVE CALLER ─────────────────────────
+  // maybeSpawnFocus had zero callers outside this smoke — the one spawner of an undirected focus,
+  // and therefore the whole free-thought lane, was unreachable in production. Source-pinned so the
+  // wire cannot silently drop again.
+  {
+    const mono = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'monologue.js'), 'utf8');
+    ok(/require\('\.\/interests'\)\.maybeSpawnFocus\(\)/.test(mono),
+      'B1: the monologue idle branch CALLS maybeSpawnFocus — the wondering pulse is live');
+    ok(/interests\.last_spawn_attempt_at/.test(mono),
+      'B1: the spawn attempt is cadence-gated (the 07-01 noise-audit ruling stands)');
+    ok(/focus wonder self-dialogue error/.test(mono),
+      'B1: a <wonder> on a focus tick fires self-dialogue instead of being silently discarded');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

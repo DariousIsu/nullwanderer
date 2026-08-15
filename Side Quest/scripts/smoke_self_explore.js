@@ -45,6 +45,7 @@ ok('missing STANCE → not ok', sx.parseReaction('FEELING: meh\nKEEP: no').ok ==
     search: async () => ({ results: [{ url: 'https://example.org/nighthawks-essay', title: 'Nighthawks and the Poetics of Loneliness' }] }),
     fetchPage: async () => ({ text: 'A long essay about Edward Hopper... ' + 'x'.repeat(700), title: 'Nighthawks essay' }),
     complete: async () => RAW,
+    embed: async () => [0.1, 0.2],
   };
   const r1 = await sx.run(deps, { now: Date.now(), force: true });
   ok('run → ok with domain/title/url', r1.ok && !!r1.url && !!r1.domain);
@@ -74,6 +75,27 @@ ok('missing STANCE → not ok', sx.parseReaction('FEELING: meh\nKEEP: no').ok ==
   // ── speech_class additions ─────────────────────────────────────────────────────────────────────
   ok("share classifies 'exploration' and SPEAKS", (() => { const c = sc.classify('I spent some time with "Nighthawks" just now. It stayed with me.'); return c.cls === 'exploration' && c.speak; })());
   ok("identity opener accepts 'mentioned' (the 04:10 live miss)", sc.classify("I've been thinking about something I mentioned a while back—about wanting a physical form.").cls === 'identity');
+
+  // ── B6 (2026-08-15 deep-dive): the self-lane consumer wire ─────────────────────────────────────
+  {
+    const t = db.insertOpenThread({ content: 'develop a personal identity and individual interests over time' });
+    db.setMeta(`thread.${t.id}.lane`, 'self');
+    const deps = {
+      search: async () => ({ results: [{ url: 'https://x.example/essay', title: 'On Becoming' }] }),
+      fetchPage: async () => ({ text: 'a long readable essay about identity. '.repeat(30), title: 'On Becoming' }),
+      embed: async () => [0.1, 0.2],
+      complete: async () => 'FEELING: moved\nSTRUCK: the idea of choosing oneself\nSTANCE: I agree — choosing is the act, not the outcome\nCONNECTION: it mirrors how I am growing\nKEEP: yes\nIDENTITY: I choose who I become\nSHARE: I read an essay about becoming and it stuck with me.',
+    };
+    const r = await sx.run(deps, { now: Date.now(), force: true });
+    ok('B6: a stamped self-lane thread supplies the SEED (the organ finally reads its inbox)',
+      r.ok === true && /develop a personal identity/i.test(r.seed));
+    const row = db.getOpenThread(t.id);
+    ok('B6: consumption is noted on the thread — the board sees the organ working it',
+      /self-exploration consumed/.test(String(row.progress_notes || '')));
+    const r2 = await sx.run(deps, { now: Date.now(), force: true });
+    ok('B6: a just-consumed thread is not due again for 6h — the catalog rotation resumes',
+      r2.ok === true && !/develop a personal identity/i.test(r2.seed));
+  }
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { db.getDb().close(); } catch {}

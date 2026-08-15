@@ -1164,6 +1164,22 @@ async function _runOneTick() {
     // So idle simply advances the graph one move (cadence + budget gated), or stays quiet. No idle
     // thought is generated here → no idle curiosity/boredom search can fire (those live past this
     // early return). recentThoughts/openThreads stay available for the awareness block above.
+    // THE WONDERING ORGAN GETS ITS PULSE BACK (2026-08-15 deep-dive B1): interests.maybeSpawnFocus
+    // — the ONE spawner of an undirected focus, and therefore the door to the whole free-thought
+    // lane (a served interest focus generates, and its <wonder> now fires self-dialogue below) —
+    // had ZERO live callers since the autonomic flip: focus.setFromText demoted, rumination
+    // escalates to threads, directed foci are driver-owned. Cadence-gated (45min) so idle stays
+    // predominantly graph-builder — the 07-01 noise-audit ruling stands: a spawned interest focus
+    // is served by the FOCUS machinery (strikes, caps, novelty gates), never an unbounded idle loop,
+    // and maybeSpawnFocus itself self-gates (no spawn while any focus is active, prob leaves room).
+    try {
+      const _lastSpawn = parseInt(db.getMeta('interests.last_spawn_attempt_at') || '0', 10) || 0;
+      if (Date.now() - _lastSpawn > 45 * 60 * 1000) {
+        db.setMeta('interests.last_spawn_attempt_at', String(Date.now()));
+        const sp = await require('./interests').maybeSpawnFocus();
+        if (sp) console.log(`[interests] wondering focus spawned → "${String((sp.focus && sp.focus.goal) || (sp.interest && sp.interest.topic) || '').slice(0, 70)}"`);
+      }
+    } catch (e) { console.error('[interests] spawn attempt failed:', e && e.message); }
     // DENSER SUBCONSCIOUS (Slice 4) — run the three idle lanes CONCURRENTLY (they're independent + fail-soft),
     // and let the knowledge-building graph-walk BURST up to subcMovesPerTick moves this tick (each still
     // budget-gated, so it self-limits). Was: one move each, sequentially → barely touched the 2M/hr budget.
@@ -1598,6 +1614,16 @@ async function _runOneTick() {
   // forever. Returns here so focus ticks bypass the free-association quality gates.
   if (activeFocus) {
     const control = focusLib.parseControlTags(trimmed);
+    // A <wonder> on a FOCUS tick fires self-dialogue exactly like the free lane (2026-08-15
+    // deep-dive B1: it was stripped and DISCARDED here — and since an interest focus is the only
+    // reachable undirected generation path, the wondering organ's output went straight to the
+    // floor). Async, one per tick, does not block the focus outcome.
+    const _fw = trimmed.match(/<wonder>([\s\S]*?)<\/wonder>/i);
+    if (_fw && _fw[1].trim()) {
+      const _sid = opts.getSessionId ? opts.getSessionId() : null;
+      runSelfDialogue({ wonderText: _fw[1].trim(), sessionId: _sid }).catch(err =>
+        console.error('[monologue] focus wonder self-dialogue error:', err.message));
+    }
     let clean = focusLib.stripControlTags(trimmed).replace(/<wonder>[\s\S]*?<\/wonder>/gi, '').trim();
     if (/^SKIP\.?$/i.test(clean)) clean = '';
     const sig = blackboard.signature(clean);
