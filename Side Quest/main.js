@@ -4812,6 +4812,10 @@ try {
       const sa = require('./lib/self_audit');
       if (sa.due()) sa.spawnPass({});
     } catch {}
+    // INTERNAL-STATE VECTOR Slice 0 — THE DARK INSTRUMENT (proposal 08-14, built on "clear to
+    // continue" 08-15): drives + affect computed from existing exhaust, journaled every 10min,
+    // ZERO consumers until ~48h of trajectories verify honest by hand. Measured, never asserted.
+    try { require('./lib/internal_state').tick({ deps: { lastUserTurnTs } }); } catch {}
   }, 10 * 60 * 1000);
   if (_dbhTick.unref) _dbhTick.unref();
   // AMBIENT SCREEN BEAT (senses §2): titles-only sample every 120s → code-computed deltas → one
