@@ -213,6 +213,11 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
     }
   } catch {}
 
+  // Held-for-Lucas line (delivery router, senses §1) — near-miss observations the moment gate
+  // shelved instead of dropping. She knows she's holding them; offering the digest is her move.
+  let heldLine = null;
+  try { heldLine = require('./delivery_router').heldLine(); } catch {}
+
   // STANDING — how far along her own long-running research actually is, and what she is working on
   // this moment. AMBIENT ON PURPOSE.
   //
@@ -277,6 +282,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
     gmeetRecallLine ? `• ${gmeetRecallLine}` : null,
     mediaRecallLine ? `• ${mediaRecallLine}` : null,
     overheardLine ? `• ${overheardLine}` : null,
+    heldLine ? `• ${heldLine}` : null,
     workingLine ? `• ${workingLine}` : null,
     standingLine ? `• ${standingLine}` : null,
     chosenName ? `• You go by ${chosenName}. This is the name you chose for yourself. Use it when self-referring.` : null,

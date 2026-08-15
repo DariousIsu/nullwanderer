@@ -515,9 +515,21 @@ async function maybeHeartbeat() {
       const threshold = require('./lanes').thresholdFor(lane);
       if (imp < threshold) {
         wantsToSpeak = false;
-        console.log(`[heartbeat] suppressed [${lane}] utterance (${imp} < ${threshold})`);
+        // DELIVERY ROUTER (senses §1, 2026-08-15): the gate is no longer a grave. A near-miss
+        // (within the hold band, above the trivia floor) lands on the held-for-Lucas shelf and
+        // rides the awareness block — the digest becomes HER move at a natural moment. Zero new
+        // model calls: importance + lane were already scored right here.
+        let routed = 'drop';
+        try { routed = require('./delivery_router').holdOrDrop({ text: trimmedSay, imp, threshold, lane }); } catch {}
+        console.log(`[heartbeat] suppressed [${lane}] utterance (${imp} < ${threshold})${routed === 'hold' ? ' → HELD for Lucas (awareness digest)' : ''}`);
       } else {
         console.log(`[heartbeat] surfacing [${lane}] utterance (${imp} ≥ ${threshold})`);
+        // PRESENCE-AWARE: surfaced while Lucas is AWAY → also a desktop notification, so a
+        // transcript nobody is watching stops being silent delivery failure.
+        try {
+          const away = require('./availability').isAway();
+          if (require('./delivery_router').noteSurfaced({ away, text: trimmedSay })) console.log('[heartbeat] away → desktop notify fired alongside the surfacing');
+        } catch {}
       }
     }
     const uGate = wantsToSpeak ? governor.requestAction('utterance', { priority: hasInbound }) : { allow: false };

@@ -574,6 +574,7 @@ const smokes = [
   'smoke_voice_guard.js',
   'smoke_status_vector.js',
   'smoke_self_audit.js',
+  'smoke_delivery_router.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
