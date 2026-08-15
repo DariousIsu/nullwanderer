@@ -4830,7 +4830,29 @@ try {
   // line on her awareness + monologue beats. ~1s async PowerShell shell per sample; no model.
   const _ambTick = setInterval(() => { try { require('./lib/screen').ambientSample(); } catch {} }, 120 * 1000);
   if (_ambTick.unref) _ambTick.unref();
-  console.log('[status_vector] Loop A (60s self-read) + Loop C (machine vitals) + Loop D (db health, 10min) + Stage-1 self-audit (daily) + ambient screen (120s) armed');
+  // IDENTITY MAINTENANCE (2026-08-15 live-audit fix): self_narrative (Loop B) + mood maybeRefresh were
+  // wired ONLY to the desktop chat post-reply path (main.js:~11853/11861). When Lucas works through
+  // Claude Code — or across any long stretch without desktop chat — that path is DORMANT, so the
+  // narrative went 5.9 DAYS stale with 14 unconsumed dirty-journal entries and Loop B's event-driven
+  // recompose never fired. Identity/affect maintenance must not depend on the user chatting. This
+  // idle-cadence poll fires both on their OWN internal gates (dirty≥3 / 90-min TTL, + a 30-min retry
+  // floor), quota-gated to the idle lane since they compose on the cloud. When not stale it no-ops
+  // (a few meta reads), so the 15-min cadence can't waste budget or spam.
+  const _identityTick = setInterval(() => {
+    try {
+      if (!require('./lib/quota_gate').allow('idle', { quiet: true }).allow) return;
+      const uName = db.getMeta('user_name') || 'Lucas';
+      require('./lib/self_narrative').maybeRefresh({ userName: uName })
+        .then((t) => { if (t) console.log('[identity] self-narrative recomposed (idle cadence)'); }).catch(() => {});
+      require('./lib/mood').maybeRefresh({
+        userName: uName,
+        recentRows: (() => { try { return db.getRecentTurns(12); } catch { return []; } })(),
+        genFn: (prompt) => condenseComplete([{ role: 'user', content: prompt }], { numPredict: 320 }),
+      }).then((m) => { if (m) console.log('[identity] mood cultivated (idle cadence):', m.feeling); }).catch(() => {});
+    } catch {}
+  }, 15 * 60 * 1000);
+  if (_identityTick.unref) _identityTick.unref();
+  console.log('[status_vector] Loop A (60s self-read) + Loop C (machine vitals) + Loop D (db health, 10min) + Stage-1 self-audit (daily) + ambient screen (120s) + identity maintenance (15min) armed');
 } catch (e) { console.error('[status_vector] loop arm failed:', e.message); }
 
 ipcMain.handle('calendar:auth-status', async () => {
