@@ -223,6 +223,11 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
   let ambientScreenLine = null;
   try { ambientScreenLine = require('./screen').ambientLine(); } catch {}
 
+  // Today-ahead line (senses §6, gcal live) — his next events + countdowns, so timing and ETAs
+  // reason from the real schedule. Fail-absent when the provider snapshot is stale.
+  let todayAheadLine = null;
+  try { todayAheadLine = require('./calendar').todayAheadLine(); } catch {}
+
   // STANDING — how far along her own long-running research actually is, and what she is working on
   // this moment. AMBIENT ON PURPOSE.
   //
@@ -289,6 +294,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
     overheardLine ? `• ${overheardLine}` : null,
     heldLine ? `• ${heldLine}` : null,
     ambientScreenLine ? `• ${ambientScreenLine}` : null,
+    todayAheadLine ? `• ${todayAheadLine}` : null,
     workingLine ? `• ${workingLine}` : null,
     standingLine ? `• ${standingLine}` : null,
     chosenName ? `• You go by ${chosenName}. This is the name you chose for yourself. Use it when self-referring.` : null,

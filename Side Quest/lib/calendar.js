@@ -205,7 +205,65 @@ async function etaSuffix({ nowMs = Date.now(), totalMin = 0 } = {}) {
   } catch { return ''; }
 }
 
+// ── the awareness surfaces (2026-08-15, gcal reconnected — "do everything calendar") ─────────────
+// Both read the meta snapshot main's provider refresh persists (calendar.upcoming) — no fetch, no
+// module-state reach-in, fail-absent when stale (>20min) so a dead refresh never fakes a schedule.
+const UPCOMING_KEY = 'calendar.upcoming';
+const UPCOMING_STALE_MS = 20 * MIN;
+
+function _upcoming(deps, nowMs) {
+  try {
+    const raw = ((deps && deps.db) || require('./db')).getMeta(UPCOMING_KEY);
+    const v = JSON.parse(raw || 'null');
+    if (!v || !v.at || (nowMs - v.at) > UPCOMING_STALE_MS) return null;
+    return (v.events || []).map((e) => ({ ...e, startMs: toMs(e.s) })).filter((e) => e.startMs && e.startMs > nowMs).sort((a, b) => a.startMs - b.startMs);
+  } catch { return null; }
+}
+
+// Titles come from Google → neutralize tag-structural characters before they ride a prompt.
+function _safeTitle(t) { return String(t || '').replace(/</g, '‹').replace(/>/g, '›').replace(/\[/g, '(').replace(/\]/g, ')').slice(0, 60); }
+
+function _countdown(ms) {
+  const min = Math.round(ms / MIN);
+  if (min < 60) return `in ${Math.max(1, min)}m`;
+  if (min < 36 * 60) { const h = Math.floor(min / 60), r = min % 60; return `in ${h}h${r ? ` ${r}m` : ''}`; }
+  return `in ${Math.round(min / 1440)}d`;
+}
+
+/** TODAY AHEAD — the next 2-3 events + countdowns, one awareness line. Null when none/stale. */
+function todayAheadLine({ deps = {}, nowMs = Date.now() } = {}) {
+  const evs = _upcoming(deps, nowMs);
+  if (!evs || !evs.length) return null;
+  const tz = (() => { try { return require('./tz'); } catch { return null; } })();
+  const items = evs.slice(0, 3).map((e) => {
+    const when = tz ? tz.timeWithZone(new Date(e.startMs)) : new Date(e.startMs).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    return `${_safeTitle(e.t)} at ${when} (${_countdown(e.startMs - nowMs)})`;
+  });
+  return `Lucas's calendar ahead: ${items.join(' · ')}. Real schedule, not speculation — factor it into ETAs and timing, and don't recite it unprompted.`;
+}
+
+/**
+ * T-15 PREP NUDGE — the next event starting within (5, 20] minutes that hasn't been prepped.
+ * Returns { id, title, startMs, minutes } ONCE per event (the caller stamps calendar.prep.<id>);
+ * null otherwise. Pure read + stamp check; the caller owns delivery (notify + monologue).
+ */
+function prepNudge({ deps = {}, nowMs = Date.now() } = {}) {
+  const evs = _upcoming(deps, nowMs);
+  if (!evs || !evs.length) return null;
+  const db = (deps && deps.db) || (() => { try { return require('./db'); } catch { return null; } })();
+  for (const e of evs) {
+    const lead = e.startMs - nowMs;
+    if (lead > 20 * MIN) break;          // sorted — nothing sooner follows
+    if (lead <= 5 * MIN) continue;       // too late to prep; the voice guard owns in-meeting
+    const key = `calendar.prep.${e.id || e.s}`;
+    try { if (db && db.getMeta(key)) continue; } catch {}
+    return { id: e.id || e.s, key, title: _safeTitle(e.t), startMs: e.startMs, minutes: Math.round(lead / MIN) };
+  }
+  return null;
+}
+
 module.exports = {
   toMs, normalizeEvent, normalizeEvents, nextEvent, busyMsBetween, projectETA,
-  parseClock, resolveDeadline, setProvider, hasProvider, usingStub, getUpcoming, etaSuffix, MIN, HOUR
+  parseClock, resolveDeadline, setProvider, hasProvider, usingStub, getUpcoming, etaSuffix,
+  todayAheadLine, prepNudge, UPCOMING_KEY, MIN, HOUR
 };

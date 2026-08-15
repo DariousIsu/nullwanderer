@@ -87,6 +87,33 @@ ok(cal.parseClock('sometime later') === null, 'no clock → null');
   ok((await cal.etaSuffix({ nowMs: now, totalMin: 120 })) === '', 'etaSuffix: throwing provider → empty (fail-safe)');
   cal.setProvider(null);
 
+  // --- today-ahead line + T-15 prep nudge (gcal reconnected, 2026-08-15) ---
+  {
+    const st = {};
+    const deps = { db: { getMeta: (k) => st[k], setMeta: (k, v) => { st[k] = v; } } };
+    const iso = (off) => new Date(now + off).toISOString();
+    st[cal.UPCOMING_KEY] = JSON.stringify({ at: now, events: [
+      { id: 'ev1', s: iso(14 * MIN), t: 'Standup <b>[test]</b>' },
+      { id: 'ev2', s: iso(3 * HOUR), t: 'Policy sync' },
+      { id: 'ev3', s: iso(26 * HOUR), t: 'Tomorrow thing' },
+      { id: 'ev0', s: iso(-1 * HOUR), t: 'Already happened' },
+    ] });
+    const line = cal.todayAheadLine({ deps, nowMs: now });
+    ok(!!line && /Standup .*in 14m/.test(line) && /Policy sync .*in 3h/.test(line), `today-ahead: next events + countdowns (${(line || '').slice(0, 90)}…)`);
+    ok(!/Already happened/.test(line), 'today-ahead: past events dropped');
+    ok(!/[<>\[\]]/.test(line), 'today-ahead: tag-shaped title characters neutralized');
+    ok(cal.todayAheadLine({ deps, nowMs: now + 21 * MIN + 26 * HOUR }) === null, 'stale snapshot (>20m) → no line (a dead refresh never fakes a schedule)');
+
+    const n1 = cal.prepNudge({ deps, nowMs: now });
+    ok(n1 && n1.id === 'ev1' && n1.minutes === 14, 'prep: the 5–20min-out event nudges (14m)');
+    deps.db.setMeta(n1.key, '1');
+    ok(cal.prepNudge({ deps, nowMs: now }) === null, 'prep: stamped → never nudges twice');
+    ok(cal.prepNudge({ deps, nowMs: now + 11 * MIN }) === null, 'prep: <5m out → too late, no nudge (voice guard owns in-meeting)');
+    st[cal.UPCOMING_KEY] = JSON.stringify({ at: now, events: [{ id: 'far', s: iso(2 * HOUR), t: 'Far away' }] });
+    ok(cal.prepNudge({ deps, nowMs: now }) === null, 'prep: nothing inside the window → null');
+    ok(cal.prepNudge({ deps: { db: { getMeta: () => { throw new Error('x'); }, setMeta: () => {} } }, nowMs: now }) === null, 'prep: broken store → null (fail-soft)');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

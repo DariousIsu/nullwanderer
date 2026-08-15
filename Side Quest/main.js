@@ -4728,6 +4728,19 @@ async function _calProvRefresh() {
       && !((ev.attendees || []).some(a => a && a.self && a.responseStatus === 'declined')));
     const prevLen = _calProv.events.length, first = !_calProv.at;
     _calProv.events = items; _calProv.at = now; _calProv.failStreak = 0;
+    // PERSIST for the awareness surfaces (today-ahead line + the T-15 prep organ read meta, so
+    // lib/calendar and lib/context never touch main's module state or the network).
+    try {
+      db.setMeta('calendar.upcoming', JSON.stringify({
+        at: now,
+        events: items.slice(0, 8).map((ev) => ({
+          id: String(ev.id || '').slice(0, 48),
+          s: ev.start.dateTime,
+          e: (ev.end && (ev.end.dateTime || ev.end.date)) || null,
+          t: String(ev.summary || '(untitled)').slice(0, 80),
+        })),
+      }));
+    } catch {}
     if (first || items.length !== prevLen) console.log(`[calendar] provider cache: ${items.length} timed event(s) in the 36h window`);
   } catch (e) { _calProv.failStreak++; console.error('[calendar] provider refresh failed:', e.message); }
 }
@@ -4735,6 +4748,25 @@ try {
   require('./lib/calendar').setProvider(() => _calProv.events);   // cache-serving — never fetches in-turn
   setTimeout(_calProvRefresh, 45 * 1000);                          // first fill after echoVenv paths settle
   const _calT = setInterval(() => {
+    // T-15 PREP ORGAN (senses §6, gcal reconnected 08-15): the next meeting inside the 5–20min
+    // window gets ONE prep moment — a desktop notify (reaches him wherever he is) + a monologue
+    // reading (so SHE holds it and can speak to it; the beat contract's explicit model moment).
+    // Stamped per event id — never repeats. Runs off the meta snapshot; no fetch here.
+    try {
+      const cal = require('./lib/calendar');
+      const nudge = cal.prepNudge({});
+      if (nudge) {
+        db.setMeta(nudge.key, String(Date.now()));
+        const tz = (() => { try { return require('./lib/tz'); } catch { return null; } })();
+        const when = tz ? tz.timeWithZone(new Date(nudge.startMs)) : new Date(nudge.startMs).toLocaleTimeString();
+        try { require('./lib/presence').notify('Zoe — meeting soon', `${nudge.title} at ${when} (in ${nudge.minutes}m)`); } catch {}
+        try {
+          const mono = db.insertMonologue({ content: `Heads-up I'm tracking: "${nudge.title}" starts at ${when} — ${nudge.minutes} minutes out. If there's prep worth doing (context, our held notes on the attendees or topic), now is the moment; otherwise just be ready to go quiet when it starts.`, model: 'calendar', type: 'reading', query: nudge.title });
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: mono.id, ts: mono.ts, content: `(meeting in ${nudge.minutes}m: ${nudge.title})`, type: 'reading', query: nudge.title });
+        } catch {}
+        console.log(`[calendar] T-15 prep fired: "${nudge.title}" in ${nudge.minutes}m (notified + riding her stream)`);
+      }
+    } catch {}
     // Backoff: disconnected/failing → retry every 30 min instead of every 5 (each probe shells python).
     if (_calProv.failStreak > 0 && (Date.now() - _calProv.lastTryAt) < 30 * 60e3) return;
     _calProvRefresh();
