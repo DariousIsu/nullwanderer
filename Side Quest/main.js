@@ -4719,7 +4719,10 @@ async function _calProvRefresh() {
     const raw = await gcal.listEvents({
       calendarId: 'primary',
       timeMin: new Date(now - 60 * 60e3).toISOString(),        // include ongoing events
-      timeMax: new Date(now + 36 * 3600e3).toISOString(),
+      // 48h (was 36): measured live 08-15 — the next real event sat 39h out and the today-ahead
+      // line went empty. Two full mornings ahead always visible; the ETA math is unaffected
+      // (events beyond a run's span never bind).
+      timeMax: new Date(now + 48 * 3600e3).toISOString(),
       maxResults: 100,
     }, gcalOpts());
     const items = ((raw && raw.items) || []).filter(ev =>
@@ -4741,7 +4744,7 @@ async function _calProvRefresh() {
         })),
       }));
     } catch {}
-    if (first || items.length !== prevLen) console.log(`[calendar] provider cache: ${items.length} timed event(s) in the 36h window`);
+    if (first || items.length !== prevLen) console.log(`[calendar] provider cache: ${items.length} timed event(s) in the 48h window`);
   } catch (e) { _calProv.failStreak++; console.error('[calendar] provider refresh failed:', e.message); }
 }
 try {
