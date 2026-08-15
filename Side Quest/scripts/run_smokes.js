@@ -572,6 +572,7 @@ const smokes = [
   // manual (Ctrl+Alt+M) overrides auto; her-own-meeting > meeting-app window > calendar-busy;
   // fail-soft keeps the prior state. Enforced at _speech.enqueue + stt:transcribe.
   'smoke_voice_guard.js',
+  'smoke_status_vector.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.

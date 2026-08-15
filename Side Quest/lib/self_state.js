@@ -13,7 +13,9 @@
  */
 
 // "What are you doing / what can you see / what's your status" — current operational state.
-const STATE_RE = /\b(what are you (?:doing|up to)(?: right now)?|what(?:'?s| is) (?:going on|happening) with you|what(?:'?s| is) your (?:status|state|situation)|what can you (?:see|access|do)(?: right now)?|are you (?:searching|online|connected|busy|working)(?: right now)?|what(?:'?s| is) (?:running|active|connected)|status (?:report|check)|are you (?:there|with me)|what tools do you have)\b/i;
+// WIDENED 2026-08-15 (status-vector build): systems/machine/memory/database phrasings now open the
+// same door — previously "how are your systems?" missed every branch and she confabulated state.
+const STATE_RE = /\b(what are you (?:doing|up to)(?: right now)?|what(?:'?s| is) (?:going on|happening) with you|what(?:'?s| is) your (?:status|state|situation)|what can you (?:see|access|do)(?: right now)?|are you (?:searching|online|connected|busy|working)(?: right now)?|what(?:'?s| is) (?:running|active|connected)|status (?:report|check)|are you (?:there|with me)|what tools do you have|how(?: are| is|'?s) (?:your|the) (?:systems?|machine|hardware|memory|databases?|db|organs?|body|loops?|vitals?)(?: (?:doing|holding up|running|looking))?|systems? (?:status|check|report|health)|how are you running|(?:everything|all) (?:ok(?:ay)?|good|healthy|green) (?:with|on) your (?:end|side|systems?)|any(?:thing)? (?:wrong|broken|down|red) (?:with|on) your (?:end|side|systems?))\b/i;
 
 // COVERAGE questions — "how's the research going", "how much have we covered". Separate from
 // STATE_RE because they are a different question with a different answer: state is what's running

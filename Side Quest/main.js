@@ -4743,6 +4743,37 @@ try {
   console.log('[calendar] meeting-aware ETA provider WIRED (5min refresh, 30min disconnected backoff)');
 } catch (e) { console.error('[calendar] provider wire failed:', e.message); }
 
+// ── THE STATUS VECTOR + INTEROCEPTION LOOPS (2026-08-15 deterministic-loops A/C/D) ───────────────
+// Loop C samples the MACHINE (her body) every 60s; Loop D watches the DB substrate (her memory)
+// every 10min + a weekly child-process quick_check; Loop A assembles the whole self-read every 60s
+// from what the organs already know. Per the beat contract (§0b) all three terminate in her
+// cognition: the vector's line rides every awareness build + monologue tick, the full block sits
+// behind the state door, and threshold anomalies escalate obs_bus → self_watch. Zero model calls.
+try {
+  const _svTick = setInterval(async () => {
+    try { await require('./lib/machine_vitals').sample(); } catch {}
+    try {
+      require('./lib/status_vector').refresh({
+        deps: {
+          echoConnected: !!(echoSuit && echoSuit.connected),
+          guard: (() => { try { return _voiceGuard.state(); } catch { return null; } })(),
+          working: (() => { try { return _workingNow(); } catch { return null; } })(),
+        },
+      });
+    } catch {}
+  }, 60 * 1000);
+  if (_svTick.unref) _svTick.unref();
+  const _dbhTick = setInterval(() => {
+    try {
+      const dh = require('./lib/db_health');
+      dh.tick({});
+      dh.maybeQuickCheck({});   // due-gated inside (weekly); runs in a child process, never this thread
+    } catch {}
+  }, 10 * 60 * 1000);
+  if (_dbhTick.unref) _dbhTick.unref();
+  console.log('[status_vector] Loop A (60s self-read) + Loop C (machine vitals) + Loop D (db health, 10min) armed');
+} catch (e) { console.error('[status_vector] loop arm failed:', e.message); }
+
 ipcMain.handle('calendar:auth-status', async () => {
   try {
     // Prefer Echo's own status route (gives email + scopes); fall back to a token probe.
@@ -8016,6 +8047,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // A COVERAGE question surfaces it even when the activity poll is running: activity answers "what am
   // I doing this second", which cannot answer "how far have we got" — that needs the denominator.
   if ((stateQ || coverageQ) && !(activityQ && !coverageQ)) {
+    // STATUS VECTOR full block (Loop A, 2026-08-15) — the measured systems self-read, FIRST, so a
+    // systems question ("how are your systems / machine / memory") is answered from the vector.
+    // Same stored object as the always-on awareness line — the two can never disagree.
+    try {
+      const svb = require('./lib/status_vector').block();
+      if (svb) { retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${svb}\n\n${retrievedKnowledgeBlock}` : svb; console.log('[main] status-vector block surfaced'); }
+    } catch (e) { console.error('[main] status-vector block failed:', e.message); }
     try {
       const ss = require('./lib/self_state');
       const block = ss.buildBlock(ss.snapshot({

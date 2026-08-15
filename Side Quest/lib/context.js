@@ -108,6 +108,11 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
   // pathways work (direct counter to capability-denial). Ages out within 12h.
   let selfCheckLine = null;
   try { selfCheckLine = require('./self_check').awarenessLine(); } catch {}
+  // Status-vector line (Loop A, 2026-08-15) — the measured self-read (organs, voice, quota, gate,
+  // machine, memory substrate) + what changed since the last beat. Same stored object the full
+  // state-door block renders from, so the two can never disagree. Fail-absent until first refresh.
+  let statusLine = null;
+  try { statusLine = require('./status_vector').line(); } catch {}
   // Live-meeting line — when she's in a Google Meet, surface her running understanding so a
   // desktop-chat question ("what's happening in the meeting?") is answered from what she's
   // actually following, not a deflection. Only while a meeting is active.
@@ -266,6 +271,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
     downtimeLine ? `• ${downtimeLine}` : null,
     reawakenLine ? `• ${reawakenLine}` : null,
     selfCheckLine ? `• ${selfCheckLine}` : null,
+    statusLine ? `• ${statusLine}` : null,
     gmeetLine ? `• ${gmeetLine}` : null,
     mediaLine ? `• ${mediaLine}` : null,
     gmeetRecallLine ? `• ${gmeetRecallLine}` : null,
