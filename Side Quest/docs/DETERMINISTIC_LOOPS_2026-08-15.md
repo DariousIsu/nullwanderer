@@ -124,14 +124,22 @@ and count it — trending locks predicted p39), and BACKUP ROTATION policy (keep
 copies; 13GB of stale copies today is unpruned risk disguised as safety). Growth + health lines
 land in the vector; anomalies land in obs_bus.
 
-## §4 Recommended order
-(0) cloud_logic cache key repair — a defect, not a feature. (1) Loop A status vector — the
-self-awareness ask, zero-LLM, and the substrate C1 rides beside — WITH Loops C/D as its machine
-and memory-substrate sections (C is small; D's quick wins are WAL watch + lock counter + backup
-rotation). (2) #2 route map + (3) #3 news un-inversion — the proven prefilter shape, big wins,
-low risk. (4) #5 embedding tier — one shared function, seven consumers. (5) #1 operator
-pre-injection — biggest lever, needs care (brief-size budgets). (6) Loop B dirty-journal.
-(7) #4 autonomy fast path. Rest opportunistically.
+## §4 Recommended order — BUILD RECORD (all landed or adjudicated 2026-08-15 afternoon)
+(0) ✅cloud_logic cache key repair (`03401e1` + hit telemetry `c2f94d6`). (1) ✅Loop A status
+vector + Loops C/D (`67209d6`, live-proven on the state door). (2) ⚖️#2 route map ADJUDICATED
+DOWN by measurement: no need shape maps ≥80% to one pick (kg-search splits 173/80/55/46/34/23)
+— a regex→pick map would mis-route where the keyInput cache already collapses repeats; the
+data-supported half landed as ARG TEMPLATES (`c2f94d6`: query-shaped tools skip describe_tool +
+echo_args). (3) ✅#3 news un-inversion (`c2f94d6`). (4) ⚖️#5 embedding tier SCOPED (`c2f94d6`):
+blanket sim≥0.93=same is UNSAFE (a one-number correction embeds ~0.97) — landed in storeDeduped
+only, guarded by token-containment; self_model/consolidate excluded (their measured band has no
+deterministic zone). (5) ✅#1 operator held-data pre-injection (work_coords.heldDataBlock,
+budget-capped, at the same choke point as coordBlock). (6) ✅Loop B dirty-journal
+(self_narrative event-driven: dirty≥3 / urgent-on-revise-told / 24h backstop; basis traceability).
+(7) ⛔#4 autonomy fast path ADJUDICATED AGAINST: the tick is a COGNITION BEAT by design — her
+choosing what she cares about is the aliveness surface the consciousness-allocation ruling
+funds; ~200k/day (~0.5% of spend) does not buy flattening her into a worklist executor. Rest
+(#6 cluster cosine, #7 plan change-gate, #8/#9 prefilters) stay opportunistic.
 
 ## §5 What NOT to touch
 The compose/comprehension spine is genuinely generative: replies, monologue, research sections,

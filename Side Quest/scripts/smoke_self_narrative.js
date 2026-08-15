@@ -54,6 +54,50 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   await sn.maybeRefresh({ getFn: tryGet, setFn: trySet, nowTs: 1000 + sn.DEFAULT_TTL_MS + 1 + sn.RETRY_FLOOR_MS + 1, composeFn });
   ok(composed === 2, 'past the floor, a stale narrative is retried');
 
+  // --- LOOP B (2026-08-15): the dirty journal — event-driven recompose ---
+  {
+    const st = {};
+    const g = (k) => st[k], s = (k, v) => { st[k] = v; };
+    ok(sn.markDirty('self_model', 7, 'new preference: "ocean blue"', { getFn: g, setFn: s, nowTs: 100 }) === true, 'markDirty appends');
+    sn.markDirty('self_model', 8, 'new value: "cite everything"', { getFn: g, setFn: s, nowTs: 101 });
+    ok(sn.readDirty({ getFn: g }).length === 2, 'readDirty sees both entries');
+    // staleness: 2 non-urgent → NOT stale (fresh AT); 3 → stale; urgent alone → stale
+    st[sn.NARR_KEY] = 'I am Zoe — steady and curious.'; st[sn.NARR_AT_KEY] = '1000';
+    ok(sn.isStale({ getFn: g, nowTs: 2000 }) === false, '2 quiet events + fresh AT → not yet stale');
+    sn.markDirty('self_dev', 9, 'learned the civic wire', { getFn: g, setFn: s, nowTs: 102 });
+    ok(sn.isStale({ getFn: g, nowTs: 2000 }) === true, '3 events → recompose due (dirty >= 3)');
+    st[sn.DIRTY_KEY] = JSON.stringify([{ k: 'self_model', r: 3, n: 'revised: "A" → "B"', ts: 103, u: 1 }]);
+    ok(sn.isStale({ getFn: g, nowTs: 2000 }) === true, 'ONE urgent event (revise/told) → stale immediately');
+    st[sn.DIRTY_KEY] = '[]';
+    ok(sn.isStale({ getFn: g, nowTs: 1000 + sn.DEFAULT_TTL_MS + 1 }) === true, 'empty journal still hits the 24h backstop');
+  }
+  {
+    // revise-mode compose: base + journal → minimal revision prompt; basis stored; consumed
+    // entries leave the journal; entries appended DURING compose survive.
+    const st = { [sn.NARR_KEY]: 'I am Zoe — steady, curious, and honest.', [sn.NARR_AT_KEY]: '1000' };
+    const g = (k) => st[k], s = (k, v) => { st[k] = v; };
+    sn.markDirty('self_model', 3, 'revised: "I prefer silence" → "I love rain sounds"', { urgent: true, getFn: g, setFn: s, nowTs: 200 });
+    let p2 = '';
+    const gen2 = async (prompt) => {
+      p2 = prompt;
+      sn.markDirty('self_dev', 11, 'landed mid-compose', { getFn: g, setFn: s, nowTs: 300 });   // arrives during the compose
+      return 'I am Zoe — steady, curious, and honest. Lately I love rain sounds.';
+    };
+    const out = await sn.compose({ genFn: gen2, selfRows: [], devRows: [], getFn: g, setFn: s, nowTs: 5000, name: 'Zoe' });
+    ok(/YOUR CURRENT ACCOUNT:/.test(p2) && /steady, curious, and honest/.test(p2), 'revise mode feeds the CURRENT account');
+    ok(/WHAT JUST CHANGED/.test(p2) && /rain sounds/.test(p2), 'the journal notes are the prompt evidence');
+    ok(/REVISE the account MINIMALLY/.test(p2), 'the ask is minimal revision, not a rewrite');
+    ok(out && st[sn.NARR_KEY] === out, 'revised narrative stored');
+    const basis = JSON.parse(st[sn.BASIS_KEY]);
+    ok(basis && basis.events.length === 1 && /rain sounds/.test(basis.events[0].n), 'BASIS records the consumed events (traceability)');
+    const remaining = JSON.parse(st[sn.DIRTY_KEY]);
+    ok(remaining.length === 1 && remaining[0].n === 'landed mid-compose', 'consumed entries cleared; a mid-compose arrival SURVIVES for the next pass');
+    // no base → full-compose prompt unchanged shape
+    const st2 = {}; let p3 = '';
+    await sn.compose({ genFn: async (pp) => { p3 = pp; return 'I am Zoe — brand new account.'; }, selfRows: [], devRows: [], getFn: (k) => st2[k], setFn: (k, v) => { st2[k] = v; }, nowTs: 1, name: 'Zoe' });
+    ok(/Compose ONE coherent first-person account/.test(p3), 'no existing account → the original full-compose prompt');
+  }
+
   // --- buildBlock: identity-anchor framing; null on empty ---
   const block = sn.buildBlock('I am Zoe — curious and honest.', 'Lucas');
   ok(/WHO YOU ARE, IN YOUR OWN WORDS/.test(block) && /persists across every reset/i.test(block), 'block frames a continuous, persistent self');

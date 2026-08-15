@@ -33,7 +33,11 @@ async function record(summary, { date = null, importance = 0.8, storeFn = null }
   if (text.length < 6) return null;
   const content = date ? `${date} — ${text}` : text;
   const store = storeFn || memory.storeDeduped;
-  return store({ kind: 'reference', content, source: 'self_dev', importance });
+  const r = await store({ kind: 'reference', content, source: 'self_dev', importance });
+  // LOOP B (2026-08-15): a genuinely new dev-ledger entry is an identity event — journal it for
+  // the narrative's event-driven recompose. A dedup noop is nothing new; it journals nothing.
+  try { if (r && (r.action === 'add' || r.action === 'update')) require('./self_narrative').markDirty('self_dev', r.id || null, text.slice(0, 130)); } catch {}
+  return r;
 }
 
 // The ledger, newest-first. getFn injectable for tests (defaults to db lookup by source).

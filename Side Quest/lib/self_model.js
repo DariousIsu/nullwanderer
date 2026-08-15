@@ -169,6 +169,9 @@ async function record(content, { category = 'insight', importance = 0.6, decideF
         db.updateSelfModel(candidate.id, { content: text, embedding: JSON.stringify(emb), importance: Math.max(candidate.importance || 0.6, importance), bumpMention: false });
         if (epistemic !== 'speculated') db.setSelfModelEpistemic(candidate.id, epistemic);
         try { await memory.store({ kind: 'note', content: `My view evolved — I used to hold "${gist(old)}", and now it's "${gist(text)}".`, source: 'self_evolution', importance: 0.6 }); } catch {}
+        // LOOP B: a REVISION is the self actually changing — journal it URGENT so the narrative
+        // recomposes now (minimally), instead of carrying the old self up to a blind TTL later.
+        try { require('./self_narrative').markDirty('self_model', candidate.id, `revised: "${gist(old)}" → "${gist(text)}"`, { urgent: true }); } catch {}
         return { action: 'revise', id: candidate.id, old, sim: cSim };
       }
       // 'different' → fall through to ADD
@@ -179,6 +182,9 @@ async function record(content, { category = 'insight', importance = 0.6, decideF
   }
 
   const row = db.insertSelfModel({ category: cat, content: text, embedding: embStr, importance: addImportance, epistemic });
+  // LOOP B: a new facet journals non-urgent (3 accumulate → recompose); a TOLD trait (Lucas
+  // affirmed it) is urgent — external affirmation is identity news, not drift.
+  try { require('./self_narrative').markDirty('self_model', row.id, `new ${cat}: "${gist(text)}"`, { urgent: epistemic === 'told' }); } catch {}
   return { action: 'add', id: row.id };
 }
 

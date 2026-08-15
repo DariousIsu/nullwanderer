@@ -41,6 +41,16 @@ ok('known-gap coordinate rides along', /known-gap: email of "tangipahoa parish c
 ok('unresolvable prompt emits NOTHING', wc.coordBlock('research "Zzyzx Quux Fictional Body" thoroughly') === '');
 ok('no-candidate prompt emits nothing', wc.coordBlock('summarize the notes') === '');
 
+// ── heldDataBlock: the ACTUAL rows ride (deterministic-loops #1), budget-capped ─────────────────
+const held = wc.heldDataBlock('Research the current Tangipahoa Parish Council roster and verify officeholders.');
+ok('held block emits for a held body', /HELD DATA/.test(held));
+ok('the actual member rows ride the brief', /Alice Amite \(Chair\)/.test(held) && /Bob Hammond/.test(held));
+ok('framing demands verify-not-regather', /do NOT re-search/.test(held));
+ok('unheld subject emits NOTHING (non-civic runs pay zero)', wc.heldDataBlock('research "Zzyzx Quux Fictional Body" thoroughly') === '');
+ok('no text → nothing', wc.heldDataBlock('') === '');
+// budget: a tiny budget still returns '' rather than a broken fragment
+ok('budget too small for any line → empty, never a fragment', wc.heldDataBlock('Tangipahoa Parish Council roster', { budget: 10 }) === '');
+
 console.log(`smoke_work_coords: ${pass} passed, ${fail} failed`);
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 process.exit(fail ? 1 : 0);

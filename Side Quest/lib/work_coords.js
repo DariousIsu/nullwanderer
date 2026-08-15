@@ -108,4 +108,37 @@ function _render(lines) {
   return `\nDATABASE COORDINATES (verified addresses for this run's subjects — START HERE and dereference via localdb/echo/analyze_data before any searching; a known-gap line means we already know we lack it):\n${uniq.join('\n')}\n`;
 }
 
-module.exports = { candidatesFrom, coordBlock };
+/**
+ * heldDataBlock(text, {budget}) — OPERATOR HELD-DATA PRE-INJECTION (deterministic-loops #1,
+ * 2026-08-15; the single biggest measured lever, 1.8–3.7M tok/day). The pick ledger showed the
+ * operator's dominant brief shape is "search knowledge graph for {place} council members" — and
+ * the deepseek run then spent its gathering iterations REDISCOVERING rosters civic_memberships
+ * already holds. This injects the ACTUAL held rows (not just addresses) at the same choke point
+ * coordBlock rides, so gathering collapses into verification. Beat contract: the operator run
+ * still happens — now processing held rosters instead of searching for them.
+ *
+ * BRIEF-SIZE BUDGET (the doc's "needs care"): total ≤ `budget` chars (default 2,400 ≈ 700 tok),
+ * each roster line capped at 900 with a dereference pointer — a 4-body hit can never blow up the
+ * context. Sync + local only (civic_store); Echo-side contacts stay a tool call. '' on no match,
+ * so non-civic runs pay nothing. Fail-soft.
+ */
+function heldDataBlock(text, { budget = 2400 } = {}) {
+  try {
+    const civic = require('./civic_store');
+    const hits = civic.heldRostersFor(str(text).slice(0, 600), { limit: 4 });
+    if (!hits || !hits.length) return '';
+    const lines = [];
+    let used = 0;
+    for (const h of hits) {
+      let l = str(h.line);
+      if (l.length > 900) l = l.slice(0, 900) + ` … (+more — dereference body_key "${h.bodyKey}" via civic query)`;
+      if (used + l.length > budget) break;
+      used += l.length;
+      lines.push('- ' + l);
+    }
+    if (!lines.length) return '';
+    return `\nHELD DATA (your own verified store ALREADY CONTAINS these rows — they are the primary source: work FROM them, verify or extend only the gaps, and do NOT re-search what is listed; a VACANT/CONFLICT marker is a real finding, repeat it as stated):\n${lines.join('\n')}\n`;
+  } catch { return ''; }
+}
+
+module.exports = { candidatesFrom, coordBlock, heldDataBlock };

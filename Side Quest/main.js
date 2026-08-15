@@ -12594,7 +12594,12 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
       // M5.7 — DATABASE COORDINATES at the choke point (every run, zero model calls): the stores'
       // addresses for this run's subjects ride the context, so the pass rapid-fires by address
       // instead of burning steps re-discovering what is already held (lib/work_coords).
-      userMessage, context: (context || '') + taskNote + (() => { try { return require('./lib/work_coords').coordBlock(userMessage); } catch { return ''; } })(),
+      // + HELD-DATA PRE-INJECTION (deterministic-loops #1, 2026-08-15): the ACTUAL held rosters
+      // ride too (budget-capped) — the operator's measured dominant brief re-gathered rows
+      // civic_memberships already holds; gathering collapses into verification.
+      userMessage, context: (context || '') + taskNote
+        + (() => { try { return require('./lib/work_coords').coordBlock(userMessage); } catch { return ''; } })()
+        + (() => { try { const b = require('./lib/work_coords').heldDataBlock(userMessage); if (b) console.log(`[operator] held-data pre-injection: ${b.length} chars of verified rows ride the brief`); return b; } catch { return ''; } })(),
       deps: { complete: operator._operatorComplete, tools },
       maxSteps: _maxSteps,
       maxMs: _maxMs,

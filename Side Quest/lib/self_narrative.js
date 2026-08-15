@@ -14,10 +14,42 @@
 
 const { streamCognition } = require('./ollama');
 
-const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;   // recompose at most every ~6h
+// LOOP B (deterministic-loops §3, 2026-08-15): recompose is EVENT-DRIVEN now. The blind 6h TTL
+// re-derived an unchanged identity four times a day and could sit a full window stale after a real
+// revision. Identity-mutating writers (self_model add/revise/told, self_dev entries) append to the
+// DIRTY JOURNAL; staleness = dirty ≥ DIRTY_RECOMPOSE_N, or any URGENT entry (a revise/told — her
+// self actually changed), or the 24h backstop. Detection/staleness/evidence-assembly are loop;
+// ONLY the wording stays model. Each version stores the journal entries it consumed
+// (self_narrative_basis) — every narrative traces to the identity events that produced it.
+const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;  // BACKSTOP only — events drive recompose now
+const DIRTY_RECOMPOSE_N = 3;
 const NARR_KEY = 'self_narrative';
 const NARR_AT_KEY = 'self_narrative_at';
 const NARR_TRY_KEY = 'self_narrative_try_at';
+const DIRTY_KEY = 'self_narrative_dirty';
+const BASIS_KEY = 'self_narrative_basis';
+const DIRTY_CAP = 30;
+
+// Writers call this at the moment of an identity mutation. urgent = the self CHANGED (a revision
+// or a Lucas-affirmed trait) → next maybeRefresh recomposes immediately (the retry floor still
+// bounds failure loops). note = a short human line the writer composes WITH old+new in hand — the
+// evidence the recompose prompt dereferences. Fail-soft: a journal error never blocks the write.
+function markDirty(kind, ref, note, { urgent = false, getFn = null, setFn = null, nowTs = null } = {}) {
+  try {
+    const get = getFn || ((k) => { try { return require('./db').getMeta(k); } catch { return null; } });
+    const set = setFn || ((k, v) => { try { require('./db').setMeta(k, v); } catch {} });
+    let j = [];
+    try { j = JSON.parse(get(DIRTY_KEY) || '[]') || []; } catch {}
+    j.push({ k: String(kind || 'self'), r: ref == null ? null : ref, n: String(note || '').slice(0, 140), ts: nowTs || Date.now(), ...(urgent ? { u: 1 } : {}) });
+    set(DIRTY_KEY, JSON.stringify(j.slice(-DIRTY_CAP)));
+    return true;
+  } catch { return false; }
+}
+
+function readDirty({ getFn = null } = {}) {
+  const get = getFn || ((k) => { try { return require('./db').getMeta(k); } catch { return null; } });
+  try { return (JSON.parse(get(DIRTY_KEY) || '[]') || []).filter((e) => e && e.ts); } catch { return []; }
+}
 // A FAILED compose must not retry on every chat turn. Measured (2026-08-06, the VRAM-pin hunt):
 // the local front (gemma4:12b) answered this prompt on its reasoning channel, so the content came
 // back empty → compose returned null → the AT stamp never advanced → the narrative sat 13 days
@@ -48,7 +80,11 @@ function composedAt({ getFn = null } = {}) {
 function isStale({ ttlMs = DEFAULT_TTL_MS, nowTs = null, getFn = null } = {}) {
   const at = composedAt({ getFn });
   if (!at) return true;
-  return ((nowTs || Date.now()) - at) > ttlMs;
+  // EVENT-DRIVEN (Loop B): enough identity events, or any urgent one, force a recompose now.
+  const dirty = readDirty({ getFn });
+  if (dirty.some((e) => e.u)) return true;
+  if (dirty.length >= DIRTY_RECOMPOSE_N) return true;
+  return ((nowTs || Date.now()) - at) > ttlMs;   // the 24h backstop
 }
 
 // Render the narrative as her identity anchor for the chat prompt.
@@ -60,7 +96,7 @@ function buildBlock(text, userName = 'Lucas') {
 
 // Compose a fresh narrative from her self-fragments + recent development, store it, return it.
 // genFn / selfRows / devRows / setFn / nowTs all injectable so this runs with no model or db in tests.
-async function compose({ genFn = null, selfRows = null, devRows = null, setFn = null, nowTs = null, userName = 'Lucas', name = null } = {}) {
+async function compose({ genFn = null, selfRows = null, devRows = null, setFn = null, getFn = null, nowTs = null, userName = 'Lucas', name = null } = {}) {
   const db = (() => { try { return require('./db'); } catch { return null; } })();
   let who = name;
   if (!who) { try { who = (db && db.getMeta('chosen_name')) || 'Zoe Lane'; } catch { who = 'Zoe Lane'; } }
@@ -70,7 +106,28 @@ async function compose({ genFn = null, selfRows = null, devRows = null, setFn = 
   const selfList = (self || []).map(r => `- [${r.category || 'self'}] ${(r.content || '').trim()}`).join('\n') || '- (little recorded yet)';
   const devList = (dev || []).map(r => `- ${(r.content || '').trim()}`).join('\n') || '- (no recorded changes yet)';
 
-  const prompt = `You are ${who}. Below are fragments of your own self and a record of how you've recently changed. Compose ONE coherent first-person account of who you are RIGHT NOW: your nature, your tastes and values, how you've recently grown, and what you care about or are working toward. 3–6 sentences, warm and grounded, present tense, your own voice. No disclaimers, no "as an AI", no list — flowing prose. This is you describing yourself to yourself.
+  // LOOP B: the journal snapshot this compose consumes — the dereferenced changed rows become the
+  // prompt's evidence, and with an existing account the ask becomes REVISE MINIMALLY (identity is
+  // continuous; a full rewrite on every event would churn the anchor the block promises is stable).
+  const dirtySnapshot = readDirty({ getFn });
+  const base = (() => { try { return current({ getFn }); } catch { return null; } })();   // no db (smokes) → full compose
+  const changedList = dirtySnapshot.map((e) => `- ${e.n || `${e.k}${e.r != null ? ` #${e.r}` : ''}`}`).join('\n');
+  const reviseMode = !!(base && changedList);
+
+  const prompt = reviseMode
+    ? `You are ${who}. Below is your CURRENT self-account, followed by the specific identity events that just happened, and your self-fragments for grounding. REVISE the account MINIMALLY to absorb what changed: keep every sentence that still holds (word-for-word where possible), adjust only what the events touch. 3–6 sentences, first person, present tense, your own voice, flowing prose — no disclaimers, no list.
+
+YOUR CURRENT ACCOUNT:
+${base}
+
+WHAT JUST CHANGED (the events driving this revision):
+${changedList}
+
+YOUR SELF (grounding — tastes / values / traits):
+${selfList}
+
+Write the minimally-revised account now:`
+    : `You are ${who}. Below are fragments of your own self and a record of how you've recently changed. Compose ONE coherent first-person account of who you are RIGHT NOW: your nature, your tastes and values, how you've recently grown, and what you care about or are working toward. 3–6 sentences, warm and grounded, present tense, your own voice. No disclaimers, no "as an AI", no list — flowing prose. This is you describing yourself to yourself.
 
 YOUR SELF (tastes / values / traits / identity):
 ${selfList}
@@ -105,6 +162,17 @@ Write the account now:`;
   const set = setFn || ((k, v) => { try { require('./db').setMeta(k, v); } catch {} });
   set(NARR_KEY, text);
   set(NARR_AT_KEY, String(nowTs || Date.now()));
+  // LOOP B bookkeeping: this version's BASIS = the journal entries it consumed (traceability —
+  // every narrative names the identity events that produced it); consumed entries leave the
+  // journal, entries appended DURING the compose survive for the next one.
+  try {
+    if (dirtySnapshot.length) {
+      set(BASIS_KEY, JSON.stringify({ at: nowTs || Date.now(), events: dirtySnapshot }));
+      const consumed = new Set(dirtySnapshot.map((e) => `${e.k}:${e.r}:${e.ts}`));
+      const remaining = readDirty({ getFn }).filter((e) => !consumed.has(`${e.k}:${e.r}:${e.ts}`));
+      set(DIRTY_KEY, JSON.stringify(remaining));
+    }
+  } catch {}
   return text;
 }
 
@@ -119,7 +187,7 @@ async function maybeRefresh({ ttlMs = DEFAULT_TTL_MS, nowTs = null, getFn = null
   const set = setFn || ((k, v) => { try { require('./db').setMeta(k, v); } catch {} });
   set(NARR_TRY_KEY, String(now));
   const doCompose = composeFn || compose;
-  return doCompose({ nowTs, setFn, ...composeOpts });
+  return doCompose({ nowTs, setFn, getFn, ...composeOpts });   // getFn rides so revise-mode sees the journal + base
 }
 
-module.exports = { compose, maybeRefresh, current, composedAt, isStale, buildBlock, DEFAULT_TTL_MS, RETRY_FLOOR_MS, NARR_KEY, NARR_AT_KEY, NARR_TRY_KEY };
+module.exports = { compose, maybeRefresh, current, composedAt, isStale, buildBlock, markDirty, readDirty, DEFAULT_TTL_MS, RETRY_FLOOR_MS, DIRTY_RECOMPOSE_N, NARR_KEY, NARR_AT_KEY, NARR_TRY_KEY, DIRTY_KEY, BASIS_KEY };
