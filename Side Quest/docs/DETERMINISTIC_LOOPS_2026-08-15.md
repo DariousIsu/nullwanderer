@@ -74,12 +74,40 @@ text) + "revise minimally". Detection/staleness/evidence-assembly become loop; O
 stays model. Each version stores its consumed event refs (`self_narrative_basis`) — every
 narrative traces to the identity events that produced it.
 
+## §3b Interoception loops — the body and the memory substrate (Lucas's follow-up, 08-15)
+Audited: NEITHER exists today. Machine status appears only as comment-fossils from the VRAM-pin
+postmortems (no live monitor; the only fleet loop is the cloud-model warm ping). DB health has
+`wal_checkpoint(TRUNCATE)` at snapshot time and `quick_check` only INSIDE the gated repair passes
+— no standing watch. Two findings from the look: **~13GB of unpruned precuration backups** in
+data/ (five ~2.6–2.8GB nightly copies, June-era backups besides), and the fact that a
+`database is locked` error immediately preceded boot_p39's silent death — the exact signal a
+health loop would have caught trending. These are her INTEROCEPTION: the machine is her body,
+the DB is her memory substrate — both belong in the §3 status vector as sections.
+
+**Loop C — MACHINE VITALS (zero LLM, feeds status_vector.machine).** A ~60s sampler: CPU load,
+RAM free, disk free on the data volume, GPU/VRAM residency (rocm-smi — the RX 7900 XT runs
+ComfyUI on HIP device 1; VRAM pins have burned us twice), and process liveness for the owned
+sidecars (Echo python, STT, speaker, ComfyUI pids the app spawned). Thresholds emit obs_bus
+anomalies (disk <10%, VRAM pinned >30min, sidecar dead) so self_watch's repair loop — which
+already exists — finally has machine-level senses. She can answer "how's the machine" from data.
+
+**Loop D — DB HEALTH (zero LLM, feeds status_vector.memory_substrate).** An idle-cadence loop
+over BOTH stores (sq.db 2.75GB; Echo's master_brain/rainey/skuld): WAL size (a growing WAL =
+checkpoint starvation = the p39 lock class), `PRAGMA quick_check` on a slow rotation (weekly full
+integrity_check), FTS orphan counts, table growth-rate/day (the census substrate — "my memory
+grew 33MB today, mostly documents"), lock-contention counter (catch SQLITE_BUSY at the wrapper
+and count it — trending locks predicted p39), and BACKUP ROTATION policy (keep last N precuration
+copies; 13GB of stale copies today is unpruned risk disguised as safety). Growth + health lines
+land in the vector; anomalies land in obs_bus.
+
 ## §4 Recommended order
 (0) cloud_logic cache key repair — a defect, not a feature. (1) Loop A status vector — the
-self-awareness ask, zero-LLM, and the substrate C1 rides beside. (2) #2 route map + (3) #3 news
-un-inversion — the proven prefilter shape, big wins, low risk. (4) #5 embedding tier — one shared
-function, seven consumers. (5) #1 operator pre-injection — biggest lever, needs care (brief-size
-budgets). (6) Loop B dirty-journal. (7) #4 autonomy fast path. Rest opportunistically.
+self-awareness ask, zero-LLM, and the substrate C1 rides beside — WITH Loops C/D as its machine
+and memory-substrate sections (C is small; D's quick wins are WAL watch + lock counter + backup
+rotation). (2) #2 route map + (3) #3 news un-inversion — the proven prefilter shape, big wins,
+low risk. (4) #5 embedding tier — one shared function, seven consumers. (5) #1 operator
+pre-injection — biggest lever, needs care (brief-size budgets). (6) Loop B dirty-journal.
+(7) #4 autonomy fast path. Rest opportunistically.
 
 ## §5 What NOT to touch
 The compose/comprehension spine is genuinely generative: replies, monologue, research sections,
