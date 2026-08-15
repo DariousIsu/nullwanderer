@@ -19,8 +19,8 @@ function run(full, chunkSize = 7) {
   let streamed = '';
   const p = new TagStreamParser({ onSayToken: (t) => { streamed += t; } });
   for (let i = 0; i < full.length; i += chunkSize) p.feed(full.slice(i, i + chunkSize));
-  const { thought, say } = p.finalize();
-  return { said: say, streamed, thought };
+  const { thought, say, post, truncated } = p.finalize();
+  return { said: say, streamed, thought, post, truncated };
 }
 
 console.log('Normal <think>/<say>:');
@@ -99,6 +99,33 @@ console.log('\nsayLooksCutOff — the CUT-OFF reply detector (regenerate a trunc
   ok('question ending, long, truncated → complete enough', cut('So which of the two chambers do you want me to start with?', 1) === false);
   ok('ends with quote+period → complete', cut('He told me plainly, "we have all sixty-four."', 1) === false);
   ok('null/undefined → false', cut(null, 1) === false && cut(undefined, 1) === false);
+}
+
+console.log('\nTHE POST CHANNEL (2026-08-15 deep-dive F1 — the documented tag position must survive):');
+{
+  // tags AFTER </say> — exactly where the reply package says to put them — ride the post channel
+  const r = run('<think>t</think><say>Putting this on your canvas now.</say>\n<echo-do name="saga_canvas_add_block">{"tab_key":"k"}</echo-do>');
+  ok('say stays clean', r.said === 'Putting this on your canvas now.');
+  ok('the post-say tag is CAPTURED, not discarded', /<echo-do name="saga_canvas_add_block">/.test(r.post));
+  ok('ending in tags is NOT truncation', r.truncated === 0);
+}
+{
+  // a tag BETWEEN </think> and <say> (the other silent-discard zone) also survives
+  const r = run('<think>plan</think>\n<recall>the Monroe files</recall>\n<say>One moment.</say>');
+  ok('between-section tag rides post', /<recall>the Monroe files<\/recall>/.test(r.post));
+  ok('say unaffected by the between capture', r.said === 'One moment.');
+}
+{
+  // no <say> at all: the salvage still strips tags from the VISIBLE say, but the raw
+  // buffer rides post — strip-AND-RUN, never strip-and-silently-drop
+  const r = run('<think>x</think>\n<echo-do name="save_document">{"t":1}</echo-do>');
+  ok('no-say salvage keeps the say tag-free', !/echo-do/.test(r.said));
+  ok('but the tag is still executable from post', /<echo-do name="save_document">/.test(r.post));
+}
+{
+  // plain conforming replies carry an EMPTY post — no phantom scans
+  const r = run('<think>weighing</think><say>Done.</say>');
+  ok('a clean reply has an empty post channel', r.post === '');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

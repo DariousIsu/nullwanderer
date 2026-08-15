@@ -311,6 +311,15 @@ class TagStreamParser {
     this.buf = '';
     this.thought = '';
     this.say = '';
+    // THE POST CHANNEL (2026-08-15 deep-dive F1 — CRITICAL): the reply package instructs the model
+    // to put action tags AFTER </say> — and that was the one position finalize() silently DELETED
+    // (no post branch; line `this.buf = ''`). She would say "putting this on your canvas now" while
+    // the tag that would do it evaporated: no dispatch, no error, no followup — the exact
+    // advertised≠executed fabrication the doctrine forbids. Everything after </say>, plus the
+    // between-section discards (a tag between </think> and <say> died the same way), now lands
+    // here. post NEVER renders — consumers merge it into the THOUGHT-channel scan so the ~15 tag
+    // executors see it; the visible say is untouched.
+    this.post = '';
   }
 
   feed(chunk) {
@@ -348,16 +357,22 @@ class TagStreamParser {
         }
       } else if (this.mode === 'between') {
         // Either another interior block (multi-block journaling) re-enters think,
-        // or <say> begins. Whichever comes first. Content before it is discarded
-        // (it's malformed between-section junk — e.g. a stray <file-append>).
+        // or <say> begins. Whichever comes first. Content before it used to be
+        // DISCARDED as malformed junk — but a well-formed action tag placed there
+        // (a real model habit) died silently with it (deep-dive F1). It now lands
+        // in the post channel: still never rendered, but the executors can see it.
         const sayIdx = this.buf.indexOf('<say>');
         const think = firstToken(this.buf, THINK_OPEN);
         if (think.idx !== -1 && (sayIdx === -1 || think.idx < sayIdx)) {
+          const dropped = this.buf.slice(0, think.idx);
+          if (dropped.trim()) this.post += dropped;
           this.thought += '\n';  // separator between captured interior blocks
           this.buf = this.buf.slice(think.idx + think.token.length);
           this.mode = 'think';
           progress = true;
         } else if (sayIdx !== -1) {
+          const dropped = this.buf.slice(0, sayIdx);
+          if (dropped.trim()) this.post += dropped;
           this.buf = this.buf.slice(sayIdx + '<say>'.length);
           this.mode = 'say';
           progress = true;
@@ -398,9 +413,12 @@ class TagStreamParser {
       if (this.buf) this.thought += this.buf;
     } else if (this.mode === 'between') {
       // Saw interior block(s) but no <say>. The remaining buffer is post-interior
-      // junk (tool tags, trailing fragments). Salvage ONLY genuine prose — in the
-      // leak case this strips to empty, so say stays empty instead of dumping the
-      // journal. A real reply written without <say> tags survives as prose.
+      // content: salvage ONLY genuine prose for the say (tags stripped, so the
+      // journal never dumps) — but the RAW buffer also rides the post channel
+      // (deep-dive F1), so a well-formed action tag here is strip-AND-RUN, never
+      // strip-and-silently-drop. A tag-only turn then follows the designed
+      // tag-in-flight flow (no empty-say retry; the followup speaks the result).
+      if (this.buf.trim()) this.post += this.buf;
       const salvaged = stripTagBlocks(this.buf);
       if (salvaged) { this.say = salvaged; this.onSayToken(salvaged); }
     } else if (this.mode === 'say') {
@@ -413,10 +431,14 @@ class TagStreamParser {
         this.onSayToken(salvaged);
       }
     }
+    // The post-mode buffer is the documented tag position (deep-dive F1) — everything after
+    // </say> returns on the post channel instead of being deleted here.
+    if (this.mode === 'post' && this.buf.trim()) this.post += this.buf;
     this.buf = '';
     return {
       thought: this.thought.trim(),
       say: this.say.trim(),
+      post: this.post.trim(),
       truncated: this.mode !== 'post' ? 1 : 0
     };
   }

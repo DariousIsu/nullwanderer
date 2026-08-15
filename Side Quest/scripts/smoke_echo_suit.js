@@ -269,6 +269,25 @@ function mockClient(overrides = {}) {
     ok('a paragraph-length query is not a query', para.length === 0);
     // the default path is untouched — only the reasoning channel opts in
     ok('non-deliberative parsing is unchanged', S.parseEchoTags(`<echo-find>${'x'.repeat(300)}</echo-find>`).length === 1);
+
+    // F5 (2026-08-15 deep-dive): clean JSON is STRUCTURAL proof of commitment — a real canvas
+    // block's full content exceeds the old 240-char/one-line bar by design, and the bar was
+    // dropping exactly the blocks the package commands to carry their content in full.
+    const bigBlock = S.parseEchoTags(`<echo-do name="saga_canvas_add_block">{"tab_key":"k","block_type":"paragraph","md":"${'real content '.repeat(40)}\\nsecond line"}</echo-do>`, { deliberative: true });
+    ok('F5: a long clean-JSON canvas block SURVIVES the committed bar', bigBlock.length === 1 && bigBlock[0].name === 'saga_canvas_add_block');
+    const spec = S.parseEchoTags('<echo-delegate name="briefing_writer">Write the brief.\nCover finances.\nCite everything.</echo-delegate>', { deliberative: true });
+    ok('F5: a multi-line delegate task spec survives (the manifest instructs the full spec)', spec.length === 1);
+    const swallow = S.parseEchoTags('<echo-delegate>we could use <echo-find> for this later maybe</echo-delegate>', { deliberative: true });
+    ok('F5: a span that swallowed another tag mention is still deliberation — dropped', swallow.length === 0);
+
+    // F3 (2026-08-15 deep-dive): parse grammar now matches strip grammar — a single-quoted name
+    // used to be stripped from the say and silently never executed.
+    const sq = S.parseEchoTags(`<echo-do name='db_query'>{"sql":"SELECT 1"}</echo-do>`);
+    ok('F3: a single-quoted name PARSES (it was strip-without-execute)', sq.length === 1 && sq[0].name === 'db_query');
+    const attrs = S.parseEchoTags('<echo-do name="db_query" extra="junk">{"sql":"SELECT 1"}</echo-do>');
+    ok('F3: attribute slack parses', attrs.length === 1 && attrs[0].name === 'db_query');
+    const sqd = S.parseEchoTags(`<echo-delegate name='press_monitor'>watch the wires</echo-delegate>`);
+    ok('F3: single-quoted delegate parses', sqd.length === 1 && sqd[0].agent === 'press_monitor');
   }
 
   // --- ⭐ STRIPPING A TAG MUST NOT DAMAGE THE SENTENCE AROUND IT (live 2026-07-31) --------------

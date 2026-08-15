@@ -215,7 +215,9 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
       onToken: (chunk) => parser.feed(chunk)
     });
 
-    const { thought, say, truncated } = parser.finalize();
+    const { thought: _ctThought, say, post, truncated } = parser.finalize();
+    // post rides the thought scan (2026-08-15 deep-dive F1): a tag after </say> executes, never vanishes
+    const thought = _ctThought ? (post ? `${_ctThought}\n${post}` : _ctThought) : (post || '');
     let trimmedSay = (say || '').trim();
     // VOICE GUARD: de-disclaim before surfacing (streamed → swap on complete).
     const continuityDisclaimed = voice.isSelfDisclaimer(trimmedSay);

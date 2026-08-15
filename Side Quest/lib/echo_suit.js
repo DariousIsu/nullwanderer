@@ -127,8 +127,17 @@ function _isCommittedTag(t) {
   if (!t) return false;
   if (t.kind === 'guide') return true;                       // no payload to judge
   if ((t.kind === 'do' || t.kind === 'propose') && t.parseError) return false;
+  // CLEAN JSON IS STRUCTURAL PROOF (2026-08-15 deep-dive F5): a do/propose whose body already
+  // parsed as JSON cannot be the 07-31 disease (deliberation spanning a non-greedy tag pair is
+  // prose — it never parses). The old one-line/240-char bar dropped exactly the payloads the
+  // package COMMANDS: a canvas block "carrying its real content in full" exceeds 240 chars by
+  // design. Finds keep the bar (a query is one line); delegates allow the multi-line task spec
+  // the manifest instructs but refuse a span that swallowed another tag mention.
+  if (t.kind === 'do' || t.kind === 'propose') return true;
   const p = _tagPayload(t);
-  if (/[\r\n]/.test(p)) return false;                        // deliberation wraps; a call does not
+  if (/<echo-/i.test(p)) return false;                       // swallowed another tag → deliberation span
+  if (t.kind === 'delegate') return p.length <= 2000;
+  if (/[\r\n]/.test(p)) return false;                        // deliberation wraps; a find does not
   if (p.length > 240) return false;                          // a query is a query, not a paragraph
   return true;
 }
@@ -155,14 +164,18 @@ function parseEchoTags(text, { deliberative = false } = {}) {
   // One <echo-do> may carry SEVERAL argument objects — see parseArgsList. Each becomes its own tag
   // here, in document order, so every downstream consumer (dispatch, the canvas mirror, the tier
   // gate) sees a normal single-argument call and needs no knowledge of batching.
-  scan(/<echo-do\s+name="([^"]+)"\s*>([\s\S]*?)<\/echo-do>/g, (m) => {
-    const name = m[1].trim();
-    const a = parseArgsList(m[2]);
+  // PARSE GRAMMAR MATCHES STRIP GRAMMAR (2026-08-15 deep-dive F3): the strip regexes are tolerant
+  // (any quotes, any attrs) but the parse regexes demanded exact double-quoted spellings — so
+  // <echo-do name='db_query'> was STRIPPED from the visible say and never executed, no error, no
+  // log. Single quotes and attribute slack now parse; what still doesn't parse is REPORTED below.
+  scan(/<echo-do\s+name\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/echo-do>/g, (m) => {
+    const name = (m[1] || m[2]).trim();
+    const a = parseArgsList(m[3]);
     if (a.list.length > 1) return a.list.map((args) => ({ kind: 'do', name, args, parseError: null }));
     return { kind: 'do', name, args: a.list[0] || {}, parseError: a.parseError };
   });
-  scan(/<echo-delegate(?:\s+name="([^"]*)")?\s*>([\s\S]*?)<\/echo-delegate>/g, m => ({ kind: 'delegate', agent: (m[1] || '').trim() || null, task: m[2].trim() }));
-  scan(/<echo-propose\s+kind="([^"]+)"\s*>([\s\S]*?)<\/echo-propose>/g, m => { const a = parseArgs(m[2]); return { kind: 'propose', proposeKind: m[1].trim(), payload: a.args, parseError: a.parseError }; });
+  scan(/<echo-delegate(?:\s+name\s*=\s*(?:"([^"]*)"|'([^']*)'))?\s*>([\s\S]*?)<\/echo-delegate>/g, m => ({ kind: 'delegate', agent: ((m[1] || m[2] || '')).trim() || null, task: m[3].trim() }));
+  scan(/<echo-propose\s+kind\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/echo-propose>/g, m => { const a = parseArgs(m[3]); return { kind: 'propose', proposeKind: (m[1] || m[2]).trim(), payload: a.args, parseError: a.parseError }; });
   // <echo-recipe name="X" arg="Y"/> — the PREFERRED path: a named, pre-validated procedure.
   // Tolerant of self-closing or paired form, attrs in any order, and arg given as the body.
   scan(/<echo-recipe\s+([^>]*?)\/?>(?:([\s\S]*?)<\/echo-recipe>)?/g, m => {
@@ -184,6 +197,15 @@ function parseEchoTags(text, { deliberative = false } = {}) {
     console.error(`[echo-suit] UNCLOSED <echo-do> — generation stopped mid-tag, that action was LOST: ${text.slice(lastOpen, lastOpen + 120)}`);
   }
   const out = found.sort((a, b) => a.index - b.index).map(x => x.tag);
+  // NEAR-MISS REPORTER (deep-dive F3): anything echo-tag-shaped the grammar above did NOT parse
+  // will still be STRIPPED from the visible say by the tolerant strip regexes — the silent-action-
+  // loss class. Count tag opens against parses and name the door (batched <echo-do> can only push
+  // the parse count HIGHER, so opens > parses is a true miss, not batching).
+  const _opens = (text.match(/<echo-(do|delegate|propose)\b/gi) || []).length;
+  const _parsed = out.filter((t) => t.kind === 'do' || t.kind === 'delegate' || t.kind === 'propose').length;
+  if (_opens > _parsed) {
+    console.error(`[echo-suit] ${_opens - _parsed} echo tag(s) were tag-SHAPED but did not parse (near-miss spelling / malformed attrs) — they will be stripped UNEXECUTED. Check the raw output around "<echo-".`);
+  }
   if (!deliberative) return out;
   // Name the door: a dropped tag is a real event. Silence here is how twelve failing hops looked
   // like the model simply choosing to search badly.

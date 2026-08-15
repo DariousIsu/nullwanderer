@@ -129,9 +129,14 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
     const out = '<think>t</think><say>Starting now.</say>\n<echo-do name="saga_canvas_open_tab">{"tab_key":"k"}</echo-do>';
     const parser = new TagStreamParser({});
     parser.feed(out);
-    ok(parser.say.trim() === 'Starting now.', 'a tag after </say> does not pollute what Lucas reads');
-    ok(parser.mode === 'post', 'SAFETY: and the turn is NOT flagged truncated for ending in tags');
-    ok(es.parseEchoTags(out).length === 1, 'and the tag is still dispatched');
+    const fin = parser.finalize();
+    ok(fin.say.trim() === 'Starting now.', 'a tag after </say> does not pollute what Lucas reads');
+    ok(fin.truncated === 0, 'SAFETY: and the turn is NOT flagged truncated for ending in tags');
+    // THE UNMASKED ASSERTION (2026-08-15 deep-dive F2): this used to parse the RAW string — a
+    // dispatch path production never had — and green-lit a contract the parser silently broke
+    // (finalize discarded everything after </say>). Production scans finalize's channels ONLY,
+    // so the tag must arrive on the post channel or the advertised position is a lie.
+    ok(es.parseEchoTags(fin.post).length === 1, 'and the tag is still dispatched — from the POST channel finalize actually returns');
   }
   // 2026-07-21 — REWRITTEN, because the old rule was unsatisfiable. It asked her to wait until she
   // "saw the result", but the reply is composed at main.js:6700 and the tags dispatch at :7350,

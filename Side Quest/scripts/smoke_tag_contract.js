@@ -41,7 +41,7 @@ const chat = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'chat.js'), 
   ok(/if \(cloudComplete && say && say\.trim\(\) && truncated\) \{/.test(main),
     'a complete cloud reply with unclosed tags is cleared of the truncation flag');
   const at = main.indexOf('if (cloudComplete && say && say.trim() && truncated)');
-  const fin = main.indexOf('let { thought, say, truncated } = parser.finalize()');
+  const fin = main.indexOf('let { thought, say, post, truncated } = parser.finalize()');
   const recov = main.indexOf('const _sayCutOff =');
   ok(fin > 0 && at > fin, 'the correction runs AFTER finalize');
   ok(recov > 0 && at < recov,

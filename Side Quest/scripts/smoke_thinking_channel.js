@@ -120,6 +120,17 @@ function replay(chunks) {
     '…and neither one scans the reasoning channel unguarded');
   ok(/const _fullThought = \[thought \|\| '', \(replyWriter !== MODEL && cloudThinking\)/.test(m),
     'the reasoning is folded into her stored interior, through the same tag-strip chain');
+  // F4 (2026-08-15 deep-dive): the vision family was the one reasoning-aware scan that never read
+  // cloudThinking — the manifest promises "never say you cannot make images" while a reasoning
+  // model's <draw> died unparsed. Pinned so the scan cannot quietly drop again.
+  ok(/replyWriter !== MODEL \? require\('\.\/lib\/vision'\)\.parseGenTags\(cloudThinking \|\| ''\) : \[\]/.test(m),
+    'F4: <draw>/<image-gen> scans the reasoning channel on cloud turns');
+  // F1 (2026-08-15 deep-dive): the post channel (tags after </say> — the documented position)
+  // must merge into the thought scan on the main turn, or the executors never see it.
+  ok(/let \{ thought, say, post, truncated \} = parser\.finalize\(\)/.test(m),
+    'F1: the main turn takes the post channel from finalize');
+  ok(/thought = thought \? `\$\{thought\}\\n\$\{post\}` : post;/.test(m),
+    'F1: and merges it into the thought-channel scan');
 }
 
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);

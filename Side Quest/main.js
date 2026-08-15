@@ -103,6 +103,12 @@ const REPLY_MAX_MS = 240000;
 // your canvas / I made it" claim when NO image actually rendered this turn (live #10872). Monotonic, mirrors
 // canvas_docs.lastWriteTs(); no per-turn reset needed. Module-scoped so both gen sites + the gate share it.
 let lastImageGenTs = 0;
+// TURN-START ANCHOR for the followup antifab gate (2026-08-15 deep-dive F6): fireToolFollowup has
+// 74 call sites and no turn context of its own, so its canvas/image/db claim checks were stubbed
+// `() => true` — a false completion claim in a followup passed unverified on exactly the path that
+// fabricated before. Stamped where the user turn row is minted; 0 (never stamped) keeps the old
+// fail-open behavior on non-turn followup paths.
+let lastUserTurnStartTs = 0;
 let echoSuit = null;   // Echo "suit" — the MCP tool surface Zoe wears; bound to the engine she owns
 let echoHttp = null;   // {base,token} for the engine's HTTP custom routes (e.g. GET /canvas live snapshot)
 let echoVenv = null;   // {python,cwd} — Echo's venv interpreter + repo root, for the Google-token bridge (lib/gcal)
@@ -6674,6 +6680,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
 
   const sessionId = currentSessionId;
   const userTurnRow = db.insertTurn({ sessionId, speaker: 'user', content: userMessage });
+  lastUserTurnStartTs = (userTurnRow && userTurnRow.ts) || Date.now();   // followup antifab anchor (F6)
   // CONVERSATION AS AN ENCOUNTER STREAM (C1) — the objects Lucas names become encounters, so the one
   // input stream that never decomposed into objects finally does. Written with authority 'stated',
   // which carries ZERO evidentiary weight: it creates the object and then we go looking for a real
@@ -10212,7 +10219,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   }
 
-  let { thought, say, truncated } = parser.finalize();
+  let { thought, say, post, truncated } = parser.finalize();
+  // THE POST CHANNEL RIDES THE THOUGHT SCAN (2026-08-15 deep-dive F1): tags placed after </say> —
+  // the position the reply package INSTRUCTS — used to be discarded by the parser. They now return
+  // on `post` and are merged into the thought-channel scan here, so every tag executor below sees
+  // them with zero per-scanner changes. post never reaches the visible say.
+  if (post) {
+    thought = thought ? `${thought}\n${post}` : post;
+    console.log(`[main] post-say channel carried ${post.length} char(s) into the tag scan`);
+  }
 
   // MEETING-CONFAB BACKSTOP (log-only) — the reply already streamed, so we don't rewrite it; but if a
   // join/in-call claim slipped past the directive with no meeting active, flag it so the confab is
@@ -10419,9 +10434,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   ];
   // VISION OUT — <image-gen>/<draw>/<imagine> prompts she emitted → generate an image (gated OFF
   // until a provider key is set). Off the clock she still gets to make images (it's expressive).
+  // Scanned in the reasoning channel too (2026-08-15 deep-dive F4): the manifest says "own it —
+  // never say you cannot make images", but on cloud turns the tag is authored in cloudThinking
+  // (450/633 tokens rode message.thinking, per the evidence above) and this was the one
+  // reasoning-aware family that never looked there — a promised <draw> silently no-oped, and the
+  // honest-failure followup could not fire because nothing ever parsed.
   const imageGenToRun = [
     ...require('./lib/vision').parseGenTags(thought || ''),
-    ...require('./lib/vision').parseGenTags(say || '')
+    ...require('./lib/vision').parseGenTags(say || ''),
+    ...(replyWriter !== MODEL ? require('./lib/vision').parseGenTags(cloudThinking || '') : [])
   ];
 
   // The cloud's native reasoning IS her interior on cloud-written turns — the content-side <think>
@@ -11816,7 +11837,9 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     }
     if (followupWriter === MODEL) await streamChat({ model: MODEL, messages, onToken: (c) => parser.feed(c) });
     try { _ff.flush(); } catch {}
-    const { thought, say } = parser.finalize();
+    const { thought: _fuThought, say, post: _fuPost } = parser.finalize();
+    // post rides the thought scan (deep-dive F1) — a chain tag placed after </say> must chain too
+    const thought = _fuPost ? (_fuThought ? `${_fuThought}\n${_fuPost}` : _fuPost) : _fuThought;
     // Capture any follow-on Echo tag BEFORE stripping (the strip below removes all tags). The
     // reasoning channel is scanned too — on a reasoning model that is where the next <echo-do> is
     // actually written, and dropping it is how a build chain dies mid-document.
@@ -11839,21 +11862,24 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     sayOut = sayOut.replace(/<[^>]+>/g, '').trim();
     sayOut = require('./lib/leakguard').stripLeakedDirectives(sayOut);   // final-text backstop (this path bypassed the main strip)
     sayOut = require('./lib/leakguard').stripPlanningLeak(sayOut);
-    // ANTIFAB, file slice (08-08 audit: fireToolFollowup never verified its claims — the false-
-    // canvas-claim replies rode THIS path). The canvas/db/image checks need the turn-start anchor
-    // this function doesn't carry, and a wrong anchor mints FALSE corrections on true references to
-    // older artifacts — so only the objectively checkable class runs here: a followup naming a
-    // "saved" file that does not exist gets the correction appended. Canvas truth is now stated by
-    // the door relays themselves (landed vs failed), source-side.
+    // ANTIFAB, full slice (2026-08-15 deep-dive F6; was file-only since the 08-08 audit). The
+    // canvas/db/image checks now anchor on lastUserTurnStartTs — stamped when the user turn row is
+    // minted, the same anchor semantics as the main-path gate at _antifabCorrect — so a false
+    // "it's on your canvas" in a followup is caught on exactly the path that fabricated before.
+    // An anchor of 0 (a followup outside any user turn) keeps the checks failing OPEN, which is
+    // the pre-fix behavior: no new false-correction risk on the non-turn paths.
     try {
       const _mc = require('./lib/metacognition');
+      const _fuAnchor = lastUserTurnStartTs || 0;
       const _av = _mc.verifyArtifactClaims(sayOut, {
         fileExists: (p) => { try { const _p = require('path'); const abs = _p.isAbsolute(p) ? p : _p.join(__dirname, p); return require('fs').existsSync(abs); } catch { return true; } },
-        canvasWroteThisTurn: () => true, imageGenThisTurn: () => true, dbWroteThisTurn: () => true,
+        canvasWroteThisTurn: () => { if (!_fuAnchor) return true; try { return require('./lib/canvas_docs').lastWriteTs() >= _fuAnchor; } catch { return true; } },
+        imageGenThisTurn: () => !_fuAnchor || (lastImageGenTs || 0) >= _fuAnchor,
+        dbWroteThisTurn: () => { if (!_fuAnchor) return true; try { return require('./lib/echo_suit').lastContactWriteTs() >= _fuAnchor; } catch { return true; } },
       });
       if (!_av.ok) {
         const _corr = _mc.artifactCorrection(_av.violations);
-        if (_corr) { console.warn(`[antifab] followup claimed a file that isn't there → corrected: ${_av.violations.map((v) => v.kind + ':' + v.claim).join(', ').slice(0, 160)}`); sayOut += _corr; }
+        if (_corr) { console.warn(`[antifab] followup claimed an artifact that didn't land → corrected: ${_av.violations.map((v) => v.kind + ':' + v.claim).join(', ').slice(0, 160)}`); sayOut += _corr; }
       }
     } catch (e) { console.error('[antifab] followup verification failed:', e.message); }
     // Deliver her words (the visible step — "I'll run db_query…" or the final answer). May be
@@ -17800,8 +17826,10 @@ async function runActionStep(io, depth = 0) {
         // Steps run silent (no streaming to the user); the final confirmation speaks.
         const parser = new TagStreamParser({ onSayToken: () => {} });
         await streamChat({ model: MODEL, messages, onToken: (c) => parser.feed(c) });
-        const { thought, say } = parser.finalize();
-        let tags = [...emailLib.parseTags(thought || ''), ...emailLib.parseTags(say || '')];
+        const { thought, say, post } = parser.finalize();
+        // post rides the scan (deep-dive F1): the step directive says "emit the single tag raw" —
+        // a model that closes a stray <say> first used to land the tag in the discarded post zone
+        let tags = [...emailLib.parseTags(thought || ''), ...emailLib.parseTags(say || ''), ...emailLib.parseTags(post || '')];
         const expect = actionLoop.currentExpect();
         if (expect) tags = tags.filter(t => t.tag === expect); // only the tag this step wants
         // FALLBACK: the body step needs <email-body>…</email-body>, but the 24B often writes

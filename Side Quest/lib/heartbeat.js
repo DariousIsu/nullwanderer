@@ -295,7 +295,9 @@ async function maybeHeartbeat() {
       options: { num_ctx: 8192, num_predict: HB_NUM_PREDICT }
     });
 
-    const { thought, say, truncated } = parser.finalize();
+    const { thought: _hbThought, say, post, truncated } = parser.finalize();
+    // post rides the thought scan (2026-08-15 deep-dive F1): a tag after </say> executes, never vanishes
+    const thought = post ? (_hbThought ? `${_hbThought}\n${post}` : post) : _hbThought;
 
     // Mark inbounds consumed only AFTER a successful generation — if streamChat
     // had thrown above, we'd skip this and the inbound stays pending for the
