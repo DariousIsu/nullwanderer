@@ -11,6 +11,28 @@ fast-path first, bounded model call only behind it; the more she holds, the less
 The measured evidence that the shape works where applied: `artifact_intent` fired 7×/26h behind its
 prefilter, `thread_lane` 7×/26h behind its regex template, `redirect_intent` 4×.
 
+## §0b THE BEAT CONTRACT — every loop terminates in cognition (Lucas, 08-15)
+"I want to make sure that all of these python loops end at a model call — so she is actually
+processing the information on each beat." This is the rule that keeps the loops from becoming the
+built-and-dark disease (data written to meta keys nothing reads). Two classes, one contract:
+
+- **Replacement loops (§2) FEED model calls, they don't delete them.** The operator run still
+  happens — now processing held rosters instead of searching for them. The reply still happens —
+  grounded by the civic recall. The news briefing is still HERS to compose — over labels the fast
+  path sorted. The model's tokens move from FINDING to COMPREHENDING; the call at the end of the
+  chain is the point of the chain.
+- **Perception loops (§3/§3b, and C1–C8) terminate in her existing cognition beats — never in a
+  dead dashboard, and never in a new per-sample model call either** (a model call per 60s sample
+  would rebuild the burn we just removed). The pattern: python samples → python computes DELTAS
+  and threshold events → the compact current-state + what-changed line rides the NEXT beat that
+  already ends at a model — the monologue tick's prompt (she thinks WITH her body/memory state on
+  every subconscious beat, the ambient-awareness doctrine), the chat turn's awareness block (she
+  answers FROM it), and the autonomic decision points. Anomalies escalate to an EXPLICIT
+  processing moment through organs that already end at models: obs_bus → self_watch → a thought /
+  a capability need / a repair decision. The dream loop (C7) is the same contract at the slowest
+  cadence: the night's accumulated loop output is processed — by a model — into consolidated
+  memory. Nothing is sensed that she never feels; nothing is felt that costs a per-sample call.
+
 ## §1 The measured spend (usage.meter.ring + cloud_traces, 26.0h live window)
 9,563 metered calls, 39.2M tokens ≈ **36M tokens/day**. By bucket: deepseek-v4-flash (operator
 loop) **18.4M — 47% of everything**; gemma4:31b-cloud (page/doc comprehension) 16.4M; gpt-oss:120b
@@ -54,7 +76,7 @@ already deterministic (activity.js + _workingNow ambient line). **"How are your 
 weak path**: a narrow STATE_RE at main.js:7965 injects an ad-hoc snapshot with no quota, gate mode,
 organ health, voice/speaker state, or stall data — miss the phrasing and she confabulates.
 
-**Loop A — STATUS VECTOR (real-time systems awareness; zero LLM).** New `lib/status_vector.js`:
+**Loop A — STATUS VECTOR (deterministic assembly; terminates in her beats per §0b).** New `lib/status_vector.js`:
 `assemble()` READS (never computes) organs up/down, current focus + why, quota + lane allowances
 (quota_gate.state()), tier-gate mode, voice/speaker guard state, last-8 organ fires (obs_bus),
 watch flags → one JSON vector in meta `status_vector`, refreshed on a ~60s tick + staleness-refresh
@@ -62,7 +84,9 @@ at turn start. Injected twice from the SAME object (so they can never disagree):
 one-liner beside selfCheckLine in buildAwarenessBlock (lib/context.js:109), and the full block
 replacing the ad-hoc gather behind a WIDENED STATE_RE. Authority split with C1 drive_gauge: the
 vector owns Node-side operational facts; C1 owns drives; the vector's `drives` section only ever
-reads C1's journal (fail-absent).
+reads C1's journal (fail-absent). §0b contract: the vector's DELTA line rides every monologue
+tick prompt and every turn's awareness block — each beat she generates, she generates KNOWING
+her state; anomalies escalate through obs_bus→self_watch into explicit model-processed moments.
 
 **Loop B — CONCEPT-OF-SELF (event-driven identity maintenance).** self_model/self_dev are already
 event-driven; self_narrative recomposes on a blind 6h TTL with generic evidence. Add a
