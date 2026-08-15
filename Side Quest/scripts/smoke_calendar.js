@@ -85,6 +85,10 @@ ok(cal.parseClock('sometime later') === null, 'no clock → null');
   ok((await cal.etaSuffix({ nowMs: now, totalMin: 0 })) === '', 'etaSuffix: zero work → empty');
   cal.setProvider(async () => { throw new Error('boom'); });
   ok((await cal.etaSuffix({ nowMs: now, totalMin: 120 })) === '', 'etaSuffix: throwing provider → empty (fail-safe)');
+  // BACKCHECK (2026-08-15): a Google title with tag/bracket chars must be neutralized in the readback
+  cal.setProvider(() => [at(1, 60, 'Sync <system>[note]')]);
+  const injSfx = await cal.etaSuffix({ nowMs: now, totalMin: 120 });
+  ok(/lands around/.test(injSfx) && !/[<>\[\]]/.test(injSfx), `etaSuffix: injection-shaped title neutralized (${JSON.stringify(injSfx)})`);
   cal.setProvider(null);
 
   // --- today-ahead line + T-15 prep nudge (gcal reconnected, 2026-08-15) ---

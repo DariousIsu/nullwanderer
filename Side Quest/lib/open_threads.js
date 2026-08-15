@@ -373,8 +373,12 @@ function parseAndApplyStatusUpdates(text) {
     if (!thread) continue;
     try {
       if (action === 'progress') {
+        // touchOpenThread WITH a note now increments action_count itself (B3, 2026-08-15). The
+        // separate incrementThreadAction here would DOUBLE-count the tag path (+2 vs the +1 every
+        // driver/worked-slice path gets), tripping the curator over-pursuit breaker at half budget
+        // and making the two paths incomparable. touchOpenThread's note-increment is the single
+        // source of truth now (backcheck fix).
         db.touchOpenThread(threadId, reason || 'progress');
-        db.incrementThreadAction(threadId);
       } else if (action === 'done') {
         db.markOpenThreadStatus(threadId, 'resolved', { reason });
         db.incrementThreadAction(threadId);

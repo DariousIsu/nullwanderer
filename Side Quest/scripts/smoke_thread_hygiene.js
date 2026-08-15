@@ -74,6 +74,17 @@ const statusOf = (id) => db.getDb().prepare('SELECT status FROM open_threads WHE
     ok(statusOf(fixation.id) === 'abandoned', 'unbounded fixation over 60 actions → retired (the breaker still fires)');
     ok(statusOf(bounded.id) !== 'abandoned', 'a coverage-bounded run at the same count → SURVIVES (bounds itself; not the fixation class)');
 
+    // ── B3 double-count guard (backcheck): a [thread-progress:N] tag must add EXACTLY +1, not +2 ──
+    console.log('B3 backcheck — the tag path does not double-count');
+    const tagT = db.insertOpenThread({ content: 'track the FEC committee totals' });
+    ot.parseAndApplyStatusUpdates(`[thread-progress:${tagT.id} pulled Q3 filing]`);
+    ok(acOf(tagT.id) === 1, 'one [thread-progress] tag → +1 (touchOpenThread is the single counter; the redundant increment is gone)');
+    ot.parseAndApplyStatusUpdates(`[thread-progress:${tagT.id} pulled Q4 filing]`);
+    ok(acOf(tagT.id) === 2, 'a second tag → +1 (matches the driver/worked-slice path — the two are comparable again)');
+    const doneT = db.insertOpenThread({ content: 'finish the donor rollup' });
+    ot.parseAndApplyStatusUpdates(`[thread-done:${doneT.id} shipped]`);
+    ok(acOf(doneT.id) === 1 && statusOf(doneT.id) === 'resolved', 'a [thread-done] tag still counts its one action + resolves');
+
     // ── B4: extractFromUserTurn serializes (overlapping calls never interleave) ──
     console.log('B4 — extraction serialization');
     const order = [];

@@ -56,12 +56,16 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
 
   memory.storeDeduped = realStore;   // restore
 
-  console.log('\nembedding-tier high-band guard (_tierSame, deterministic-loops #5 — sim alone is NOT enough):');
-  ok('verbatim restate → same, no model call', memory._tierSame('The parish seat is Gretna', 'The parish seat is Gretna.', 0.99) === true);
-  ok('subset restate (adds no token) → same', memory._tierSame('parish seat Gretna', 'The parish seat of Jefferson Parish is Gretna', 0.95) === true);
-  ok('numeric correction BREAKS containment (39→38 embeds ~0.97 but must reach the model)', memory._tierSame('The Senate has 39 seats', 'The Senate has 38 seats', 0.97) === false);
+  console.log('\nembedding-tier high-band guard (_tierSame, deterministic-loops #5 + 2026-08-15 backcheck):');
+  ok('verbatim restate (case/punct only) → same, no model call', memory._tierSame('The parish seat is Gretna', 'the parish seat is gretna.', 0.99) === true);
+  ok('pure reordering → same (multiset equality is word-order-independent)', memory._tierSame('Gretna is the parish seat', 'the parish seat is Gretna', 0.99) === true);
+  ok('BACKCHECK: negation REMOVAL is NOT same ("approved" vs "not approved" — the old subset bug)', memory._tierSame('The drug was approved', 'The drug was not approved', 0.97) === false);
+  ok('BACKCHECK: short-token difference reaches the model (Q3 vs Q2 — the old tokenizer collapsed it)', memory._tierSame('Revenue rose in Q3', 'Revenue rose in Q2', 0.97) === false);
+  ok('BACKCHECK: suffixed-numeric difference ($4.2B vs $4.3B)', memory._tierSame('Revenue was $4.2B', 'Revenue was $4.3B', 0.97) === false);
+  ok('a terser restatement (drops filler tokens) → the model decides (conservative, no silent drop)', memory._tierSame('parish seat Gretna', 'The parish seat of Jefferson Parish is Gretna', 0.95) === false);
+  ok('numeric correction reaches the model (39→38 embeds ~0.97)', memory._tierSame('The Senate has 39 seats', 'The Senate has 38 seats', 0.97) === false);
   ok('a novel token (new info) → the model decides', memory._tierSame('Gretna is the seat and the mayor is Constance', 'The parish seat is Gretna', 0.94) === false);
-  ok('below SIM_SAME → the model decides regardless of containment', memory._tierSame('parish seat Gretna', 'The parish seat is Gretna', 0.9) === false);
+  ok('below SIM_SAME → the model decides regardless', memory._tierSame('the parish seat is gretna', 'The parish seat is Gretna', 0.9) === false);
   ok('empty/degenerate inputs → never same', memory._tierSame('', 'x', 0.99) === false && memory._tierSame('a b', '', 0.99) === false);
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);

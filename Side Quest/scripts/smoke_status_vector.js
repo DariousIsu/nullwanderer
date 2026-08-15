@@ -46,6 +46,11 @@ const GB = 1073741824;
     ok(stored && stored.cpuPct === 10, 'sample persisted to meta machine_vitals');
     ok(/CPU 10%/.test(mv.describe(stored)) && /disk 200GB/.test(mv.describe(stored)), `describe renders (${mv.describe(stored)})`);
     ok(mv.describe(null) === null, 'describe(null) → null (fail-absent)');
+    // GPU AGE-GUARD (2026-08-15 backcheck): a reading older than the freshness window (3 sample
+    // windows ≈ 15min) is dropped, never re-reported as current after the sampler self-disables.
+    const GPU_WIN = 5 * 60e3;
+    const agedGpu = await mv.sample({ deps: { cpus: () => cpusB, freemem: () => 16 * GB, totalmem: () => 64 * GB, statfs: statfsOk, gpuBytes: null, uptime: () => 1 }, nowMs: now + 4 * GPU_WIN });
+    ok(!agedGpu.gpu, 'a frozen GPU reading past the freshness window is dropped (fail-absent, not a stale figure presented as live)');
 
     // anomalies: low RAM + low disk → obs_bus events; cooldown suppresses a repeat
     const statfsLow = async () => ({ bavail: 30 * 1024, bsize: 1048576, blocks: 1000 * 1024 });   // 3% free
@@ -110,6 +115,12 @@ const GB = 1073741824;
     ok(qcBad && qcBad.ok === false, 'db_quick_check child: missing file → ok:false, exit clean');
     db.setMeta(dh.QC_KEY, JSON.stringify({ at: Date.now(), ok: true, msg: 'ok' }));
     ok(dh.maybeQuickCheck({ paths }) === false, 'maybeQuickCheck: fresh verdict → due-gated, no spawn');
+    // IN-PROGRESS guard (2026-08-15 backcheck): a DUE state spawns once; a second immediate call
+    // must NOT spawn a concurrent full-scan child (returns false while one is in flight).
+    db.setMeta(dh.QC_KEY, '');   // clear → due
+    const first = dh.maybeQuickCheck({ paths: { sqDb: cleanDb, dataDir: tmpDir, echo: [] } });
+    const second = dh.maybeQuickCheck({ paths: { sqDb: cleanDb, dataDir: tmpDir, echo: [] } });
+    ok(first === true && second === false, 'due → first spawns, second is refused while the child is in flight (no doubled full-scan)');
 
     console.log('C) status_vector (Loop A)');
     const qgFix = {

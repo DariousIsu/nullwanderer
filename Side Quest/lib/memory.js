@@ -206,20 +206,30 @@ async function storeDeduped({ kind = 'note', content, source = null, importance 
 }
 
 // THE EMBEDDING TIER's high-band check (deterministic-loops #5): 'same' without a model call
-// requires BOTH (1) sim ≥ SIM_SAME and (2) the new text's token set ⊆ the existing note's —
-// i.e. the new note adds NO token the stored one lacks, so there is no informational delta a
-// merge could keep. Numeric tokens are kept regardless of length ("39" vs "38" must break
-// containment — corrections always reach the model). Conservative by design: a miss costs one
-// model call, a false 'same' silently drops information.
+// requires sim ≥ SIM_SAME AND the two notes' full token MULTISETS to be EQUAL.
+//
+// ⚠ FIXED 2026-08-15 (session backcheck, HIGH): the original test was one-directional CONTAINMENT
+// (new ⊆ existing) over a tokenizer that DROPPED every ≤2-char non-digit token. Two silent
+// data-loss bugs (program-is-the-model: worse than a capability gap):
+//   (1) a correction that REMOVES a meaning-flipping qualifier is a strict SUBSET of the old note,
+//       so "The drug was approved" was judged 'same' as the stored "The drug was NOT approved" and
+//       the correction was discarded — the stale, now-inverted fact kept.
+//   (2) Q2/Q3, US/UK, $4.2B/$4.3B collapsed to identical token sets (the short tokens were filtered
+//       out), so the newer figure was dropped as a duplicate.
+// The cure is maximal conservatism: lowercase, punctuation→space, keep EVERY token, sort, and
+// require the arrays to be EQUAL. A verbatim or merely-reordered restatement still skips the model;
+// anything that adds, drops, or changes ANY token — a negation, a quarter, a digit — reaches it.
+// A missed dup costs one model call; a false 'same' silently corrupts memory, so we never risk it.
 const SIM_SAME = 0.93;
 let _tierHitCount = 0;
+function _tierTokens(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean).sort();
+}
 function _tierSame(a, b, sim) {
   if (!(sim >= SIM_SAME) || !a || !b) return false;
-  const tok = (s) => new Set(String(s).toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/)
-    .filter((w) => w.length > 2 || /^\d+$/.test(w)));
-  const A = tok(a), B = tok(b);
-  if (!A.size || !B.size) return false;
-  for (const w of A) if (!B.has(w)) return false;   // any novel token → the model decides
+  const A = _tierTokens(a), B = _tierTokens(b);
+  if (!A.length || A.length !== B.length) return false;
+  for (let i = 0; i < A.length; i++) if (A[i] !== B[i]) return false;   // any token difference → the model decides
   return true;
 }
 

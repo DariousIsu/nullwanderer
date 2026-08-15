@@ -65,6 +65,23 @@ const F = (t, mtimeMs = Date.now()) => ({ text: t, mtimeMs });
     ok(by('fail-open-gate').length === 1 && /toll_gate/.test(by('fail-open-gate')[0].file), 'fail-open: undocumented catch→allow flagged; "Fails OPEN" doc\'d one skipped');
     ok(by('ungated-smoke').length === 1 && by('ungated-smoke')[0].name === 'smoke_fresh.js', 'smokes: recent ungated flagged; ancient live-set + gated one not');
 
+    // BACKCHECK fixes (2026-08-15): inline-documented fail-open skipped; $-in-name export probes correctly.
+    console.log('A2) backcheck regressions');
+    const fx2 = sa.runDetectors({
+      docsText: '',
+      files: {
+        // a fail-open documented INLINE on the return line (was missed → spurious flag)
+        'lib/inline_gate.js': F('function chk() { try { hmm(); } catch (e) { return { allow: true }; /* fails open: no store yet */ } }'),
+        // a fail-open documented in the FILE HEADER (was missed)
+        'lib/header_gate.js': F('/** This guard FAILS OPEN by design — a bricked throttle is worse. */\nfunction c() { try { x(); } catch (e) { return true; } }'),
+        // an export whose name contains $ — the \\b regex mis-anchored and falsely flagged it dark
+        'lib/dollar.js': F('function use$Thing() {}\nmodule.exports = { use$Thing };'),
+        'main.js': F("const { use$Thing } = require('./lib/dollar'); use$Thing();"),
+      },
+    }, { nowMs: now });
+    ok(fx2.filter((f) => f.detector === 'fail-open-gate').length === 0, 'inline + header "fails open" notes are now recognized (no spurious fail-open finding)');
+    ok(!fx2.some((f) => f.detector === 'zero-caller-export' && f.name === 'use$Thing'), '$-in-name export with a real live caller → NOT flagged dark (identifier-boundary regex)');
+
     console.log('B) recurrence + the capped mint door');
     const needsMade = [];
     const cnFix = {

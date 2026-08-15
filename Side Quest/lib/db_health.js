@@ -177,8 +177,15 @@ function tick({ deps = {}, nowMs = Date.now(), paths = null } = {}) {
  * runtime as node (ELECTRON_RUN_AS_NODE) on scripts/db_quick_check.js; the child opens the DB
  * read-only and prints one JSON line. Due-gated here; call from the tick cadence.
  */
+// IN-PROGRESS guard (2026-08-15 backcheck fix): a quick_check of the ~2.6GB store can outlive the
+// 10-min tick interval (its own timeout is 15min), and the due-gate only clears when the child
+// COMPLETES (writes QC_KEY). Without this flag the next tick re-reads the still-stale timestamp and
+// spawns a SECOND concurrent full-scan — doubled disk I/O on an already-tight volume. One in-flight
+// child at a time; the flag clears in the completion callback (and on spawn failure).
+let _qcInFlight = false;
 function maybeQuickCheck({ deps = {}, nowMs = Date.now(), paths = null } = {}) {
   const db = deps.db || require('./db');
+  if (_qcInFlight) return false;
   try {
     const qc = JSON.parse(db.getMeta(QC_KEY) || 'null');
     if (qc && qc.at && (nowMs - qc.at) < QC_EVERY_MS) return false;
@@ -187,10 +194,12 @@ function maybeQuickCheck({ deps = {}, nowMs = Date.now(), paths = null } = {}) {
   try {
     const { execFile } = require('child_process');
     const script = path.join(__dirname, '..', 'scripts', 'db_quick_check.js');
+    _qcInFlight = true;
     const child = execFile(process.execPath, [script, P.sqDb], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       timeout: 15 * 60e3, windowsHide: true, maxBuffer: 1048576,
     }, (err, stdout) => {
+      _qcInFlight = false;
       let res = null;
       try { res = JSON.parse(String(stdout || '').trim().split('\n').pop()); } catch {}
       if (!res) res = { ok: false, msg: err ? `child failed: ${err.message}` : 'no output' };
@@ -199,7 +208,7 @@ function maybeQuickCheck({ deps = {}, nowMs = Date.now(), paths = null } = {}) {
     });
     if (child.unref) child.unref();
     return true;
-  } catch (e) { try { console.error('[db_health] quick_check spawn failed:', e.message); } catch {} return false; }
+  } catch (e) { _qcInFlight = false; try { console.error('[db_health] quick_check spawn failed:', e.message); } catch {} return false; }
 }
 
 // One compact phrase for the status vector's memory_substrate section.

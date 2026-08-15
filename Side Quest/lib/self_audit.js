@@ -83,7 +83,13 @@ function detectZeroCallerExports(corpus) {
     if (!m) continue;
     const names = m[1].split(',').map((s) => (s.split(':')[0] || '').trim()).filter((s) => /^[A-Za-z_$][\w$]*$/.test(s) && s.length >= 5 && !s.startsWith('_'));
     for (const name of names) {
-      const rx = new RegExp(`\\b${name}\\b`);
+      // Escape regex metachars + use IDENTIFIER boundaries (2026-08-15 backcheck fix): the name
+      // filter permits `$` (a valid JS identifier char), but `\b${name}\b` treats a `$` in the name
+      // as an anchor and mis-anchors at word boundaries around it — a `$`-containing export never
+      // matched its real call sites and was falsely flagged as dark. `(?<![\w$])name(?![\w$])`
+      // treats `$` as part of the identifier, which is the correct boundary.
+      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rx = new RegExp(`(?<![\\w$])${esc}(?![\\w$])`);
       let live = false, smokeOnly = false;
       for (const [p, { text }] of Object.entries(corpus.files)) {
         if (p === f) continue;
@@ -162,8 +168,16 @@ function detectFailOpenGates(corpus) {
   for (const [p, { text }] of Object.entries(corpus.files)) {
     if (!/gate|guard|tier|policy|quota/.test(p) || p.startsWith('scripts/')) continue;
     for (const m of text.matchAll(/catch[\s\S]{0,160}?(allow:\s*true|return\s+true)/g)) {
-      const before = text.slice(Math.max(0, m.index - 300), m.index);
-      if (/fails?[ -]open/i.test(before)) continue;   // documented = a design choice, not a finding
+      // Scan the 300 chars BEFORE the catch PLUS the rest of the CURRENT LINE (2026-08-15 backcheck
+      // fix): a "fails open" note placed INLINE on the return line (`catch(e){ return true; /* fails
+      // open */ }`) sits after the match and was missed → the documented gate got wrongly flagged.
+      // End-of-line (not a fixed after-window) is deliberate: it catches the same-line note WITHOUT
+      // reaching a following function's leading comment (which would suppress a real undocumented
+      // fail-open on THIS catch). A header-level note is still caught by the 300-before window in the
+      // small gate files where it matters.
+      const lineEnd = text.indexOf('\n', m.index);
+      const around = text.slice(Math.max(0, m.index - 300), lineEnd === -1 ? text.length : lineEnd);
+      if (/fails?[ -]open/i.test(around)) continue;   // documented = a design choice, not a finding
       const line = text.slice(0, m.index).split('\n').length;
       out.push({ detector: 'fail-open-gate', file: p, name: `L${line}`, text: `${p}:${line} — a catch in a gate-named file returns ALLOW with no "fails open" doc comment; an error there silently opens the gate (the tier-gate disease class)` });
     }

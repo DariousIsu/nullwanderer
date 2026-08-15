@@ -4748,7 +4748,15 @@ async function _calProvRefresh() {
   } catch (e) { _calProv.failStreak++; console.error('[calendar] provider refresh failed:', e.message); }
 }
 try {
-  require('./lib/calendar').setProvider(() => _calProv.events);   // cache-serving — never fetches in-turn
+  // STALENESS-GUARDED provider (2026-08-15 backcheck fix): on a refresh failure _calProvRefresh does
+  // `failStreak++; return` WITHOUT clearing _calProv.events, so the cache FREEZES at the last success.
+  // etaSuffix reads it with no freshness check (unlike the meta-backed today-ahead/prep surfaces,
+  // which fail-absent at 20min), so a sustained gcal outage would keep it projecting around — and
+  // naming — meetings that may have been cancelled. Serve [] once the cache is >20min stale (the
+  // refresh runs every 5min, so this tolerates ~4 failed refreshes before going naive), matching the
+  // sibling surfaces and the module's "a dead refresh never fakes a schedule" contract.
+  const _CAL_STALE_MS = 20 * 60e3;
+  require('./lib/calendar').setProvider(() => ((_calProv.at && (Date.now() - _calProv.at) < _CAL_STALE_MS) ? _calProv.events : []));
   setTimeout(_calProvRefresh, 45 * 1000);                          // first fill after echoVenv paths settle
   const _calT = setInterval(() => {
     // T-15 PREP ORGAN (senses §6, gcal reconnected 08-15): the next meeting inside the 5–20min
@@ -11833,6 +11841,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (stored && stored.length > 0) console.log('[main] personal_facts captured:', stored.map(s => `${s.action || 'add'}: ${s.content.slice(0, 60)}`));
   }).catch(err => console.error('[main] personal_facts extract failed:', err.message));
 
+  // DELIVERY-ROUTER SHELF RELEASE (senses §1, 2026-08-15 backcheck fix): the held-for-Lucas notes
+  // rode THIS turn's awareness block (built above), so she has just had her natural moment to offer
+  // the digest. Release the shelf now so heldLine() doesn't re-inject the identical "you're holding
+  // N notes" line into every subsequent turn for 48h. Without this, clearHeld had zero production
+  // callers and the shelf only ever drained on the 48h expiry — re-offering already-surfaced notes.
+  try { const dr = require('./lib/delivery_router'); if (dr.heldLine()) { dr.clearHeld(); console.log('[main] delivery shelf released — held digest was available this turn'); } } catch {}
+
   // Background: refresh her unified self-narrative if stale (self-awareness Layer 4). Lazy — at
   // most once per TTL — so identity stays current with how she's grown without a per-turn cost.
   require('./lib/self_narrative').maybeRefresh({ userName })
@@ -17277,14 +17292,19 @@ async function runDirectedResearchPass(focus) {
                 const _rvInput = rpm.revalidateInput({ plan: plan0, synthesis: section, covered, goal });
                 const _rvHash = require('crypto').createHash('sha1').update(JSON.stringify(_rvInput)).digest('hex');
                 if (db.getMeta(`focus.${focus.id}.reval_hash`) === _rvHash) { console.log(`[user-work] plan revalidate SKIPPED — inputs unchanged since the last pass (focus #${focus.id})`); return; }
-                db.setMeta(`focus.${focus.id}.reval_hash`, _rvHash);
                 const verdict = await require('./lib/cloud_logic').ask({
                   task: 'plan_revalidate', v: 1, numPredict: 700,
                   input: _rvInput,
                   want: rpm.revalidateWant(),
                   validate: rpm.revalidateValidator,
                 });
+                // Persist the hash ONLY after a REAL verdict (2026-08-15 backcheck fix): the old code
+                // stamped it before the await, so a null verdict (budget exhaustion / transient
+                // quota-deferral) permanently suppressed retry on unchanged inputs — caching a
+                // transient failure as a definitive "no change" and defeating the very retry that
+                // would un-stick a non-converging plan.
                 if (!verdict) return;
+                db.setMeta(`focus.${focus.id}.reval_hash`, _rvHash);
                 const { plan: plan1, changed, notes } = require('./lib/research_plan').applyPlanDelta(plan0, verdict);
                 for (const need of (Array.isArray(verdict.tool_needs) ? verdict.tool_needs : []).slice(0, 3)) {
                   try { require('./lib/capability_need').record(String(need).slice(0, 300), { bornFrom: `plan-revalidate:${focus.id}` }); } catch {}
@@ -17938,13 +17958,13 @@ Reply ONLY: {"verdict": "survives"|"refuted", "attack": "<the strongest single a
             const _rvInput = rpm.revalidateInput({ plan: plan0, synthesis: section, covered, goal });
             const _rvHash = require('crypto').createHash('sha1').update(JSON.stringify(_rvInput)).digest('hex');
             if (db.getMeta(`focus.${focus.id}.reval_hash`) === _rvHash) { console.log(`[topical] plan revalidate SKIPPED — inputs unchanged since the last pass (focus #${focus.id})`); return; }
-            db.setMeta(`focus.${focus.id}.reval_hash`, _rvHash);
             const verdict = await require('./lib/cloud_logic').ask({
               task: 'plan_revalidate', v: 1, numPredict: 700,
               input: _rvInput,
               want: rpm.revalidateWant(), validate: rpm.revalidateValidator,
             });
-            if (!verdict) return;
+            if (!verdict) return;   // no verdict (transient) → don't cache; retry next pass (backcheck fix)
+            db.setMeta(`focus.${focus.id}.reval_hash`, _rvHash);
             const { plan: plan1, changed, notes } = rpm.applyPlanDelta(plan0, verdict);
             for (const need of (Array.isArray(verdict.tool_needs) ? verdict.tool_needs : []).slice(0, 3)) {
               try { require('./lib/capability_need').record(String(need).slice(0, 300), { bornFrom: `plan-revalidate:${focus.id}` }); } catch {}

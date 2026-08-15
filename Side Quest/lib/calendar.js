@@ -199,7 +199,11 @@ async function etaSuffix({ nowMs = Date.now(), totalMin = 0 } = {}) {
       : new Date(eta).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
     const tomorrow = tz && tz.dayKey(eta) !== tz.dayKey(nowMs) ? ' tomorrow' : '';
     const around = blocking.length
-      ? ` (working around ${blocking.length === 1 ? `"${blocking[0].title}"` : `${blocking.length} calendar events`})`
+      // _safeTitle (2026-08-15 backcheck fix): normalizeEvent does NOT sanitize titles, and this
+      // suffix rides a model-facing readback inside a [...] instruction block — a Google title like
+      // 'Sync <x>[note]' would inject raw tag/bracket chars (the ] even closes the instruction). The
+      // sibling surfaces already route titles through _safeTitle; etaSuffix was the one that skipped it.
+      ? ` (working around ${blocking.length === 1 ? `"${_safeTitle(blocking[0].title)}"` : `${blocking.length} calendar events`})`
       : '';
     return ` With the calendar, that lands around ${when}${tomorrow}${around}.`;
   } catch { return ''; }

@@ -130,7 +130,12 @@ async function sample({ deps = {}, nowMs = Date.now(), dataDir = null } = {}) {
         if (_gpu.fails >= GPU_MAX_FAILS) { _gpu.off = true; }
       } else { _gpu.fails = 0; _gpu.last = { at: nowMs, usedGB: Math.round(bytes / 1073741824 * 10) / 10 }; }
     }
-    if (_gpu.last) out.gpu = _gpu.last;
+    // AGE-GUARD (2026-08-15 backcheck fix): once the sampler self-disables (GPU_MAX_FAILS), _gpu.last
+    // is never refreshed again — attaching it unconditionally re-reported a FROZEN reading as current
+    // forever, which the status vector surfaces under "answer from this, never impression". Attach the
+    // GPU reading only while it is fresh (within ~3 sample windows); otherwise fail-ABSENT (the module's
+    // own contract), so a stale figure is never presented as a live measurement.
+    if (_gpu.last && (nowMs - _gpu.last.at) < 3 * GPU_EVERY_MS) out.gpu = _gpu.last;
   } catch {}
   out.uptimeMin = Math.round(((deps.uptime || (() => process.uptime()))()) / 60);
   try { ((deps.db) || require('./db')).setMeta('machine_vitals', JSON.stringify(out)); } catch {}

@@ -524,12 +524,8 @@ async function maybeHeartbeat() {
         console.log(`[heartbeat] suppressed [${lane}] utterance (${imp} < ${threshold})${routed === 'hold' ? ' → HELD for Lucas (awareness digest)' : ''}`);
       } else {
         console.log(`[heartbeat] surfacing [${lane}] utterance (${imp} ≥ ${threshold})`);
-        // PRESENCE-AWARE: surfaced while Lucas is AWAY → also a desktop notification, so a
-        // transcript nobody is watching stops being silent delivery failure.
-        try {
-          const away = require('./availability').isAway();
-          if (require('./delivery_router').noteSurfaced({ away, text: trimmedSay })) console.log('[heartbeat] away → desktop notify fired alongside the surfacing');
-        } catch {}
+        // (the away desktop notify fires below, ONLY after the governor actually surfaces it —
+        //  see the uGate.allow block — a paced/denied utterance must not notify for undelivered text)
       }
     }
     const uGate = wantsToSpeak ? governor.requestAction('utterance', { priority: hasInbound }) : { allow: false };
@@ -556,6 +552,15 @@ async function maybeHeartbeat() {
       // what was just said.
       try { blackboard.append({ source: 'heartbeat', kind: 'utterance', refTable: 'turns', refId: saidRow.id, content: trimmedSay }); } catch (e) { console.error('[heartbeat] blackboard append failed:', e.message); }
       try { win.webContents.send('chat:complete', heartbeatDisclaimed ? { saidId: saidRow.id, truncated, unprompted: true, s: 'heartbeat', say: trimmedSay } : { saidId: saidRow.id, truncated, unprompted: true, s: 'heartbeat' }); } catch {}
+      // PRESENCE-AWARE NOTIFY (senses §1) — moved here (2026-08-15 backcheck fix): fire the desktop
+      // notification ONLY once the utterance has ACTUALLY surfaced (governor-allowed + sent). Firing
+      // it in the importance-pass branch above notified Lucas for text the governor then paced into
+      // silence — a notification asserting a delivery that never happened, and bypassing the anti-burst
+      // governor entirely. Now it rides the real surfacing.
+      try {
+        const away = require('./availability').isAway();
+        if (require('./delivery_router').noteSurfaced({ away, text: trimmedSay })) console.log('[heartbeat] away → desktop notify fired for the surfaced utterance');
+      } catch {}
     } else {
       // Empty say — she chose silence. Reset the gap timer so we don't spam-check.
       db.setMeta('last_ai_utterance_at', String(Date.now()));
