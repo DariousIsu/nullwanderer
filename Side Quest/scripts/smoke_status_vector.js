@@ -86,6 +86,18 @@ const GB = 1073741824;
     ok(typeof t2.growthMBperDay === 'number', `growth computed (${t2.growthMBperDay}MB/day)`);
     ok(JSON.parse(db.getMeta(dh.SNAP_KEY) || 'null').at === now + 21 * 3600e3, 'snapshot persisted to meta db_health');
 
+    // PRECURATION ROTATION (Lucas's 08-15 reclaim ruling): newest N kept, strictly-matched only.
+    // Drop the census fixture first (it matches the strict pattern and would skew the sort).
+    try { fs.unlinkSync(path.join(tmpDir, 'sq.db.precuration_20990101_000000')); } catch {}
+    for (const n of ['sq.db.precuration_20260810_010101', 'sq.db.precuration_20260812_010101', 'sq.db.precuration_20260814_010101']) fs.writeFileSync(path.join(tmpDir, n), 'x');
+    fs.writeFileSync(path.join(tmpDir, 'sq.db.precuration_NOTASTAMP'), 'x');   // pattern miss → untouched
+    const rot = dh.rotateBackups({ dataDir: tmpDir });
+    ok(rot.pruned.length === 1 && rot.pruned[0] === 'sq.db.precuration_20260810_010101', `rotation prunes exactly beyond newest ${dh.PRECURATION_KEEP} (${JSON.stringify(rot.pruned)})`);
+    ok(fs.existsSync(path.join(tmpDir, 'sq.db.precuration_20260814_010101')) && fs.existsSync(path.join(tmpDir, 'sq.db.precuration_20260812_010101')), 'the 2 newest copies survive');
+    ok(!fs.existsSync(path.join(tmpDir, 'sq.db.precuration_20260810_010101')), 'the oldest copy is gone');
+    ok(fs.existsSync(path.join(tmpDir, 'sq.db.precuration_NOTASTAMP')), 'a non-matching name is NEVER touched (strict pattern)');
+    ok(dh.rotateBackups({ dataDir: tmpDir }).pruned.length === 0, 'steady state: nothing further to prune');
+
     // quick_check child script on a PRISTINE real store → ok:true
     const cleanDb = path.join(tmpDir, 'clean.db');
     { const D = require(ROOT + '/node_modules/better-sqlite3'); const d2 = new D(cleanDb); d2.exec('CREATE TABLE t(x); INSERT INTO t VALUES (1)'); d2.close(); }

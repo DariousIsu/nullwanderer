@@ -12,9 +12,10 @@
  * What it watches (10-min tick, all fs.stat — cheap):
  *   • sq.db + WAL size — a growing WAL means checkpoint starvation → the p39 lock class. >256MB warns.
  *   • Echo's big stores (saga/web_cache/jobs/skuld) + their WALs.
- *   • the BACKUP PILE census — count + GB of sq.db precuration/backup copies. ~13GB of stale
- *     copies existed unwatched at build time. This loop only REPORTS; pruning is Lucas's decision
- *     (surfaced, never auto-deleted).
+ *   • the BACKUP PILE census — count + GB of sq.db precuration/backup copies (~13GB sat unwatched
+ *     at build time). The census REPORTS everything; rotateBackups AUTO-PRUNES exactly one
+ *     pattern — sq.db.precuration_* beyond the newest PRECURATION_KEEP — under Lucas's 08-15
+ *     reclaim ruling. Every other backup-class file is surfaced, never auto-deleted.
  *   • growth ring — one size sample per ~day, 14 kept → MB/day ("my memory grew 33MB today").
  *   • PRAGMA quick_check WEEKLY, in a CHILD process (scripts/db_quick_check.js) — a 2.6GB
  *     quick_check on the main thread would BE a main-thread stall, the exact disease route_obs
@@ -64,6 +65,41 @@ function _emitAnomaly(type, level, text, { deps = {}, nowMs = Date.now() } = {})
   } catch {}
 }
 
+// PRECURATION ROTATION (Lucas's reclaim ruling, 2026-08-15 "reclaim audit and continue"): the
+// nightly pre-curation snapshot writer never pruned — 5 copies ≈ 12.8GB sat on a 4%-free volume
+// until a hand-run reclaim. A hand-run repair is an UNFINISHED FEATURE: this keeps exactly the
+// newest PRECURATION_KEEP copies and deletes older ones, STRICTLY the sq.db.precuration_<stamp>
+// pattern (timestamped names sort chronologically) — never any other file, never the live store.
+// Runs on the tick; prunes log + emit obs (lane 'db', kind 'rotation').
+const PRECURATION_KEEP = 2;
+const PRECURATION_RE = /^sq\.db\.precuration_\d{8}_\d{6}$/;
+function rotateBackups({ deps = {}, nowMs = Date.now(), dataDir = null } = {}) {
+  try {
+    const dir = dataDir || _defaultPaths().dataDir;
+    const matches = fs.readdirSync(dir).filter((n) => PRECURATION_RE.test(n)).sort().reverse();
+    const stale = matches.slice(PRECURATION_KEEP);
+    const pruned = [];
+    for (const n of stale) {
+      try {
+        const p = path.join(dir, n);
+        const gb = Math.round((fs.statSync(p).size / 1073741824) * 100) / 100;
+        fs.unlinkSync(p);
+        pruned.push(n);
+        try { console.log(`[db_health] rotated out ${n} (${gb}GB) — keeping newest ${PRECURATION_KEEP} precuration copies`); } catch {}
+      } catch {}
+    }
+    if (pruned.length) {
+      try {
+        ((deps.obsBus) || require('./obs_bus')).emit(
+          { lane: 'db', kind: 'rotation', level: 'info', text: `precuration rotation pruned ${pruned.length} old cop${pruned.length === 1 ? 'y' : 'ies'} (kept newest ${Math.min(matches.length, PRECURATION_KEEP)})`, data: { pruned } },
+          { deps, nowMs }
+        );
+      } catch {}
+    }
+    return { pruned, kept: matches.slice(0, PRECURATION_KEEP) };
+  } catch { return { pruned: [], kept: [] }; }
+}
+
 // Census of backup-ish copies in the data dir (name-matched, ≥50MB). REPORT-ONLY by design.
 function backupCensus(dataDir) {
   try {
@@ -86,6 +122,8 @@ function tick({ deps = {}, nowMs = Date.now(), paths = null } = {}) {
   const P = paths || _defaultPaths();
   const db = deps.db || require('./db');
   const out = { at: nowMs };
+  // rotation FIRST, so the census below reports the post-rotation truth
+  try { rotateBackups({ deps, nowMs, dataDir: P.dataDir }); } catch {}
   try {
     out.sq = { sizeMB: _mb(P.sqDb), walMB: _mb(P.sqDb + '-wal') };
     if (out.sq.walMB != null && out.sq.walMB > WAL_WARN_MB) {
@@ -175,4 +213,4 @@ function describe(v) {
   return bits.length ? bits.join(' · ') : null;
 }
 
-module.exports = { tick, maybeQuickCheck, backupCensus, describe, WAL_WARN_MB, BACKUP_WARN_GB, RING_KEY, QC_KEY, SNAP_KEY };
+module.exports = { tick, maybeQuickCheck, backupCensus, rotateBackups, describe, WAL_WARN_MB, BACKUP_WARN_GB, PRECURATION_KEEP, RING_KEY, QC_KEY, SNAP_KEY };
