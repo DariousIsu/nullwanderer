@@ -7726,7 +7726,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           .map(c => { const s = String((c && c.line) || '').replace(/\s+/g, ' ').trim().slice(0, 400); return s ? `  • ${s}` : ''; })
           .filter(Boolean);
         if (cLines.length) {
-          parts.push('From your civic store (VERIFIED seat records — answer seat/roster questions directly FROM these; a VACANT entry means the seat is genuinely empty, cited):\n' + cLines.join('\n'));
+          // The header's promise must match what the lines guarantee (2026-08-15 deep-dive C2):
+          // the store grades, it does not gate — so unflagged lines are the citable facts, and any
+          // line carrying [UNCITED/low-confidence/recheck/CONFLICT] is a LEAD the model must verify,
+          // never assert. The old header called everything VERIFIED and told her not to double-check.
+          parts.push('From your civic store (held seat records — lines WITHOUT a bracketed flag are verified and citable: answer seat/roster questions directly from them, and an unflagged VACANT entry means the seat is genuinely empty, cited. Any line flagged [UNCITED / low-confidence / low-grade / recheck / CONFLICT] is a lead to verify before asserting, not a fact):\n' + cLines.join('\n'));
           recallResult.civicHits.forEach(c => rkRows.unshift({ content: c.line, source: 'civic' }));
           console.log(`[recall] civic store grounded this turn — ${cLines.length} line(s)`);
         }

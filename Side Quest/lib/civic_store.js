@@ -109,7 +109,12 @@ function recordMembership(m = {}, { deps = {}, nowMs = Date.now() } = {}) {
         if (isFinite(conf) && conf > Number(cur.confidence || 0)) {
           d.prepare('UPDATE civic_memberships SET confidence = ?, source_url = COALESCE(?, source_url), source_kind = ?, observed_ts = ? WHERE id = ?')
             .run(conf, m.sourceUrl || null, sourceKind, nowMs, cur.id);
-          return { ok: true, id: cur.id, regraded: true };
+          // A researched re-confirmation of the sitting holder ALSO closes any (force-recorded)
+          // vacancy conflict on the seat — the better source just verified the seat is filled
+          // (2026-08-15 deep-dive C3: the wire used to run only on the fresh-insert path, so a
+          // vacancy recorded after the fill stayed live forever while re-observations early-returned).
+          const rvR = isBackfill ? null : _resolveVacancyOn(d, bodyKey, m.district, cur.id, nowMs);
+          return { ok: true, id: cur.id, regraded: true, resolvedVacancy: rvR };
         }
         return { ok: true, id: cur.id, unchanged: true };
       }
@@ -121,24 +126,37 @@ function recordMembership(m = {}, { deps = {}, nowMs = Date.now() } = {}) {
         m.crmId || null, m.pullerId || null, m.email || null, m.phone || null, m.sourceUrl || null, sourceKind,
         m.docRef || null, isFinite(Number(m.confidence)) ? Number(m.confidence) : 0.5, nowMs);
     if (cur) d.prepare('UPDATE civic_memberships SET superseded_by = ? WHERE id = ?').run(info.lastInsertRowid, cur.id);
-    // THE SELF-HEALING WIRE (vacancy-as-data): a fresh membership naming a district FILLS any live
-    // vacancy claim on that exact seat — exact-key match on (body_key, district), never fuzzy.
-    // When the D14 successor is eventually recorded, the vacancy resolves itself with lineage to
-    // the filling row; nothing has to remember to close it.
+    // THE SELF-HEALING WIRE (vacancy-as-data): a membership naming a district FILLS any live
+    // vacancy claim on that exact seat — normalized-key match on (body_key, seat), never fuzzy.
+    // GUARDS (2026-08-15 deep-dive C4 — the wire used to fire on ANY insert):
+    //   · backfill never resolves — a prose re-extraction of the DEAD incumbent must not close an
+    //     official-cited vacancy (mirror of the "backfill never supersedes researched" rule above);
+    //   · a supersede of an EXISTING member resolves only when the DISTRICT itself changed — a
+    //     colleague's new email in a multi-member district is not a vacancy fill.
     let resolvedVacancy = null;
-    try {
-      if (m.district != null && str(m.district).trim()) {
-        const vac = d.prepare(`SELECT id FROM civic_vacancies WHERE body_key = ? AND TRIM(seat) = TRIM(?)
-          AND superseded_by IS NULL AND resolved_ts IS NULL`).get(bodyKey, str(m.district));
-        if (vac) {
-          d.prepare('UPDATE civic_vacancies SET resolved_ts = ?, resolved_by_membership = ? WHERE id = ?')
-            .run(nowMs, info.lastInsertRowid, vac.id);
-          resolvedVacancy = vac.id;
-        }
-      }
-    } catch { /* vacancy resolution is additive, never blocks the membership write */ }
+    const districtChanged = cur ? str(cur.district) !== str(m.district) : true;
+    if (!isBackfill && districtChanged) {
+      resolvedVacancy = _resolveVacancyOn(d, bodyKey, m.district, info.lastInsertRowid, nowMs);
+    }
     return { ok: true, id: info.lastInsertRowid, superseded: cur ? cur.id : null, resolvedVacancy };
   } catch (e) { return { ok: false, reason: e.message }; }
+}
+
+// Resolve one live vacancy matching (body, normalized seat), lineage to the filling/confirming
+// membership row. Compares seats NORMALIZED on both sides (legacy rows may carry "District 14").
+// Additive: a fault here never blocks the membership write.
+function _resolveVacancyOn(d, bodyKey, district, membershipId, nowMs) {
+  try {
+    const seat = _normSeat(district);
+    if (!seat) return null;
+    const live = d.prepare(`SELECT id, seat FROM civic_vacancies WHERE body_key = ?
+      AND superseded_by IS NULL AND resolved_ts IS NULL`).all(bodyKey);
+    const vac = live.find((v) => _normSeat(v.seat) === seat);
+    if (!vac) return null;
+    d.prepare('UPDATE civic_vacancies SET resolved_ts = ?, resolved_by_membership = ? WHERE id = ?')
+      .run(nowMs, membershipId, vac.id);
+    return vac.id;
+  } catch { return null; }
 }
 
 // ── vacancies — the seat-state claims (2026-08-14, the D14 lesson) ───────────────────────────
@@ -152,15 +170,28 @@ function recordMembership(m = {}, { deps = {}, nowMs = Date.now() } = {}) {
 const _VAC_MATERIAL = ['vacant_since', 'reason', 'successor_note'];
 function recordVacancy(v = {}, { deps = {}, nowMs = Date.now() } = {}) {
   const bodyKey = v.bodyKey ? str(v.bodyKey) : keyFor(v.bodyTitle);
-  const seat = str(v.seat).trim();
+  const seat = _normSeat(v.seat) || str(v.seat).trim();
   if (!bodyKey) return { ok: false, reason: 'no body' };
   if (!seat) return { ok: false, reason: 'a vacancy names its SEAT (the district/role value the roster uses)' };
   try {
     const d = _db(deps).getDb();
     if (!d.prepare('SELECT 1 FROM civic_bodies WHERE body_key = ?').get(bodyKey)) return { ok: false, reason: `unknown body "${bodyKey}" — upsertBody first` };
+    // A vacancy claim on a seat the live roster HOLDS is a contradiction, and stored contradictions
+    // rendered as verified facts are worse than refusals (2026-08-15 deep-dive C3: a stale article's
+    // vacancy landed after the successor and could never self-heal — every later re-observation of
+    // the successor early-returned before the resolve wire). Refuse with the door NAMED: the caller
+    // either supersedes the holder first (the seat really emptied) or passes force:true to record
+    // the conflict knowingly — a forced row renders as CONFLICT, never as plain VACANT.
+    const liveRows = d.prepare(`SELECT id, person_name, district FROM civic_memberships WHERE body_key = ?
+      AND superseded_by IS NULL`).all(bodyKey);
+    const holder = liveRows.find((r) => _normSeat(r.district) === seat);
+    if (holder && !v.force) {
+      return { ok: false, reason: `seat "${seat}" is currently held by ${holder.person_name} (membership row ${holder.id}) — supersede the holder first if the seat truly emptied, or pass force:true to record the conflict`, heldBy: holder.id };
+    }
     const incoming = { vacant_since: v.vacantSince == null ? null : str(v.vacantSince), reason: v.reason == null ? null : str(v.reason), successor_note: v.successorNote == null ? null : str(v.successorNote) };
-    const cur = d.prepare(`SELECT * FROM civic_vacancies WHERE body_key = ? AND TRIM(seat) = TRIM(?)
-      AND superseded_by IS NULL AND resolved_ts IS NULL ORDER BY observed_ts DESC LIMIT 1`).get(bodyKey, seat);
+    const liveVacs = d.prepare(`SELECT * FROM civic_vacancies WHERE body_key = ?
+      AND superseded_by IS NULL AND resolved_ts IS NULL ORDER BY observed_ts DESC`).all(bodyKey);
+    const cur = liveVacs.find((r) => _normSeat(r.seat) === seat) || null;
     if (cur) {
       const changed = _VAC_MATERIAL.some((f) => incoming[f] != null && str(incoming[f]) !== str(cur[f]));
       if (!changed) {
@@ -179,7 +210,7 @@ function recordVacancy(v = {}, { deps = {}, nowMs = Date.now() } = {}) {
       .run(bodyKey, seat, incoming.vacant_since, incoming.reason, incoming.successor_note,
         v.sourceUrl || null, str(v.sourceKind) || 'operator', isFinite(Number(v.confidence)) ? Number(v.confidence) : 0.5, nowMs);
     if (cur) d.prepare('UPDATE civic_vacancies SET superseded_by = ? WHERE id = ?').run(info.lastInsertRowid, cur.id);
-    return { ok: true, id: info.lastInsertRowid, superseded: cur ? cur.id : null };
+    return { ok: true, id: info.lastInsertRowid, superseded: cur ? cur.id : null, conflictsWith: holder ? holder.id : null };
   } catch (e) { return { ok: false, reason: e.message }; }
 }
 
@@ -192,13 +223,43 @@ function vacancies(bodyKeyOrTitle, { deps = {} } = {}) {
   } catch { return []; }
 }
 
+// SEAT NORMALIZATION (2026-08-15 deep-dive C5): the "seat carries the exact district value"
+// invariant was comment-enforced only — a vacancy stored as "District 14" against a membership
+// district "14" broke the resolve wire, rendered "District District 14", and made the recall
+// probe claim "no live row held" NEXT TO the vacancy it missed. Normalize at every write and
+// every compare: strip a leading district/seat word, strip leading zeros ("07" → "7").
+function _normSeat(s) {
+  return str(s).trim().replace(/^(?:district|seat|dist\.?)\s*#?\s*/i, '').replace(/^0+(?=\d)/, '').trim();
+}
+
 // One rendered line per live vacancy — the shape digests and rosters append.
-function _vacancyLine(r) {
+// GRADE RIDES THE LINE (2026-08-15 deep-dive C2): the chat door frames these as verified facts,
+// but recordVacancy accepts uncited/low-confidence claims by design (grade-don't-gate, rule 5).
+// The grade must therefore be VISIBLE where the claim is spoken: an uncited, low-confidence, or
+// stale vacancy carries its own verify-first flag so the model can never mistake a weak claim
+// for a cited fact. A clean line (cited, confident, fresh) stays clean.
+const _VAC_STALE_MS = 30 * 24 * 3600 * 1000; // same 30d bar staleRostersFor uses
+function _vacancyLine(r, { now = Date.now() } = {}) {
   const bits = [];
   if (r.vacant_since) bits.push(`since ${r.vacant_since}`);
   if (r.reason) bits.push(r.reason);
   if (r.successor_note) bits.push(r.successor_note);
-  return `District ${r.seat} — VACANT${bits.length ? ` (${bits.join('; ')})` : ''}`;
+  const flags = [];
+  if (!r.source_url) flags.push('UNCITED — verify before asserting');
+  else if (Number(r.confidence || 0) < 0.6) flags.push('low-confidence — verify before asserting');
+  const age = now - Number(r.observed_ts || 0);
+  if (isFinite(age) && age > _VAC_STALE_MS) flags.push(`last confirmed ${Math.round(age / 86400000)}d ago — recheck`);
+  return `District ${_normSeat(r.seat) || r.seat} — VACANT${bits.length ? ` (${bits.join('; ')})` : ''}${flags.length ? ` [${flags.join('; ')}]` : ''}`;
+}
+
+// A vacancy claim on a seat the live roster HOLDS is a contradiction, not a fact — render it as
+// one (2026-08-15 deep-dive C6). Speaking both "District 14: Jane Doe" and "District 14 — VACANT"
+// as verified hands the model a coin flip; naming the conflict makes verify-first the only move.
+function _vacancyOrConflictLine(v, liveRows, { now = Date.now() } = {}) {
+  const seat = _normSeat(v.seat);
+  const holder = seat ? (liveRows || []).find((r) => _normSeat(r.district) === seat) : null;
+  if (holder) return `District ${seat} — CONFLICT: the roster holds ${holder.person_name} but a vacancy claim exists; verify before asserting either`;
+  return _vacancyLine(v, { now });
 }
 
 // SEAT-GRAIN recorder (roster-refresh organ, 2026-08-07): an elected SEAT has exactly one holder,
@@ -285,8 +346,9 @@ function heldRostersFor(text, { limit = 40, deps = {} } = {}) {
     if (!rows.length) continue;
     const named = rows.map((r) => `${r.person_name}${r.role && !/^member$/i.test(r.role) ? ` (${r.role})` : ''}${r.district ? ` [${r.district}]` : ''}`);
     // Live vacancy claims ride the same line — "who holds District 14" must answer VACANT (cited),
-    // never fall silent as if the seat were unresearched.
-    const vac = vacancies(b.body_key, { deps }).map(_vacancyLine);
+    // never fall silent as if the seat were unresearched. Conflict-aware: a vacancy on a held seat
+    // renders as CONFLICT (deep-dive C6), and weak claims carry their verify-first flag (C2).
+    const vac = vacancies(b.body_key, { deps }).map((v) => _vacancyOrConflictLine(v, rows));
     out.push({ bodyKey: b.body_key, count: rows.length, line: `${b.body_key} — ${rows.length} held${vac.length ? ` + ${vac.length} vacant` : ''}: ${named.join('; ')}${vac.length ? `; ${vac.join('; ')}` : ''}` });
     if (out.length >= limit) break;
   }
@@ -318,7 +380,7 @@ function civicDigestFor(topic, { limit = 120, charBudget = 40000, deps = {} } = 
     const rows = roster(key, { deps });
     if (!rows.length) continue;
     const named = rows.map((r) => `${r.person_name}${r.role && !/^member$/i.test(r.role) ? ` (${r.role})` : ''}`);
-    const vac = vacancies(key, { deps }).map(_vacancyLine);
+    const vac = vacancies(key, { deps }).map((v) => _vacancyOrConflictLine(v, rows));
     const line = `- ${key} — ${rows.length} member(s)${vac.length ? ` + ${vac.length} VACANT seat(s): ${vac.join('; ')}` : ''}: ${named.join('; ')}`;
     if (lines.length >= limit || used + line.length > charBudget) { dropped++; continue; }
     lines.push(line); used += line.length + 1;
@@ -358,19 +420,29 @@ function staleRostersFor(text, { maxAgeMs = 30 * 24 * 3600 * 1000, limit = 5, no
 // topic — the same bar news matching uses), best-matched bodies first, a compact per-body
 // summary instead of the full name roll, the DISTRICT the text actually asks about pulled to the
 // front, and every live vacancy spoken. Returns [{bodyKey, line}], capped and fail-soft.
-function civicRecallFor(text, { limit = 3, deps = {} } = {}) {
+// CLASS words name a KIND of body, never WHICH one — two class hits are not a topic match
+// (2026-08-15 deep-dive C1: "Texas State Senate District 14" scored 2 on 'louisiana state senate'
+// via state+senate, and Louisiana's vacancy answered a Texas question as VERIFIED). A match now
+// needs the 2-token bar AND at least one SPECIFIC token (a word that distinguishes the body —
+// 'louisiana', 'jefferson', 'landry'). Unlike _GENERIC_BODY_WORDS this set carries NO place names:
+// place names are exactly what makes a match specific here.
+const _RECALL_CLASS_WORDS = new Set(['state', 'senate', 'house', 'representatives', 'assembly', 'legislature',
+  'county', 'parish', 'city', 'town', 'village', 'council', 'commission', 'board', 'school', 'district',
+  'court', 'judicial', 'police', 'jury', 'government', 'municipal', 'consolidated']);
+function civicRecallFor(text, { limit = 3, deps = {}, now = Date.now() } = {}) {
   const toks = [...new Set(str(text).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !_DIGEST_STOP.has(w)))];
   if (toks.length < 2) return [];
   let bodies = [];
   try { bodies = _db(deps).getDb().prepare(`SELECT DISTINCT body_key FROM civic_memberships WHERE superseded_by IS NULL
     UNION SELECT DISTINCT body_key FROM civic_vacancies WHERE superseded_by IS NULL AND resolved_ts IS NULL`).all(); } catch { return []; }
   const dm = str(text).match(/\bdistrict\s*#?\s*(\d{1,3})\b/i);
-  const wantDistrict = dm ? dm[1] : null;
+  const wantDistrict = dm ? _normSeat(dm[1]) : null;
   const scored = [];
   for (const b of bodies) {
     const key = String(b.body_key);
-    const hits = toks.filter((t) => key.includes(t)).length;
-    if (hits >= 2) scored.push({ key, hits });
+    const matched = toks.filter((t) => key.includes(t));
+    const specific = matched.filter((t) => !_RECALL_CLASS_WORDS.has(t)).length;
+    if (matched.length >= 2 && specific >= 1) scored.push({ key, hits: matched.length });
   }
   scored.sort((a, z) => z.hits - a.hits);
   const out = [];
@@ -383,13 +455,19 @@ function civicRecallFor(text, { limit = 3, deps = {} } = {}) {
     // live row held" onto every secondary match (a congressional single-seat body that matched on
     // shared tokens) reads as a claim about a body that has no district 14 at all.
     if (wantDistrict && out.length === 0) {
-      const hit = rows.find((r) => str(r.district).trim() === wantDistrict);
-      const vhit = vac.find((v) => str(v.seat).trim() === wantDistrict);
-      if (hit) bits.push(`District ${wantDistrict}: ${hit.person_name}${hit.party ? ` (${hit.party})` : ''}${hit.role && !/^member$/i.test(hit.role) ? `, ${hit.role}` : ''}`);
-      else if (!vhit) bits.push(`District ${wantDistrict}: no live row held`);
+      const hit = rows.find((r) => _normSeat(r.district) === wantDistrict);
+      const vhit = vac.find((v) => _normSeat(v.seat) === wantDistrict);
+      if (hit) {
+        // The chat door frames these lines as answer-from-directly — so a low-grade holder row
+        // must say so on the line itself (deep-dive C2), same doctrine as the vacancy flags.
+        // Bar: non-researched source OR clearly-weak confidence. A researched row at the default
+        // 0.5 stays clean — flagging the whole store would gut the wire the D3 test proved.
+        const weak = !RESEARCHED_KINDS.has(str(hit.source_kind)) || Number(hit.confidence || 0) < 0.4;
+        bits.push(`District ${wantDistrict}: ${hit.person_name}${hit.party ? ` (${hit.party})` : ''}${hit.role && !/^member$/i.test(hit.role) ? `, ${hit.role}` : ''}${weak ? ' [low-grade source — verify]' : ''}`);
+      } else if (!vhit) bits.push(`District ${wantDistrict}: no live row held`);
       // a vacancy on the asked district needs no extra line — every live vacancy renders below
     }
-    for (const v of vac) bits.push(_vacancyLine(v));
+    for (const v of vac) bits.push(_vacancyOrConflictLine(v, rows, { now }));
     out.push({ bodyKey: key, line: `${key} — ${bits.join('; ')}` });
     if (out.length >= limit) break;
   }

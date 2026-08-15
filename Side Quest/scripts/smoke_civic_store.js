@@ -192,6 +192,72 @@ const T = 1785400000000;
     ok(cs.civicRecallFor('').length === 0 && cs.civicRecallFor('grid transmission pressure').length === 0, 'empty/unrelated topics recall nothing, never throw');
   }
 
+  // ── DEEP-DIVE REGRESSION PINS (2026-08-15, findings C1–C6) ──────────────────────────────────
+  {
+    const d = require('../lib/db').getDb();
+
+    // C1: two CLASS-word hits are not a topic — the wrong state can never ground the answer
+    ok(cs.civicRecallFor('who represents Texas State Senate District 14?').length === 0,
+      'C1: state+senate alone never match — a Texas ask cannot ground from the Louisiana store');
+    ok(cs.civicRecallFor('who represents Louisiana Senate District 14?').length >= 1,
+      'C1: a specific token (louisiana) plus a class token still matches');
+
+    // C2: grade rides the line — the LA D14 fixture is uncited, so its line says verify-first
+    const rcF = cs.civicRecallFor('who represents Louisiana Senate District 14?');
+    ok(/UNCITED — verify before asserting/.test(rcF[0].line), 'C2: an uncited vacancy claim is flagged on the line itself');
+    const rcS = cs.civicRecallFor('who represents Louisiana Senate District 14?', { now: T + 40 * 86400000 });
+    ok(/\d+d ago — recheck/.test(rcS[0].line), 'C2: a stale vacancy claim names its age');
+
+    // C3: a vacancy on a HELD seat is refused with the holder named; force records the conflict
+    const r1 = cs.recordVacancy({ bodyTitle: 'Louisiana State Senate', seat: '5', reason: 'stale article claim' }, { nowMs: T + 10 });
+    ok(r1.ok === false && /Test Senator/.test(r1.reason) && r1.heldBy != null,
+      'C3: a vacancy claim on a held seat is refused, holder and door named');
+    const r2 = cs.recordVacancy({ bodyTitle: 'Louisiana State Senate', seat: '5', reason: 'stale article claim', force: true, sourceUrl: 'https://stale.example', sourceKind: 'news', confidence: 0.7 }, { nowMs: T + 11 });
+    ok(r2.ok && r2.conflictsWith != null, 'C3: force:true records the conflict knowingly, lineage to the holder');
+
+    // C6: a forced conflict speaks as CONFLICT, never as plain VACANT
+    const rcC = cs.civicRecallFor('who holds Louisiana Senate District 5?');
+    ok(/District 5 — CONFLICT: the roster holds Test Senator/.test(rcC[0].line) && !/District 5 — VACANT/.test(rcC[0].line),
+      'C6: a vacancy on a held seat renders as CONFLICT — the model is told to verify, not coin-flip');
+
+    // C3 self-heal on the regrade path: a researched re-confirmation of the sitting holder closes it
+    const rg = cs.recordMembership({ bodyTitle: 'Louisiana State Senate', personName: 'Test Senator', district: '5', party: 'R', sourceKind: 'official', confidence: 0.9 }, { nowMs: T + 12 });
+    ok(rg.ok && rg.regraded && rg.resolvedVacancy === r2.id,
+      'C3: a researched re-confirmation of the holder RESOLVES the conflict vacancy (the wire now runs past the early-returns)');
+    ok(cs.vacancies('Louisiana State Senate').length === 1, 'C3: only the genuine D14 vacancy remains live');
+
+    // C4: backfill never resolves an official-cited vacancy (the dead-incumbent resurrection guard)
+    cs.upsertBody({ title: 'Quorumville City Council', level: 'municipal' }, { nowMs: T });
+    const qv = cs.recordVacancy({ bodyTitle: 'Quorumville City Council', seat: '2', reason: 'resigned', sourceUrl: 'https://q.gov', sourceKind: 'official', confidence: 0.9 }, { nowMs: T + 20 });
+    ok(qv.ok, 'setup: cited vacancy on an unheld seat lands');
+    const bf = cs.recordMembership({ bodyTitle: 'Quorumville City Council', personName: 'Prose Ghost', district: '2', sourceKind: 'prose_extract' }, { nowMs: T + 21 });
+    ok(bf.ok && bf.resolvedVacancy == null && cs.vacancies('Quorumville City Council').some((v) => v.id === qv.id),
+      'C4: a backfill row never resolves an official-cited vacancy');
+
+    // C4: a sitting member's detail change never resolves a vacancy sharing the district value
+    cs.upsertBody({ title: 'Multiton School Board', level: 'school_district' }, { nowMs: T });
+    cs.recordMembership({ bodyTitle: 'Multiton School Board', personName: 'Mem One', district: '7', sourceKind: 'official' }, { nowMs: T + 30 });
+    const mv = cs.recordVacancy({ bodyTitle: 'Multiton School Board', seat: '7', reason: 'one of two district seats empty', force: true, sourceUrl: 'https://m.gov', sourceKind: 'official', confidence: 0.8 }, { nowMs: T + 31 });
+    ok(mv.ok, 'setup: multi-member district vacancy force-recorded (a holder shares the district value)');
+    const up = cs.recordMembership({ bodyTitle: 'Multiton School Board', personName: 'Mem One', district: '7', email: 'new@multiton.org', sourceKind: 'official' }, { nowMs: T + 32 });
+    ok(up.ok && up.superseded != null && up.resolvedVacancy == null,
+      'C4: a colleague detail-change supersede (district unchanged) does NOT close the shared-district vacancy');
+    const nm = cs.recordMembership({ bodyTitle: 'Multiton School Board', personName: 'Mem Two', district: '7', sourceKind: 'official' }, { nowMs: T + 33 });
+    ok(nm.ok && nm.resolvedVacancy === mv.id, 'C4: a genuinely NEW member on the district IS the fill — resolves');
+
+    // C5: seat values normalize at write and compare — "District 07" is seat "7"
+    const nv = cs.recordVacancy({ bodyTitle: 'Quorumville City Council', seat: 'District 07', reason: 'vacated', sourceUrl: 'https://q.gov', sourceKind: 'official', confidence: 0.8 }, { nowMs: T + 40 });
+    ok(nv.ok && cs.vacancies('Quorumville City Council').some((v) => v.seat === '7'),
+      'C5: a decorated seat value is stored NORMALIZED ("District 07" → "7")');
+    const fill7 = cs.recordMembership({ bodyTitle: 'Quorumville City Council', personName: 'Seven Fill', district: '7', sourceKind: 'official' }, { nowMs: T + 41 });
+    ok(fill7.ok && fill7.resolvedVacancy === nv.id, 'C5: the normalized seat resolves against the bare district value');
+
+    // C2: a NON-researched holder row carries the low-grade flag when it fronts a district ask
+    const rcW = cs.civicRecallFor('who holds Quorumville City Council District 2?');
+    ok(rcW.length >= 1 && /Prose Ghost \[low-grade source — verify\]/.test(rcW[0].line),
+      'C2: a backfill-sourced holder row is flagged low-grade on the line itself');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   try { require('../lib/db').getDb().close(); } catch {}
   try { require('fs').unlinkSync(process.env.SQ_DB_PATH); } catch {}
