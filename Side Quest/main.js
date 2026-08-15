@@ -13587,6 +13587,19 @@ async function autonomyTick() {
         if (nb && r && ['green', 'stuck', 'discarded'].includes(r.status)) {
           require('./lib/capability_need').setStatus(Number(nb[1]), r.status === 'green' ? 'proposed' : 'parked', { nowMs: now });
           console.log(`[autonomy] need #${nb[1]} → ${r.status === 'green' ? 'proposed (card out)' : 'parked (run ' + r.status + ')'}`);
+          // B7 TOOL-LANE AUTO-CLOSE (2026-08-15 deep-dive): a thread-born need's GREEN exit used
+          // to leave the mother thread pending forever — nothing parsed born_from back. The card
+          // is out for Lucas; the thread's ask is answered → resolve it with the trail attached.
+          if (r.status === 'green') {
+            try {
+              const needRow = require('./lib/capability_need').get(Number(nb[1]));
+              const tm = /^thread-(\d+)$/.exec(String((needRow && needRow.born_from) || ''));
+              if (tm) {
+                db.markOpenThreadStatus(Number(tm[1]), 'resolved', { reason: `capability need #${nb[1]} went green — proposal card out (run ${run.slug})` });
+                console.log(`[autonomy] tool-lane thread #${tm[1]} auto-RESOLVED (need #${nb[1]} green, card out)`);
+              }
+            } catch {}
+          }
         }
       } catch {}
       console.log(`[autonomy] chose=rehearse → ${run.slug} ${r ? r.status : 'FAILED'}${r ? ` — ${String(r.note).slice(0, 100)}` : ''}`);
@@ -13842,7 +13855,25 @@ async function seedBeatRun(beat, { background = false, targetsOverride = null } 
 
     let fid, focusRow;
     if (background) {
-      const row = adopted || db.insertOpenThread({ content: beat.goal });
+      // B2 CHURN GUARD (2026-08-15 deep-dive): adoption (matchCarriedThread) requires a
+      // source_turn_id, so the beat's OWN prior mint never matched — resolve → sweep → re-mint
+      // cycled identical content 26× on one topical beat. Reuse an identical open thread; REOPEN
+      // an identical resolved one (its history survives); mint only when genuinely new.
+      const row = adopted || (() => {
+        try {
+          const norm = String(beat.goal).replace(/\s+/g, ' ').trim().toLowerCase();
+          const open = db.getActiveOpenThreads(300) || [];
+          const same = open.find((t) => String(t.content || '').replace(/\s+/g, ' ').trim().toLowerCase() === norm);
+          if (same) { console.log(`[beat] ${beat.id}: churn guard → reusing open thread #${same.id} (identical content)`); return same; }
+          const res = db.getDb().prepare("SELECT id, content FROM open_threads WHERE status = 'resolved' AND lower(content) = ? ORDER BY id DESC LIMIT 1").get(norm);
+          if (res) {
+            db.getDb().prepare("UPDATE open_threads SET status = 'pending', last_touched_ts = ? WHERE id = ?").run(Date.now(), res.id);
+            console.log(`[beat] ${beat.id}: churn guard → REOPENED thread #${res.id} (identical resolved content — no re-mint)`);
+            return res;
+          }
+        } catch {}
+        return db.insertOpenThread({ content: beat.goal });
+      })();
       focusRow = focusLib.setBackground(row.id) || row;
       fid = row.id;
       try { db.setMeta(`focus.${fid}.background`, '1'); } catch {}
@@ -17240,9 +17271,16 @@ async function runDirectedResearchPass(focus) {
               (async () => {
                 const plan0 = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || '{}');
                 const rpm = require('./lib/research_plan');
+                // CHANGE GATE (deterministic-loops #7, 2026-08-15): identical inputs cannot yield
+                // a different verdict — unchanged {plan, synthesis, covered, goal} since the last
+                // pass for this focus → no cloud call at all.
+                const _rvInput = rpm.revalidateInput({ plan: plan0, synthesis: section, covered, goal });
+                const _rvHash = require('crypto').createHash('sha1').update(JSON.stringify(_rvInput)).digest('hex');
+                if (db.getMeta(`focus.${focus.id}.reval_hash`) === _rvHash) { console.log(`[user-work] plan revalidate SKIPPED — inputs unchanged since the last pass (focus #${focus.id})`); return; }
+                db.setMeta(`focus.${focus.id}.reval_hash`, _rvHash);
                 const verdict = await require('./lib/cloud_logic').ask({
                   task: 'plan_revalidate', v: 1, numPredict: 700,
-                  input: rpm.revalidateInput({ plan: plan0, synthesis: section, covered, goal }),
+                  input: _rvInput,
                   want: rpm.revalidateWant(),
                   validate: rpm.revalidateValidator,
                 });
@@ -17896,9 +17934,14 @@ Reply ONLY: {"verdict": "survives"|"refuted", "attack": "<the strongest single a
           (async () => {
             const plan0 = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || '{}');
             const rpm = require('./lib/research_plan');
+            // CHANGE GATE (deterministic-loops #7): same as the directed site — unchanged inputs → no call.
+            const _rvInput = rpm.revalidateInput({ plan: plan0, synthesis: section, covered, goal });
+            const _rvHash = require('crypto').createHash('sha1').update(JSON.stringify(_rvInput)).digest('hex');
+            if (db.getMeta(`focus.${focus.id}.reval_hash`) === _rvHash) { console.log(`[topical] plan revalidate SKIPPED — inputs unchanged since the last pass (focus #${focus.id})`); return; }
+            db.setMeta(`focus.${focus.id}.reval_hash`, _rvHash);
             const verdict = await require('./lib/cloud_logic').ask({
               task: 'plan_revalidate', v: 1, numPredict: 700,
-              input: rpm.revalidateInput({ plan: plan0, synthesis: section, covered, goal }),
+              input: _rvInput,
               want: rpm.revalidateWant(), validate: rpm.revalidateValidator,
             });
             if (!verdict) return;

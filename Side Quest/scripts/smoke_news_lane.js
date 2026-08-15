@@ -313,6 +313,19 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   ok(await lane.adjudicateSameEvent({ title: 'A' }, { title: 'B' }, { ask: async () => ({ same: false }) }) === false, 'adjudicateSameEvent → false when cloud says different');
   ok(await lane.adjudicateSameEvent({ title: 'A' }, { title: 'B' }, {}) === false, 'adjudicateSameEvent → false-safe with no ask (never merges on error)');
   ok(await lane.adjudicateSameEvent({ title: 'A' }, { title: 'B' }, { ask: async () => { throw new Error('x'); } }) === false, 'adjudicateSameEvent → false-safe when ask throws');
+  // EMBEDDING TIER (deterministic-loops #6): the extremes settle without the cloud; the middle asks.
+  {
+    const eq = [1, 0, 0], near = [0.97, 0.243, 0], far = [0, 1, 0], mid = [0.75, 0.661, 0];
+    const embOf = (v) => async () => v;   // not used — embedFn receives text; map by call order instead
+    let asked = 0;
+    const askSpy = async () => { asked++; return { same: true }; };
+    const mkEmbed = (a, b) => { let n = 0; return async () => (n++ === 0 ? a : b); };
+    ok(await lane.adjudicateSameEvent({ title: 'Kyiv strike' }, { title: 'Strikes hit Kyiv' }, { ask: askSpy, embedFn: mkEmbed(eq, near) }) === true && asked === 0, 'tier: cosine ≥0.90 → same, NO cloud call');
+    ok(await lane.adjudicateSameEvent({ title: 'Kyiv strike' }, { title: 'Panda born in zoo' }, { ask: askSpy, embedFn: mkEmbed(eq, far) }) === false && asked === 0, 'tier: cosine ≤0.55 → distinct, NO cloud call');
+    ok(await lane.adjudicateSameEvent({ title: 'A' }, { title: 'B' }, { ask: askSpy, embedFn: mkEmbed(eq, mid) }) === true && asked === 1, 'tier: the true middle band still asks the model');
+    ok(await lane.adjudicateSameEvent({ title: 'A' }, { title: 'B' }, { ask: async () => ({ same: false }), embedFn: async () => { throw new Error('embed down'); } }) === false, 'tier: embed failure → falls through to the model (fail-safe)');
+    void embOf;
+  }
   // end-to-end: the adjudicator merges the ambiguous cross-source Kyiv pair (S=0.42, middle band)
   clearStories(); newsdb.get().exec('DELETE FROM news_story_updates');
   await lane.clusterItems([kyivBBC], { now: NOW });

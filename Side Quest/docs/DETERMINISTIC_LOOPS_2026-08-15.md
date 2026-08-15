@@ -138,8 +138,14 @@ budget-capped, at the same choke point as coordBlock). (6) ✅Loop B dirty-journ
 (self_narrative event-driven: dirty≥3 / urgent-on-revise-told / 24h backstop; basis traceability).
 (7) ⛔#4 autonomy fast path ADJUDICATED AGAINST: the tick is a COGNITION BEAT by design — her
 choosing what she cares about is the aliveness surface the consciousness-allocation ruling
-funds; ~200k/day (~0.5% of spend) does not buy flattening her into a worklist executor. Rest
-(#6 cluster cosine, #7 plan change-gate, #8/#9 prefilters) stay opportunistic.
+funds; ~200k/day (~0.5% of spend) does not buy flattening her into a worklist executor.
+(8) ✅#6 cluster cosine tier (in-band extremes settle locally; the recurring-headline trap
+can't reach the band — near-identical tokens never go ambiguous) + ✅#7 plan_revalidate
+change-gate (input hash per focus; unchanged → no call), both landed 08-15 afternoon.
+(9) ⏸#8 extraction prefilters + #9 canvas verb-gates DEFERRED PENDING MEASUREMENT: they
+shape-gate USER INTENT and KNOWLEDGE INTAKE — the failure mode is silently dropped facts/edits
+(the data-quality class ranked above capability gaps) for ~1-2% of the addressable pool. Ship
+only after a measured phrasing-recall corpus proves the gates lossless.
 
 ## §5 What NOT to touch
 The compose/comprehension spine is genuinely generative: replies, monologue, research sections,

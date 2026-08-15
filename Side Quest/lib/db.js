@@ -1499,11 +1499,15 @@ function touchOpenThread(id, note = null, { keepStatus = false } = {}) {
   // thread from the seed pool forever (getUnstartedUserThreads selects pending only), making a
   // misclassified thread LESS recoverable than before typed routing existed.
   const newStatus = (!keepStatus && cur.status === 'pending') ? 'active' : cur.status;
+  // B3 (2026-08-15 deep-dive): action_count was near-dead — its only writer was the model-emitted
+  // [thread-progress:N] tag, so every driver that actually WORKED threads (directed research, the
+  // beat driver, user-work) never incremented it and the curator's "over-pursued" retirement could
+  // never fire. A touch WITH a progress note is an action; a bare touch / lane stamp is not.
   getDb()
     .prepare(`UPDATE open_threads
-      SET status = ?, progress_notes = ?, last_touched_ts = ?
+      SET status = ?, progress_notes = ?, last_touched_ts = ?, action_count = COALESCE(action_count, 0) + ?
       WHERE id = ?`)
-    .run(newStatus, JSON.stringify(notes), now, id);
+    .run(newStatus, JSON.stringify(notes), now, note ? 1 : 0, id);
   return { id, ts: now };
 }
 

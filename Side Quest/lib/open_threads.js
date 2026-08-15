@@ -106,8 +106,24 @@ function routeRefinement(userMessage, pool) {
 /**
  * Extract any goals from a user message and insert into open_threads.
  * Returns array of inserted thread objects.
+ *
+ * SERIALIZED (B4, 2026-08-15 deep-dive): callers fire-and-forget, and each run snapshots the
+ * dedup pool once at entry — two work-shaped turns seconds apart raced (the second's pool
+ * predated the first's insert → double mint; HEAD's newestFirst fix closed the within-window
+ * variant, not this cross-turn race). One module-level chain closes it at the root: each
+ * extraction starts only after the prior one's inserts have landed. The chain swallows its own
+ * errors so one failed extraction never wedges the lane.
  */
-async function extractFromUserTurn({ userMessage, sourceTurnId, userName }) {
+let _extractChain = Promise.resolve();
+function extractFromUserTurn(args) {
+  // opts._worker overrides the extraction body (smoke-only seam — verifies serialization without
+  // a live model). Production always runs _extractFromUserTurn.
+  const worker = (args && args._worker) || _extractFromUserTurn;
+  const p = _extractChain.then(() => worker(args));
+  _extractChain = p.catch(() => {});
+  return p;
+}
+async function _extractFromUserTurn({ userMessage, sourceTurnId, userName }) {
   if (!userMessage || userMessage.trim().length < 4) return [];
 
   let raw = '';

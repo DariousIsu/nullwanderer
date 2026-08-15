@@ -79,10 +79,27 @@ function curateThreads({ staleDays = STALE_THREAD_DAYS, activeStaleDays = ACTIVE
     //    converging (an unbounded goal slipped the creation guard, or pursuit looped). Retire it
     //    regardless of recency. Live: thread #66 ("learn everything about federal permitting reform")
     //    hit 389 actions and fixated her. Healthy goals resolve well before MAX_THREAD_ACTIONS.
+    //
+    //    ⚠ COVERAGE-BOUNDED EXEMPTION (2026-08-15, with the B3 action_count fix): action_count now
+    //    increments per WORKED SLICE (it was near-dead before), so a legitimately-large run — the
+    //    California 58 counties, a 435-Rep federal roster — accrues one action per target and would
+    //    trip a raw 60-action bar MID-RUN, abandoning healthy work. A bounded run BOUNDS ITSELF
+    //    (coverage denominator + focus.recordOutcome strikes/wall-clock), so exempt any thread whose
+    //    focus carries a coverage universe or an intended-target list. The breaker then fires only on
+    //    the class it was built for: UNBOUNDED chat-spawned fixation with no denominator.
+    const _isCoverageBounded = (id) => {
+      try {
+        const u = parseInt(db.getMeta(`focus.${id}.universe`) || '0', 10);
+        if (u > 0) return true;
+        const it = JSON.parse(db.getMeta(`focus.${id}.intended_targets`) || '[]');
+        return Array.isArray(it) && it.length > 0;
+      } catch { return false; }
+    };
     const runaway = db.getDb()
       .prepare(`SELECT id, action_count FROM open_threads WHERE status IN ('active','pending','stalled') AND action_count > ?`)
       .all(MAX_THREAD_ACTIONS);
     for (const r of runaway) {
+      if (_isCoverageBounded(r.id)) continue;   // a bounded run bounds itself — never the fixation class
       db.markOpenThreadStatus(r.id, 'abandoned', { reason: `curator: over-pursued (${r.action_count} actions, never resolved)` });
       aged++;
     }

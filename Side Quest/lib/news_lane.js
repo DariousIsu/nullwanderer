@@ -438,8 +438,33 @@ function adjValidate(raw) {
   try { const o = JSON.parse(m[0]); return typeof o.same === 'boolean' ? { valid: true, value: o } : { valid: false, error: 'no boolean same' }; }
   catch (e) { return { valid: false, error: e.message }; }
 }
-async function adjudicateSameEvent(story, item, { ask } = {}) {
+// EMBEDDING TIER inside the ambiguous band (deterministic-loops #6, 2026-08-15): the band exists
+// because TOKENS disagreed (S 0.30–0.60) — but a local embedding can still settle the extremes.
+// ≥0.90 = a cross-source paraphrase of the same event (the BBC-vs-NBC class the band was built
+// for) → same, no cloud call; ≤0.55 → distinct, no call; the true middle still asks. The
+// recurring-headline trap ("Fed holds rates", months apart) can't reach here: near-identical
+// tokens score S ≥ 0.60 and never enter the ambiguous band. Embeds are the LOCAL bge model —
+// free relative to the cloud call they replace. Fail-safe: any embed error → ask, as before.
+const ADJ_EMB_SAME = 0.90;
+const ADJ_EMB_DISTINCT = 0.55;
+async function adjudicateSameEvent(story, item, { ask, embedFn = null } = {}) {
   if (typeof ask !== 'function') return false;
+  try {
+    const mem = require('./memory');
+    if (!embedFn && !(mem.isReady && mem.isReady())) throw new Error('embedder cold');   // cold/offline → the model decides
+    const embed = embedFn || ((t) => mem.embed(t));
+    const cosine = mem.cosine;
+    const sTxt = `${(story && story.title) || ''} ${[...((story && story.entity_set) || [])].slice(0, 8).join(' ')}`.trim();
+    const iTxt = `${(item && item.title) || ''} ${String((item && item.summary) || '').slice(0, 120)}`.trim();
+    if (sTxt && iTxt) {
+      const [se, ie] = await Promise.all([embed(sTxt), embed(iTxt)]);
+      if (se && ie) {
+        const sim = cosine(se, ie);
+        if (sim >= ADJ_EMB_SAME) return true;
+        if (sim <= ADJ_EMB_DISTINCT) return false;
+      }
+    }
+  } catch { /* tier unavailable → the model decides, as before */ }
   try {
     // cloud_logic.ask has no `system` param — the rules go in `want`.
     const r = await ask({ task: 'news_cluster_adjudicate', v: 1, input: adjInput(story, item), want: `${ADJ_SYSTEM}\n\nOutput ONLY {"same": true} or {"same": false}.`, validate: adjValidate });
