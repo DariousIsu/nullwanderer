@@ -70,8 +70,20 @@ function classifyThreadLane(content) {
   const c = String(content || '').trim();
   if (c.split(/\s+/).length < 4) return { lane: null, confident: false };
   if (TOOL_NOUN_RE.test(c) && TOOL_VERB_RE.test(c)) return { lane: 'tool', confident: true };
-  if (SELF_NOUN_RE.test(c) && SELF_VERB_RE.test(c)) return { lane: 'self', confident: true };
-  if (DELIVERABLE_VERB_RE.test(c) && DELIVERABLE_NOUN_RE.test(c)) return { lane: 'deliverable', confident: true };
+  // SELF outranks RESEARCH ("explore complex human emotions" is not a survey) but NEVER a named
+  // ARTIFACT or a DEADLINE (2026-08-15 deep-dive R1: "explore voter opinions in LA-03 and write a
+  // memo by Friday" classified self on opinions+explore and the deadline thread left the driver's
+  // pool — the exact orphan disease this classifier was built to cure). An artifact makes it
+  // deliverable outright; a deadline'd self-phrasing is Lucas-work of SOME kind — too ambiguous
+  // for the regex, so it goes to the cloud classifier instead of a confident wrong stamp.
+  const selfShaped = SELF_NOUN_RE.test(c) && SELF_VERB_RE.test(c);
+  const deliverableShaped = DELIVERABLE_VERB_RE.test(c) && DELIVERABLE_NOUN_RE.test(c);
+  if (deliverableShaped) return { lane: 'deliverable', confident: true };
+  if (selfShaped) {
+    // anchor=1: only the EXISTENCE of a deadline phrase matters here, not the computed dueTs
+    if (parseDeadline(c, 1)) return { lane: null, confident: false };
+    return { lane: 'self', confident: true };
+  }
   if (isResearchShaped(c)) return { lane: 'research', confident: true };
   return { lane: null, confident: false };
 }

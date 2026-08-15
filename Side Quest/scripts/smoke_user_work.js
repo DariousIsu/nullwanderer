@@ -341,6 +341,12 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
   // self-growth is not a survey
   ok(lane('develop a personal identity and individual interests over time').lane === 'self', 'identity thread → self');
   ok(lane('explore complex human emotions and social dynamics for self-growth').lane === 'self', 'emotions thread → self, not research');
+  // R1 (2026-08-15 deep-dive): a named ARTIFACT outranks self phrasing; a deadline'd self-phrase
+  // is too ambiguous for the regex — the original orphan disease must not return through SELF
+  ok(lane('explore voter opinions in LA-03 and write a memo for Lucas by Friday').lane === 'deliverable',
+    'R1: opinions+explore with a named memo → deliverable, never self');
+  const dl = lane('develop opinions on transit policy by tomorrow morning');
+  ok(dl.lane === null && dl.confident === false, 'R1: a deadline\'d self-phrasing is not guessed — cloud decides');
   // research unchanged
   ok(lane('conduct deep research on the global AI arms race for Lucas').lane === 'research', 'research thread → research');
   ok(lane('compile leadership and historical data for all Louisiana parishes').lane === 'research', 'compile → research (verb preserved)');

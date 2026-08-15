@@ -1471,14 +1471,17 @@ function markOpenThreadStatus(id, status, { reason = null } = {}) {
   return { id, ts: now };
 }
 
-function touchOpenThread(id, note = null) {
+function touchOpenThread(id, note = null, { keepStatus = false } = {}) {
   const now = Date.now();
   const cur = getDb().prepare('SELECT progress_notes, status FROM open_threads WHERE id = ?').get(id);
   if (!cur) return null;
   const notes = cur.progress_notes ? JSON.parse(cur.progress_notes) : [];
   if (note) notes.push({ ts: now, progress: note });
-  // pending → active on first touch
-  const newStatus = cur.status === 'pending' ? 'active' : cur.status;
+  // pending → active on first touch. keepStatus (2026-08-15 deep-dive R2): a lane STAMP is
+  // metadata, not work start — stamping used to flip pending→active, which silently removed the
+  // thread from the seed pool forever (getUnstartedUserThreads selects pending only), making a
+  // misclassified thread LESS recoverable than before typed routing existed.
+  const newStatus = (!keepStatus && cur.status === 'pending') ? 'active' : cur.status;
   getDb()
     .prepare(`UPDATE open_threads
       SET status = ?, progress_notes = ?, last_touched_ts = ?

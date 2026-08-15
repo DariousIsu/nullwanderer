@@ -684,7 +684,15 @@ class EchoSuit {
     // that log carries only rogue/model-authored calls. Interactive turns are unaffected: policyFor
     // only ever denies LOCKED when !autonomous, which hard-blocks here regardless of the switch.
     let _auto = false;
-    try { _auto = require('./lane').isAutonomous(opts.autonomous); } catch { _auto = !!opts.autonomous; }
+    try { _auto = require('./lane').isAutonomous(opts.autonomous); } catch (e) {
+      // LANE FAULT FAILS TOWARD AUTONOMOUS (2026-08-15 deep-dive G1): the old fallback
+      // (`!!opts.autonomous`) read every ambient call as interactive when lib/lane itself faulted —
+      // the one failure that silently reverted the ENTIRE gate to decorative. Unknown provenance is
+      // now treated as autonomous (writes block, loudly, naming the fault); only an EXPLICIT
+      // autonomous:false still reads interactive. Symmetric with the echo_tier fail-closed below.
+      console.error('[echo] lane resolution failed — treating dispatch as autonomous:', e && e.message);
+      _auto = opts.autonomous !== false;
+    }
     let _gatedToolName = null;
     if (tag.kind === 'do') _gatedToolName = tag.name;
     else if (tag.kind === 'propose') _gatedToolName = 'propose_' + tag.proposeKind;
@@ -712,10 +720,21 @@ class EchoSuit {
     } catch (e) {
       // FAIL CLOSED on the autonomous loop (was: log + allow). A gate-machinery fault (bad deploy,
       // corrupted echo_tier) must not turn the unattended allowlist into no gate at all. Interactive
-      // turns already allow write+heavy, so a fault there changes nothing and we let those through.
+      // turns already allow write+heavy, so a fault there changes nothing for those tiers — but
+      // LOCKED/SHELL are denied interactive-always by design, so a policyFor fault must not open
+      // them either (2026-08-15 deep-dive G2): re-classify with classifyTool as the residual check
+      // and keep the always-deny tiers shut even when the policy layer is down.
       console.error('[echo] tier-gate check failed:', e && e.message);
       if (_auto && _gatedToolName) {
         return { ok: false, kind: tag.kind, isError: true, blocked: true, tier: 'unknown', text: `Echo tool "${_gatedToolName}" could not be tier-checked (gate fault) — blocked on the autonomous loop as a safety default. Surface to Lucas.` };
+      }
+      if (_gatedToolName) {
+        let residual = null;
+        try { residual = require('./echo_tier').classifyTool(_gatedToolName); } catch {}
+        if (residual === 'locked' || residual === 'shell') {
+          console.log(`[echo] tier-gate BLOCKED ${_gatedToolName} (${residual}, gate-fault residual check)`);
+          return { ok: false, kind: tag.kind, isError: true, blocked: true, tier: residual, text: `Echo tool "${_gatedToolName}" is a ${residual} action and stays off even under a gate fault.` };
+        }
       }
     }
     // Self-heal: if she reaches for the suit before the warm-connect finished (or after Echo
@@ -888,9 +907,16 @@ class EchoSuit {
     try {
       const tier = require('./echo_tier');
       const pol = tier.policyFor(pick.name, { autonomous, maintain });
-      if (!pol.allow) {
-        console.log(`[echo] routeNeed tier-gate BLOCKED ${pick.name} (${pol.tier}, autonomous=${autonomous})`);
-        return { ok: false, kind: 'find', isError: true, blocked: true, routed: true, text: `The best Echo match for "${query}" is "${pick.name}", a ${pol.tier} action — ${pol.reason}. ${autonomous ? 'On the autonomous loop you may READ from Echo but not write/spawn — note it for Lucas instead of doing it unattended.' : 'That one is off by design.'}` };
+      // THE CARVE IS CALL-SITE-ONLY (2026-08-15 deep-dive G3): AUTO_ALLOW names (agent_inbox,
+      // set_entity_temporal) are allowed on auto because their REAL call sites pass DETERMINISTIC
+      // code-computed args. A cloud-picked route to the same name would dispatch cloud-AUTHORED
+      // JSON through the allowance — exactly what the carve's invariant forbids. On the autonomous
+      // loop a cloud-picked tool must be read-tier on its own merits; a write-class name that only
+      // passes policyFor via the carve is refused here.
+      const carveOnly = autonomous && !maintain && pol.allow && tier.classifyTool(pick.name) === 'write';
+      if (!pol.allow || carveOnly) {
+        console.log(`[echo] routeNeed tier-gate BLOCKED ${pick.name} (${carveOnly ? 'carve is call-site-only' : pol.tier}, autonomous=${autonomous})`);
+        return { ok: false, kind: 'find', isError: true, blocked: true, routed: true, text: `The best Echo match for "${query}" is "${pick.name}", a ${carveOnly ? 'write' : pol.tier} action — ${carveOnly ? 'its autonomous allowance covers only its own deterministic lane, never a cloud-routed call' : pol.reason}. ${autonomous ? 'On the autonomous loop you may READ from Echo but not write/spawn — note it for Lucas instead of doing it unattended.' : 'That one is off by design.'}` };
       }
     } catch (e) { console.error('[echo] routeNeed tier-gate failed (allowing):', e.message); }
     let schema = '';

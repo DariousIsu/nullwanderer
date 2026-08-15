@@ -2021,7 +2021,11 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
   const promoteOne = _ingestArmed ? async ({ kind, name, proposal_id }) => {
     try {
       const args = { kind }; if (name) args.name = name; if (proposal_id != null) args.proposal_id = proposal_id;
-      const r = await echoSuit.dispatch({ kind: 'do', name: 'promote_grounded_one', args });
+      // Explicit — the ambient-lane fix (5bddfb5) made a bare dispatch here resolve AUTONOMOUS
+      // (the monologue tick wraps lane.run), inverting this comment and hard-blocking every inline
+      // promote under enforce (2026-08-15 deep-dive D2). autonomous:false restores the documented
+      // design: deterministic code-computed args, same deliberate posture as the F2 batch drain.
+      const r = await echoSuit.dispatch({ kind: 'do', name: 'promote_grounded_one', args }, { autonomous: false });
       return !!(r && r.ok);
     } catch { return false; }
   } : null;

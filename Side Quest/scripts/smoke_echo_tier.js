@@ -175,6 +175,24 @@ async function run() {
   r = await suit.routeNeed('ingest this file', { ask: askPick, autonomous: false });
   ok(calls.includes('ingest_file'), 'interactive routeNeed: WRITE tool runs (Lucas present)');
 
+  // G3 (2026-08-15 deep-dive): the AUTO_ALLOW carve is CALL-SITE-ONLY. A cloud pick of a carved
+  // write would dispatch cloud-AUTHORED args through the allowance — refused on auto; the same
+  // pick runs interactively; and the deterministic direct dispatch keeps its allowance.
+  const askCarve = async ({ task }) => {
+    if (task === 'echo_pick') return { type: 'tool', name: 'set_entity_temporal', reason: 'mock' };
+    if (task === 'echo_args') return { entity: 'x' };
+    return {};
+  };
+  calls.length = 0;
+  r = await suit.routeNeed('stamp this entity temporal', { ask: askCarve, autonomous: true });
+  ok(r.blocked === true && !calls.includes('set_entity_temporal'), 'G3: cloud-picked CARVED write refused on auto — the carve is call-site-only');
+  calls.length = 0;
+  r = await suit.routeNeed('stamp this entity temporal', { ask: askCarve, autonomous: false });
+  ok(calls.includes('set_entity_temporal'), 'G3: the same pick still runs interactively');
+  calls.length = 0;
+  r = await suit.dispatch({ kind: 'do', name: 'set_entity_temporal', args: { entity: 'x' } }, { autonomous: true });
+  ok(!r.blocked && calls.includes('set_entity_temporal'), 'G3: the deterministic call-site dispatch keeps its allowance');
+
   // --- MAINTAIN (conductor 2d): the curated maintenance allowlist ---
   ok(tier.policyFor('run_integrity_audit', { autonomous: true }).allow === false, 'auto WITHOUT maintain: an allowlisted loop stays blocked');
   ok(tier.policyFor('run_integrity_audit', { autonomous: true, maintain: true }).allow === true, 'auto + maintain: run_integrity_audit admitted');
@@ -205,6 +223,12 @@ async function run() {
     ok(et.policyFor('agent_clear', { autonomous: true }).allow === false, 'sibling agent_ tools stay blocked — the allowance is tool-by-tool, never by family');
     ok(et.policyFor('set_engagement_stage', { autonomous: true }).allow === false, 'other set_ writes stay blocked — no prefix bleed from the allowance');
     ok(et.allowedOnAuto('agent_inbox') && !et.allowedOnAuto('agent_fire'), 'allowedOnAuto agrees with policyFor on the carve');
+    // D1 (2026-08-15 deep-dive): hunter_find_email is a lookup — it was unknown⇒write and the
+    // Puller's Hunter organ died silently under enforce (never surfaced in EITHER measurement
+    // window because the lane wasn't exercised). Classified read; the explicit autonomous:true
+    // dispatch at its call site now passes like every other read.
+    ok(et.classifyTool('hunter_find_email') === 'read', 'D1: hunter_find_email classifies READ — the Puller Hunter organ lives on the auto loop');
+    ok(et.policyFor('hunter_find_email', { autonomous: true }).allow === true, 'D1: allowed on the autonomous loop as a read');
   }
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

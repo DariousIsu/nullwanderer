@@ -107,6 +107,15 @@ async function run() {
   ok('fresh stalled → untouched', db.getOpenThread(freshStalled.id).status === 'stalled');
   ok('resolved (even if old) → kept, never touched', db.getOpenThread(resolved.id).status === 'resolved');
 
+  // R2 (2026-08-15 deep-dive): a lane STAMP is metadata, not work start — touchOpenThread with
+  // keepStatus records the note but leaves a pending thread PENDING (in the seed pool, rescuable
+  // by the redirect override); the default touch still flips pending → active for real work.
+  const stamped = db.insertOpenThread({ content: 'a lane-stamped pending thread' });
+  db.touchOpenThread(stamped.id, 'routing note only', { keepStatus: true });
+  ok('R2: keepStatus touch leaves a pending thread pending', db.getOpenThread(stamped.id).status === 'pending');
+  db.touchOpenThread(stamped.id, 'now the work actually starts');
+  ok('R2: a default touch still flips pending → active', db.getOpenThread(stamped.id).status === 'active');
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { db.getDb().close(); } catch {}
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmp + ext); } catch {} }

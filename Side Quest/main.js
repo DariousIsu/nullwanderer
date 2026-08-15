@@ -14075,16 +14075,26 @@ async function _autonomicSchedulerTick() {
           for (const t of threads) {
             try {
               if (db.getMeta(`thread.${t.id}.lane`)) continue;
+              // Classifier-failure cooldown (2026-08-15 deep-dive R3): a null/failed cloud verdict
+              // used to re-ask the SAME newest threads every 90s tick forever (head-of-line block +
+              // cloud burn). A failed ask now defers that thread for 6h so the 2 ask slots rotate
+              // to the rest of the backlog; the thread re-enters classification after the cooldown.
+              if ((parseInt(db.getMeta(`thread.${t.id}.lane_defer`) || '0', 10) || 0) > Date.now()) continue;
               let lane = null;
               const fast = uw.classifyThreadLane(t.content);
               if (fast.confident) lane = fast.lane;
               else if (_laneAsks < 2) {
                 _laneAsks++;
                 try { const r = await require('./lib/cloud_logic').ask(uw.buildLaneAsk(t.content)); if (r && r.lane) lane = r.lane; } catch (e) { console.error(`[user-work] lane classify failed for #${t.id}:`, e.message); }
+                if (!lane) { try { db.setMeta(`thread.${t.id}.lane_defer`, String(Date.now() + 6 * 3600 * 1000)); } catch {} }
               }
               if (!lane) continue;
               db.setMeta(`thread.${t.id}.lane`, lane);
               console.log(`[user-work] thread #${t.id} lane=${lane} — "${String(t.content).slice(0, 60)}"`);
+              // keepStatus on every stamp note (deep-dive R2): the stamp records ROUTING, it is not
+              // work start — the thread stays pending (honest inventory; the lane filter keeps it
+              // out of the driver's pool) and stays visible to the explicit-redirect override, which
+              // is the operator's rescue path for a misclassified thread.
               if (lane === 'tool') {
                 // R2's lane: mint a capability need (record() dedupes ≥0.55 similarity) and note
                 // the delegation on the thread so the board shows WHERE the work went. The thread
@@ -14092,12 +14102,12 @@ async function _autonomicSchedulerTick() {
                 try {
                   const cn = require('./lib/capability_need');
                   const rec = cn.record(String(t.content).slice(0, 300), { bornFrom: `thread-${t.id}` });
-                  db.touchOpenThread(t.id, `routed to the R2 tool lane as capability need${rec && rec.id ? ` #${rec.id}` : ''} — the rehearsal driver owns the build`);
+                  db.touchOpenThread(t.id, `routed to the R2 tool lane as capability need${rec && rec.id ? ` #${rec.id}` : ''} — the rehearsal driver owns the build`, { keepStatus: true });
                 } catch (e) { console.error(`[user-work] tool-lane mint failed for #${t.id}:`, e.message); }
               } else if (lane === 'self') {
-                db.touchOpenThread(t.id, 'self-growth lane — standing work the self-exploration organ runs; kept open until that organ consumes thread seeds (named follow-up)');
+                db.touchOpenThread(t.id, 'self-growth lane — standing work the self-exploration organ runs; kept open until that organ consumes thread seeds (named follow-up)', { keepStatus: true });
               } else if (lane === 'none') {
-                db.touchOpenThread(t.id, 'not autonomously drainable (needs Lucas live) — waiting on conversation, not on the driver');
+                db.touchOpenThread(t.id, 'not autonomously drainable (needs Lucas live) — waiting on conversation, not on the driver', { keepStatus: true });
               }
             } catch (e) { console.error(`[user-work] lane stamp failed for #${t.id}:`, e.message); }
           }
@@ -17339,7 +17349,12 @@ async function runEnrichResearchPass(focus) {
 // lib/list_complete is the pure decomposer; deps are injectable for offline tests.
 async function _defaultWriteCell(tabKey, blockId, updated, prevData) {
   const patch = { headers: updated.headers, rows: updated.rows };
-  try { await echoSuit.dispatch({ kind: 'do', name: 'saga_canvas_update_block', args: { tab_key: tabKey, block_id: blockId, patch } }); } catch (e) { console.error('[list-complete] engine update failed:', e.message); }
+  try {
+    const r = await echoSuit.dispatch({ kind: 'do', name: 'saga_canvas_update_block', args: { tab_key: tabKey, block_id: blockId, patch } });
+    // A tier-gate block returns {ok:false, blocked} without throwing — it used to vanish here while
+    // the durable mirror recorded the cell, silently diverging engine from mirror (deep-dive D3).
+    if (r && r.blocked) console.error(`[list-complete] engine update BLOCKED by the tier gate (${r.tier}) — durable mirror carries the cell; live canvas stale until an interactive pass`);
+  } catch (e) { console.error('[list-complete] engine update failed:', e.message); }
   try { require('./lib/canvas_docs').recordBlock({ tabKey, blockId, blockType: 'table', data: { ...(prevData || {}), ...patch } }); } catch (e) { console.error('[list-complete] durable mirror failed:', e.message); }
 }
 // Per-person contact lookup for the list-completion fill. WAS a lone Echo web_search (keyless on this box →
