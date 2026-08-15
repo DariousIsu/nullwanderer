@@ -1566,6 +1566,24 @@ app.whenReady().then(() => {
     };
     drain().catch(() => {});
   }, 20 * 1000).unref?.();
+  // KNOWLEDGE/SELF_MODEL/INTERESTS embedding backfill (2026-08-15 deep-dive M3/M7/M11): rows
+  // written during an embedder outage were invisible to scored recall FOREVER — only turns ever
+  // had a backfill. Same bounded-drain shape, offset from the turn drain so the CPU embedder
+  // never runs both batches at once.
+  setTimeout(() => {
+    let drained = 0;
+    const drain = async () => {
+      markActivity('embed-backfill');
+      try {
+        const n = await memoryLib.backfillMissingEmbeddings({ limit: 150 });
+        drained += n;
+        if (n >= 150 && drained < 3000) { setTimeout(() => { drain().catch(() => {}); }, 45 * 1000).unref?.(); }
+        else if (drained) console.log(`[main] store-embedding backfill caught up (${drained} embedded)`);
+      } catch {}
+      finally { markActivity('idle'); }
+    };
+    drain().catch(() => {});
+  }, 90 * 1000).unref?.();
   // Index hygiene: purge any orphaned FTS rows (rotted from past mismatched deletes) so keyword
   // search can't match ghosts. Idempotent; cheap.
   try { const purged = db.reconcileKnowledgeFts(); if (purged) console.log(`[main] purged ${purged} orphaned knowledge_fts row(s)`); } catch {}

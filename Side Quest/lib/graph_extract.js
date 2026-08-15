@@ -48,7 +48,9 @@ function parseTriples(raw) {
     if (PRONOUN.test(s) || PRONOUN.test(t)) continue;
     if (!/^[A-Z][A-Z_]+$/.test(rel)) continue;
     out.push({ source: s, type: rel, target: t });
-    if (out.length >= 6) break;
+    // 20 matches the prompt's "Max 20 lines" (deep-dive M4: the prompt+comment said 20 but this
+    // break still said 6 — lines 7-20 were silently discarded, starving the graph at ~1/3 rate)
+    if (out.length >= 20) break;
   }
   return out;
 }

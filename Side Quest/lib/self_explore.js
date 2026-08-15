@@ -151,10 +151,16 @@ async function run(deps = {}, { now = Date.now(), force = false } = {}) {
   if (!rx.ok) return { ok: false, reason: 'no reaction', domain, seed, url };
 
   // The durable OPINION record — a personality-database row, provenance carried.
+  // EMBEDDED at write (2026-08-15 deep-dive M10): these rows were born embedding:null BY
+  // CONSTRUCTION — the personality database (future training substrate, program-is-the-model) was
+  // invisible to scored recall from day one. Embed like every other knowledge write; a failed
+  // embed still lands the row and the idle backfill re-embeds it.
   const body = `EXPERIENCE (${domain}) — ${title}\nFeeling: ${rx.feeling}\nStruck: ${rx.struck}\nStance: ${rx.stance}\nConnection: ${rx.connection}`;
+  let bodyEmb = null;
+  try { bodyEmb = JSON.stringify(await require('./memory').embed(body)); } catch {}
   try {
-    db.insertKnowledge({ kind: 'experience', content: body, source: 'self_explore', importance: rx.keep ? 0.7 : 0.5, embedding: null, provenance: { url, title, domain, seed } });
-  } catch (e) { try { db.insertKnowledge({ kind: 'note', content: body, source: 'self_explore', importance: 0.5, embedding: null }); } catch {} }
+    db.insertKnowledge({ kind: 'experience', content: body, source: 'self_explore', importance: rx.keep ? 0.7 : 0.5, embedding: bodyEmb, provenance: { url, title, domain, seed } });
+  } catch (e) { try { db.insertKnowledge({ kind: 'note', content: body, source: 'self_explore', importance: 0.5, embedding: bodyEmb }); } catch {} }
 
   // Identity is EARNED: experienced + first-person + kept. (Research-derived interests still rail.)
   if (rx.keep && rx.identity) {

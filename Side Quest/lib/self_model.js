@@ -66,12 +66,18 @@ async function defaultDecide(a, b) {
 async function classify3(a, b) {
   const messages = [{ role: 'user', content: `Two statements about the same person:\nA (already known): ${a}\nB (new): ${b}\n\nHow does B relate to A?\n- SAME — B just restates A, no real change\n- UPDATE — B is the SAME aspect of them (same kind of preference/trait/topic) but their stance or favorite has CHANGED or evolved\n- DIFFERENT — B is about something else entirely\nAnswer with ONE word: SAME, UPDATE, or DIFFERENT.` }];
   let raw = '';
+  // 'unknown' on failure, NEVER 'same' (2026-08-15 deep-dive M5): with the LLM down, the old
+  // catch defaulted 'same' — and record()'s same-branch REPLACES the stored trait's content when
+  // the new text is longer. Identity corruption from an outage. 'unknown' falls through record()'s
+  // verdict branches to a plain ADD: a duplicate row is churn the consolidator can fix later; an
+  // overwritten trait is not.
   try { await streamChat({ model: MODEL, messages, options: { temperature: 0, top_p: 0.9, num_ctx: 8192, num_predict: 4 }, onToken: (t) => { raw += t; } }); }
-  catch (e) { console.error('[self_model] classify3 failed:', e.message); return 'same'; }
+  catch (e) { console.error('[self_model] classify3 failed:', e.message); return 'unknown'; }
   const m = raw.trim().toLowerCase();
   if (m.startsWith('update')) return 'update';
   if (m.startsWith('different')) return 'different';
-  return 'same';
+  if (m.startsWith('same')) return 'same';
+  return 'unknown';   // unparseable output is not agreement
 }
 
 // Record a self-statement. Returns { action: 'add'|'update', id, sim? } or null.

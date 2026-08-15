@@ -245,19 +245,33 @@ function _objectLines(obj, { maxFacts = 10 } = {}) {
 // Best-effort entity/relation recall from the graph. Match topic tokens to entities, pull neighbors.
 // Fully defensive — any shape mismatch / uninitialized graph → []; the notes carry recall regardless.
 function _graphFacts(topic) {
-  let gm; try { gm = require('./graph_memory'); } catch { return []; }
+  let gm, gdb; try { gm = require('./graph_memory'); gdb = require('./db'); } catch { return []; }
   const toks = String(topic).toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 4).slice(0, 4);
   const out = []; const seen = new Set();
+  // graph_relations rows carry entity IDS, not names (deep-dive M1: _relStr used to probe
+  // .source/.type/.target — columns that never existed — so every [graph] line, the facts-rich
+  // trigger, and consolidation facts were dead since the day they shipped). Resolve ids → names
+  // here, cached per call; a row whose endpoint can't resolve renders nothing, never an id.
+  const _nameCache = new Map();
+  const nameOf = (id) => {
+    if (_nameCache.has(id)) return _nameCache.get(id);
+    let nm = null; try { const ent = gdb.graphGetEntity(id); nm = (ent && ent.name) || null; } catch {}
+    _nameCache.set(id, nm); return nm;
+  };
   for (const tok of toks) {
     let e = null; try { e = gm.getEntity(tok); } catch {}
     if (!e) continue;
-    let ns = []; try { ns = gm.neighbors(e.name || tok, { limit: 5 }) || []; } catch {}
-    for (const n of ns) { const s = _relStr(n); if (s && !seen.has(s)) { seen.add(s); out.push(s); if (out.length >= 6) return out; } }
+    let ns = []; try { ns = (gm.neighbors(e.name || tok) || []).slice(0, 5); } catch {}
+    for (const n of ns) { const s = _relStr(n, nameOf); if (s && !seen.has(s)) { seen.add(s); out.push(s); if (out.length >= 6) return out; } }
   }
   return out;
 }
-function _relStr(n) {
+function _relStr(n, nameOf) {
   if (!n || typeof n !== 'object') return null;
+  if (n.source_id != null && n.target_id != null && n.relation_type && typeof nameOf === 'function') {
+    const s = nameOf(n.source_id), t = nameOf(n.target_id);
+    if (s && t) return `${s} ${String(n.relation_type).toLowerCase().replace(/_/g, ' ')} ${t}`;
+  }
   if (n.source && n.type && n.target) return `${n.source} ${String(n.type).toLowerCase().replace(/_/g, ' ')} ${n.target}`;
   if (n.name && n.summary) return `${n.name}: ${n.summary}`;
   return n.summary || n.name || null;

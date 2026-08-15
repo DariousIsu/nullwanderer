@@ -27,6 +27,10 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
   ok('pronoun triple rejected', !parsed.some(t => t.source === 'it' || t.target === 'that'));
   ok('sentence-entity rejected', !parsed.some(t => t.source.length > 60 || t.source.split(/\s+/).length > 6));
   ok('relation normalized to UPPER_SNAKE', parsed.some(t => t.type === 'MEMBER_OF'));
+  // M4 (2026-08-15 deep-dive): the prompt says "Max 20 lines" but the parser still broke at 6 —
+  // lines 7-20 silently discarded, graph intake starved at 1/3 the intended rate.
+  const many = ge.parseTriples(Array.from({ length: 25 }, (_, i) => `Entity${i} Alpha | KNOWS | Entity${i} Beta`).join('\n'));
+  ok('M4: the parser keeps up to 20 triples (matches the prompt), not 6', many.length === 20);
 
   console.log('\ningestReading — triples become grounded (read) graph facts w/ provenance:');
   const deps = { extract: async () => 'Joshua Fredrickson | WORKS_FOR | Rainey Center\nFAST-41 Act | REGULATES | federal permitting' };

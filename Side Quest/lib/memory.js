@@ -182,7 +182,9 @@ async function storeDeduped({ kind = 'note', content, source = null, importance 
         try { merged = mergeFn ? await mergeFn(candText, text) : await _merge(candText, text); } catch { merged = null; }
         merged = (merged && merged.trim()) || `${candText} ${text}`.slice(0, 600);
         let mEmb = null; try { mEmb = JSON.stringify(await embed(merged)); } catch {}
-        try { db.updateKnowledge(best.id, { content: merged, embedding: mEmb }); } catch {}
+        // clearEmbedding on a failed re-embed (deep-dive M9): never leave the OLD vector under the
+        // NEW content — NULL it and let the idle backfill re-embed honestly.
+        try { db.updateKnowledge(best.id, { content: merged, embedding: mEmb, clearEmbedding: !mEmb }); } catch {}
         return { action: 'update', id: best.id, sim: bestSim };
       }
       // rel === 'distinct' → fall through to ADD (a real sibling)
@@ -276,6 +278,27 @@ async function backfillTurnEmbeddings(limit = 300) {
     try { const v = await embed(r.content); if (v) { db.setTurnEmbedding(r.id, JSON.stringify(v)); n++; } } catch {}
   }
   if (n) console.log(`[memory] backfilled embeddings for ${n} past turn(s)`);
+  return n;
+}
+
+// The turns backfill, generalized (2026-08-15 deep-dive M3/M7/M11): re-embed NULL-embedding rows
+// in knowledge (invisible to retrieveScored — including verified_facts, killing the precedence
+// gate for outage-era facts), self_model (injected into her persona every turn yet unreachable by
+// dedup/evolution), and interests (can never gain reinforcement weight). Idempotent, bounded,
+// best-effort; also mops up M9's honest NULLs after a failed merge re-embed and M10's
+// self_explore EXPERIENCE rows.
+async function backfillMissingEmbeddings({ limit = 150 } = {}) {
+  let n = 0;
+  for (const r of db.getKnowledgeMissingEmbedding(limit)) {
+    try { const v = await embed(r.content); if (v) { db.setKnowledgeEmbedding(r.id, JSON.stringify(v)); n++; } } catch {}
+  }
+  for (const r of db.getSelfModelMissingEmbedding(Math.ceil(limit / 3))) {
+    try { const v = await embed(r.content); if (v) { db.setSelfModelEmbedding(r.id, JSON.stringify(v)); n++; } } catch {}
+  }
+  for (const r of db.getInterestsMissingEmbedding(Math.ceil(limit / 3))) {
+    try { const v = await embed(r.topic); if (v) { db.setInterestEmbedding(r.id, JSON.stringify(v)); n++; } } catch {}
+  }
+  if (n) console.log(`[memory] backfilled ${n} missing embedding(s) across knowledge/self_model/interests`);
   return n;
 }
 
@@ -457,6 +480,6 @@ function isReady() { return !!_extractor; }
 function warm() { return getExtractor().then(() => true).catch(() => false); }
 
 module.exports = {
-  embed, store, storeDeduped, logAction, retrieve, retrieveScored, retrieveTurns, backfillTurnEmbeddings, formatForPrompt, warm, isReady,
+  embed, store, storeDeduped, logAction, retrieve, retrieveScored, retrieveTurns, backfillTurnEmbeddings, backfillMissingEmbeddings, formatForPrompt, warm, isReady,
   cosine, fuse, _normalize  // exported for unit tests
 };

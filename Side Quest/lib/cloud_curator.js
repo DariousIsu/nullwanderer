@@ -218,7 +218,7 @@ async function selfEvolutionMerge({ apply = false, relateFn = _defaultRelate, me
     merged = (merged && String(merged).trim()) || (keepRow && keepRow.content) || texts[0];
     if (apply) {
       let emb = null; try { emb = JSON.stringify(await embed(merged)); } catch {}
-      try { db.updateKnowledge(c.keepId, { content: merged, embedding: emb }); } catch {}
+      try { db.updateKnowledge(c.keepId, { content: merged, embedding: emb, clearEmbedding: !emb }); } catch {}   // M9: no stale vector under new content
       _deleteKnowledge(c.dropIds);
       collapsed += c.dropIds.length;
     }
@@ -394,7 +394,7 @@ async function mergeNearDupKnowledge({ apply = false, sim = NEARDUP_SIM, relateF
     merged = (merged && String(merged).trim()) || (keepRow && keepRow.content) || texts[0];
     if (apply) {
       let emb = null; try { emb = JSON.stringify(await embed(merged)); } catch {}
-      try { db.updateKnowledge(c.keepId, { content: merged, embedding: emb }); } catch {}
+      try { db.updateKnowledge(c.keepId, { content: merged, embedding: emb, clearEmbedding: !emb }); } catch {}   // M9: no stale vector under new content
       _deleteKnowledge(c.dropIds);
       collapsed += c.dropIds.length;
     }

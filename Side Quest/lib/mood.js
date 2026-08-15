@@ -189,11 +189,25 @@ Every value must be her ACTUAL mood in your own words. Do not echo the descripti
   return mood;
 }
 
-// Re-cultivate only if missing or stale. Non-blocking caller. Deps injectable for tests.
-async function maybeRefresh({ ttlMs = DEFAULT_TTL_MS, nowTs = null, getFn = null, composeFn = null, ...composeOpts } = {}) {
+// RETRY FLOOR (2026-08-15 deep-dive M6 — the self_narrative transplant, verbatim pattern from
+// lib/self_narrative.js where it was built for the measured 2026-08-06 VRAM-pin failure): a
+// FAILED compose must not retry on every user turn. Mood is called per-turn with a live cloud
+// genFn; with the cloud down and the mood past TTL, every turn burned one cloud attempt
+// indefinitely. The try-stamp advances on every ATTEMPT; MOOD_AT_KEY only on success.
+const MOOD_TRY_KEY = 'mood_try_at';
+const RETRY_FLOOR_MS = 30 * 60 * 1000;
+
+// Re-cultivate only if missing or stale — and never retry a FAILING compose more than once per
+// RETRY_FLOOR_MS. Non-blocking caller. Deps injectable for tests.
+async function maybeRefresh({ ttlMs = DEFAULT_TTL_MS, nowTs = null, getFn = null, composeFn = null, setFn = null, ...composeOpts } = {}) {
   if (!isStale({ ttlMs, nowTs, getFn })) return null;
+  const get = getFn || ((k) => { try { return require('./db').getMeta(k); } catch { return null; } });
+  const now = nowTs || Date.now();
+  if (now - (parseInt(get(MOOD_TRY_KEY) || '0', 10) || 0) < RETRY_FLOOR_MS) return null;
+  const set = setFn || ((k, v) => { try { require('./db').setMeta(k, v); } catch {} });
+  set(MOOD_TRY_KEY, String(now));
   const doCompose = composeFn || compose;
-  return doCompose({ nowTs, ...composeOpts });
+  return doCompose({ nowTs, setFn, ...composeOpts });
 }
 
-module.exports = { compose, maybeRefresh, current, composedAt, isStale, parseMood, parseMoodJson, isTemplateEcho, buildBlock, DEFAULT_TTL_MS, MOOD_KEY, MOOD_AT_KEY };
+module.exports = { compose, maybeRefresh, current, composedAt, isStale, parseMood, parseMoodJson, isTemplateEcho, buildBlock, DEFAULT_TTL_MS, MOOD_KEY, MOOD_AT_KEY, MOOD_TRY_KEY, RETRY_FLOOR_MS };

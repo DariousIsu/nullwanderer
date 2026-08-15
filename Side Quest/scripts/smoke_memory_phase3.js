@@ -27,6 +27,15 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
   ok('FTS reflects the rewrite (old term gone, new term found)',
     db.ftsSearchKnowledge('currents', 5).some(r => r.id === k.id) && !db.ftsSearchKnowledge('standalone', 5).some(r => r.id === k.id));
 
+  // DEEP-DIVE M9: a merge whose re-embed FAILED must not keep the OLD vector under NEW content —
+  // clearEmbedding NULLs it so scored recall can't drift and the idle backfill re-embeds honestly.
+  db.updateKnowledge(k.id, { content: 'A re-merged fact whose re-embed failed.', clearEmbedding: true });
+  ok('M9: clearEmbedding NULLs the stale vector under rewritten content', db.getKnowledgeByIds([k.id])[0].embedding == null);
+  // DEEP-DIVE M3: the NULL-embedding getters feed the store backfill (only turns ever had one).
+  ok('M3: the row now surfaces as missing-embedding', db.getKnowledgeMissingEmbedding(50).some((r) => r.id === k.id));
+  db.setKnowledgeEmbedding(k.id, JSON.stringify([0.1, 0.2]));
+  ok('M3: setKnowledgeEmbedding restores it and it leaves the missing set', !db.getKnowledgeMissingEmbedding(50).some((r) => r.id === k.id));
+
   console.log('\nparent assignment on ADD (fact lands under nearest topic):');
   const topic = await memory.store({ content: 'Substack publishing workflow overview and steps.', level: 'topic' });
   const added = await memory.storeDeduped({ content: 'Substack publishing workflow overview and the steps involved.', relateFn: async () => 'distinct' });

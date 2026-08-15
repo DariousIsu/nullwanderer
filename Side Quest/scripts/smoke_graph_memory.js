@@ -16,7 +16,7 @@ const kgActs = []; global.__emitKgActivity = (p) => kgActs.push(p);   // capture
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}`); } };
 
-(function () {
+(async function () {
   console.log('Offline — graph memory (epistemic typing + gate)\n');
 
   console.log('GATE — grounded enters canonical, speculation does NOT:');
@@ -102,6 +102,34 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
   kgActs.length = 0;
   db.insertMonologue({ content: 'another immediate thought', type: 'thought' });
   ok('immediate second write → throttled (no think within 3.5s)', !kgActs.some(a => a.kind === 'think'));
+
+  console.log('\nDEEP-DIVE M2 — relation re-observation is UPGRADE-ONLY (the entity rule, transplanted):');
+  {
+    const r1 = gm.recordRelation({ source: 'Anchor Person', target: 'Test Meeting', type: 'ATTENDED', epistemic: 'witnessed', confidence: 0.95 });
+    const rel1 = db.graphGetRelation(r1.relationId);
+    db.getDb().prepare('UPDATE graph_relations SET confirmed = 1 WHERE id = ?').run(rel1.id);
+    // a prose re-extraction of the same edge at lower trust must not downgrade anything
+    gm.recordRelation({ source: 'Anchor Person', target: 'Test Meeting', type: 'ATTENDED', epistemic: 'read', confidence: 0.75 });
+    const rel2 = db.graphGetRelation(rel1.id);
+    ok('M2: epistemic never downgrades (witnessed stays witnessed)', rel2.epistemic === 'witnessed');
+    ok('M2: confidence never downgrades (0.95 stays)', Number(rel2.confidence) === 0.95);
+    ok('M2: confirmed never resets to null on re-observation', rel2.confirmed === 1);
+    // and a better sighting still upgrades
+    gm.recordRelation({ source: 'Anchor Person', target: 'Test Meeting', type: 'ATTENDED', epistemic: 'witnessed', confidence: 0.99 });
+    ok('M2: a stronger sighting RAISES confidence', Number(db.graphGetRelation(rel1.id).confidence) === 0.99);
+  }
+
+  console.log('\nDEEP-DIVE M1 — graph facts RENDER in recall (ids resolve to names):');
+  {
+    gm.recordRelation({ source: 'Zephyrium', target: 'Nimbusia', type: 'ALLIED_WITH', epistemic: 'told', confidence: 0.9 });
+    const ar = require('../lib/active_recall');
+    const r = await ar.recall('zephyrium standing', {
+      retrieveFn: async () => [], prominenceFn: async () => ({ status: 'ok' }),
+      resolveFn: async () => ({ status: 'none' }), civicFn: async () => [],
+    });
+    ok('M1: the [graph] facts line is ALIVE — names, not dead column probes',
+      (r.facts || []).some((f) => /zephyrium/i.test(f) && /nimbusia/i.test(f)));
+  }
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { require('fs').rmSync(path.dirname(process.env.SQ_DB_PATH), { recursive: true, force: true }); } catch {}

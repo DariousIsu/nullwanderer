@@ -156,6 +156,22 @@ const recentRows = [
       'control: an ordinary colon is not a label');
   }
 
+  console.log('\nDEEP-DIVE M6 — retry floor (the self_narrative transplant):');
+  {
+    const meta = {};
+    const getFn = (k) => meta[k] || null;
+    const setFn = (k, v) => { meta[k] = v; };
+    let attempts = 0;
+    const failingCompose = async () => { attempts++; return null; };   // cloud down: compose fails
+    const T0 = 1_700_000_000_000;
+    await mood.maybeRefresh({ nowTs: T0, getFn, setFn, composeFn: failingCompose });
+    ok(attempts === 1 && meta[mood.MOOD_TRY_KEY] === String(T0), 'a failed attempt stamps the try key');
+    await mood.maybeRefresh({ nowTs: T0 + 60 * 1000, getFn, setFn, composeFn: failingCompose });
+    ok(attempts === 1, 'M6: within the floor NO retry fires — one cloud burn per window, not per turn');
+    await mood.maybeRefresh({ nowTs: T0 + mood.RETRY_FLOOR_MS + 1000, getFn, setFn, composeFn: failingCompose });
+    ok(attempts === 2, 'past the floor the retry runs again');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

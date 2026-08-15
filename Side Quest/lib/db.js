@@ -1198,6 +1198,23 @@ function getTurnsMissingEmbedding(limit = 300) {
     .prepare("SELECT id, content FROM turns WHERE embedding IS NULL AND speaker IN ('user','ai_said') ORDER BY id DESC LIMIT ?")
     .all(limit);
 }
+// NULL-EMBEDDING ROWS across the three stores that embed at write (2026-08-15 deep-dive M3/M7/M11):
+// a row written while the embedder was down was INVISIBLE to scored recall (knowledge — including
+// verified_facts, so the precedence gate could never fire on them), un-consolidatable but still
+// prompt-injected (self_model), or reinforcement-blind (interests) — FOREVER, because only turns
+// ever had a backfill. These feed memory.backfillMissingEmbeddings, the turns pattern generalized.
+function getKnowledgeMissingEmbedding(limit = 150) {
+  return getDb().prepare('SELECT id, content FROM knowledge WHERE embedding IS NULL AND content IS NOT NULL ORDER BY id DESC LIMIT ?').all(limit);
+}
+function setKnowledgeEmbedding(id, embedding) { getDb().prepare('UPDATE knowledge SET embedding = ? WHERE id = ?').run(embedding, id); }
+function getSelfModelMissingEmbedding(limit = 60) {
+  return getDb().prepare('SELECT id, content FROM self_model WHERE embedding IS NULL AND content IS NOT NULL ORDER BY id DESC LIMIT ?').all(limit);
+}
+function setSelfModelEmbedding(id, embedding) { getDb().prepare('UPDATE self_model SET embedding = ? WHERE id = ?').run(embedding, id); }
+function getInterestsMissingEmbedding(limit = 60) {
+  return getDb().prepare('SELECT id, topic FROM interests WHERE embedding IS NULL AND topic IS NOT NULL ORDER BY id DESC LIMIT ?').all(limit);
+}
+function setInterestEmbedding(id, embedding) { getDb().prepare('UPDATE interests SET embedding = ? WHERE id = ?').run(embedding, id); }
 
 function getRecentDisplayTurns(n) {
   // user + ai_thought + ai_said — renderer pairs thought with following said
@@ -1998,12 +2015,16 @@ function deleteDocument(id) {
 // Phase 3: rewrite a knowledge note in place (Mem0 UPDATE/merge) — content + its
 // embedding + FTS index, bumping last_used_ts. Used when a new takeaway AUGMENTS an
 // existing one rather than duplicating it, so one topic doesn't pile up near-dup rows.
-function updateKnowledge(id, { content, embedding = null, importance = null } = {}) {
+function updateKnowledge(id, { content, embedding = null, importance = null, clearEmbedding = false } = {}) {
   if (!id || !content || !String(content).trim()) return false;
   const now = Date.now();
   const sets = ['content = ?', 'last_used_ts = ?'];
   const args = [String(content).trim(), now];
   if (embedding != null) { sets.push('embedding = ?'); args.push(embedding); }
+  // clearEmbedding (deep-dive M9): when a merge's re-embed FAILED, preserving the old vector
+  // leaves a stale embedding under new content — scored recall drifts silently. NULL it instead;
+  // the idle backfill re-embeds the row honestly.
+  else if (clearEmbedding) sets.push('embedding = NULL');
   if (importance != null) { sets.push('importance = ?'); args.push(importance); }
   args.push(id);
   getDb().prepare(`UPDATE knowledge SET ${sets.join(', ')} WHERE id = ?`).run(...args);
@@ -2476,14 +2497,26 @@ function graphListEntities({ epistemic = null, limit = 500 } = {}) {
 }
 function graphInsertRelation({ sourceId, targetId, relationType, confidence = 0.8, epistemic = 'told', confirmed = null, proposedBy = null, validFrom = null }) {
   const now = Date.now();
+  const cur = getDb().prepare('SELECT * FROM graph_relations WHERE source_id = ? AND target_id = ? AND relation_type = ?').get(sourceId, targetId, relationType);
+  if (cur) {
+    // UPGRADE-ONLY re-observation (2026-08-15 deep-dive M2) — the mirror of the entity path in
+    // graph_memory.upsertEntity, which relations never got: the old blanket ON CONFLICT overwrite
+    // let a prose re-extraction (read/0.75) DOWNGRADE a witnessed 0.95 confirmed edge and reset
+    // confirmed to null, silently undoing reconciliation. Epistemic and confidence only climb;
+    // confirmed fills from null and is never reset; a re-sighting still revives a deleted edge.
+    const TRUST = { witnessed: 4, told: 3, read: 2, anticipated: 1, speculated: 0 };
+    const tr = (e) => TRUST[e] ?? 0;
+    const sets = ['deleted = 0'], vals = [];
+    if (tr(epistemic) > tr(cur.epistemic)) { sets.push('epistemic = ?'); vals.push(epistemic); }
+    if ((confidence || 0) > (cur.confidence || 0)) { sets.push('confidence = ?'); vals.push(confidence); }
+    if (confirmed != null && cur.confirmed == null) { sets.push('confirmed = ?'); vals.push(confirmed); }
+    getDb().prepare(`UPDATE graph_relations SET ${sets.join(', ')} WHERE id = ?`).run(...vals, cur.id);
+    return getDb().prepare('SELECT * FROM graph_relations WHERE id = ?').get(cur.id);
+  }
   getDb().prepare(
     `INSERT INTO graph_relations (source_id, target_id, relation_type, confidence, epistemic, confirmed, proposed_by, created_at, valid_from, valid_to, deleted)
-     VALUES (?,?,?,?,?,?,?,?,?,NULL,0)
-     ON CONFLICT(source_id, target_id, relation_type) DO UPDATE SET
-       confidence = excluded.confidence, epistemic = excluded.epistemic,
-       confirmed = excluded.confirmed, deleted = 0`
+     VALUES (?,?,?,?,?,?,?,?,?,NULL,0)`
   ).run(sourceId, targetId, relationType, confidence, epistemic, confirmed, proposedBy, now, validFrom == null ? now : validFrom);
-  // lastInsertRowid is unreliable on an upsert-update path — re-read the canonical row.
   return getDb().prepare('SELECT * FROM graph_relations WHERE source_id = ? AND target_id = ? AND relation_type = ?').get(sourceId, targetId, relationType);
 }
 function graphGetRelation(id) {
@@ -2758,6 +2791,9 @@ module.exports = {
   setTurnEmbedding,
   getEmbeddedTurns,
   getTurnsMissingEmbedding,
+  getKnowledgeMissingEmbedding, setKnowledgeEmbedding,
+  getSelfModelMissingEmbedding, setSelfModelEmbedding,
+  getInterestsMissingEmbedding, setInterestEmbedding,
   getRecentDisplayTurns,
   getRecentReflections,
   getReflectionById,
