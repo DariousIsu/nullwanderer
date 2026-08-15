@@ -259,7 +259,17 @@ async function ask({ task, v = 1, input = {}, keyInput = null, want = '', valida
     try {
       const cached = db.getCachedCloudTrace(inputHash);
       if (cached && cached.parsed_json) {
-        try { return JSON.parse(cached.parsed_json); } catch {}
+        try {
+          const v = JSON.parse(cached.parsed_json);
+          // HIT TELEMETRY (2026-08-15): hits leave no trace row, so before this counter the cache's
+          // health was invisible — which is exactly how the 0-hits keyInput defect went unnoticed.
+          try {
+            const h = (parseInt(db.getMeta('cloud_logic.cache_hits') || '0', 10) || 0) + 1;
+            db.setMeta('cloud_logic.cache_hits', String(h));
+            if (h % 25 === 0) console.log(`[cloud_logic] cache hit #${h} (task ${task}) — calls the pool never paid for`);
+          } catch {}
+          return v;
+        } catch {}
       }
     } catch {}
   }

@@ -4,10 +4,13 @@
  * A shared 9-category taxonomy for topical balance across the scrolling feed AND the brief. UMD so it runs
  * in Node (collector/compression) AND the browser (the Monitors widget), like studio/feeds_view.
  *
- * Classification is CLOUD-ON-EVERYTHING (Lucas): every item/story is cloud-classified ONCE and the verdict
- * cached on its row — never re-classified (the cost control). `categorizeFast` is the free deterministic
- * label shown provisionally until the cloud verdict lands, and the fail-safe when cloud is down. Mirrors the
- * ad-filter's batched+validated+fail-safe shape (lib/news_ads).
+ * Classification is FAST-PATH-FIRST (un-inverted 2026-08-15, deterministic-loops #3; the original
+ * CLOUD-ON-EVERYTHING posture burned ~250k tok/day re-deriving labels the lexicon already knew):
+ * `categorizeFast` ANSWERS when it is confident — ≥2 keyword hits (confidence ≥0.6) or a source-hint
+ * winner (a single-topic feed is a strong prior) — and only the RESIDUE batches to the model. Every
+ * verdict is still cached on its row, classified once. The beat contract holds: the briefing is
+ * still HERS to compose — over labels the fast path sorted. Cloud-down fail-safe unchanged. Mirrors
+ * the ad-filter's batched+validated+fail-safe shape (lib/news_ads).
  *
  * Weather is its own PROTECTED, UNCAPPED category (hurricanes/wildfires are hard news you never cap).
  */
@@ -107,18 +110,29 @@ For EACH input id, output your best single category KEY. Respond with ONLY a JSO
     return out.length ? { valid: true, value: out } : { valid: false, error: 'no {id, cat} verdicts found' };
   }
 
-  // CLOUD-ON-EVERYTHING: classify a batch of items → { [id]: category-key }. Every item goes to the model;
-  // any the model omits/garbles falls back to categorizeFast (never unlabeled). deps.ask = cloud_logic.ask.
-  // The CALLER batches (passes only NEW items per tick — each item is classified once, then cached).
+  // FAST-PATH-FIRST: classify a batch → { [id]: category-key }. The lexicon answers where it is
+  // confident (≥0.6 = 2+ keyword hits, or a source-hint winner at ≥0.5 — a single-topic feed is a
+  // strong prior); only the RESIDUE goes to the model. Any residue item the model omits/garbles
+  // falls back to its fast label (never unlabeled). deps.ask = cloud_logic.ask. The CALLER batches
+  // (passes only NEW items per tick — each item is classified once, then cached).
   async function classifyTopicsBatch(items, { ask = null, model = null, numPredict = 1600 } = {}) {
     const verdict = {};
-    if ((items || []).length && typeof ask === 'function') {
+    const residue = [];
+    for (const s of (items || [])) {
+      const f = categorizeFast(s);
+      const srcHay = (str(s.source) + ' ' + str(s.sourceUrl)).toLowerCase();
+      const hinted = SOURCE_HINTS.some(([re]) => re.test(srcHay));
+      if (f.confidence >= 0.6 || (hinted && f.confidence >= 0.5)) verdict[s.id] = f.category;
+      else residue.push(s);
+    }
+    if (residue.length && typeof ask === 'function') {
       try {
-        const r = await ask({ task: 'news_topic_classify', v: 1, input: classifyInput(items), want: CLASSIFY_WANT, validate: classifyValidator, model, numPredict });
+        const r = await ask({ task: 'news_topic_classify', v: 1, input: classifyInput(residue), want: CLASSIFY_WANT, validate: classifyValidator, model, numPredict });
         if (Array.isArray(r)) for (const e of r) if (e && e.id != null && e.cat) verdict[e.id] = e.cat;
       } catch { /* fall through to fast */ }
     }
-    for (const s of (items || [])) if (!verdict[s.id]) verdict[s.id] = categorizeFast(s).category;   // fail-safe / cloud-down
+    for (const s of residue) if (!verdict[s.id]) verdict[s.id] = categorizeFast(s).category;   // fail-safe / cloud-down
+    try { if ((items || []).length && typeof console !== 'undefined') console.log(`[news] topics: fast path labeled ${(items || []).length - residue.length}/${(items || []).length}, model classifies ${residue.length}`); } catch {}
     return verdict;
   }
 

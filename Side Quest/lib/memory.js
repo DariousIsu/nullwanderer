@@ -170,8 +170,19 @@ async function storeDeduped({ kind = 'note', content, source = null, importance 
       const candText = cand ? cand.content : '';
       // Mem0 decision. relateFn (3-way) takes precedence; else decideFn/_sameFact (boolean)
       // collapses to same|distinct (back-compat — no merge unless a relate is available).
+      // EMBEDDING TIER first (deterministic-loops #5, scoped 2026-08-15): the sim was computed
+      // and then a model re-derived the verdict. The high band short-circuits 'same' ONLY with
+      // the containment guard — sim alone is NOT safe ("X is 39" vs "X is 38" embeds ~0.97 but
+      // is a correction that must reach the model, or updates silently drop). NOT applied to
+      // self_model/consolidate: bge-small's measured band there (paraphrase ~0.75, distinct
+      // ~0.61) leaves no deterministic zone, per self_model.js's own header.
       let rel;
-      if (relateFn) rel = await relateFn(text, candText);
+      if (_tierSame(text, candText, bestSim)) {
+        rel = 'same';
+        _tierHitCount++;
+        if (_tierHitCount % 50 === 0) { try { console.log(`[memory] dedup embedding-tier: ${_tierHitCount} verbatim-class 'same' verdicts without a model call`); } catch {} }
+      }
+      else if (relateFn) rel = await relateFn(text, candText);
       else if (decideFn) rel = (await decideFn(text, candText)) ? 'same' : 'distinct';
       else rel = await _relate(text, candText);
 
@@ -192,6 +203,24 @@ async function storeDeduped({ kind = 'note', content, source = null, importance 
   }
   const row = await store({ kind, content: text, source, importance, links: link ? [link] : null, provenance, level: 'fact', parentId });
   return { action: 'add', id: row && row.id, parentId };
+}
+
+// THE EMBEDDING TIER's high-band check (deterministic-loops #5): 'same' without a model call
+// requires BOTH (1) sim ≥ SIM_SAME and (2) the new text's token set ⊆ the existing note's —
+// i.e. the new note adds NO token the stored one lacks, so there is no informational delta a
+// merge could keep. Numeric tokens are kept regardless of length ("39" vs "38" must break
+// containment — corrections always reach the model). Conservative by design: a miss costs one
+// model call, a false 'same' silently drops information.
+const SIM_SAME = 0.93;
+let _tierHitCount = 0;
+function _tierSame(a, b, sim) {
+  if (!(sim >= SIM_SAME) || !a || !b) return false;
+  const tok = (s) => new Set(String(s).toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/)
+    .filter((w) => w.length > 2 || /^\d+$/.test(w)));
+  const A = tok(a), B = tok(b);
+  if (!A.size || !B.size) return false;
+  for (const w of A) if (!B.has(w)) return false;   // any novel token → the model decides
+  return true;
 }
 
 // Default 3-way relation between a new note and its nearest existing one (one cheap call).
@@ -481,5 +510,5 @@ function warm() { return getExtractor().then(() => true).catch(() => false); }
 
 module.exports = {
   embed, store, storeDeduped, logAction, retrieve, retrieveScored, retrieveTurns, backfillTurnEmbeddings, backfillMissingEmbeddings, formatForPrompt, warm, isReady,
-  cosine, fuse, _normalize  // exported for unit tests
+  cosine, fuse, _normalize, _tierSame, SIM_SAME  // exported for unit tests
 };

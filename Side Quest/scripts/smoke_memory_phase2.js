@@ -56,6 +56,14 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
 
   memory.storeDeduped = realStore;   // restore
 
+  console.log('\nembedding-tier high-band guard (_tierSame, deterministic-loops #5 — sim alone is NOT enough):');
+  ok('verbatim restate → same, no model call', memory._tierSame('The parish seat is Gretna', 'The parish seat is Gretna.', 0.99) === true);
+  ok('subset restate (adds no token) → same', memory._tierSame('parish seat Gretna', 'The parish seat of Jefferson Parish is Gretna', 0.95) === true);
+  ok('numeric correction BREAKS containment (39→38 embeds ~0.97 but must reach the model)', memory._tierSame('The Senate has 39 seats', 'The Senate has 38 seats', 0.97) === false);
+  ok('a novel token (new info) → the model decides', memory._tierSame('Gretna is the seat and the mayor is Constance', 'The parish seat is Gretna', 0.94) === false);
+  ok('below SIM_SAME → the model decides regardless of containment', memory._tierSame('parish seat Gretna', 'The parish seat is Gretna', 0.9) === false);
+  ok('empty/degenerate inputs → never same', memory._tierSame('', 'x', 0.99) === false && memory._tierSame('a b', '', 0.99) === false);
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { require('fs').rmSync(path.dirname(process.env.SQ_DB_PATH), { recursive: true, force: true }); } catch {}
   process.exit(fail === 0 ? 0 : 1);

@@ -56,6 +56,22 @@ const items = [
   ok(vDown[1] === 'sports' && vDown[3] === 'weather', 'batch: cloud down → every item still labeled via fast (never unlabeled)');
   ok(Object.keys(vDown).length === 3, 'batch: all items labeled even with no cloud');
 
+  // ===== FAST-PATH-FIRST (un-inversion 2026-08-15, deterministic-loops #3) =====
+  let sawIds = null;
+  const askSpy = async ({ input }) => { sawIds = input.map((i) => i.id); return input.map((i) => ({ id: i.id, cat: 'culture' })); };
+  const mix = [
+    { id: 10, title: 'Hurricane strengthens to Category 4 as evacuations begin along the coast' }, // 2+ kw hits → fast answers
+    { id: 11, title: 'Late rally seals it', source: 'ESPN' },                                      // source-hint winner → fast answers
+    { id: 12, title: 'Random ambiguous headline xyz' },                                            // residue → the model
+  ];
+  const vm = await T.classifyTopicsBatch(mix, { ask: askSpy });
+  ok(vm[10] === 'weather' && vm[11] === 'sports', 'confident items are answered by the FAST path (2+ keywords / source hint)');
+  ok(sawIds && sawIds.length === 1 && sawIds[0] === 12, `only the RESIDUE reaches the model (${JSON.stringify(sawIds)})`);
+  ok(vm[12] === 'culture', 'residue takes the model label');
+  let asked = false;
+  const vAll = await T.classifyTopicsBatch([mix[0], mix[1]], { ask: async () => { asked = true; return []; } });
+  ok(!asked && vAll[10] === 'weather' && vAll[11] === 'sports', 'an all-confident batch makes ZERO model calls');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

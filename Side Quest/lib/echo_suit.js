@@ -415,6 +415,26 @@ function filterRecipes(jsonText, query, limit = 8) {
   return `RECIPES matching "${query}" — PREFER these, run with <echo-recipe name="NAME" arg="..."/>:\n` + lines.join('\n');
 }
 
+// ARG TEMPLATES (deterministic-loops #2c): tools whose dominant live arg shape is one query string
+// (or nothing). Measured from 1,500 echo_args traces 2026-08-15 — {query} was the winning shape for
+// each; extra optional fields (top_k, state, entity_type) the cloud sometimes added are exactly
+// that, optional. db_query/legistar/list_contacts are NEVER template-able (their args need
+// comprehension: SQL, client names, filter fields). Returns a fresh args object, or null.
+const ARG_TEMPLATE_TOOLS = {
+  search: (q) => ({ query: q }),
+  search_documents_semantic: (q) => ({ query: q }),
+  search_entities: (q) => ({ query: q }),
+  search_contacts: (q) => ({ query: q }),
+  get_pass_status: () => ({}),
+};
+function templateArgs(name, need) {
+  const fn = ARG_TEMPLATE_TOOLS[String(name || '')];
+  if (!fn) return null;
+  const q = String(need || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (fn.length > 0 && !q) return null;   // a query-shaped tool with no query text → let the cloud try
+  return fn(q);
+}
+
 // Is Echo cloud-routing on? On by default WHEN a cloud tier is configured; db meta echo.cloudRoute
 // = 'off' disables it (→ fall back to the catalog-list behavior so the front can pick manually).
 function echoCloudRouteEnabled() {
@@ -950,26 +970,41 @@ class EchoSuit {
         return { ok: false, kind: 'find', isError: true, blocked: true, routed: true, text: `The best Echo match for "${query}" is "${pick.name}", a ${carveOnly ? 'write' : pol.tier} action — ${carveOnly ? 'its autonomous allowance covers only its own deterministic lane, never a cloud-routed call' : pol.reason}. ${autonomous ? 'On the autonomous loop you may READ from Echo but not write/spawn — note it for Lucas instead of doing it unattended.' : 'That one is off by design.'}` };
       }
     } catch (e) { console.error('[echo] routeNeed tier-gate failed (allowing):', e.message); }
+    // ARG-TEMPLATE FAST-PATH (2026-08-15 deterministic-loops #2c, measured before built): for the
+    // tools whose DOMINANT historical arg shape is a single query string ({query} won 121/178 for
+    // search_documents_semantic, 64/97 for search, and {} 25/25 for get_pass_status in the live
+    // echo_args ledger), the cloud call writes what a template writes. Skip describe_tool AND the
+    // echo_args call; the ARG-ERR retry below still self-heals if a schema ever drifts. The pick
+    // regex→choice map from the same doc was measured and REJECTED — no need shape maps ≥80% to
+    // one choice, so a deterministic pick would mis-route where the cache (keyInput) already
+    // collapses the repeats correctly.
     let schema = '';
-    try { schema = normalizeToolResult(await c.callTool('describe_tool', { name: pick.name })).text; } catch {}
-    const argObj = await cloudAsk({
-      task: 'echo_args', v: 1,
-      input: { need: query, tool: pick.name, schema: cap(schema, 1800) },
-      // Stable key: need+tool only — describe_tool's text embeds "recent invocations" (volatile every
-      // call). If a schema genuinely changes, a stale cached arg fails and the ARG-ERR retry below
-      // corrects it — self-healing, one extra call only in that rare case.
-      keyInput: { need: normNeed, tool: pick.name },
-      want: `Write the JSON arguments object for the tool "${pick.name}" to satisfy the need, matching its schema. Output ONLY a JSON object (e.g. {"query":"..."}). Use {} if it takes no args.`,
-      validate: (raw) => { const m = String(raw || '').match(/\{[\s\S]*\}/); if (!m) return { valid: false, error: 'no json' }; try { return { valid: true, value: JSON.parse(m[0]) }; } catch (e) { return { valid: false, error: e.message }; } }
-    });
-    let args = (argObj && typeof argObj === 'object') ? argObj : {};
+    let args = null;
+    const tmpl = templateArgs(pick.name, query);
+    if (tmpl) { args = tmpl; console.log(`[echo] routeNeed arg-template fast-path: ${pick.name} (no cloud args call)`); }
+    if (!args) {
+      try { schema = normalizeToolResult(await c.callTool('describe_tool', { name: pick.name })).text; } catch {}
+      const argObj = await cloudAsk({
+        task: 'echo_args', v: 1,
+        input: { need: query, tool: pick.name, schema: cap(schema, 1800) },
+        // Stable key: need+tool only — describe_tool's text embeds "recent invocations" (volatile every
+        // call). If a schema genuinely changes, a stale cached arg fails and the ARG-ERR retry below
+        // corrects it — self-healing, one extra call only in that rare case.
+        keyInput: { need: normNeed, tool: pick.name },
+        want: `Write the JSON arguments object for the tool "${pick.name}" to satisfy the need, matching its schema. Output ONLY a JSON object (e.g. {"query":"..."}). Use {} if it takes no args.`,
+        validate: (raw) => { const m = String(raw || '').match(/\{[\s\S]*\}/); if (!m) return { valid: false, error: 'no json' }; try { return { valid: true, value: JSON.parse(m[0]) }; } catch (e) { return { valid: false, error: e.message }; } }
+      });
+      args = (argObj && typeof argObj === 'object') ? argObj : {};
+    }
     let res = await this.dispatch({ kind: 'do', name: pick.name, args }, { autonomous, maintain });
     // ARG-VALIDATION RETRY — the cloud often writes args that violate the tool schema (a `query` key on a
     // tool that doesn't take one → pydantic "unexpected keyword argument"; a db_query on a hallucinated
     // table). Feed the error back ONCE and let it correct the args, then re-run — turning a hard miss into a
-    // working lookup. Bounded to a single retry; fail-soft.
+    // working lookup. Bounded to a single retry; fail-soft. (A failed TEMPLATE lands here too — the
+    // schema is fetched lazily since the fast-path skipped it.)
     if (res && ARG_ERR_RE.test(String(res.text || ''))) {
       try {
+        if (!schema) { try { schema = normalizeToolResult(await c.callTool('describe_tool', { name: pick.name })).text; } catch {} }
         const fixed = await cloudAsk({
           task: 'echo_args_fix', v: 1,
           input: { need: query, tool: pick.name, schema: cap(schema, 1800), bad_args: JSON.stringify(args).slice(0, 400), error: String(res.text || '').slice(0, 300) },
@@ -1823,6 +1858,6 @@ function routeCacheStats() {
 module.exports = {
   routeCacheStats, _raceTimeout, lastContactWriteTs, lastGatherTs, lastExternalGatherTs, markGather,
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  placeholderComplaint, sanitizeFtsQuery, prepareDoArgs, recipeMisrouteHint,
+  placeholderComplaint, sanitizeFtsQuery, prepareDoArgs, recipeMisrouteHint, templateArgs,
   setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates, _salienceDominant
 };

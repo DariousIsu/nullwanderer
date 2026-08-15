@@ -305,6 +305,18 @@ function mockClient(overrides = {}) {
     ok('a tag-only message still strips to empty', S.stripEchoTags('<echo-find>x</echo-find>') === '');
   }
 
+  // --- ARG-TEMPLATE FAST-PATH (deterministic-loops #2c, 2026-08-15) -----------------------------
+  {
+    ok('template: search → {query}', JSON.stringify(S.templateArgs('search', 'reno city council')) === '{"query":"reno city council"}');
+    ok('template: search_documents_semantic → {query}', S.templateArgs('search_documents_semantic', 'charter powers').query === 'charter powers');
+    ok('template: get_pass_status → {} (no-arg tool)', JSON.stringify(S.templateArgs('get_pass_status', 'whatever')) === '{}');
+    ok('template: whitespace normalized + capped', S.templateArgs('search', '  a\n\n b  ').query === 'a b');
+    ok('template: db_query NEVER templates (needs SQL comprehension)', S.templateArgs('db_query', 'find things') === null);
+    ok('template: legistar_list_persons NEVER templates (needs a client name)', S.templateArgs('legistar_list_persons', 'allentown roster') === null);
+    ok('template: unknown tool → null (cloud path unchanged)', S.templateArgs('some_new_tool', 'x') === null);
+    ok('template: query tool with EMPTY need → null (never dispatch a blank query)', S.templateArgs('search', '   ') === null);
+  }
+
   console.log('\n' + (fail === 0 ? 'ALL PASS' : 'FAILURES') + ` - ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

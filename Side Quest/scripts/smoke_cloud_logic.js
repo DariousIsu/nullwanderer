@@ -79,6 +79,7 @@ const lastTrace = (task) => db.getDb().prepare('SELECT * FROM cloud_traces WHERE
     ok(k3 && n8 === 2, 'keyInput: changed key (catalog versioned by its name list) → fresh cloud call');
     const k4 = await cl.ask({ task: 'kpick', input: { need: 'q', cat: 'volatile-A' }, want: 'j', deps: { complete: kc, skipBudget: true } });
     ok(k4 && n8 === 3, 'no keyInput → full-input hashing unchanged (classify-unique-text tasks unaffected)');
+    ok(parseInt(db.getMeta('cloud_logic.cache_hits') || '0', 10) >= 2, `cache hits are COUNTED now (${db.getMeta('cloud_logic.cache_hits')} — the 0-hits defect can never go invisible again)`);
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   } finally {
