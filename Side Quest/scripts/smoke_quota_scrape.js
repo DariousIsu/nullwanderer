@@ -90,6 +90,12 @@ ok(qs.extractMeters('67.1%\nno reset anywhere').length === 0, 'a percentage with
   ok(okIdx > -1 && writeIdx > okIdx && writeIdx - okIdx < 400, 'quota.mark_pct is written ONLY inside the clean-parse branch');
   ok(m.indexOf('/(^|\\.)ollama\\.com$/i.test(host)') > -1, 'cookie port filters to ollama.com hosts only');
   ok(/quota\.scrape_signin_note_at/.test(m), 'the signed-out chat ask is throttled (24h meta key)');
+  // THE RESET ANCHOR HOLDS STILL (2026-08-15 morning harvest): the dashboard's coarse "Resets in
+  // 1 day" re-derived resetAt = now+1d on EVERY scrape, walking the deadline forward (+6h per 7h
+  // uptime, measured) — hoursLeft pinned near 24 and the use-it-or-lose-it ramp never escalated.
+  ok(/_storedReset > now && Math\.abs\(p\.resetAt - _storedReset\) < _ROUND_MS/.test(m),
+    'anchor-hold: a parsed reset within the rounding window keeps the STORED anchor (the deadline stops sliding)');
+  ok(/anchor held — dashboard rounding/.test(m), 'anchor-hold: the held anchor is named in the log line');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

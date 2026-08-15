@@ -91,6 +91,15 @@ const get = (slug) => db.getDb().prepare('SELECT * FROM interests WHERE slug=?')
       'B1: the spawn attempt is cadence-gated (the 07-01 noise-audit ruling stands)');
     ok(/focus wonder self-dialogue error/.test(mono),
       'B1: a <wonder> on a focus tick fires self-dialogue instead of being silently discarded');
+    // 2026-08-15 consciousness-allocation ruling: the organs get a SLOT, not just a wire — the
+    // 7h live measurement showed the driver back-to-backs foci so the organs never got a turn.
+    const mainSrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+    ok(/WONDERING SLOT → interest focus/.test(mainSrc),
+      'allocation: the beat scheduler yields the free slot to a starved wondering organ (6h clock)');
+    ok(/interests\.last_spawn_at/.test(mono) && /interests\.last_spawn_at/.test(mainSrc),
+      'allocation: successful spawns stamp the shared starvation clock at BOTH spawn sites');
+    ok(/self_explore\.idle_at/.test(mono),
+      'allocation: self-explore holds a 2h on-clock idle slot — self-growth no longer waits for an off-clock that never comes');
   }
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

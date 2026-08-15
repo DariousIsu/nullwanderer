@@ -2434,8 +2434,18 @@ app.whenReady().then(() => {
           const prev = Number(db.getMeta('quota.mark_pct') || '0') || 0;
           db.setMeta('quota.mark_pct', String(p.pct));
           db.setMeta('quota.mark_at', String(now));
-          db.setMeta('quota.reset_at', String(p.resetAt));
-          console.log(`[quota] self-true-up: ${(p.pct * 100).toFixed(1)}% (${p.label}; was ${(prev * 100).toFixed(1)}%), resets ${new Date(p.resetAt).toISOString()}${p.session ? `; session ${(p.session.pct * 100).toFixed(1)}%` : ''}`);
+          // THE RESET ANCHOR HOLDS STILL (2026-08-15 morning harvest): the dashboard prints
+          // "Resets in 1 day" at coarse granularity, so every scrape re-derived resetAt = now+1d
+          // and the deadline WALKED FORWARD (+~6h per 7h uptime, measured on boot_p42) — hoursLeft
+          // pinned near 24, the use-it-or-lose-it ramp stuck at 1/3 strength, surplus still
+          // stranded. Keep the stored anchor while the parsed one lands within the rounding window
+          // of it; adopt the parsed value only when it genuinely differs (first anchor, or a NEW
+          // period after the true reset passed).
+          const _storedReset = Number(db.getMeta('quota.reset_at') || '0') || 0;
+          const _ROUND_MS = 26 * 3600e3;
+          const _resetAt = (_storedReset > now && Math.abs(p.resetAt - _storedReset) < _ROUND_MS) ? _storedReset : p.resetAt;
+          db.setMeta('quota.reset_at', String(_resetAt));
+          console.log(`[quota] self-true-up: ${(p.pct * 100).toFixed(1)}% (${p.label}; was ${(prev * 100).toFixed(1)}%), resets ${new Date(_resetAt).toISOString()}${_resetAt !== p.resetAt ? ' (anchor held — dashboard rounding)' : ''}${p.session ? `; session ${(p.session.pct * 100).toFixed(1)}%` : ''}`);
         } else if (p.signedOut) {
           console.log('[quota] self-true-up: usage page is signed out — needs a one-time ollama.com sign-in in her dedicated browser');
           // One throttled chat note (24h): the automation Lucas asked for is blocked on him, and a
@@ -14404,6 +14414,23 @@ async function _autonomicSchedulerTick() {
     }
     if (t && t.status === 'resolved') { bs.status = 'done'; bs.doneAt = Date.now(); state.beats[nextId] = bs; _saveSchedState(state); return; }
   }
+  // THE WONDERING SLOT (2026-08-15, Lucas: "dedicate allocation to the new simulated consciousness
+  // organs"): the overnight driver back-to-backs directed foci, so the interest organ's 45min
+  // attempts found the slot occupied for 7 straight hours (measured, boot_p42) — armed but never
+  // fired. When the slot is genuinely FREE here and no interest focus has spawned in 6h, the
+  // wondering organ takes the slot FIRST and the next beat waits one cycle. One-focus-at-a-time
+  // stands; her own curiosity just stops being the lane that always yields.
+  try {
+    const _lastWonder = parseInt(db.getMeta('interests.last_spawn_at') || '0', 10) || 0;
+    if (Date.now() - _lastWonder > 6 * 3600e3) {
+      const sp = await require('./lib/interests').maybeSpawnFocus();
+      if (sp) {
+        db.setMeta('interests.last_spawn_at', String(Date.now()));
+        console.log(`[autonomic] WONDERING SLOT → interest focus "${String((sp.focus && sp.focus.goal) || (sp.interest && sp.interest.topic) || '').slice(0, 70)}" (the next beat waits a cycle)`);
+        return;
+      }
+    }
+  } catch (e) { console.error('[autonomic] wondering-slot attempt failed:', e && e.message); }
   // SEED a fresh run.
   const r = await seedBeatRun(beat);
   if (r && r.ok) { bs.thread = r.focusId; bs.sliceStartCovered = 0; bs.lastRun = Date.now(); state.sliceIndex = (state.sliceIndex || 0) + 1; state.beats[nextId] = bs; _saveSchedState(state); console.log(`[autonomic] seeded ${laneUsed}:${nextId}`); }

@@ -209,8 +209,14 @@ function check({ lane = 'idle', st = null, spentLastHour = 0, estimate = 0 } = {
   // final ENDGAME_H hours the background shares RAMP linearly toward ~95% of the sustainable rate,
   // so the surplus is spent instead of stranded. The FLOOR reserves above are UNTOUCHED — at 85/90%
   // of the pool the background tiers still hard-stop, so his chat reserve survives the ramp.
+  // BASE SHARES RAISED (2026-08-15, Lucas: "we only used half of our weekly quota this week —
+  // the governor we put on last week was too strict, dedicate allocation to the new simulated
+  // consciousness organs"). Research 0.45→0.60. Idle 0.20→0.40 — and the idle raise IS the
+  // consciousness dedication: the wondering organs (interest foci, focus-wonder self-dialogue,
+  // self-exploration) all spend on the idle lane, and 0.20 throttled them first and hardest.
+  // The measured week: pool ended half unused; the FLOOR reserves below still protect his chat.
   const ENDGAME_H = 36;
-  const base = tier === 'research' ? 0.45 : 0.20;
+  const base = tier === 'research' ? 0.60 : 0.40;
   const ramp = st.hoursLeft < ENDGAME_H ? (1 - st.hoursLeft / ENDGAME_H) : 0;   // 0 → 1 across the final window
   const share = base + (0.95 - base) * ramp;
   const allowedThisHour = st.pacePerHour * share;

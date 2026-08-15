@@ -1177,9 +1177,31 @@ async function _runOneTick() {
       if (Date.now() - _lastSpawn > 45 * 60 * 1000) {
         db.setMeta('interests.last_spawn_attempt_at', String(Date.now()));
         const sp = await require('./interests').maybeSpawnFocus();
-        if (sp) console.log(`[interests] wondering focus spawned → "${String((sp.focus && sp.focus.goal) || (sp.interest && sp.interest.topic) || '').slice(0, 70)}"`);
+        if (sp) {
+          db.setMeta('interests.last_spawn_at', String(Date.now()));   // SUCCESS stamp — the starvation clock
+          console.log(`[interests] wondering focus spawned → "${String((sp.focus && sp.focus.goal) || (sp.interest && sp.interest.topic) || '').slice(0, 70)}"`);
+        }
       }
     } catch (e) { console.error('[interests] spawn attempt failed:', e && e.message); }
+    // DEDICATED SELF-EXPLORE SLOT (2026-08-15, the same consciousness-allocation ruling): the
+    // organ ran only off-clock — and she was never off-clock for 7 straight hours (boot_p42,
+    // zero [play] ticks), so the stamped self-growth threads sat unconsumed all night. A 2h
+    // on-clock idle cadence gives the experience→opinion→identity organ standing time; the
+    // personal-mode path still runs too, and both share the organ's own 20min inner cadence.
+    try {
+      const _sxAt = parseInt(db.getMeta('self_explore.idle_at') || '0', 10) || 0;
+      if (Date.now() - _sxAt > 2 * 3600e3) {
+        db.setMeta('self_explore.idle_at', String(Date.now()));
+        const sx = require('./self_explore');
+        const r = await sx.run();
+        if (r && r.ok) {
+          const note = `I took in something for myself (${r.domain}): ${r.title || r.seed}${r.kept ? ' — and I\'m keeping part of it as mine.' : ''}`;
+          const rr = db.insertMonologue({ content: note, model: 'self-explore', type: 'reading', query: r.seed, urls: r.url ? [r.url] : null });
+          pushSheep({ id: rr.id, ts: rr.ts, content: note, type: 'reading', query: r.seed });
+          console.log(`[self-explore] idle slot: experienced (${r.domain}) "${String(r.title || r.seed).slice(0, 60)}"${r.kept ? ' → identity kept' : ''}`);
+        }
+      }
+    } catch (e) { console.error('[self-explore] idle slot failed:', e && e.message); }
     // DENSER SUBCONSCIOUS (Slice 4) — run the three idle lanes CONCURRENTLY (they're independent + fail-soft),
     // and let the knowledge-building graph-walk BURST up to subcMovesPerTick moves this tick (each still
     // budget-gated, so it self-limits). Was: one move each, sequentially → barely touched the 2M/hr budget.
