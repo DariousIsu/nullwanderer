@@ -573,6 +573,7 @@ const smokes = [
   // fail-soft keeps the prior state. Enforced at _speech.enqueue + stt:transcribe.
   'smoke_voice_guard.js',
   'smoke_status_vector.js',
+  'smoke_self_audit.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.

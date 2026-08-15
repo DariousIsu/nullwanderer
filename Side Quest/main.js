@@ -4769,9 +4769,17 @@ try {
       dh.tick({});
       dh.maybeQuickCheck({});   // due-gated inside (weekly); runs in a child process, never this thread
     } catch {}
+    // STAGE-1 SELF-AUDIT (native self-repair IDENTIFY, 2026-08-15): daily deterministic source
+    // sweep — the diagnostics the external deep-dives ran by hand, native. Due-gated inside (24h);
+    // the ~8s sweep runs in a CHILD process (never this thread); findings mint through the capped
+    // need door only after recurring on ≥2 passes ≥20h apart.
+    try {
+      const sa = require('./lib/self_audit');
+      if (sa.due()) sa.spawnPass({});
+    } catch {}
   }, 10 * 60 * 1000);
   if (_dbhTick.unref) _dbhTick.unref();
-  console.log('[status_vector] Loop A (60s self-read) + Loop C (machine vitals) + Loop D (db health, 10min) armed');
+  console.log('[status_vector] Loop A (60s self-read) + Loop C (machine vitals) + Loop D (db health, 10min) + Stage-1 self-audit (daily) armed');
 } catch (e) { console.error('[status_vector] loop arm failed:', e.message); }
 
 ipcMain.handle('calendar:auth-status', async () => {
