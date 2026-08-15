@@ -58,7 +58,8 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
 
   console.log('\nembedding-tier high-band guard (_tierSame, deterministic-loops #5 + 2026-08-15 backcheck):');
   ok('verbatim restate (case/punct only) → same, no model call', memory._tierSame('The parish seat is Gretna', 'the parish seat is gretna.', 0.99) === true);
-  ok('pure reordering → same (multiset equality is word-order-independent)', memory._tierSame('Gretna is the parish seat', 'the parish seat is Gretna', 0.99) === true);
+  ok('RE-FIX: word-order REVERSAL that flips meaning is NOT same ("A owes B" vs "B owes A")', memory._tierSame('Lucas owes Bob 5 dollars', 'Bob owes Lucas 5 dollars', 0.97) === false);
+  ok('RE-FIX: a benign reorder also reaches the model (sequence equality is order-SENSITIVE — safe)', memory._tierSame('Gretna is the parish seat', 'the parish seat is Gretna', 0.99) === false);
   ok('BACKCHECK: negation REMOVAL is NOT same ("approved" vs "not approved" — the old subset bug)', memory._tierSame('The drug was approved', 'The drug was not approved', 0.97) === false);
   ok('BACKCHECK: short-token difference reaches the model (Q3 vs Q2 — the old tokenizer collapsed it)', memory._tierSame('Revenue rose in Q3', 'Revenue rose in Q2', 0.97) === false);
   ok('BACKCHECK: suffixed-numeric difference ($4.2B vs $4.3B)', memory._tierSame('Revenue was $4.2B', 'Revenue was $4.3B', 0.97) === false);

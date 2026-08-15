@@ -206,24 +206,23 @@ async function storeDeduped({ kind = 'note', content, source = null, importance 
 }
 
 // THE EMBEDDING TIER's high-band check (deterministic-loops #5): 'same' without a model call
-// requires sim ≥ SIM_SAME AND the two notes' full token MULTISETS to be EQUAL.
+// requires sim ≥ SIM_SAME AND the two notes' full token SEQUENCES to be identical.
 //
 // ⚠ FIXED 2026-08-15 (session backcheck, HIGH): the original test was one-directional CONTAINMENT
-// (new ⊆ existing) over a tokenizer that DROPPED every ≤2-char non-digit token. Two silent
-// data-loss bugs (program-is-the-model: worse than a capability gap):
-//   (1) a correction that REMOVES a meaning-flipping qualifier is a strict SUBSET of the old note,
-//       so "The drug was approved" was judged 'same' as the stored "The drug was NOT approved" and
-//       the correction was discarded — the stale, now-inverted fact kept.
-//   (2) Q2/Q3, US/UK, $4.2B/$4.3B collapsed to identical token sets (the short tokens were filtered
-//       out), so the newer figure was dropped as a duplicate.
-// The cure is maximal conservatism: lowercase, punctuation→space, keep EVERY token, sort, and
-// require the arrays to be EQUAL. A verbatim or merely-reordered restatement still skips the model;
-// anything that adds, drops, or changes ANY token — a negation, a quarter, a digit — reaches it.
-// A missed dup costs one model call; a false 'same' silently corrupts memory, so we never risk it.
+// (new ⊆ existing) over a tokenizer that DROPPED every ≤2-char non-digit token — silently dropping
+// negation-removing corrections ("approved" vs stored "NOT approved") and short-token diffs
+// (Q2/Q3, $4.2B/$4.3B). ⚠ RE-FIXED same day (self-adversarial re-review of the fix): the first fix
+// used SORTED-multiset equality, which is ORDER-INDEPENDENT — so "Lucas owes Bob $5" and "Bob owes
+// Lucas $5" have identical multisets and one would be dropped, though they are OPPOSITE facts (same
+// trap for owed/beat/defeated/replaced/before-after). SEQUENCE equality (no sort) is strictly safer:
+// it still catches a verbatim dup (modulo case/punctuation) but a REORDER — which can flip meaning —
+// correctly reaches the model. The whole tier is deliberately maximal-conservatism: a missed dup
+// costs one model call; a false 'same' silently corrupts memory (program-is-the-model), so we never
+// risk it. Any added, dropped, changed, or REORDERED token reaches the model.
 const SIM_SAME = 0.93;
 let _tierHitCount = 0;
 function _tierTokens(s) {
-  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean).sort();
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);   // NO sort — sequence, not multiset
 }
 function _tierSame(a, b, sim) {
   if (!(sim >= SIM_SAME) || !a || !b) return false;
