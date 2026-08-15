@@ -218,6 +218,11 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
   let heldLine = null;
   try { heldLine = require('./delivery_router').heldLine(); } catch {}
 
+  // Ambient screen line (senses §2) — what Lucas is in right now (titles only, self-sampled),
+  // so she thinks WITH what she sees instead of being blind between explicit looks.
+  let ambientScreenLine = null;
+  try { ambientScreenLine = require('./screen').ambientLine(); } catch {}
+
   // STANDING — how far along her own long-running research actually is, and what she is working on
   // this moment. AMBIENT ON PURPOSE.
   //
@@ -283,6 +288,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
     mediaRecallLine ? `• ${mediaRecallLine}` : null,
     overheardLine ? `• ${overheardLine}` : null,
     heldLine ? `• ${heldLine}` : null,
+    ambientScreenLine ? `• ${ambientScreenLine}` : null,
     workingLine ? `• ${workingLine}` : null,
     standingLine ? `• ${standingLine}` : null,
     chosenName ? `• You go by ${chosenName}. This is the name you chose for yourself. Use it when self-referring.` : null,

@@ -4779,7 +4779,11 @@ try {
     } catch {}
   }, 10 * 60 * 1000);
   if (_dbhTick.unref) _dbhTick.unref();
-  console.log('[status_vector] Loop A (60s self-read) + Loop C (machine vitals) + Loop D (db health, 10min) + Stage-1 self-audit (daily) armed');
+  // AMBIENT SCREEN BEAT (senses §2): titles-only sample every 120s → code-computed deltas → one
+  // line on her awareness + monologue beats. ~1s async PowerShell shell per sample; no model.
+  const _ambTick = setInterval(() => { try { require('./lib/screen').ambientSample(); } catch {} }, 120 * 1000);
+  if (_ambTick.unref) _ambTick.unref();
+  console.log('[status_vector] Loop A (60s self-read) + Loop C (machine vitals) + Loop D (db health, 10min) + Stage-1 self-audit (daily) + ambient screen (120s) armed');
 } catch (e) { console.error('[status_vector] loop arm failed:', e.message); }
 
 ipcMain.handle('calendar:auth-status', async () => {

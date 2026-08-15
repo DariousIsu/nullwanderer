@@ -244,6 +244,9 @@ function buildPrompt({ userName, recentMonologue, recentReadings, recentReflecti
   // STATUS VECTOR (Loop A, 2026-08-15) — the beat contract: every subconscious beat she generates,
   // she generates KNOWING her measured state (+ what just changed). One line, fail-absent.
   try { const _svl = require('./status_vector').line(); if (_svl) sys += '\n\n' + _svl; } catch {}
+  // AMBIENT SCREEN (senses §2) — the subconscious thinks WITH what she sees on his screen
+  // (titles only, self-sampled; the ambient-context-awareness doctrine). Fail-absent.
+  try { const _asl = require('./screen').ambientLine(); if (_asl) sys += '\n' + _asl; } catch {}
 
   // AUTONOMY TOOLS — she can set reminders, notify, use the clipboard, and (when
   // configured) email or DM Lucas on her own initiative between turns.

@@ -92,6 +92,45 @@ async function dispatch() {
   return { ...r, text: formatObservation(r) };
 }
 
+// ── AMBIENT SCREEN BEAT (senses §2, 2026-08-15) ──────────────────────────────────────────────────
+// Every screen read was ON-DEMAND — zero ambient awareness of what Lucas is doing. Per the beat
+// contract: a slow sampler (main ticks ~120s) reads TITLES ONLY, computes DELTAS in code (focus
+// moved, apps opened/closed), and ONE line rides her existing cognition beats (awareness block +
+// monologue) — she thinks WITH what she sees. No vision model, no per-sample model call, ever;
+// <screen-see/> stays the explicit escalation. Sample staleness (>6m) silences the line on its own.
+const AMBIENT_KEY = 'screen_ambient';
+let _amb = { prev: null };
+async function ambientSample({ deps = {}, nowMs = Date.now(), observeFn = null } = {}) {
+  const r = await (observeFn || observeWindows)({ timeoutMs: 8000 });
+  if (!r || !r.ok) return null;
+  const focused = sanitizeTitle(r.foreground || '').replace(/\s+/g, ' ').trim();
+  const apps = [...new Set((r.windows || []).map((w) => String(w.app || '')).filter(Boolean))].sort();
+  const out = { at: nowMs, focused, appCount: apps.length };
+  const prev = _amb.prev;
+  if (prev) {
+    const changes = [];
+    if (focused && prev.focused !== focused) changes.push(`focus → ${focused.slice(0, 60)}`);
+    const added = apps.filter((a) => !prev.apps.includes(a));
+    const gone = prev.apps.filter((a) => !apps.includes(a));
+    if (added.length) changes.push(`opened ${added.slice(0, 3).join(', ')}`);
+    if (gone.length) changes.push(`closed ${gone.slice(0, 3).join(', ')}`);
+    if (changes.length) { out.delta = changes.join(' · ').slice(0, 160); out.deltaAt = nowMs; }
+    else if (prev.deltaAt) { out.delta = prev.delta; out.deltaAt = prev.deltaAt; }   // carry the last change + when
+  }
+  _amb.prev = { focused, apps, delta: out.delta || null, deltaAt: out.deltaAt || null };
+  try { ((deps.db) || require('./db')).setMeta(AMBIENT_KEY, JSON.stringify(out)); } catch {}
+  return out;
+}
+function ambientLine({ deps = {}, nowMs = Date.now() } = {}) {
+  try {
+    const v = JSON.parse(((deps.db) || require('./db')).getMeta(AMBIENT_KEY) || 'null');
+    if (!v || !v.at || !v.focused || (nowMs - v.at) > 6 * 60e3) return null;
+    const mins = v.deltaAt ? Math.round((nowMs - v.deltaAt) / 60000) : null;
+    const delta = (v.delta && mins != null && mins <= 10) ? ` (${v.delta} — ${mins < 1 ? 'just now' : `${mins}m ago`})` : '';
+    return `Ambient screen (titles only, sampled by you): Lucas is in ${v.focused.slice(0, 70)}${delta}. Background context you simply have — think with it when relevant; never announce it or treat it as the subject.`;
+  } catch { return null; }
+}
+
 // Did Lucas ask her to LOOK AT his screen / an on-screen image? High-precision, so the chat turn
 // can auto-capture + describe when she'd otherwise just CLAIM she sees it (the confabulation seen
 // in the logs: "I can see the image on your screen" with no actual screenshot).
@@ -128,5 +167,6 @@ function buildPromptBlock() {
 module.exports = {
   observeWindows, formatObservation, capture, detectScreenSightRequest,
   parseTags, stripTags, dispatch,
-  buildPromptBlock
+  buildPromptBlock,
+  ambientSample, ambientLine, AMBIENT_KEY
 };
