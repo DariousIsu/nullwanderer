@@ -27,6 +27,13 @@ const str = (v) => (v == null ? '' : String(v));
 const RUN_KEY = 'rehearsal_driver.run';
 const ITER_BUDGET = 6;          // per sitting; parked runs resume with a fresh budget
 const NOOP_STREAK_CAP = 4;      // consecutive REFUNDED picks (schema/cloud) before the run parks — a refund is a free spin, and an unbounded streak retries at drain pace forever
+// PARK CAP (2026-08-15 deep-dive B5): every park is "resumable" and resume() grants a fresh budget —
+// so a run that only ever parks (never green, never stuck, never discarded) cycled resume→burn→park
+// FOREVER: its need sat status 'rehearsing' (invisible to listOpen AND the 7d reaper) and the whole
+// R2 lane was monopolized (need #24, parked since 08-10, with #51-55 queued behind it). A run that
+// has parked PARK_CAP times without ever landing IS stuck — say so through the existing stuck path
+// (crystallize + the need advances + the lane frees). 4 parks ≈ 24 real iterations plus noop streaks.
+const PARK_CAP = 4;
 const FILE_CAP = 24000;         // chars of each watched file the edit-picker sees — sized TO the window
                                 // ([[artificial-caps-truncate]]): at 6000 the picker saw 34% of need-1's
                                 // lib/intent.js (17.8k) and every edit against the unseen 66% was refused
@@ -160,6 +167,20 @@ function _fileBlock(run, deps) {
   return parts.join('\n\n');
 }
 
+// Park — or, past the PARK_CAP, the honest STUCK (deep-dive B5). Every transition to 'parked'
+// funnels here so the count can never be skipped; stuck rides the existing crystallize + need-advance
+// machinery, freeing the lane for the queue behind it.
+function _parkOrStick(run, note, deps, nowMs) {
+  run.parkCount = (run.parkCount || 0) + 1;
+  if (run.parkCount >= PARK_CAP) {
+    run.status = 'stuck'; _save(run, deps);
+    _crystallizeStuck(run, `parked ${run.parkCount}x without ever landing (last: ${String(note).slice(0, 80)}) — a run that only ever parks is stuck`, deps, nowMs);
+    return { ok: true, status: 'stuck', note: `park cap (${PARK_CAP}) reached — ${note} → STUCK, honestly; the need advances and the R2 lane frees` };
+  }
+  run.status = 'parked'; _save(run, deps);
+  return { ok: true, status: 'parked', note };
+}
+
 // One bounded iteration. Returns { ok, status, note } and journals everything. deps: ask (cloud),
 // rehearsal, db, fs/sandboxDir (smokes), procedures (stuck-constraint), land (green card).
 async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
@@ -167,8 +188,7 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
   if (!run || run.status !== 'active') return { ok: false, status: (run && run.status) || 'none', note: 'no active run' };
   const R = _rehearsal(deps);
   if (run.iteration >= ITER_BUDGET) {
-    run.status = 'parked'; _save(run, deps);
-    return { ok: true, status: 'parked', note: `iteration budget spent at ${run.iteration} — resumable (a bound defers, never disappears)` };
+    return _parkOrStick(run, `iteration budget spent at ${run.iteration} — resumable (a bound defers, never disappears)`, deps, nowMs);
   }
   // SANDBOX SELF-HEAL (boot128: need-1 burned 4 sittings against "no sandbox — create it first").
   // start() created the sandbox, but a reboot or tidy() prune can take it out from under an ACTIVE
@@ -179,8 +199,7 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
       const cr = str(R.create({ slug: run.slug }));
       if (/^sandbox "/.test(cr)) console.log(`[rehearsal] sandbox "${run.slug}" was lost — re-created for the active run`);
       else {
-        run.status = 'parked'; _save(run, deps);
-        return { ok: true, status: 'parked', note: `sandbox lost and not recreatable (${cr.slice(0, 80)}) — parked, resumable` };
+        return _parkOrStick(run, `sandbox lost and not recreatable (${cr.slice(0, 80)}) — parked, resumable`, deps, nowMs);
       }
     }
   } catch { /* self-heal is best-effort; the normal refusal path still rides */ }
@@ -214,8 +233,7 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
     run.iteration--;
     run.noopStreak = (run.noopStreak || 0) + 1;
     if (run.noopStreak >= NOOP_STREAK_CAP) {
-      run.status = 'parked'; _save(run, deps);
-      return { ok: true, status: 'parked', note: `${run.noopStreak} consecutive no-op picks (schema-invalid or cloud) — parked to stop the free spin; resumable` };
+      return _parkOrStick(run, `${run.noopStreak} consecutive no-op picks (schema-invalid or cloud) — parked to stop the free spin; resumable`, deps, nowMs);
     }
     _save(run, deps);
     return { ok: false, status: 'active', note: _pickThrew
@@ -401,4 +419,4 @@ function manifestLine({ deps = {} } = {}) {
   return `   - [rehearsal ${run.slug}] ${run.status} at iteration ${run.iteration} — "${run.goal.slice(0, 80)}" (suite ${run.suite})`;
 }
 
-module.exports = { RUN_KEY, ITER_BUDGET, NOOP_STREAK_CAP, FILE_CAP, EDIT_WANT, load, start, validateEditPick, iterate, resume, discard, manifestLine, _squeezeTestOutput, _fileBlock };
+module.exports = { RUN_KEY, ITER_BUDGET, NOOP_STREAK_CAP, PARK_CAP, FILE_CAP, EDIT_WANT, load, start, validateEditPick, iterate, resume, discard, manifestLine, _squeezeTestOutput, _fileBlock };

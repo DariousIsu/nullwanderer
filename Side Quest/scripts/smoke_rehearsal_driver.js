@@ -167,6 +167,26 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
     ok(drv.discard({ deps }).ok && drv.load({ deps }) === null, 'discard clears the run and the sandbox');
   }
 
+  // PARK CAP (2026-08-15 deep-dive B5): a run that ONLY EVER PARKS is stuck, honestly. The
+  // resume→burn→park cycle monopolized R2 for days (need #24 since 08-10) while its need sat
+  // status 'rehearsing' — invisible to listOpen AND the 7d reaper. The cap converts perpetual
+  // parking into the existing stuck exit: crystallize fires, the need advances, the lane frees.
+  {
+    const { deps } = freshDeps();
+    drv.start({ slug: 'perpetual-parker', goal: 'a goal long enough to pass the start contract check', suite: 'smoke_x.js', deps });
+    let last = null;
+    for (let cycle = 0; cycle < drv.PARK_CAP; cycle++) {
+      const run = drv.load({ deps }); run.iteration = drv.ITER_BUDGET;
+      deps.db.setMeta(drv.RUN_KEY, JSON.stringify(run));
+      last = await drv.iterate({ deps });
+      if (last.status === 'parked') drv.resume({ deps });
+    }
+    ok(last.status === 'stuck' && /park cap/.test(last.note),
+      `B5: park #${drv.PARK_CAP} becomes STUCK — a run that only ever parks stops monopolizing the lane`);
+    ok(drv.load({ deps }).status === 'stuck', 'B5: the stored run is stuck (the need-advance handler sees green|stuck|discarded)');
+    ok(JSON.parse(JSON.stringify(drv.load({ deps }))).parkCount === drv.PARK_CAP, 'B5: the park count survives resume cycles (resume never resets it)');
+  }
+
   // BUDGET REFUND (boot110 live): a failed cloud pick does NO work — it must not spend an
   // iteration, or a flaky stretch parks the run without it ever actually iterating.
   {
