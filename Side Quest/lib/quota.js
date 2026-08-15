@@ -201,7 +201,18 @@ function check({ lane = 'idle', st = null, spentLastHour = 0, estimate = 0 } = {
   // Pace is a rate check, so it needs the trailing hour, not the instant. The background tiers get a slice
   // of the sustainable rate — autonomous research a little, idle/subconscious drift the least (throttled
   // first + hardest, so subconscious yields before anything else Lucas cares about).
-  const share = tier === 'research' ? 0.45 : 0.20;
+  //
+  // USE-IT-OR-LOSE-IT (2026-08-15, Lucas's dashboard: 53.1% weekly used with ONE DAY to reset): the
+  // pool does not roll over — headroom the base shares hold back for interactive/directed work that
+  // never comes (overnight, weekends) simply EXPIRES at the reset. Measured: total burn capped near
+  // ~45% of sustainable all night, guaranteeing ~half the remaining pool is forfeited. Inside the
+  // final ENDGAME_H hours the background shares RAMP linearly toward ~95% of the sustainable rate,
+  // so the surplus is spent instead of stranded. The FLOOR reserves above are UNTOUCHED — at 85/90%
+  // of the pool the background tiers still hard-stop, so his chat reserve survives the ramp.
+  const ENDGAME_H = 36;
+  const base = tier === 'research' ? 0.45 : 0.20;
+  const ramp = st.hoursLeft < ENDGAME_H ? (1 - st.hoursLeft / ENDGAME_H) : 0;   // 0 → 1 across the final window
+  const share = base + (0.95 - base) * ramp;
   const allowedThisHour = st.pacePerHour * share;
   if (num(spentLastHour) + num(estimate) > allowedThisHour) {
     return {

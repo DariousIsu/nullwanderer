@@ -115,5 +115,27 @@ ok(q.check({ lane: 'nonsense', st: live, spentLastHour: 60_000 }).allow === fals
     '…but the tier FLOOR still holds: 99% used is past where idle work is allowed at all');
 }
 
+// --- USE-IT-OR-LOSE-IT (2026-08-15): the endgame ramp spends the surplus instead of stranding it ---
+{
+  // Same relative burn — half the sustainable rate — far from the reset vs inside the final window.
+  const far = q.state({ limit: POOL, markPct: 0.5, markAt: NOW, spentSince: 0, resetAt: NOW + 48 * H, now: NOW });
+  const burnFar = far.pacePerHour * 0.5;
+  ok(!q.check({ lane: 'idle', st: far, spentLastHour: burnFar }).allow,
+    'ramp: far from the reset the base idle share (20%) still governs — half-pace burn is over it');
+  const near = q.state({ limit: POOL, markPct: 0.5, markAt: NOW, spentSince: 0, resetAt: NOW + 12 * H, now: NOW });
+  const burnNear = near.pacePerHour * 0.5;
+  ok(q.check({ lane: 'idle', st: near, spentLastHour: burnNear }).allow,
+    '⭐ ramp: 12h from the reset the same half-pace burn is ALLOWED — expiring surplus opens the throttle');
+  const last = q.state({ limit: POOL, markPct: 0.5, markAt: NOW, spentSince: 0, resetAt: NOW + 1 * H, now: NOW });
+  ok(q.check({ lane: 'research', st: last, spentLastHour: last.pacePerHour * 0.9 }).allow,
+    'ramp: in the final hour research may burn ~the full sustainable rate (share → ~95%)');
+  ok(!q.check({ lane: 'research', st: last, spentLastHour: last.pacePerHour * 0.97 }).allow,
+    'ramp: …but never past it — the cap tops out below 100% of sustainable');
+  // The FLOOR is untouched by the ramp: a nearly-empty pool still hard-stops background work.
+  const empty = q.state({ limit: POOL, markPct: 0.995, markAt: NOW, spentSince: 0, resetAt: NOW + 1 * H, now: NOW });
+  ok(!q.check({ lane: 'idle', st: empty, spentLastHour: 0, estimate: 10 }).allow,
+    '⭐ ramp never touches the FLOOR — at 99.5% used, idle stays stopped and the chat reserve survives');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
