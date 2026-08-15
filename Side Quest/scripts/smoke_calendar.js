@@ -19,6 +19,11 @@ ok(cal.normalizeEvent({ start_at: 1782800000, end_at: 1782803600, title: 'X' }).
 ok(cal.normalizeEvent({ start: now, end: now + HOUR, summary: 'Y' }).title === 'Y', 'ms + summary field tolerated');
 ok(cal.normalizeEvent({ start: '2026-06-30T15:00:00Z' }).end > cal.normalizeEvent({ start: '2026-06-30T15:00:00Z' }).start, 'ISO start, default 30-min end');
 ok(cal.normalizeEvent({ title: 'no start' }) === null, 'no start → null (dropped)');
+// GOOGLE OBJECT SHAPE (2026-08-15 fix): {start:{dateTime}} used to stop the ?? chain at the truthy
+// object → toMs(object) → null → every real Google event silently dropped. Now unwrapped.
+const g = cal.normalizeEvent({ start: { dateTime: '2026-06-30T15:00:00Z' }, end: { dateTime: '2026-06-30T16:00:00Z' }, summary: 'G' });
+ok(g && g.title === 'G' && g.end - g.start === HOUR, 'Google {start:{dateTime}} object shape parsed (was silently dropped)');
+ok(cal.normalizeEvent({ start: { date: '2026-06-30' } }) !== null, 'Google all-day {start:{date}} tolerated (the live provider filters all-day out)');
 ok(cal.normalizeEvents([{ start_at: 1782803600 }, { start_at: 1782800000 }]).map(e => e.start)[0] === 1782800000000, 'normalizeEvents sorts by start');
 
 // --- projectETA: naive (stub, no events) vs meeting-aware ---
@@ -70,6 +75,17 @@ ok(cal.parseClock('sometime later') === null, 'no clock → null');
   ok((await cal.getUpcoming({ nowMs: now })).length === 0, 'a throwing provider → [] (fail-safe, no crash)');
   cal.setProvider(null);
   ok(cal.usingStub() === true, 'setProvider(null) reverts to the stub');
+
+  // --- etaSuffix: the SPOKEN circuit for the provider seam (2026-08-15 wire) ---
+  ok((await cal.etaSuffix({ nowMs: now, totalMin: 120 })) === '', 'etaSuffix: stub provider → empty (naive readback stands alone)');
+  cal.setProvider(() => [at(1, 60, 'Standup')]);   // SYNC provider — the live wire serves a cache synchronously
+  const sfx = await cal.etaSuffix({ nowMs: now, totalMin: 120 });
+  ok(/lands around .+/.test(sfx) && sfx.includes('Standup'), `etaSuffix: meeting pushes the ETA → speaks the landing time + names the event (${JSON.stringify(sfx)})`);
+  ok((await cal.etaSuffix({ nowMs: now, totalMin: 30 })) === '', 'etaSuffix: work that finishes before the meeting → empty (calendar does not move it)');
+  ok((await cal.etaSuffix({ nowMs: now, totalMin: 0 })) === '', 'etaSuffix: zero work → empty');
+  cal.setProvider(async () => { throw new Error('boom'); });
+  ok((await cal.etaSuffix({ nowMs: now, totalMin: 120 })) === '', 'etaSuffix: throwing provider → empty (fail-safe)');
+  cal.setProvider(null);
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

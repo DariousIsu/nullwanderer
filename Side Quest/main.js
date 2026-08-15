@@ -3058,6 +3058,19 @@ ipcMain.handle('stt:transcribe', async (_e, audioBuf) => {
           db.setMeta('speaker.nearmiss_count', String(nm));
           if (nm % 5 === 0) console.warn(`[speaker] ${nm} NEAR-MISS rejects total (score just under thr ${spkr.threshold}) — if these are Lucas, ADD enrollment samples; never lower the cut`);
         }
+        // RETENTION (2026-08-15 senses quick-win #3): a rejected utterance used to be transcribed,
+        // gated, and DISCARDED — she was deaf to the room by construction. It's still ROOM AWARENESS:
+        // "a voice that wasn't Lucas said X" (a video, a call, someone else present). Keep the last
+        // few on a 60-min shelf; the awareness block surfaces them clearly labelled NOT-Lucas. The
+        // renderer still drops the turn — the gate's job is unchanged, only the deafness is cured.
+        if (res && res.ok && (res.text || '').trim()) {
+          try {
+            const ring = (JSON.parse(db.getMeta('room.overheard') || '[]') || [])
+              .filter(o => o && o.text && (Date.now() - o.ts) < 60 * 60e3);
+            ring.push({ ts: Date.now(), text: String(res.text).trim().slice(0, 200) });
+            db.setMeta('room.overheard', JSON.stringify(ring.slice(-5)));
+          } catch {}
+        }
       }
     } catch {}
     return (res && res.ok)
@@ -4689,6 +4702,46 @@ ipcMain.handle('crm:get', async (_e, { contactId } = {}) => {
 // maps payloads to view shapes via studio/calendar_view; the renderer draws. The token is in-memory
 // only — never written or logged. Identity: this is the OPERATOR'S calendar (his Google account).
 function gcalOpts() { return echoVenv || {}; }
+
+// ── MEETING-AWARE ETA PROVIDER WIRE (2026-08-15 senses quick-win #1) ─────────────────────────────
+// lib/calendar shipped 06-30 with its whole meeting-aware ETA engine behind a provider seam — and
+// setProvider() had ZERO callers ever since, so every spoken estimate stayed naive the entire time
+// gcal has been live (the built-and-dark disease, at the calendar). The provider serves a CACHE
+// only (sync, zero in-turn cost): gcal.getToken shells Echo's python SYNCHRONOUSLY (up to seconds),
+// so the fetch lives on a slow timer, never inside a turn. Filtering mirrors voice_guard's rules:
+// timed events only (all-day never blocks work), not cancelled/transparent/declined.
+const _calProv = { events: [], at: 0, lastTryAt: 0, failStreak: 0 };
+async function _calProvRefresh() {
+  const now = Date.now();
+  _calProv.lastTryAt = now;
+  try {
+    if (!gcal.isConnected(gcalOpts())) { _calProv.failStreak++; return; }
+    const raw = await gcal.listEvents({
+      calendarId: 'primary',
+      timeMin: new Date(now - 60 * 60e3).toISOString(),        // include ongoing events
+      timeMax: new Date(now + 36 * 3600e3).toISOString(),
+      maxResults: 100,
+    }, gcalOpts());
+    const items = ((raw && raw.items) || []).filter(ev =>
+      ev && ev.status !== 'cancelled' && ev.transparency !== 'transparent'
+      && ev.start && ev.start.dateTime
+      && !((ev.attendees || []).some(a => a && a.self && a.responseStatus === 'declined')));
+    const prevLen = _calProv.events.length, first = !_calProv.at;
+    _calProv.events = items; _calProv.at = now; _calProv.failStreak = 0;
+    if (first || items.length !== prevLen) console.log(`[calendar] provider cache: ${items.length} timed event(s) in the 36h window`);
+  } catch (e) { _calProv.failStreak++; console.error('[calendar] provider refresh failed:', e.message); }
+}
+try {
+  require('./lib/calendar').setProvider(() => _calProv.events);   // cache-serving — never fetches in-turn
+  setTimeout(_calProvRefresh, 45 * 1000);                          // first fill after echoVenv paths settle
+  const _calT = setInterval(() => {
+    // Backoff: disconnected/failing → retry every 30 min instead of every 5 (each probe shells python).
+    if (_calProv.failStreak > 0 && (Date.now() - _calProv.lastTryAt) < 30 * 60e3) return;
+    _calProvRefresh();
+  }, 5 * 60 * 1000);
+  if (_calT.unref) _calT.unref();
+  console.log('[calendar] meeting-aware ETA provider WIRED (5min refresh, 30min disconnected backoff)');
+} catch (e) { console.error('[calendar] provider wire failed:', e.message); }
 
 ipcMain.handle('calendar:auth-status', async () => {
   try {
@@ -9542,14 +9595,23 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           // READBACK + ESTIMATE — state the UNDERSTOOD goal/facet/scope + an ETA so a misread (the
           // "money"→"many" typo) is VISIBLE and correctable, and invite a correction. This is the
           // confirm half of the gate that was missing when the run was created silently.
-          const readback = (() => {
+          const readback = await (async () => {
             try {
               const est = require('./lib/estimate');
               const facet = (intakeRoute && intakeRoute.facet) || '';
               const orgCount = created.orgCount || 0;
               const deep = !!(intakeRoute && intakeRoute.deep);
               const priority = (intakeRoute && intakeRoute.priority) || null;
-              return orgCount ? est.readbackLine({ facet, orgCount, deep, priority }) : (facet ? `Understood as: gather "${String(facet).slice(0, 120)}".` : '');
+              if (!orgCount) return facet ? `Understood as: gather "${String(facet).slice(0, 120)}".` : '';
+              let line = est.readbackLine({ facet, orgCount, deep, priority });
+              // MEETING-AWARE ETA (2026-08-15): the calendar provider projects the finish AROUND his
+              // known events — "~2 hours" becomes "lands around 4:35 PM ET (working around Standup)".
+              // '' whenever the calendar doesn't move it; the naive line stands alone. Fail-safe.
+              try {
+                const sfx = await require('./lib/calendar').etaSuffix({ totalMin: est.estimateRun({ orgCount, deep }).totalMin });
+                if (sfx) line += sfx;
+              } catch {}
+              return line;
             } catch { return ''; }
           })();
           // PLAN PREVIEW — the page-1 plan, proposed up front so Lucas can steer it before hours of work

@@ -226,11 +226,17 @@ function _budgetInc() {
  *   task     short id (e.g. 'rank_interests') — also the trace tag / training label
  *   v        schema version (bump when you change input/output shape)
  *   input    compact, ID-referenced object — keep it SMALL
+ *   keyInput OPTIONAL stable cache-key object. Default cache key hashes the FULL input — right for
+ *            classify-unique-text tasks, but a caller whose input carries VOLATILE text alongside a
+ *            stable question (echo_pick's filtered catalog, echo_args' describe_tool output with its
+ *            "recent invocations" section) never hits: 0 cache hits in 9,600+ calls/26h measured
+ *            2026-08-15. Pass the STABLE part here (e.g. {need, catalogNames}) and the cache keys on
+ *            it instead; the full input still goes to the model and the trace unchanged.
  *   want     the format spec the model must obey (the response contract, in words)
  *   validate (raw)=>{valid,value,error}; omit for default-JSON parsing
  *   deps     { complete, now, dailyCap, maxInputChars, noCache, skipBudget } — test seams
  */
-async function ask({ task, v = 1, input = {}, want = '', validate = null, model = null, numPredict = null, think = undefined, deps = {} } = {}) {
+async function ask({ task, v = 1, input = {}, keyInput = null, want = '', validate = null, model = null, numPredict = null, think = undefined, deps = {} } = {}) {
   if (!task) return null;
   const now = deps.now || Date.now();
   const complete = deps.complete || _complete;
@@ -243,7 +249,10 @@ async function ask({ task, v = 1, input = {}, want = '', validate = null, model 
   const cap = deps.dailyCap || dailyCap();
   const maxChars = deps.maxInputChars || DEFAULT_MAX_INPUT_CHARS;
   const inputStr = _packInput(input, maxChars);
-  const inputHash = _hash({ task, v, inputStr, want });
+  // Cache key: the stable keyInput when the caller separated it out, else the full packed input.
+  const inputHash = keyInput
+    ? _hash({ task, v, key: JSON.stringify(keyInput), want })
+    : _hash({ task, v, inputStr, want });
 
   // 1. CACHE — an identical accepted call returns its parsed result, no cloud hit.
   if (!deps.noCache) {

@@ -904,10 +904,19 @@ class EchoSuit {
     try { recipes = filterRecipes(normalizeToolResult(await c.callTool('list_recipes', {})).text, query, 10); } catch {}
     try { const r = normalizeToolResult(await c.callTool('get_tool_map', { grouping: 'intent' })); tools = r.isError ? '' : filterToolMap(r.text, query, 20); } catch {}
     if (!recipes && !tools) return { ok: false, kind: 'find', isError: true, routed: true, text: `No Echo recipe or tool matched "${query}".` };
+    // CACHE KEY REPAIR (2026-08-15 deterministic-loops #10): hashing the full input meant ZERO cache
+    // hits ever — the filtered catalog text is volatile (usage counts, ordering, describe_tool's
+    // "recent invocations"). Key on the STABLE part instead: the normalized need + the catalog's NAME
+    // LIST (which versions the catalog — a tool added/removed changes the key, a usage-count tick
+    // doesn't). A repeated search-shaped brief ("Search knowledge graph for {place} council members",
+    // the operator's measured habit) now returns its prior pick without a cloud call.
+    const normNeed = String(query || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const catNames = ((recipes + '\n' + tools).match(/^• (\S+)/gm) || []).map(s => s.slice(2)).sort().join(',');
     // 2) PASS 1 — the Reasoner picks the single best recipe/tool.
     const pick = await cloudAsk({
       task: 'echo_pick', v: 1,
       input: { need: query, recipes, tools },
+      keyInput: { need: normNeed, cat: catNames },
       want: 'Pick the SINGLE best way to satisfy the need from the catalog. Prefer a recipe. Output ONLY JSON: {"type":"recipe"|"tool"|"none","name":"exact name from the catalog","arg":"the one plain arg, only for a recipe","reason":"short"}. Use "none" when nothing GENUINELY fits — INCLUDING when the need is an open-web / general-knowledge / current-news question rather than OUR own private structured data (the caller falls back to web + vision for those). Do NOT force a CRM/list/summary tool onto a question it does not actually answer.',
       validate: (raw) => { const m = String(raw || '').match(/\{[\s\S]*\}/); if (!m) return { valid: false, error: 'no json' }; try { const o = JSON.parse(m[0]); return o && o.type ? { valid: true, value: o } : { valid: false, error: 'no type' }; } catch (e) { return { valid: false, error: e.message }; } }
     });
@@ -946,6 +955,10 @@ class EchoSuit {
     const argObj = await cloudAsk({
       task: 'echo_args', v: 1,
       input: { need: query, tool: pick.name, schema: cap(schema, 1800) },
+      // Stable key: need+tool only — describe_tool's text embeds "recent invocations" (volatile every
+      // call). If a schema genuinely changes, a stale cached arg fails and the ARG-ERR retry below
+      // corrects it — self-healing, one extra call only in that rare case.
+      keyInput: { need: normNeed, tool: pick.name },
       want: `Write the JSON arguments object for the tool "${pick.name}" to satisfy the need, matching its schema. Output ONLY a JSON object (e.g. {"query":"..."}). Use {} if it takes no args.`,
       validate: (raw) => { const m = String(raw || '').match(/\{[\s\S]*\}/); if (!m) return { valid: false, error: 'no json' }; try { return { valid: true, value: JSON.parse(m[0]) }; } catch (e) { return { valid: false, error: e.message }; } }
     });

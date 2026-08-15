@@ -117,8 +117,12 @@ async function capture() {
   } catch (e) { return { ok: false, reason: e.message }; }
 }
 
+// TRUTH REPAIR (2026-08-15 senses quick-win #2): this block ended "you can't control anything" while
+// the full Echo UIA control suite (launch/click/type/read-focused-text, behind Lucas's approval gate)
+// has been live the whole time — her own prompt DENIED a built capability, the exact capability-denial
+// disease the awareness block fights. Name the real doors; keep the two tags honestly look-only.
 function buildPromptBlock() {
-  return `SCREEN — you can see Lucas's screen two ways. <observe-screen/> lists which apps/windows are open and which is focused (titles only). <screen-see/> actually LOOKS at the screen — a screenshot through your vision — so you can read what's visible: text, images, charts, a document or page he has up. Use <observe-screen/> for "what's open", <screen-see/> for "what's on his screen right now". Observation only — you can't control anything.`;
+  return `SCREEN — you can see Lucas's screen two ways. <observe-screen/> lists which apps/windows are open and which is focused (titles only). <screen-see/> actually LOOKS at the screen — a screenshot through your vision — so you can read what's visible: text, images, charts, a document or page he has up. Use <observe-screen/> for "what's open", <screen-see/> for "what's on his screen right now". These two tags only LOOK — but you are NOT limited to looking: you CAN act on the desktop through your Echo OS tools (launch an app, click, type keys, read the focused window's text). State the need plainly or <echo-find>control an app</echo-find> and the right tool runs — sensitive actions wait for Lucas's approval, which is the gate working, not a refusal. After you act, VERIFY with <screen-see/> or the focused-UI reader instead of assuming it worked.`;
 }
 
 module.exports = {

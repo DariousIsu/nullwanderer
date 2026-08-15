@@ -66,6 +66,19 @@ const lastTrace = (task) => db.getDb().prepare('SELECT * FROM cloud_traces WHERE
     const rb2 = await cl.ask({ task: 'bud', input: { i: 2 }, want: 'j', deps: { complete: bc, dailyCap: 1, noCache: true } });
     ok(rb1 && rb1.v === 2, 'first call (under cap) succeeds');
     ok(rb2 === null && n7 === 1, 'second call over budget → null, no cloud hit');
+
+    // 8. keyInput — the cache-key repair (2026-08-15): volatile input text + a stable key → HIT.
+    // Before this, echo_pick/echo_args hashed their full input (filtered catalog / describe_tool
+    // text, volatile every call) and measured ZERO cache hits in 9,600+ calls over 26h.
+    let n8 = 0;
+    const kc = async () => { n8++; return { text: '{"pick":"x"}', model: 't' }; };
+    const k1 = await cl.ask({ task: 'kpick', input: { need: 'q', cat: 'volatile-A' }, keyInput: { need: 'q', cat: 'v1' }, want: 'j', deps: { complete: kc, skipBudget: true } });
+    const k2 = await cl.ask({ task: 'kpick', input: { need: 'q', cat: 'volatile-B' }, keyInput: { need: 'q', cat: 'v1' }, want: 'j', deps: { complete: kc, skipBudget: true } });
+    ok(k1 && k2 && k1.pick === 'x' && k2.pick === 'x' && n8 === 1, 'keyInput: volatile input + stable key → 2nd call cache-served (0-hits defect cured)');
+    const k3 = await cl.ask({ task: 'kpick', input: { need: 'q', cat: 'volatile-C' }, keyInput: { need: 'q', cat: 'v2' }, want: 'j', deps: { complete: kc, skipBudget: true } });
+    ok(k3 && n8 === 2, 'keyInput: changed key (catalog versioned by its name list) → fresh cloud call');
+    const k4 = await cl.ask({ task: 'kpick', input: { need: 'q', cat: 'volatile-A' }, want: 'j', deps: { complete: kc, skipBudget: true } });
+    ok(k4 && n8 === 3, 'no keyInput → full-input hashing unchanged (classify-unique-text tasks unaffected)');
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   } finally {

@@ -6,10 +6,11 @@
  * but you have the 1030 meeting" projects realistically. Also resolves deadline phrases ("for the 1030
  * meeting", "by 4pm") to a real timestamp so a request can be scoped to fit the window before it.
  *
- * CONNECTION IS STUBBED (2026-06-30): the real calendar (Google-authed) is being built on Lucas's side.
- * This module does NOT fetch or auth anything — the event SOURCE is a swappable provider that defaults to
- * a stub returning []. So the rest of the time build proceeds now; when Lucas's calendar lands, register
- * it with setProvider() and every ETA/deadline becomes meeting-aware with zero changes here.
+ * CONNECTED (2026-08-15): main.js registers a cache-serving provider over lib/gcal at boot (5-min
+ * refresh timer, 30-min disconnected backoff) and the intake readback speaks etaSuffix() — the seam
+ * shipped stubbed 06-30 and sat dark with zero setProvider callers until the senses sweep found it.
+ * This module still does NOT fetch or auth anything itself — the event SOURCE stays a swappable
+ * provider (stub → [] → naive ETA), so the math remains pure and offline-testable.
  *
  * The MATH is PURE + offline-testable (events in as data). Fail-safe: every function returns a value,
  * never throws on bad input; no calendar / a dead provider → [] → naive ETA, no crash.
@@ -37,10 +38,17 @@ function toMs(v) {
 }
 
 // One raw calendar row → { start, end, title, source } in ms, or null if it has no usable start.
+// Google's shape is an OBJECT ({start:{dateTime}} / all-day {start:{date}}): the old ?? chain stopped
+// at the truthy object and toMs(object) → null, so every real Google event was silently DROPPED — the
+// claimed tolerance was a lie for the one provider that matters. Unwrap objects before coercing.
+function _unwrapTime(v) {
+  if (v && typeof v === 'object') return v.dateTime ?? v.date ?? null;
+  return v;
+}
 function normalizeEvent(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const sRaw = raw.start_at ?? raw.start ?? raw.begin ?? raw.startTime ?? (raw.start && raw.start.dateTime);
-  const eRaw = raw.end_at ?? raw.end ?? raw.finish ?? raw.endTime ?? (raw.end && raw.end.dateTime);
+  const sRaw = raw.start_at ?? _unwrapTime(raw.start) ?? raw.begin ?? raw.startTime;
+  const eRaw = raw.end_at ?? _unwrapTime(raw.end) ?? raw.finish ?? raw.endTime;
   const start = toMs(sRaw);
   if (start == null) return null;
   let end = toMs(eRaw);
@@ -173,7 +181,31 @@ async function getUpcoming({ nowMs = 0, windowMs = 24 * HOUR } = {}) {
   } catch { return []; }
 }
 
+// MEETING-AWARE ETA SUFFIX — the spoken circuit for the provider seam (wired 2026-08-15; the seam sat
+// dark since 06-30 with zero setProvider callers). Given an estimate in minutes, project the finish
+// around known calendar events and return a short sentence to append to a readback — or '' whenever
+// the calendar doesn't meaningfully move it (stub, no events, shift < 5 min). Fail-safe: '' on any error.
+async function etaSuffix({ nowMs = Date.now(), totalMin = 0 } = {}) {
+  try {
+    if (!hasProvider() || !(totalMin > 0)) return '';
+    const events = await getUpcoming({ nowMs, windowMs: 36 * HOUR });
+    if (!events.length) return '';
+    const workMs = totalMin * MIN;
+    const eta = projectETA({ nowMs, workRemainingMs: workMs, events });
+    if (eta - (nowMs + workMs) < 5 * MIN) return '';          // calendar barely moves it → say nothing
+    const blocking = events.filter(e => e.end > nowMs && e.start < eta);
+    const tz = (() => { try { return require('./tz'); } catch { return null; } })();
+    const when = tz ? tz.timeWithZone(new Date(eta))
+      : new Date(eta).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    const tomorrow = tz && tz.dayKey(eta) !== tz.dayKey(nowMs) ? ' tomorrow' : '';
+    const around = blocking.length
+      ? ` (working around ${blocking.length === 1 ? `"${blocking[0].title}"` : `${blocking.length} calendar events`})`
+      : '';
+    return ` With the calendar, that lands around ${when}${tomorrow}${around}.`;
+  } catch { return ''; }
+}
+
 module.exports = {
   toMs, normalizeEvent, normalizeEvents, nextEvent, busyMsBetween, projectETA,
-  parseClock, resolveDeadline, setProvider, hasProvider, usingStub, getUpcoming, MIN, HOUR
+  parseClock, resolveDeadline, setProvider, hasProvider, usingStub, getUpcoming, etaSuffix, MIN, HOUR
 };
