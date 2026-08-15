@@ -40,16 +40,26 @@ const disp = { v: 0.95, a: 0.85, d: 0.1 };
 const half = is.decayVad(disp, is.VAD_HALF_LIFE_MS);
 ok(Math.abs(half.v - (is.VAD_BASELINE.v + (0.95 - is.VAD_BASELINE.v) / 2)) < 0.001, 'vad: one half-life → halfway home');
 ok(is.decayVad(is.VAD_BASELINE, 10 * H).v === is.VAD_BASELINE.v, 'vad: at baseline, decay is a no-op');
-const imp = is.appraiseEvents([{ level: 'error', lane: 'db' }, { level: 'warn', kind: 'anomaly', lane: 'machine' }, { kind: 'need', level: 'warn' }]);
-ok(imp.dv < 0 && imp.da > 0 && imp.why.length === 3, `appraisal: coded impulses with why (${imp.why.join(',')})`);
-const flood = is.appraiseEvents(Array.from({ length: 50 }, () => ({ level: 'error', lane: 'x' })));
-ok(flood.dv === -0.12 && flood.da <= 0.12, 'appraisal: a flood is CAPPED (the lurch bound)');
+// appraisal = CURATED state signals only (2026-08-15 recalibration): machine/db anomalies + minted needs
+const imp = is.appraiseEvents([{ kind: 'anomaly', lane: 'machine', ref: 'disk_low' }, { kind: 'need', lane: 'watch', ref: 'need:5' }]);
+ok(imp.dv < 0 && imp.da > 0 && imp.why.length === 2, `appraisal: curated stress + need impulses with why (${imp.why.join(',')})`);
+ok(is.appraiseEvents([{ kind: 'anomaly', lane: 'anomaly', ref: '-', level: 'error' }]).da === 0, 'appraisal: the self_watch console FIREHOSE (lane=anomaly) is NOT appraised — the pinning-bug fix');
+ok(is.appraiseEvents([{ level: 'error', lane: 'echo', kind: 'line' }, { level: 'warn', lane: 'window', kind: 'line' }]).dv === 0, 'appraisal: routine error/warn LINES (deprecation noise, tool chatter) are not affective');
+const dupd = is.appraiseEvents(Array.from({ length: 24 }, () => ({ kind: 'anomaly', lane: 'machine', ref: 'disk_low' })));
+ok(Math.abs(dupd.da - is.appraiseEvents([{ kind: 'anomaly', lane: 'machine', ref: 'disk_low' }]).da) < 1e-9, 'appraisal: 24 re-emits of ONE condition (signature dedupe) = one signal, not 24 (no saturation)');
+const flood = is.appraiseEvents(Array.from({ length: 50 }, (_, i) => ({ kind: 'anomaly', lane: 'machine', ref: 'r' + i })));
+ok(flood.da === 0.12, 'appraisal: 50 DISTINCT stressors → still CAPPED at +0.12 (the lurch bound)');
 ok(is.appraiseEvents([]).dv === 0, 'appraisal: quiet → zero impulse');
+// bounded deviation: sustained stress reads "elevated", never pinned at the extreme
+let vad = is.VAD_BASELINE;
+for (let i = 0; i < 40; i++) { const d = is.decayVad(vad, 0); const a = is.appraiseEvents([{ kind: 'anomaly', lane: 'machine', ref: 'disk_low' }]); vad = { v: d.v + a.dv, a: d.a + a.da, d: d.d + a.dd }; }
+const boundA = Math.min(1, Math.max(is.VAD_BASELINE.a - is.VAD_MAX_DEV, Math.min(is.VAD_BASELINE.a + is.VAD_MAX_DEV, vad.a)));
+ok(is.VAD_BASELINE.a + is.VAD_MAX_DEV <= 0.999, 'bounded deviation: arousal ceiling (baseline+MAX_DEV) is below saturation — never pins at 1.0');
 
 // tick + persistence + replay determinism
 const mk = () => { const st = {}; return { st, deps: { db: { getMeta: (k) => st[k], setMeta: (k, v) => { st[k] = v; }, getDb: () => { throw new Error('no live db in smoke'); }, getActiveOpenThreads: () => { throw new Error('injected'); } } } }; };
 const inputs = (deps) => ({
-  deps: { ...deps, monologueRows: rep, openThreads: [th(1 * H), th(80 * H)], quotaState: { known: true, usedPct: 0.6, hoursLeft: 21 }, lastUserTurnTs: T - 5 * H, events: [{ id: 7, level: 'error', lane: 'db' }] },
+  deps: { ...deps, monologueRows: rep, openThreads: [th(1 * H), th(80 * H)], quotaState: { known: true, usedPct: 0.6, hoursLeft: 21 }, lastUserTurnTs: T - 5 * H, events: [{ id: 7, kind: 'anomaly', lane: 'db', ref: 'wal' }] },
 });
 const A = mk(), B = mk();
 const t1 = is.tick({ ...inputs(A.deps), nowMs: T });

@@ -36,6 +36,8 @@ const JOURNAL_KEY = 'internal_state.journal';
 const JOURNAL_CAP = 300;
 const VAD_BASELINE = { v: 0.55, a: 0.45, d: 0.50 };
 const VAD_HALF_LIFE_MS = 4 * 3600e3;
+const VAD_MAX_DEV = 0.30;          // max deviation from baseline per axis — no saturation at the extremes
+const MODEL_VERSION = 2;           // bump when the appraisal/dynamics model changes → journal resets (v2 = 08-15 recalibration)
 const SOCIAL_HALF_RISE_MS = 5 * 3600e3;
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -76,16 +78,30 @@ function decayVad(prev, dtMs) {
   for (const ax of ['v', 'a', 'd']) out[ax] = VAD_BASELINE[ax] + ((prev && prev[ax] != null ? prev[ax] : VAD_BASELINE[ax]) - VAD_BASELINE[ax]) * k;
   return out;
 }
-// Coded deterministic appraisal of obs_bus events since the last tick. Small, documented map;
-// per-tick impulse capped so a flood can't slam the state (the memo's lurch bound).
+// Coded deterministic appraisal of obs_bus events since the last tick.
+//
+// ⚠ RECALIBRATED 2026-08-15 (live audit — the dark instrument caught its own miscalibration, which
+// is exactly what the 48h dark phase is FOR). The first cut appraised EVERY error-level obs event,
+// but the `anomaly` lane is self_watch's raw console-capture FIREHOSE — deprecation warnings and
+// routine first-time tool errors it captures as INPUT to escalate recurring patterns into needs.
+// Appraising each as an affective blow, at a rate that saturates the ±0.12 cap in a few ticks,
+// pinned the affect at v:0/a:1 within an hour — a saturated, information-free reading (and, since
+// this substrate is someday her weights, corrupt training data). The fix: appraise only CURATED
+// STATE SIGNALS — self_watch's OUTPUT (a minted capability NEED = a real recurring problem) and
+// Loop C/D resource stress (machine/db anomalies) — never the raw input stream; and DEDUPE by
+// signature so one re-emitting condition counts once, not N times. Deviation is bounded downstream.
 function appraiseEvents(events) {
   let dv = 0, da = 0, dd = 0;
   const why = [];
+  const seen = new Set();
   for (const e of (events || [])) {
-    if (!e || !e.level) continue;
-    if (e.level === 'error') { dv -= 0.04; da += 0.03; dd -= 0.02; why.push(`error:${e.lane}`); }
-    else if (e.level === 'warn' && e.kind === 'anomaly') { da += 0.03; dd -= 0.01; why.push(`anomaly:${e.lane}`); }
-    else if (e.kind === 'need') { da += 0.02; why.push('need-minted'); }
+    if (!e || !e.kind) continue;
+    const sig = `${e.lane}:${e.kind}:${e.ref || ''}`;
+    if (seen.has(sig)) continue;   // one re-emitting condition = one signal
+    // CURATED signals only — not the console-capture firehose:
+    if (e.kind === 'need') { seen.add(sig); da += 0.04; why.push(`need:${e.lane}`); }                              // an escalated problem is activating
+    else if (e.kind === 'anomaly' && (e.lane === 'machine' || e.lane === 'db')) { seen.add(sig); da += 0.05; dv -= 0.03; dd -= 0.02; why.push(`stress:${e.lane}`); }   // real resource / memory-substrate stress
+    // everything else (self_watch's raw `anomaly` firehose, info lines, deprecation noise) is NOT appraised
   }
   return {
     dv: Math.max(-0.12, Math.min(0.12, dv)),
@@ -104,6 +120,10 @@ function tick({ deps = {}, nowMs = Date.now() } = {}) {
   const db = _db(deps);
   let prev = null;
   try { prev = JSON.parse(db.getMeta(STATE_KEY) || 'null'); } catch {}
+  // MODEL-VERSION reset (2026-08-15): when the appraisal/dynamics model changes, the prior journal
+  // is from a different instrument — discard it so the 48h honesty read starts clean on the current
+  // model (the first cut's saturated ticks would otherwise pollute the trajectory).
+  if (prev && prev.mv !== MODEL_VERSION) { prev = null; try { db.setMeta(JOURNAL_KEY, '[]'); } catch {} }
 
   // exhaust in (live defaults, every one fail-soft → an absent reading, never a default)
   const rows = deps.monologueRows !== undefined ? deps.monologueRows
@@ -126,10 +146,18 @@ function tick({ deps = {}, nowMs = Date.now() } = {}) {
   const dt = prev && prev.at ? nowMs - prev.at : 0;
   const decayed = decayVad(prev && prev.vad, dt);
   const imp = appraiseEvents(events);
-  const vad = { v: r2(clamp01(decayed.v + imp.dv)), a: r2(clamp01(decayed.a + imp.da)), d: r2(clamp01(decayed.d + imp.dd)) };
+  // BOUNDED DEVIATION (2026-08-15): clamp each axis to baseline ± MAX_DEV before the [0,1] clamp, so
+  // even sustained genuine stress reads "elevated" (distinguishable from a crisis), never pinned at
+  // the absolute extreme where all information is lost.
+  const bound = (x, base) => clamp01(Math.max(base - VAD_MAX_DEV, Math.min(base + VAD_MAX_DEV, x)));
+  const vad = {
+    v: r2(bound(decayed.v + imp.dv, VAD_BASELINE.v)),
+    a: r2(bound(decayed.a + imp.da, VAD_BASELINE.a)),
+    d: r2(bound(decayed.d + imp.dd, VAD_BASELINE.d)),
+  };
   if (imp.why.length) prov.vad = `impulses: ${imp.why.join(', ')}`;
 
-  const cur = { at: nowMs, drives, vad, prov, obsCursor: events && events.length ? (events[events.length - 1].id || (prev && prev.obsCursor) || 0) : ((prev && prev.obsCursor) || 0) };
+  const cur = { at: nowMs, mv: MODEL_VERSION, drives, vad, prov, obsCursor: events && events.length ? (events[events.length - 1].id || (prev && prev.obsCursor) || 0) : ((prev && prev.obsCursor) || 0) };
   try { db.setMeta(STATE_KEY, JSON.stringify(cur)); } catch {}
   try {
     const j = (() => { try { return JSON.parse(db.getMeta(JOURNAL_KEY) || '[]') || []; } catch { return []; } })();
@@ -147,4 +175,5 @@ function journal({ deps = {} } = {}) {
 module.exports = {
   tick, journal, curiosityReading, socialReading, energyReading, progressReading,
   decayVad, appraiseEvents, STATE_KEY, JOURNAL_KEY, JOURNAL_CAP, VAD_BASELINE, VAD_HALF_LIFE_MS,
+  VAD_MAX_DEV, MODEL_VERSION,
 };
