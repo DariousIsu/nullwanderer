@@ -18,6 +18,25 @@ ok(act('The parish sweep is half-finished — want me to finish it?'), '"…want
 ok(act('Want me to resume the Louisiana roster?'), '"want me to resume …?" → act');
 ok(act('Should I keep digging into the outside-money numbers?'), '"should I keep digging …?" → act');
 
+console.log('\nclassifyUnpromptedAsk — an UNENUMERATED self-work verb still internalizes (the allowlist→blocklist fix):');
+ok(act('I never resolved those FEC numbers for Rick Scott and Debbie Mucarsel-Powell. I pulled committee IDs and some figures, but the totals shifted between pulls and I didn\'t get you a clean comparison. Want me to run that down properly?'),
+  'THE leaked screenshot: "…want me to run that down properly?" ("run down" not in the old allowlist) → act');
+ok(act('Want me to nail down the final totals?'), '"nail down" (never enumerated) → act');
+ok(act('Should I sort out the committee figures?'), '"sort out" (never enumerated) → act');
+ok(act('Want me to reconcile the two numbers?'), '"reconcile" (never enumerated) → act');
+ok(act('Want me to track that down?'), '"track that down" (never enumerated) → act');
+ok(act('I think I botched the totals in that old Gaetz paper — want me to fix it?'),
+  'THE governing rule: a self-discovered error in HER OWN old paper → fix it (act), never ask permission');
+ok(act('That brief I sent you last week has a stale figure. Should I correct it?'),
+  'fixing her own prior deliverable is not "something new" → act (she corrects + presents; Lucas redirects if he wants)');
+
+console.log('\nclassifyUnpromptedAsk — an OUTWARD action keeps surfacing (the safety boundary the blocklist preserves):');
+ok(surface('Want me to send the draft to the committee?'), '"send …" is an external side effect → surface (needs his sign-off)');
+ok(surface('Should I email Sarah the numbers?'), '"email …" is outward → surface');
+ok(surface('Want me to post it?'), '"post it" is outward/publish → surface');
+ok(surface('Should I delete the stale roster?'), '"delete …" is destructive → surface');
+ok(surface('Want me to schedule the call with them?'), '"schedule …" commits externally → surface');
+
 console.log('\nclassifyUnpromptedAsk — a GENUINE question or info-share → SURFACE (preserve):');
 ok(surface('Which cycle did you mean — 2022 or 2024?'), 'disambiguation "2022 or 2024?" → surface (genuine)');
 ok(surface('Do you want the brief formal or casual?'), 'preference "formal or casual?" → surface (genuine)');
@@ -28,7 +47,7 @@ ok(surface('Want me to pull up the parish doc, or should I wait until you review
 ok(surface('Want me to run it by the committee first?'), '"run it by the committee" is outward-facing approval, not self-work → surface');
 ok(surface('Should we go with the formal tone or keep it casual?'), '"…or keep it casual?" → surface (genuine)');
 ok(surface(''), 'empty → surface (nothing to internalize)');
-ok(surface('Want me to hold off on it?'), 'no clear self-work verb ("hold off") → surface (conservative)');
+ok(surface('Want me to hold off on it?'), 'an offer to STOP ("hold off") is a genuine "should I pause?" check → surface');
 
 console.log('\nclassifyUnpromptedAsk — the injectable model-confirm seam overrides the regex:');
 ok(surface('Want me to pull it up?', { confirm: () => false }), 'confirm()=false → surface (model vetoes the regex)');
