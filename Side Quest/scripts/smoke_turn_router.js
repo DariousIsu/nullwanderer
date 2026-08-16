@@ -7,7 +7,7 @@
  *   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_turn_router.js
  */
 'use strict';
-const { computeTurnRoute, isConversational, allowsOperator, lookupWantsOperator } = require('../lib/turn_router');
+const { computeTurnRoute, resolveTurnRoute, routeConflict, isConversational, allowsOperator, lookupWantsOperator } = require('../lib/turn_router');
 
 let pass = 0, fail = 0;
 const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++; console.log('  ✗', t); } };
@@ -87,5 +87,44 @@ ok(allowsOperator('lookup') && allowsOperator('task') && !allowsOperator('answer
 ok(typeof computeTurnRoute({ factual: true, isAssignment: true, activityQ: true }).route === 'string',
   'always returns exactly one route (never a pile)');
 
-console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
-process.exit(fail === 0 ? 0 : 1);
+// ── TIER 2: conflict detection + model escalation (2026-08-16, Lucas: "regex has a high fail rate") ──
+const conflict = (sig) => routeConflict(sig).ambiguous;
+ok(conflict({ isStatusReq: true, factual: true }) === true, 'THE bug: isStatusReq + factual → CONFLICT (status vs lookup)');
+ok(conflict({ isAssignment: true, factual: true }) === true, 'isAssignment + factual → CONFLICT (task vs lookup)');
+ok(conflict({ factual: true, personalFactQ: true }) === true, 'factual + personalFactQ → CONFLICT (lookup vs answer)');
+ok(conflict({ factual: true }) === false, 'a single clear signal → NO conflict (fast-path, no model call)');
+ok(conflict({ factual: true, isLiveInfo: true }) === false, 'two signals implying the SAME route (both lookup) → NO conflict');
+ok(conflict({ socialTurn: true, factual: true, isStatusReq: true }) === false, 'a social turn is authoritative → NO escalation');
+ok(conflict({ docQaHandled: true, factual: true, isAssignment: true }) === false, 'a pre-handled docqa turn → NO escalation');
+
+(async () => {
+  const resolve = (sig, opts) => resolveTurnRoute(sig, opts);
+  ok((await resolve({ isStatusReq: true, factual: true }, {})).route === 'status',
+    'no classifier → cheap cascade decision stands (status by precedence)');
+  ok((await resolve({ isStatusReq: true, factual: true }, { escalate: false, classify: () => 'lookup' })).route === 'status',
+    'escalate:false → model NOT consulted, cheap decision stands');
+  {
+    let called = 0;
+    const r = await resolve({ isStatusReq: true, factual: true }, { text: 'x', classify: () => { called++; return 'lookup'; } });
+    ok(r.route === 'lookup' && /model-arbitrated/.test(r.reason) && called === 1,
+      'CONFLICT → model picks lookup → route CORRECTED to lookup (was status)');
+  }
+  {
+    let called = 0;
+    const r = await resolve({ factual: true }, { text: 'x', classify: () => { called++; return 'status'; } });
+    ok(r.route === 'lookup' && called === 0, 'NO conflict → classifier NEVER called; cheap lookup stands (cost bounded)');
+  }
+  ok((await resolve({ isStatusReq: true, factual: true }, { text: 'x', classify: () => 'contacts' })).route === 'status',
+    'model returns a NON-candidate route → fail-open to cheap (status)');
+  ok((await resolve({ isStatusReq: true, factual: true }, { text: 'x', classify: () => null })).route === 'status',
+    'model returns null → fail-open to cheap');
+  ok((await resolve({ isStatusReq: true, factual: true }, { text: 'x', classify: () => { throw new Error('down'); } })).route === 'status',
+    'model throws → fail-open to cheap');
+  {
+    const r = await resolve({ isStatusReq: true, factual: true }, { text: 'x', classify: () => 'status' });
+    ok(r.route === 'status' && /model-confirmed/.test(r.reason), 'model confirms the cheap route → kept (confirmed)');
+  }
+
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+  process.exit(fail === 0 ? 0 : 1);
+})();

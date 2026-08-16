@@ -8296,12 +8296,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // the live dossier — the LPSC lesson above). The generic focus is suppressed too, so the unscoped
   // directed pass can't run in parallel and pollute the store with the row offices the organ excludes.
   const _rosterOwns = !!(_artifactVerdictEarly && _artifactVerdictEarly.intent === 'roster');
-  let turnRoute = require('./lib/turn_router').computeTurnRoute({
+  // TIER-2 escalation: on a CONFLICT (signals imply ≥2 routes) resolveTurnRoute asks lib/route_judge (a
+  // bounded model call) to arbitrate; the clear majority stays on the cheap cascade. Gated by turn.router
+  // (master) + turn.router.escalate (default on) so it's reversible; fail-open to the cheap decision.
+  const _escalateRoute = (() => { try { return (db.getMeta('turn.router.escalate') || 'on').trim() !== 'off'; } catch { return true; } })();
+  let turnRoute = await require('./lib/turn_router').resolveTurnRoute({
     socialTurn, activityQ, deliverableAggQ,
     factual: _factualR, personalFactQ, devQ, stateQ,
     isLiveInfo: _liveInfoR, isStatusReq: _isStatusReqR,
     hasDirectedFocus: _hasDirectedFocusR, isAssignment: _isDirectedTaskR, isContactsQuery: _contactsQ.isQuery
-  });
+  }, { text: userMessage, classify: require('./lib/route_judge').classifyRoute, escalate: routerOn && _escalateRoute });
   if (routerOn) console.log(`[turn-router] route=${turnRoute.route} (${turnRoute.reason}, conf ${turnRoute.confidence})`);
   const routeAllows = (r) => !routerOn || turnRoute.route === r;
   const routeAllowsAny = (...rs) => !routerOn || rs.includes(turnRoute.route);

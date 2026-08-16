@@ -147,4 +147,54 @@ function lookupWantsOperator({ route, scope, isDateTimeSelf } = {}) {
   return true;
 }
 
-module.exports = { computeTurnRoute, isConversational, allowsOperator, lookupWantsOperator, CONVERSATIONAL, OPERATOR_OK };
+// ── TIER 2: MODEL ESCALATION FOR AMBIGUOUS TURNS (2026-08-16, Lucas: "regex has a high fail rate") ────────
+// The cascade above is a cheap deterministic FILTER — it nails the ~95% of turns whose intent is lexically
+// clear, for free, on the hot path. But intent is SEMANTIC and regex is LEXICAL, so when two STRONG signals
+// disagree (the live bug: isStatusReq AND factual both true → the cascade broke the tie with a HARDCODED
+// precedence that was WRONG — "…the bills' current status" is a factual lookup, not a work-status check),
+// no regex can arbitrate. That is the detectors-vs-comprehension seam: keep the fast-path, and ONLY when the
+// signals CONFLICT escalate THAT one turn to a bounded model classifier (lib/route_judge). The clear majority
+// never pays; the ambiguous minority gets comprehension. FAIL-OPEN to the cheap decision on any error.
+
+// Each strong signal implies a route. When the true signals imply ≥2 DISTINCT routes, the cheap precedence is
+// a guess — that is the escalation trigger. (Kept in lock-step with the cascade tiers above.)
+function _impliedRoutes(sig = {}) {
+  const R = new Set();
+  if (sig.isAssignment) R.add('task');
+  if (sig.isContactsQuery && !sig.isAssignment) R.add('contacts');
+  if (sig.isLiveInfo || sig.factual) R.add('lookup');
+  if (sig.isStatusReq || sig.activityQ || (sig.deliverableAggQ && sig.hasDirectedFocus)) R.add('status');
+  if (sig.personalFactQ || sig.devQ || sig.stateQ) R.add('answer');
+  return R;
+}
+
+// Is the cheap decision a coin-flip? Returns { ambiguous, candidates, reason }. A pre-handled control/
+// correction/docqa turn or a social turn is authoritative — never escalate.
+function routeConflict(sig = {}, decision = null) {
+  if (sig.directedStopHandled || sig.expandHandled || sig.correctionHandled || sig.docQaHandled || sig.socialTurn) {
+    return { ambiguous: false, candidates: [], reason: 'pre-handled/social' };
+  }
+  const R = _impliedRoutes(sig);
+  const candidates = [...new Set([decision && decision.route, ...R].filter(Boolean))];
+  if (R.size >= 2) return { ambiguous: true, candidates, reason: `signals conflict → ${[...R].sort().join('+')}` };
+  return { ambiguous: false, candidates, reason: R.size ? 'single-route' : 'no-strong-signal' };
+}
+
+// Resolve the route WITH the optional model tier. Runs the cheap cascade; if the signals conflict and a
+// `classify` is provided, asks it to pick among the candidate routes; otherwise (or on any failure) returns
+// the cheap decision unchanged. `classify(text, { candidates, signals, cheap }) → route | null`. Async; the
+// cheap path stays synchronous-fast (no await when there is no conflict / no classifier / escalation off).
+async function resolveTurnRoute(sig = {}, { text = '', classify = null, escalate = true } = {}) {
+  const cheap = computeTurnRoute(sig);
+  if (!escalate || typeof classify !== 'function') return cheap;
+  const amb = routeConflict(sig, cheap);
+  if (!amb.ambiguous || amb.candidates.length < 2) return cheap;
+  let picked = null;
+  try { picked = await classify(String(text || ''), { candidates: amb.candidates, signals: sig, cheap }); }
+  catch { return cheap; }                                             // fail-open → cheap
+  if (!picked || !amb.candidates.includes(picked)) return cheap;      // unusable answer → fail-open
+  if (picked !== cheap.route) return _r(picked, 0.9, `model-arbitrated (${amb.reason}; cheap=${cheap.route})`);
+  return _r(cheap.route, Math.max(cheap.confidence, 0.9), `model-confirmed (${amb.reason})`);
+}
+
+module.exports = { computeTurnRoute, resolveTurnRoute, routeConflict, _impliedRoutes, isConversational, allowsOperator, lookupWantsOperator, CONVERSATIONAL, OPERATOR_OK };
