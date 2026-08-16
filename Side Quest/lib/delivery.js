@@ -97,4 +97,46 @@ function claimsNonDelivery(ans) {
   return _NONDELIVERY_RE.test(s);
 }
 
-module.exports = { detectPromise, bookingSubject, isAckOrphan, claimsNonDelivery, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD, _EXPLORE_LEAD, _PLAN_CHAIN, _RESULT_STRONG, _NONDELIVERY_RE };
+// FALSE-INCOMPLETENESS self-nag (FEC loop, 2026-08-16 audit). The MIRROR of claimsNonDelivery: there the
+// reply denied a delivery that HAPPENED; here an UNPROMPTED say re-surfaces a past request as still-owed
+// AFTER she already delivered it. Live shape: she gave a complete head-to-head (real FEC numbers + a canvas
+// table, turns #12239-40, truncated=0), then the idle rails re-nagged "I never resolved those FEC numbers …
+// want me to run that down?" SEVEN times over an hour — every one FALSE. The loop self-reinforces: her own
+// unprompted nags sit in the heartbeat replay window (getRecentTurns includes them) and prime the next tick.
+//
+// WHY THIS IS A COMPREHENSION PROBLEM (adversarial-verify wf_38a9dc28, 3 lenses): a first cut suppressed on
+// ≥2 shared subject tokens with a result-bearing delivery. That FALSELY suppressed genuine remaining work —
+// a PARTIAL ("I gave you Scott's, still owe you Moody's"), a CORRECTION ("those were last cycle's, I owe you
+// current"), a NEW metric — because it resolves debt at the subject level, not the owed-ITEM level; and it
+// MISSED the bare canonical nag ("I never resolved those FEC numbers", where "FEC" is 3 chars, below the
+// token floor) plus alias nags ("DMP" vs "Mucarsel-Powell"). The false re-nag "I pulled figures but didn't
+// get you a clean comparison" is LEXICALLY IDENTICAL to the genuine partial — the only difference is whether
+// the claimed-missing thing is actually in a prior delivery. So per detectors-vs-comprehension the decision
+// is a bounded MODEL call (lib/renag_judge), GATED behind these two cheap PURE predicates:
+//   isOwedClaim(say)              — the say claims HER OWN work is unfinished/owed (broad; a miss fails safe
+//                                   to surface, an over-match just costs one gated model call that says OPEN)
+//   resultBearingDeliveries(turns)— recent NON-unprompted replies carrying a concrete result token (the only
+//                                   things that could contradict the nag; excludes her own prior nags)
+// If both fire, renag_judge asks the model "is the owed thing already in these deliveries?" — FAIL-OPEN to
+// surface, because suppressing a genuine partial/correction is far worse than letting a nag through.
+const _OWED_RE = /\b(?:never\s+(?:actually\s+)?(?:finished|resolved|closed|gave|got|gotten|computed|delivered|completed|answered|sent|wrapped|followed\s+through|circled\s+back)|did\s?n['’]?t\s+(?:finish|get|give|deliver|close|resolve|complete|answer|compute|send)|have\s?n['’]?t\s+(?:finished|closed|delivered|given|gotten|resolved|sent|done)|has\s?n['’]?t\s+been\s+(?:done|finished|delivered|sent)|still\s+(?:owe|outstanding|pending|open|on\s+my\s+(?:end|plate|side)|need\s+to|have\s+to)|i\s+owe\s+you|owe\s+you\s+(?:that|the|a|those)|got\s+cut\s+off|cut\s+off\s+(?:mid|before|partway)|left\s+(?:it|that|this)\s+(?:unfinished|hanging|open|half)|meant\s+to\s+(?:send|give|get|pull|share)|circle\s+back|dropped\s+the\s+ball|keep\s+forgetting|never\s+got\s+(?:you|around\s+to)|want(?:\s+me)?\s+to\s+(?:finish|close|wrap|complete|resolve|run\s+(?:it|that))|want\s+the\s+(?:full|complete))\b/i;
+function isOwedClaim(sayText) {
+  const s = String(sayText == null ? '' : sayText).trim();
+  return !!s && _OWED_RE.test(s);
+}
+// The recent DELIVERED replies (non-unprompted ai_said carrying a strong result token) — the only turns that
+// could prove the nag false. Excludes her own unprompted nags (echo-chamber immunity) and thin one-liners.
+// Most-recent first, capped. `turns` is an array of turn rows ({ speaker, unprompted, content }).
+function resultBearingDeliveries(turns, max = 3) {
+  const out = [];
+  const arr = Array.isArray(turns) ? turns : [];
+  for (let i = arr.length - 1; i >= 0 && out.length < max; i--) {
+    const t = arr[i];
+    if (!t || t.speaker !== 'ai_said' || t.unprompted) continue;
+    const c = String(t.content || '');
+    if (c.length >= 40 && _RESULT_STRONG.test(c)) out.push(c);
+  }
+  return out;
+}
+
+module.exports = { detectPromise, bookingSubject, isAckOrphan, claimsNonDelivery, isOwedClaim, resultBearingDeliveries, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD, _EXPLORE_LEAD, _PLAN_CHAIN, _RESULT_STRONG, _NONDELIVERY_RE, _OWED_RE };

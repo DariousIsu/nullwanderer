@@ -467,6 +467,22 @@ async function maybeHeartbeat() {
     // GOVERNOR: pace unprompted utterances so she doesn't surface in bursts. An
     // inbound chat-bot reply is priority (bypasses pacing — it's time-sensitive).
     let wantsToSpeak = trimmedSay && !isPlaceholder;
+    // FALSE-INCOMPLETENESS guard (FEC loop, 2026-08-16 audit): after she DELIVERED a complete answer she kept
+    // re-surfacing the SAME request as still-owed ("I never resolved those FEC numbers … want me to run that
+    // down?") — her own nags echo-chamber in the replay window. Whether the owed thing was ALREADY delivered
+    // is a comprehension call (a false re-nag is lexically identical to a genuine partial), so gate cheaply
+    // (isOwedClaim + a result-bearing delivery exists) then ask the bounded model (renag_judge). FAIL-OPEN to
+    // surface. Runs BEFORE the internal-action classifier so a confirmed false nag is dropped entirely, not
+    // internalized into a wasteful re-do inquiry. Not applied to inbounds.
+    if (wantsToSpeak && !hasInbound && require('./delivery').isOwedClaim(trimmedSay)) {
+      try {
+        const deliveries = require('./delivery').resultBearingDeliveries(db.getRecentTurns(80));
+        if (deliveries.length && await require('./renag_judge').isRedundantRenag(trimmedSay, deliveries)) {
+          wantsToSpeak = false;
+          console.log(`[heartbeat] suppressed false-incompleteness self-nag — already delivered (was: "${trimmedSay.slice(0, 80)}")`);
+        }
+      } catch (e) { console.error('[heartbeat] false-incompleteness guard failed:', e.message); }
+    }
     // INTERNAL THOUGHTS → INTERNAL ACTIONS (Lucas 2026-08-16): a self-noticed tension about HER OWN work
     // surfaced as a "want me to pull it up?" is a NAG, not a question — she can just do her own work.
     // Route it to an autonomous INTERNAL ACTION (open a line of inquiry she pursues in the idle loop) and

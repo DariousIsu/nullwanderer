@@ -268,6 +268,19 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
       } catch (e) { console.error('[continuity] importance gate failed:', e.message); }
     }
 
+    // FALSE-INCOMPLETENESS guard (FEC loop, 2026-08-16 audit — see delivery.isOwedClaim + lib/renag_judge): a
+    // commitment check-in that claims her OWN already-delivered work is unfinished/owed is a FALSE self-nag.
+    // Whether it was delivered is a comprehension call, so gate cheaply then ask the bounded model; FAIL-OPEN
+    // to surface. Suppress entirely BEFORE the internal-action classifier, so it isn't internalized into a re-do.
+    if (trimmedSay && !isPlaceholder && !repetitive && require('./delivery').isOwedClaim(trimmedSay)) {
+      try {
+        const deliveries = require('./delivery').resultBearingDeliveries(db.getRecentTurns(80));
+        if (deliveries.length && await require('./renag_judge').isRedundantRenag(trimmedSay, deliveries)) {
+          repetitive = true;
+          console.log(`[continuity] suppressed false-incompleteness self-nag — already delivered (was: "${trimmedSay.slice(0, 80)}")`);
+        }
+      } catch (e) { console.error('[continuity] false-incompleteness guard failed:', e.message); }
+    }
     // INTERNAL THOUGHTS → INTERNAL ACTIONS (Lucas 2026-08-16): a commitment check-in that surfaces as a
     // self-directed "want me to pull it up?" nag is HER OWN work — route it to an autonomous internal
     // action (open a line of inquiry) and stay silent, rather than asking permission to do what she can
