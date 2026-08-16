@@ -46,6 +46,20 @@ ok(r.isStatusRequest('what is the date today') === false, 'a plain question is N
 ok(r.isStatusRequest('how are you') === false, '"how are you" (personal, no going/progress) → NOT a status request');
 ok(r.isStatusRequest('research every think tank') === false, 'a fresh task is NOT a status request');
 
+// --- TIGHTENING (2026-08-16 drill): "status" as an EXTERNAL object attribute is NOT a work-progress check ---
+// The live miss: a factual research question ("…and current status") tripped route=status → stalled with
+// "I don't have it, want me to run it down?" instead of grounding+searching. A bare "status" noun must NOT
+// fire; the frame must be a genuine progress check about HER work.
+ok(r.isStatusRequest('Does Rick Scott sit on the Senate Commerce Committee, and what are his two most recent bills? Give me the numbers, titles, and current status — real data, not a plan.') === false,
+  'THE drill: a factual bills question ending "…and current status" → NOT a status request (routes lookup)');
+ok(r.isStatusRequest("what's the current status of the SAVE Act in the senate?") === false,
+  '"current status OF the SAVE Act" (external attribute) → NOT a status request');
+ok(r.isStatusRequest('what is the status of HB 1234?') === false, '"status OF HB 1234" (external) → NOT a status request');
+ok(r.isStatusRequest("what's the status on that?") === true, '"status ON that" (anaphoric → her work) → still a status request');
+ok(r.isStatusRequest("what's the status?") === true, 'a bare "what\'s the status?" (about her work, no external object) → still a status request');
+ok(r.isStatusRequest('give me a status update') === true, '"status update" → still a status request');
+ok(r.isStatusRequest('any update on the roster?') === true, '"any update on the roster" (her deliverable) → still a status request');
+
 // --- decideAdvance: depth-first — stay until saturated / cap / diminishing returns ---
 ok(r.decideAdvance({ passes: 1, newChars: 900 }).advance === false, 'pass 1 with new material → keep deepening');
 ok(r.decideAdvance({ passes: 3, newChars: 900 }).advance === false, 'still adding material → keep deepening');

@@ -153,10 +153,19 @@ function isClarification({ message = '', assistantAskedQuestion = false, assista
 // to the local voice model, which truncates + lacks the real state — they should be answered by a
 // frontier model reading the actual progress. Caller gates on "a directed run is active".)
 // Broadened (2026-06-29) — the old version missed the most natural phrasings: "How IS the think tank
-// project going?" (needs "how's") and "what is the LIST you've done so far". Three shapes: a how-…-going
-// progress check (handles "how is/are/'s … going/coming/progressing", words between), explicit status
-// words, and a what/which/how-many … done/covered/list enumeration request.
-const STATUS_RE = /(\bhow(?:'?s| is| are| has| have)?\b[^?.!]{0,45}\b(?:go(?:ing|ne)|coming|progress(?:ing)?|along|far)\b)|(\b(?:status|update|progress|so far|fill me in|catch me up|where (?:are|r) (?:you|we|u))\b)|(\b(?:what|which|how many)\b[^?.!]{0,45}\b(?:done|covered|researched|finished|found|the list|a list|list of|organi[sz]ations|think tanks|ones)\b)/i;
+// project going?" (needs "how's") and "what is the LIST you've done so far".
+// TIGHTENED (2026-08-16 drill): the old middle branch matched the BARE noun `status|update|progress`
+// ANYWHERE, so a FACTUAL EXTERNAL question whose answer includes a "status" attribute — "…give me the bill
+// numbers, titles, and current status", "what's the current status of the SAVE Act" — tripped as a WORK-
+// progress check → route=status → answered "I don't have it, want me to run it down?" instead of grounding+
+// searching+delivering (exactly the stall Lucas hates). The bare noun is replaced with WORK-PROGRESS FRAMES:
+// a how-…-going/coming/progressing/far check; the progress idioms (so far / fill me in / catch me up / where
+// are we / any update|progress|news); "status/progress update", "update me"; "status/update/progress ON that/
+// this/it or ON the <her-work noun>" (an EXTERNAL object's status — "status of the SAVE Act" — is NOT here,
+// so it falls through to the factual/lookup tier); "your progress/status"; and "what('s)/how's … status/
+// progress" NOT followed by "of/on" (a trailing "of X" is an external attribute). Plus the original
+// what/which/how-many … done/covered/list enumeration. Genuine status stays status; factual "status" routes lookup.
+const STATUS_RE = /(\bhow(?:'?s| is| are| has| have)?\b[^?.!]{0,45}\b(?:go(?:ing|ne)|coming|progress(?:ing)?|along|far)\b)|(\b(?:so far|fill me in|catch me up|where (?:are|r) (?:you|we|u)|any (?:updates?|progress|news))\b)|(\b(?:status|progress)\s+update\b|\bupdate\s+(?:me|us)\b)|(\b(?:status|update|progress)\s+(?:on|of)\s+(?:that|this|it|these|those|things|everything|the\s+(?:research|roster|sweep|project|deliverable|list|work|task|brief|report|analysis|draft|doc|paper|dig|search|effort))\b)|(\byour\s+(?:progress|status)\b)|(\b(?:what(?:'?s| is)|hows|how is|here'?s)\s+(?:the\s+|your\s+|our\s+)?(?:current\s+)?(?:status|progress)\b(?!\s+(?:of|on)\b))|(\b(?:what|which|how many)\b[^?.!]{0,45}\b(?:done|covered|researched|finished|found|the list|a list|list of|organi[sz]ations|think tanks|ones)\b)/i;
 function isStatusRequest(text) { return STATUS_RE.test(String(text || '')); }
 
 // Render the accumulated clarifications as a guidance block injected into every subsequent pass.
