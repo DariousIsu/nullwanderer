@@ -68,6 +68,8 @@ ok(/kg_search/.test(spec) && /gov_funding/.test(spec) && /bill_lookup/.test(spec
 ok(/ECHO DATA TOOLS/.test(spec), 'operator menu has the ECHO DATA TOOLS section header');
 ok(tier.READ_TOOLS.every(t => tier.classifyTool(t.tool) === 'read'), 'every curated tool classifies as read (none can be blocked on auto)');
 ok(typeof tier.readToolByOp('fec_lookup') === 'object' && tier.readToolByOp('fec_lookup').tool === 'fec_committee_search', 'readToolByOp resolves op → real tool');
+ok(typeof tier.readToolByOp('fec_candidate') === 'object' && tier.readToolByOp('fec_candidate').tool === 'fec_candidate_search', 'fec_candidate op → fec_candidate_search (a candidate\'s OWN filings, not committee search — T11b)');
+ok(/fec_candidate/.test(spec), 'operator menu includes fec_candidate (the candidate-financials path)');
 
 // --- LANES: the web/deep split (the two-track research architecture) ---
 ok(tier.classifyTool('web_fetch') === 'read' && tier.classifyTool('web_extract') === 'read', 'web_fetch/web_extract → read (so they run on auto)');

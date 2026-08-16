@@ -230,9 +230,19 @@ const READ_TOOLS = [
   },
   {
     op: 'fec_lookup', tool: 'fec_committee_search',
-    desc: 'find FEC-registered committees/PACs by name (campaign-finance ties of an org or its leaders)',
+    desc: 'find FEC-registered COMMITTEES/PACs by name (campaign-finance ties of an org or its leaders) — NOT a person\'s own campaign; for a CANDIDATE\'s own filings use fec_candidate',
     args: '{"query":"Club for Growth"}',
     map: (a = {}) => ({ query: String(a.query || a.name || ''), state: a.state || null, committee_type: a.committee_type || null })
+  },
+  {
+    // T11b (2026-08-16): fec_lookup is COMMITTEE-only, so a candidate name ("Rick Scott") returned empty
+    // and she fell to keyless urllib → 429. This finds the CANDIDATE → FEC id + principal committee id;
+    // the money TOTALS (receipts/disbursements/cash-on-hand) then come from openFEC /candidate|committee
+    // totals via analyze_data (FEC_API_KEY is in os.environ).
+    op: 'fec_candidate', tool: 'fec_candidate_search',
+    desc: 'find a federal CANDIDATE (House/Senate/President) by name → their FEC id + principal committee (a person\'s OWN campaign). Use this — not fec_lookup — for a candidate\'s own filings; their money totals then come from the openFEC totals endpoint via analyze_data',
+    args: '{"query":"Rick Scott","office":"S","state":"FL","cycle":2024}',
+    map: (a = {}) => ({ query: String(a.query || a.name || ''), office: a.office || null, state: a.state || null, cycle: a.cycle || null, party: a.party || null, per_page: a.per_page || 20 })
   },
   {
     op: 'bill_lookup', tool: 'search_bills',

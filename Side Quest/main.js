@@ -1625,8 +1625,11 @@ app.whenReady().then(() => {
   // so Zoe's verification classify leaf can reach the cloud frontier with the SAME key the engine
   // uses. Resolved into memory only — never written or logged (names only).
   try {
-    const r = require('./lib/keystore').hydrateFromEcho(['OLLAMA_API_KEY'], { python: ECHO_PYTHON, cwd: ECHO_CWD });
-    console.log(`[main] cloud key: ${process.env.OLLAMA_API_KEY ? 'inherited from Echo (' + r.resolved.join(',') + ')' : 'absent — cloud classify falls back to local'}`);
+    // FEC_API_KEY rides along (2026-08-16 drill T11b): openFEC 429s keyless, and analyze_data's python
+    // inherits process.env — so hydrating it here lets her urllib openFEC calls (candidate/committee
+    // totals = the campaign-finance MONEY) authenticate instead of rate-limiting to a non-delivery.
+    const r = require('./lib/keystore').hydrateFromEcho(['OLLAMA_API_KEY', 'FEC_API_KEY'], { python: ECHO_PYTHON, cwd: ECHO_CWD });
+    console.log(`[main] cloud key: ${process.env.OLLAMA_API_KEY ? 'inherited from Echo (' + r.resolved.join(',') + ')' : 'absent — cloud classify falls back to local'}; FEC key: ${process.env.FEC_API_KEY ? 'present' : 'absent'}`);
   } catch (e) { console.error('[main] cloud key hydrate failed:', e.message); }
   engineSupervisor = new EngineSupervisor({
     host: echoCfg.host, port: echoCfg.port,
