@@ -204,6 +204,16 @@ function followupResultChars() { const n = parseInt(get('ZOE_FOLLOWUP_RESULT_CHA
 // the contract, then go and read. Raised, still bounded.
 function maxEchoHops() { const n = parseInt(get('ZOE_MAX_ECHO_HOPS', '').trim(), 10); return Number.isFinite(n) ? n : 12; }
 
+// --- SWARM / RESEARCH CONCURRENCY CEILING (2026-08-16) — the hard cap on concurrent research/swarm
+// workers. MEASURED: ollama.com admits ~12 concurrent requests per account cleanly (HTTP 429 "too many
+// concurrent requests" past ~12-19), so 12 is the safe default — raised from the old hardcoded 8 once
+// the ceiling was proven artificial (scratchpad/swarm_concurrency_probe.js: N=12 clean, N=20 one 429).
+// Both _workerCount() and the "swarm <X> with N workers" override clamp to this. The cloud model choke
+// point (lib/ollama.js) carries a 429 backoff-retry so a burst that grazes the real ceiling degrades
+// gracefully instead of failing tasks. Clamped to 20 (the provider's observed hard limit) as a sanity
+// guard; env-tunable via ZOE_MAX_WORKERS.
+function maxWorkers() { const n = parseInt(get('ZOE_MAX_WORKERS', '').trim(), 10); return Number.isFinite(n) && n >= 1 ? Math.min(20, n) : 12; }
+
 // --- DENSER SUBCONSCIOUS (cloud-leverage Slice 4) — the idle lanes ran ONE move each, SEQUENTIALLY, per
 // tick, so between-turn cognition barely touched the (now 2M/hr) budget. Run the lanes CONCURRENTLY and let
 // the knowledge-building graph-walk BURST several moves per tick (each still budget-gated, so it self-limits).
@@ -294,4 +304,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, claimModel, graphModel, importanceModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, investigateHops, investigateHubCap, investigateBudget, deepNumCtx, deepNumPredict, sectionNumPredict, toolResultChars, followupResultChars, maxEchoHops, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, codeModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, companionConfig, usageConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, claimModel, graphModel, importanceModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, investigateHops, investigateHubCap, investigateBudget, deepNumCtx, deepNumPredict, sectionNumPredict, toolResultChars, followupResultChars, maxEchoHops, maxWorkers, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, codeModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, companionConfig, usageConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };

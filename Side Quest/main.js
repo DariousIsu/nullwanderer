@@ -7123,7 +7123,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         let _swarmTarget = mOn[1];
         {
           const _wm = _swarmTarget.match(/\b(?:with\s+)?(\d{1,2})\s+workers?\b/i);
-          if (_wm) { _workerOverride = Math.max(1, Math.min(8, parseInt(_wm[1], 10) || 1)); _swarmTarget = _swarmTarget.replace(_wm[0], ' ').replace(/\s+/g, ' ').trim(); }
+          if (_wm) { _workerOverride = Math.max(1, Math.min(config.maxWorkers(), parseInt(_wm[1], 10) || 1)); _swarmTarget = _swarmTarget.replace(_wm[0], ' ').replace(/\s+/g, ' ').trim(); }   // ceiling was hardcoded 8; now config.maxWorkers() (default 12) — 2026-08-16
         }
         const _rosterState = (() => { try { return require('./lib/local_frame').resolveState(_swarmTarget); } catch { return null; } })();
         const _rq = require('./lib/recheck_queue');
@@ -14952,7 +14952,7 @@ function _fillBackgroundWorkers(state, electedPool, topicPool, primaryBeatId) {
 // can be enabled/reverted LIVE without a reboot; env ZOE_RESEARCH_WORKERS is the boot default. DEFAULTS TO 1
 // (no background workers — identical to the pre-parallelism behavior) so enabling concurrency is a deliberate,
 // observable step. Safety-capped at 8.
-function _workerCount() { let n; try { n = parseInt(db.getMeta('research.workers') || process.env.ZOE_RESEARCH_WORKERS || '1', 10); } catch { n = 1; } return Math.max(1, Math.min(8, isNaN(n) ? 1 : n)); }
+function _workerCount() { let n; try { n = parseInt(db.getMeta('research.workers') || process.env.ZOE_RESEARCH_WORKERS || '1', 10); } catch { n = 1; } return Math.max(1, Math.min(config.maxWorkers(), isNaN(n) ? 1 : n)); }   // ceiling was hardcoded 8; now config.maxWorkers() (default 12, proven-safe on ollama.com) — 2026-08-16
 function _bgSlots() { return Math.max(0, _workerCount() - 1); }   // primary + this many background workers
 
 let _bgTimer = null;

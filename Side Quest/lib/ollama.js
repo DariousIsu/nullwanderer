@@ -1,5 +1,25 @@
 const OLLAMA_BASE = process.env.OLLAMA_BASE || 'http://localhost:11434';
 
+// TRANSIENT CONCURRENCY 429 BACKOFF (2026-08-16). ollama.com admits a bounded number of concurrent
+// requests per account (measured live: ~12 clean, HTTP 429 "too many concurrent requests" past ~12-19).
+// A wide swarm (up to config.maxWorkers, each operator turn firing several nested calls) can transiently
+// exceed it — this is the choke point where that 429 is born and where every concurrent cloud caller
+// passes, so a short JITTERED backoff-and-retry here lets a burst DEGRADE GRACEFULLY instead of failing
+// tasks. Only the initial admission (before any token/body is consumed) is retried, so an in-progress
+// stream is never re-issued. Returns true if it waited (caller should re-fetch), false if the error is
+// not a retryable concurrency-429 or the retry budget/abort is spent. Jitter (Math.random) de-syncs N
+// workers so they don't all retry in lockstep and re-collide.
+const _CONCURRENCY_429_RE = /concurrent|too many|rate.?limit/i;
+async function _maybeBackoff429(status, bodyText, attempt, ctrl, model, { maxRetries = 3, baseMs = 400 } = {}) {
+  if (status !== 429 || attempt >= maxRetries) return false;
+  if (!_CONCURRENCY_429_RE.test(String(bodyText || ''))) return false;   // a different 429 (e.g. a daily quota) — surface it, don't hide it behind retries
+  if (ctrl && ctrl.signal && ctrl.signal.aborted) return false;          // watchdog/maxTimer already fired → don't wait, let the abort surface
+  const delay = Math.round(baseMs * Math.pow(2, attempt) * (0.5 + Math.random()));   // 400/800/1600ms ±50% jitter
+  try { console.warn(`[ollama] ${model || '?'} 429 too-many-concurrent — backoff ${delay}ms (retry ${attempt + 1}/${maxRetries})`); } catch {}
+  await new Promise((r) => setTimeout(r, delay));
+  return true;
+}
+
 // `base` + `headers` mirror completeDetailed, so this can stream from the CLOUD tier and not just
 // localhost. It was hardcoded to OLLAMA_BASE, which is the only reason cloud answers had to be
 // fetched as one blocking block: the endpoint speaks the same /api/chat streaming protocol, we
@@ -81,15 +101,20 @@ async function streamChat({ model, messages, options = {}, onToken, onThinking, 
     kick();
     // coalesce explicit null the same way completeDetailed does (default params only fill undefined)
     const _base = base || OLLAMA_BASE;
-    const res = await fetch(`${_base}/api/chat`, {
+    const _reqInit = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(headers || {}) },
       body: JSON.stringify(body),
       signal: ctrl.signal
-    });
-
-    if (!res.ok) {
+    };
+    // Retry the ADMISSION only (no tokens consumed yet) on a transient concurrency-429; backoff resets
+    // the inactivity watchdog so the wait isn't counted as a stall. maxTimer still bounds total duration.
+    let res;
+    for (let attempt = 0; ; attempt++) {
+      res = await fetch(`${_base}/api/chat`, _reqInit);
+      if (res.ok) break;
       const text = await res.text().catch(() => '');
+      if (await _maybeBackoff429(res.status, text, attempt, ctrl, model)) { kick(); continue; }
       throw new Error(`Ollama HTTP ${res.status}: ${text || res.statusText}`);
     }
 
@@ -221,7 +246,7 @@ async function completeDetailed({ model, messages, options = {}, base = OLLAMA_B
   if (signal) { if (signal.aborted) ctrl.abort(); else signal.addEventListener('abort', onExternalAbort, { once: true }); }
   const timer = timeoutMs > 0 ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
   try {
-    const res = await fetch(`${base}/api/chat`, {
+    const _reqInit = {
       method: 'POST',
       headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
       body: JSON.stringify(Object.assign({
@@ -229,9 +254,16 @@ async function completeDetailed({ model, messages, options = {}, base = OLLAMA_B
         options: Object.assign({ temperature: 0, top_p: 0.9, num_ctx: 8192 }, options),
       }, typeof think === 'boolean' ? { think } : {})),   // think:false → reasoning models emit the answer directly, not hidden in `thinking`
       signal: ctrl.signal,
-    });
-    if (!res.ok) {
+    };
+    // Retry a transient concurrency-429 with jittered backoff — this is the non-streaming choke point the
+    // swarm's operator turns ride (each fires several nested calls), so a wide burst degrades gracefully.
+    // The timeoutMs timer still bounds the whole call (backoffs eat into it, ~2.8s max added).
+    let res;
+    for (let attempt = 0; ; attempt++) {
+      res = await fetch(`${base}/api/chat`, _reqInit);
+      if (res.ok) break;
       const text = await res.text().catch(() => '');
+      if (await _maybeBackoff429(res.status, text, attempt, ctrl, model)) continue;
       throw new Error(`Ollama HTTP ${res.status}: ${text || res.statusText}`);
     }
     const obj = await res.json();
@@ -539,4 +571,4 @@ async function streamCognition({ messages, options = {}, onToken, onThinking, si
   return streamChat({ model: front, messages, options, onToken, onThinking, signal, inactivityMs, maxMs, think });
 }
 
-module.exports = { streamChat, streamCognition, complete, completeDetailed, pickText, isReasoningModel, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded, sayLooksCutOff };
+module.exports = { streamChat, streamCognition, complete, completeDetailed, pickText, isReasoningModel, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded, sayLooksCutOff, _maybeBackoff429, _CONCURRENCY_429_RE };
