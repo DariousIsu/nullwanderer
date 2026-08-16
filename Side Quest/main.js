@@ -9616,7 +9616,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           composedUserMessage = `${composedUserMessage}\n\n[Calibration: you tried to LOOK THIS UP and the search did NOT complete (a tool failure — not "no results"). Say so plainly and offer to retry in a moment. You may give general background you genuinely hold, but LABEL it as unverified-from-memory and do not state live/specific values as fact.]`;
           console.log('[operator] EMPTY on a lookup-routed turn → honest-hedge directive injected (never a silent training answer)');
         } else {
-          composedUserMessage = `${composedUserMessage}\n\n[Calibration: you tried to RUN/ANALYZE this and it did NOT complete this turn (a tool failure — the analysis produced nothing usable). Say so plainly and offer to actually run it now — do NOT answer from prior context, and do NOT repeat an earlier reply. Never invent a result you don't have.]`;
+          composedUserMessage = `${composedUserMessage}\n\n[Calibration: you tried to RUN/ANALYZE this and it did NOT complete this turn (a tool failure — the analysis produced nothing usable). Say plainly what you got and what BLOCKED you (the specific error / rate-limit / bad data). Then — this is REQUIRED — the next thing is a CONCRETE plan to get the deliverable ANYWAY: diagnose the obstacle, look up the constraint (the API's rate limit, its pagination, the correct identifier/endpoint), and write a NEW script that handles it (throttle / backoff / paginate / retry) — iterate in a workbench. An honest non-delivery is FOLLOWED BY a determined plan to obtain the numbers at all costs — never resignation, never a vague "let me try more." Do NOT answer from prior context, do NOT repeat an earlier reply, and never invent a result you don't have.]`;
           console.log('[operator] EMPTY on a directed/analysis turn → honest-hedge directive injected (never a silent replay from context)');
         }
       }
@@ -12620,7 +12620,32 @@ const operatorTools = {
   rehearsal_discard: async ({ slug } = {}) => { try { return require('./lib/rehearsal').discard({ slug }); } catch (e) { return 'ERROR: ' + e.message; } },
   // R3 (2026-07-23) — the ONE-OFF analysis lane: run throwaway python READ-ONLY over her own data
   // and get the RESULT. Ephemeral, no adoption; the DBs open mode=ro so writes are rejected.
-  analyze_data: async ({ code, workbench, timeoutMs } = {}) => { try { return await require('./lib/analysis_lane').run({ code, workbench, timeoutMs }); } catch (e) { return 'ERROR: ' + e.message; } },
+  analyze_data: async ({ code, workbench, timeoutMs, goal } = {}) => {
+    try {
+      let finalCode = String(code == null ? '' : code);
+      // CODE MODEL (Lucas 2026-08-16: "python script writing done through kimi 2.7 code"): the operator is a
+      // fast UTILITY model; route the analysis python through the code specialist (config.codeModel) to HARDEN
+      // it — robust zoe_data use + urllib throttle/backoff/pagination for external fetches (the "obtain the
+      // deliverable at all costs" discipline). MINIMAL-diff, so a correct simple script comes back ~unchanged
+      // (keeps the working local case + the workbench iterate loop coherent). Fail-soft to the draft.
+      if (finalCode.trim()) {
+        try {
+          const codeMdl = require('./lib/config').codeModel();
+          const src = (require('./lib/models').sources() || []).find((s) => s.tier === 'cloud' && s.token);
+          if (codeMdl && src) {
+            const sys = 'You are a Python code specialist. An agent drafted a data-analysis script; return a correct, robust, COMPLETE version that runs as-is. Make MINIMAL changes: if the draft is already correct and simple, return it essentially unchanged. `import zoe_data` is available: zoe_data.query(db,sql,params)->(cols,rows), .tables(db), .schema(db,table), .atlas(), .dbs() over the local READ-ONLY stores (sq/graph/news/puller/electoral). For ANY external API use urllib with polite throttling + exponential backoff on 429/5xx + pagination — never hammer; handle rate-limits/errors. PRESERVE the intent and the shape of what it prints. Return ONLY python — no markdown fence, no prose.';
+            const r = await require('./lib/operator')._operatorComplete(
+              [{ role: 'system', content: sys }, { role: 'user', content: (goal ? 'GOAL: ' + goal + '\n\n' : '') + 'DRAFT:\n' + finalCode }],
+              { model: codeMdl, num_predict: 2000 }
+            );
+            let out = ((r && r.text) || '').replace(/^```(?:python)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+            if (out.length > 20) { console.log(`[analyze_data] hardened via ${codeMdl} (${finalCode.length}→${out.length}ch)`); finalCode = out; }
+          }
+        } catch (e) { console.error('[analyze_data] code-model finalize skipped (running draft):', e.message); }
+      }
+      return await require('./lib/analysis_lane').run({ code: finalCode, workbench, timeoutMs });
+    } catch (e) { return 'ERROR: ' + e.message; }
+  },
   // THE SKILL SHELF (O1, slice 5) — the operator's pull. The briefs carry matched trigger lines;
   // the body dereferences here (lib/skills — flow recipes / proven procedures / stored shapes).
   skill_pull: async ({ name } = {}) => { try { const r = require('./lib/skills').resolveBody(String(name || '')); return r.text; } catch (e) { return 'ERROR: ' + e.message; } },
@@ -12720,7 +12745,7 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
     // DIRECTED TASK → in-turn completion: more steps + a longer budget + a mandate to deliver the WHOLE
     // thing this turn (gather all of it, save long deliverables to a file, don't stop at a teaser).
     const taskNote = task
-      ? '\n\nThis is an ASSIGNED TASK — drive it to a COMPLETE deliverable in THIS turn: gather everything needed across multiple tool steps, do NOT stop after one step or hand back a partial teaser, and produce the FULL result (the entire list / the complete write-up). If the deliverable is long, save it with the file tool (op:"write", a notes/… path) and tell Lucas where it is. Only give a final answer once the deliverable is actually complete.\n\nYour FINAL message MUST BE the deliverable itself — the actual result/output/answer, an honest PARTIAL (what you ran, what you got, what failed), or ONE genuine clarifying question. NEVER end on a content-free acknowledgement ("on it", "starting now", "stand by", "first pass", "writing it now", "I\'ll paste the output shortly"). A partial REAL result beats a promise.\n\nFor a QUANTITATIVE or EXTERNAL-DATA task, plan an EFFICIENT path first: prefer the first-class ECHO DATA TOOLS already in your menu — nonprofit_lookup then nonprofit_financials by EIN (990 revenue + expenses), gov_funding, fec_lookup, kg_search — one call per entity for a SMALL set, rather than scraping identifiers page-by-page with web_fetch (that burns your whole step budget). RESERVE your last steps for the COMPUTE and the DELIVERED RESULT: a small set (about 10 or fewer) you rank directly in the final answer from the tool results; a large aggregation you fetch + aggregate in ONE analyze_data script and print. If you cannot finish this turn, deliver an HONEST PARTIAL (what you found, what is missing) — never a plan to fetch it, and never end on "let me now pull/rank/compute."'
+      ? '\n\nThis is an ASSIGNED TASK — drive it to a COMPLETE deliverable in THIS turn: gather everything needed across multiple tool steps, do NOT stop after one step or hand back a partial teaser, and produce the FULL result (the entire list / the complete write-up). If the deliverable is long, save it with the file tool (op:"write", a notes/… path) and tell Lucas where it is. Only give a final answer once the deliverable is actually complete.\n\nYour FINAL message MUST BE the deliverable itself — the actual result/output/answer, an honest PARTIAL (what you ran, what you got, what failed), or ONE genuine clarifying question. NEVER end on a content-free acknowledgement ("on it", "starting now", "stand by", "first pass", "writing it now", "I\'ll paste the output shortly"). A partial REAL result beats a promise.\n\nFor a QUANTITATIVE or EXTERNAL-DATA task, plan an EFFICIENT path first: prefer the first-class ECHO DATA TOOLS already in your menu — nonprofit_lookup then nonprofit_financials by EIN (990 revenue + expenses), gov_funding, fec_lookup, kg_search — one call per entity for a SMALL set, rather than scraping identifiers page-by-page with web_fetch (that burns your whole step budget). RESERVE your last steps for the COMPUTE and the DELIVERED RESULT: a small set (about 10 or fewer) you rank directly in the final answer from the tool results; a large aggregation you fetch + aggregate in ONE analyze_data script and print. If you cannot finish this turn, deliver an HONEST PARTIAL (what you found, what is missing) — never a plan to fetch it, and never end on "let me now pull/rank/compute." When a tool or API FIGHTS you (an error, a rate-limit, truncated or wrong-shaped data), do NOT stop and report failure — DIAGNOSE it, look up the constraint (the rate limit, the pagination, the right identifier/endpoint), and write a NEW script in a workbench that respects it (throttle / backoff / paginate / retry), then re-run and push through to the real numbers. If you still cannot finish, your honest partial must NAME the specific next code you will write to get past the obstacle — the deliverable is obtained at all costs, never abandoned with a shrug.'
       : '';
     // 12/180s (was 8/90s): parity with the chat lane's MAX_ECHO_HOPS=12, and each step now carries
     // full-size tool results (operator.js reads them at toolResultChars, not a 1,200-char keyhole),
