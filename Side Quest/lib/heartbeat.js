@@ -467,6 +467,28 @@ async function maybeHeartbeat() {
     // GOVERNOR: pace unprompted utterances so she doesn't surface in bursts. An
     // inbound chat-bot reply is priority (bypasses pacing — it's time-sensitive).
     let wantsToSpeak = trimmedSay && !isPlaceholder;
+    // INTERNAL THOUGHTS → INTERNAL ACTIONS (Lucas 2026-08-16): a self-noticed tension about HER OWN work
+    // surfaced as a "want me to pull it up?" is a NAG, not a question — she can just do her own work.
+    // Route it to an autonomous INTERNAL ACTION (open a line of inquiry she pursues in the idle loop) and
+    // stay silent. GENUINE questions (a decision/preference/info only Lucas holds) are preserved — the
+    // classifier returns 'act' ONLY for a clear self-work permission-offer. Not applied to inbounds (a
+    // reply to a real external message is not her own musing).
+    if (wantsToSpeak && !hasInbound) {
+      let ask = 'surface';
+      try { ask = require('./internal_action').classifyUnpromptedAsk(trimmedSay); } catch (e) { console.error('[heartbeat] internal-action classify failed:', e.message); }
+      if (ask === 'act') {
+        wantsToSpeak = false;
+        try {
+          const seed = require('./internal_action').tensionToInquiry(trimmedSay);
+          if (seed) {
+            const r = require('./inquiry').open({ question: seed, bornFrom: 'self-noticed-tension' });
+            console.log(`[heartbeat] internalized self-directed ask → ${r && r.id ? `inquiry #${r.id}` : (r && r.duplicate ? `advancing existing inquiry #${r.existingId}` : 'no inquiry seed')} (was: "${trimmedSay.slice(0, 80)}")`);
+          } else {
+            console.log(`[heartbeat] internalized self-directed ask → suppressed nag, no inquiry seed (was: "${trimmedSay.slice(0, 80)}")`);
+          }
+        } catch (e) { console.error('[heartbeat] internalize→inquiry failed:', e.message); }
+      }
+    }
     // Self-repetition guard — TWO passes. (1) lexical (word-Jaccard): a cheap catch for near-verbatim repeats.
     // (2) SEMANTIC (embedding cosine): the same point reworded, which word-overlap misses — this is what let
     // the silence-rule confirm loop (each restatement worded differently) run 100×. Meaning-level, so it needs

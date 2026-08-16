@@ -268,6 +268,23 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
       } catch (e) { console.error('[continuity] importance gate failed:', e.message); }
     }
 
+    // INTERNAL THOUGHTS → INTERNAL ACTIONS (Lucas 2026-08-16): a commitment check-in that surfaces as a
+    // self-directed "want me to pull it up?" nag is HER OWN work — route it to an autonomous internal
+    // action (open a line of inquiry) and stay silent, rather than asking permission to do what she can
+    // just do. Genuine questions (a decision only Lucas holds) are preserved. One classifier, both rails.
+    if (trimmedSay && !isPlaceholder && !repetitive) {
+      let ask = 'surface';
+      try { ask = require('./internal_action').classifyUnpromptedAsk(trimmedSay); } catch (e) { console.error('[continuity] internal-action classify failed:', e.message); }
+      if (ask === 'act') {
+        repetitive = true;   // reuse the suppress flag → willSurface false → the silent branch bumps the commitment
+        try {
+          const seed = require('./internal_action').tensionToInquiry(trimmedSay);
+          if (seed) { const r = require('./inquiry').open({ question: seed, bornFrom: 'self-noticed-tension' }); console.log(`[continuity] internalized self-directed ask → ${r && r.id ? `inquiry #${r.id}` : (r && r.duplicate ? `advancing existing inquiry #${r.existingId}` : 'no inquiry seed')} (was: "${trimmedSay.slice(0, 80)}")`); }
+          else { console.log(`[continuity] internalized self-directed ask → suppressed nag, no inquiry seed (was: "${trimmedSay.slice(0, 80)}")`); }
+        } catch (e) { console.error('[continuity] internalize→inquiry failed:', e.message); }
+      }
+    }
+
     const willSurface = trimmedSay && !isPlaceholder && !repetitive;
     unpromptedGate.logDecision('continuity',
       willSurface ? { allow: true, outcome: 'surfaced', reason: 'ok' }
