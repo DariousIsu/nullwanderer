@@ -63,10 +63,24 @@ function bookingSubject({ deliverable, sentence }) {
 // honest empty/partial ("the analysis ran but returned 0 rows") carries a payload token → NOT an orphan.
 const _ACK_LEAD = /\b(on it|stand ?by|first pass|writing it (?:now|up)|i'?ll (?:get|paste|send|have|share|run|write)|starting (?:on )?(?:that|it|this|now)|working on it|hang tight|bear with me|give me a (?:moment|sec|minute)|let me (?:get|pull|run|write) (?:that|this|it))\b/i;
 const _RESULT_PAYLOAD = /\d{2,}|```|\| .+ \||\/notes\/|exit=\d|\brows?\b/;
+// LONG-branch signals (G-orphan-long, 2026-08-16 external-extraction drill): the SHORT gate above only
+// catches a bare ack (<240 chars). But an EXTERNAL-data task orphans with a LONG plan narration ("let me
+// now pull the 990 data for each and rank them, then print revenue minus expenses") that the operator
+// shipped verbatim as "the complete result of the task you just ran" (T6/T9). Catch a directed answer that
+// (1) ANNOUNCES a fetch in its opening (explore-lead in the first 240 chars) AND (2) queues a FURTHER step
+// (plan-chain) AND (3) carries NO strong result token. Precision-over-recall: any real deliverable (money,
+// comma-grouped ints, a decimal, %, a code fence, a table row, a /notes/ path, "N rows", or a leading list
+// line) exempts it — so a WRITE draft, a prose review, a hedged real answer, and a names roster all survive.
+const _EXPLORE_LEAD = /\b(?:let me (?:now )?(?:check|pull|hit|grab|fetch|look ?up)|i(?:'|’)?ll (?:now )?(?:check|pull|hit|grab|fetch|go (?:pull|hit|check))|i need to (?:check|pull|hit|grab|fetch|look ?up)|i(?:'|’)?m going to (?:check|pull|hit|grab|fetch)|then (?:i(?:'|’)?ll |i )?(?:pull|hit|check|grab|fetch)|next,? i(?:'|’)?ll (?:pull|hit|check|grab|fetch))\b/i;
+const _PLAN_CHAIN = /\b(?:then (?:i(?:'|’)?ll |i )?(?:hit|pull|check|grab|fetch|call|query|rank|print|aggregate|tally|sum|compute)|next,? i(?:'|’)?ll|first,? i (?:need to|have to|'ll)|once i (?:have|pull|get|fetch)|i (?:still )?need to (?:confirm|check|find|figure out|pull|hit|fetch|grab)|and (?:then )?(?:rank|aggregate|print|tally|sum|compute) the)\b/i;
+const _RESULT_STRONG = /```|\| .+ \||\/notes\/|exit=\d|\b\d+\s+rows?\b|\$\s?[\d,]{2,}|\b\d{1,3}(?:,\d{3})+\b|\b\d+\.\d|\b\d+\s?%|^\s*(?:[-*•]|\d+[.)])\s+\S/m;
 function isAckOrphan(ans) {
   const s = String(ans == null ? '' : ans).trim();
-  if (!s || s.length >= 240) return false;      // a long answer is a real deliverable, not a bare ack
-  return _ACK_LEAD.test(s) && !_RESULT_PAYLOAD.test(s);
+  if (!s) return false;
+  if (s.length < 240 && _ACK_LEAD.test(s) && !_RESULT_PAYLOAD.test(s)) return true;   // SHORT bare ack
+  // plan-narration at ANY length (the two-signal AND is self-limiting): announces a fetch in the opening
+  // (explore-lead in the first 240) AND queues a further step (plan-chain) AND carries no strong result token.
+  return _EXPLORE_LEAD.test(s.slice(0, 240)) && _PLAN_CHAIN.test(s) && !_RESULT_STRONG.test(s);
 }
 
-module.exports = { detectPromise, bookingSubject, isAckOrphan, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD };
+module.exports = { detectPromise, bookingSubject, isAckOrphan, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD, _EXPLORE_LEAD, _PLAN_CHAIN, _RESULT_STRONG };

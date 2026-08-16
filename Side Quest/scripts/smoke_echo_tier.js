@@ -231,6 +231,18 @@ async function run() {
     ok(et.policyFor('hunter_find_email', { autonomous: true }).allow === true, 'D1: allowed on the autonomous loop as a read');
   }
 
+  // --- G-tool-select (2026-08-16 external-extraction drill): the by-EIN 990 numbers tool + no overpromise ---
+  ok(tier.readToolByOp('nonprofit_financials') && tier.readToolByOp('nonprofit_financials').tool === 'propublica_nonprofit_get',
+    'nonprofit_financials op → propublica_nonprofit_get (the by-EIN NUMBERS tool)');
+  ok(tier.classifyTool('propublica_nonprofit_get') === 'read', 'propublica_nonprofit_get classifies read (never auto-blocked)');
+  ok(tier.readToolByOp('nonprofit_financials').map({ ein: '53-0115260' }).ein === '530115260', 'ein dash-strip (schema accepts both forms)');
+  ok(/no dollar figures/i.test(tier.READ_TOOLS.find((t) => t.op === 'nonprofit_lookup').desc),
+    'nonprofit_lookup desc DISCLAIMS dollars (no overpromise) + redirects to nonprofit_financials');
+  ok(operator.READ_SAFE.has('nonprofit_financials'), 'nonprofit_financials in READ_SAFE → per-EIN calls batch concurrently in-budget');
+  ok(/nonprofit_financials/.test(operator.TOOL_SPEC), 'directed TOOL_SPEC lists the new by-EIN tool');
+  ok(/ECHO DATA TOOLS/.test(tier.operatorReadSpec()) && /nonprofit_financials/.test(tier.operatorReadSpec()), 'operatorReadSpec header preserved + new tool listed');
+  ok(/urllib|outbound HTTP|public data API/i.test(operator.TOOL_SPEC_CORE), 'analyze_data network framing present in the chat-path menu (external fetch permitted)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 }

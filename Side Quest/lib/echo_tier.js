@@ -194,9 +194,15 @@ function policyFor(name, { autonomous = false, maintain = false } = {}) {
 const READ_TOOLS = [
   {
     op: 'nonprofit_lookup', tool: 'propublica_nonprofit_search', lane: 'deep',
-    desc: 'find a 501(c)/nonprofit org by name + its IRS 990 financials, revenue, and exec-comp (great for think tanks, advocacy orgs, foundations)',
+    desc: 'find a 501(c)/nonprofit by name → each match\'s EIN + address + NTEE class ONLY (no dollar figures here). To rank or compare orgs by their money, take the EIN from here and call nonprofit_financials',
     args: '{"query":"Heritage Foundation","state":"DC"}',
     map: (a = {}) => ({ query: String(a.query || a.name || a.q || ''), state: a.state || null, c_code: a.c_code || null, page: a.page || 0 })
+  },
+  {
+    op: 'nonprofit_financials', tool: 'propublica_nonprofit_get', lane: 'deep',
+    desc: 'pull ONE nonprofit\'s IRS 990 history BY EIN — per-year total revenue, expenses, assets, exec comp (filings_with_data). THIS returns the NUMBERS; use it to rank/compare a known set of orgs, one call per EIN, then do the arithmetic yourself (no python for a handful of orgs). Get each EIN from nonprofit_lookup first. If only filings_without_data (PDF-only) comes back, say so — then a web fetch of that PDF is a fair fallback',
+    args: '{"ein":"530115260"}',
+    map: (a = {}) => ({ ein: String(a.ein || a.EIN || a.id || '').replace(/[^0-9]/g, '') })
   },
   {
     op: 'kg_search', tool: 'search_entities',
@@ -331,7 +337,7 @@ function laneSpec(lane) {
 function operatorReadSpec() {
   const lines = ALL_CURATED.map(t => `- ${t.op} ${t.args}\n    ${t.desc}`);
   const osLines = OS_TOOLS.map(t => `- ${t.op} ${t.args}\n    ${t.desc}`);
-  return `ECHO DATA TOOLS (OUR structured data + public records + reliable web fetch — prefer these over a raw scrape when one fits; say so honestly if a result is empty):\n${lines.join('\n')}` +
+  return `ECHO DATA TOOLS (OUR structured data + public records + reliable web fetch). When a source is STRUCTURED — a nonprofit's 990 (nonprofit_lookup → nonprofit_financials by EIN), campaign finance (fec_lookup), federal funding (gov_funding) — PREFER the dedicated tool: one call returns the numbers, whereas scraping the same facts page-by-page with web_fetch burns your whole step budget and usually delivers nothing. If no listed tool fits, say the need via echo before a raw scrape. If a dedicated tool comes back empty or PDF-only, say so honestly — then a web fetch is a fair fallback:\n${lines.join('\n')}` +
     `\nHER OWN MACHINE (full access per Lucas — interactive turns only, Echo's confirm gate applies):\n${osLines.join('\n')}`;
 }
 
