@@ -103,6 +103,27 @@ function isDirected(focus) {
   return !!(s && s.id === focus.id && s.directed);
 }
 
+// DIRECTED-STOP predicate (D-stop + D-bleed, 2026-08-16 drill) — extracted PURE so the fire/no-fire edges
+// are gate-testable. Returns true iff the message is a genuine "stop the standing task" command AND the
+// current focus is NOT an autonomic beat sweep (hasBeat). Three-tier stop-object: STRONG task-nouns
+// (task/project/research/focus/working) fire freely; the self-contained "enough" family fires freely (old
+// code caught a long "that's enough of the deep dive" via the bare "that" — don't regress); bare pronouns
+// (it/this/that) fire ONLY when RIGHT AFTER the stop-verb in a short (≤6-word) imperative — a pronoun
+// buried in a long directed task ("forget FEC … fix it and run it again", T7: 100+ words) is NOT a stop.
+// hasBeat gates out autonomic beat rotations (focus.<id>.beat set on every current beat focus, fresh AND
+// adopted) that must never be narrated to Lucas as a user-facing "you stopped that task, it's saved".
+const _STOP_VERB = /\b(stop|drop|cancel|forget|abandon|pause|quit|never ?mind|that'?s enough|enough (?:for now|of that))\b/i;
+const _STOP_ENOUGH = /\b(that'?s enough|enough (?:for now|of that))\b/i;
+const _STOP_STRONG = /\b(task|project|research|focus|working)\b/i;
+const _STOP_PRONOUN_ADJ = /\b(?:stop|drop|cancel|forget|abandon|pause|quit|never ?mind)\s+(?:it|this|that)\b/i;
+function isDirectedStop(userMessage, { hasBeat = false } = {}) {
+  if (hasBeat) return false;                       // an autonomic beat sweep is never a user stop (D-bleed)
+  const s = String(userMessage || '');
+  if (!_STOP_VERB.test(s)) return false;
+  const words = s.trim().split(/\s+/).length;
+  return _STOP_STRONG.test(s) || _STOP_ENOUGH.test(s) || (words <= 6 && _STOP_PRONOUN_ADJ.test(s));
+}
+
 // Create a DIRECTED focus straight from a user instruction (the chat entry-point the focus system
 // was missing). Unlike setFromText this does NOT require an explicit <focus> tag and does NOT honor
 // the 24h refractory — Lucas explicitly assigned it, so his word overrides the anti-thrash gate. A
@@ -473,7 +494,7 @@ function inquiryVocabTokens() {
 }
 
 module.exports = {
-  getCurrent, isActive, setCurrent, isDirected, originOf, setFromDirective, clear,
+  getCurrent, isActive, setCurrent, isDirected, isDirectedStop, originOf, setFromDirective, clear,
   setFromText, recentlyTombstoned, stripControlTags, parseControlTags,
   isNovel, recordOutcome, domainLeashTokens, inquiryVocabTokens,
   setBackground, recordOutcomeBackground,

@@ -269,10 +269,22 @@ const TASK_RE = /\b(make|build|create|compile|put together|assemble|draft|write\
 // duplicate run + confabulated files (live 2026-06-29). They're context/recall, not a command.
 const PAST_REF_RE = /\b(you (?:were|was|have been|'ve been|had been|did|used to)|we (?:were|have been|'ve been|had been)|you'?d been|remember (?:you|we|when)|earlier you|you'?ve already|already (?:did|done|researched|covered))\b/i;
 
+// EXECUTION/PRODUCTION imperatives (D-route, 2026-08-16 drill): TASK_RE keys on research/assignment
+// verbs, but a directed CODE/ANALYSIS order ("write a python script … run it … paste the output",
+// "pull up the CRM and count the rows … print the numbers") carries none of them and fell through to
+// route=status → the operator never fired and she narrated "I'm on it" (T6/T8). An exec imperative is
+// an order to DO. Bare "run it" is deliberately EXCLUDED (an execution OBJECT is required) so "run it
+// by legal" stays conversational; the interrogative-lead exclusion keeps "how do I run it?" a question.
+const EXEC_RE = /\b(run (?:it|the|this|that) (?:script|query|code|analysis|again)|execute (?:it|the|this|that)|paste (?:the )?(?:output|result|numbers?|rows?|count)|print (?:the )?(?:output|result|numbers?|rows?|count)|save (?:it|the (?:output|file|script)))\b/i;
+const EXEC_LEAD_RE = /^(?:please\s+)?(?:write|make|build|create|generate|compile|run|execute|pull\s+up)\b/i;
+const INTERROG_LEAD_RE = /^\s*(?:how|what|where|when|why|who|which|is|are|do|does|did|can|could|should|would|will|have|has|had)\b/i;
+
 function isDirectedTask(text) {
   const s = String(text || '');
   if (s.length < 6) return false;
-  if (!TASK_RE.test(s)) return false;
+  const taskHit = TASK_RE.test(s);
+  const execHit = (EXEC_RE.test(s) || EXEC_LEAD_RE.test(s.trim())) && !INTERROG_LEAD_RE.test(s);   // exec imperative, not a question
+  if (!taskHit && !execHit) return false;
   if (PAST_REF_RE.test(s)) return false;   // a reference to past/existing work, not a new assignment
   return true;
 }

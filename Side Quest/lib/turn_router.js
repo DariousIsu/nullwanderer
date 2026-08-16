@@ -71,17 +71,25 @@ function computeTurnRoute(sig = {}) {
 
   // 3) STATUS — only for a REAL status intent about active/known work. A bare deliverableAggQ is a WEAK
   //    signal that misfires on factual entity questions (the "who is Trump → list 19 orgs" bug), so it
-  //    only routes to status when it's NOT a factual entity question AND there's actual work to report.
+  //    only routes to status when it's NOT a factual entity question AND there's actual work to report —
+  //    AND it is NOT a genuine assignment (D-route, 2026-08-16 drill): "write a python script … run it …
+  //    paste the output" is an aggregate-shaped ORDER, not a "how's it going?"; the weak tier yields to it
+  //    the same way it already yields to !factual/!personalFactQ, so the operator fires instead of her
+  //    narrating "I'm on it". The STRONG tiers (isStatusReq/activityQ) still win — a real status ask routes
+  //    status even if the assignment regex also trips.
   if (sig.isStatusReq) return _r('status', 0.85, 'status-request');
   if (sig.activityQ) return _r('status', 0.75, 'activity-question');
-  if (sig.deliverableAggQ && sig.hasDirectedFocus && !sig.factual && !sig.personalFactQ) {
+  if (sig.deliverableAggQ && sig.hasDirectedFocus && !sig.factual && !sig.personalFactQ && !sig.isAssignment) {
     return _r('status', 0.6, 'deliverable-agg+active-focus');
   }
 
   // 3.7) CONTACTS — "list / give me / who do we have — the contacts we HOLD" → query the Puller/CRM and
   //      drop a canvas list. Sits ABOVE `task` so a contact-list ask isn't mistaken for a research
-  //      assignment (the "cleanest energy industry contacts → deep-research run" bug).
-  if (sig.isContactsQuery) return _r('contacts', 0.85, 'contacts-query');
+  //      assignment (the "cleanest energy industry contacts → deep-research run" bug). BUT it yields to a
+  //      genuine ASSIGNMENT the same way the status tier does (D-contacts, 2026-08-16 drill): "write me a
+  //      python script that counts contacts by state … run it … paste" is an ORDER to compute, not a
+  //      list-what-we-hold ask — else the analysis lane never fires and she narrates "on it" (T7).
+  if (sig.isContactsQuery && !sig.isAssignment) return _r('contacts', 0.85, 'contacts-query');
 
   // 4) TASK — a genuine work assignment (start / extend a deliverable).
   if (sig.isAssignment) return _r('task', 0.8, 'assignment');

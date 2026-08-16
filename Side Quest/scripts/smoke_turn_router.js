@@ -33,12 +33,25 @@ ok(route({ factual: true, personalFactQ: true }) === 'lookup', 'factual+personal
 // ── work / status paths ──
 ok(route({ isAssignment: true }) === 'task', 'assignment → task');
 ok(route({ isContactsQuery: true }) === 'contacts', 'contacts-query → contacts');
-ok(route({ isContactsQuery: true, isAssignment: true }) === 'contacts', 'contacts-query OUTRANKS assignment (list-what-we-have, not research)');
+ok(route({ isContactsQuery: true, isAssignment: true }) === 'task',
+  'contacts-query YIELDS to a genuine exec/task imperative ("write a python script that counts contacts …") → task (D-contacts, 2026-08-16)');
+ok(route({ isContactsQuery: true, isAssignment: false }) === 'contacts',
+  'a pure contacts-list ask (no exec/task verb) still → contacts (list-what-we-hold path unchanged)');
 ok(route({ socialTurn: true, isContactsQuery: true }) === 'converse', 'social still outranks a contacts-query');
 ok(route({ isStatusReq: true }) === 'status', 'explicit status request → status');
 ok(route({ activityQ: true }) === 'status', 'activity question ("what are you working on") → status');
 ok(route({ deliverableAggQ: true, hasDirectedFocus: true, factual: false }) === 'status',
   'deliverableAggQ + active focus + NOT factual → status (legit deliverable query)');
+
+// ── D-route (2026-08-16 drill): a genuine ASSIGNMENT beats the WEAK deliverable-status tier ──
+// "write a python script … run it … paste the output" is aggregate-SHAPED but it is an ORDER, not a
+// "how's it going?" — it routed status → the operator never fired → she narrated "I'm on it" (T6/T8).
+ok(route({ deliverableAggQ: true, hasDirectedFocus: true, factual: false, isAssignment: true }) === 'task',
+  'deliverableAggQ + focus + isAssignment → task (exec order beats the weak status tier — the T6/T8 mis-route)');
+ok(route({ deliverableAggQ: true, hasDirectedFocus: true, isStatusReq: true, isAssignment: true }) === 'status',
+  'STRONG status tier (isStatusReq) still wins even if the assignment flag also trips');
+ok(route({ deliverableAggQ: true, hasDirectedFocus: true, activityQ: true, isAssignment: true }) === 'status',
+  'STRONG status tier (activityQ) still wins over a stray assignment flag');
 
 // ── priority: control/correction/docqa win ──
 ok(route({ directedStopHandled: true, factual: true }) === 'control', 'stop-handled outranks factual → control');
@@ -65,7 +78,8 @@ ok(lookupWantsOperator({ route: 'converse' }) === false && lookupWantsOperator({
 
 // ── predicates used for the main.js gates ──
 ok(isConversational('answer') && isConversational('converse') && isConversational('lookup'), 'answer/converse/lookup are conversational');
-ok(!isConversational('task') && !isConversational('status'), 'task/status are NOT conversational');
+ok(!isConversational('task') && !isConversational('status') && !isConversational('control') && !isConversational('contacts'),
+  'task/status/control/contacts are NOT conversational (the D-email inbox-suppression set)');
 ok(allowsOperator('lookup') && allowsOperator('task') && !allowsOperator('answer') && !allowsOperator('status'),
   'operator allowed on lookup/task, blocked on answer/status');
 

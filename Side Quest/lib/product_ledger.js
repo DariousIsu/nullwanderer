@@ -34,6 +34,17 @@ const LEADS_BUILD = /^\s*(?:please\s+)?(?:now\s+)?(?:can you\s+|could you\s+|wou
 // Asking ABOUT a product's content, not for the product.
 const ABOUT = /\b(what (?:does|do|did|is|are)|why (?:does|did)|how (?:does|did)|summarize|explain)\b/i;
 
+// DIRECTED-TASK VETO (D-pullup, 2026-08-16 drill): a retrieve verb can ride a message whose DOMINANT
+// intent is a directed code/analysis task ("pull up the CRM and write a python script … run it …
+// paste the output"). LEADS_BUILD only catches a message that OPENS with a build verb; here the task
+// clause is CONJOINED after the "pull up", so the pull-up door stole the turn to an unrelated held
+// doc (Claim-Form.pdf) and the analysis lane never ran. A code/execution directive is an order to DO
+// — it beats the retrieve verb. Scoped to the code/execution SHAPE; bare adjective/noun collisions
+// (aggregate/bash/compute/tabulate/"count records") and the review idiom "run it by <someone>"
+// (negative lookahead) are EXCLUDED so ordinary held-product pull-ups are untouched.
+const DIRECTED_TASK = /\b(?:python|javascript|node\.js|\bsql\b|bash script|shell script|a (?:python |node |sql )?script|run (?:it|this|that)\b(?!\s+by\b)|run (?:the )?(?:script|code|query|python|program)|execute\b|paste (?:the )?(?:output|results?))\b/i;
+function isDirectedTask(text) { return DIRECTED_TASK.test(str(text)); }
+
 // The EPISODIC anchor — the signal that a specific prior product is meant:
 //   "that/this/my/our <noun>", "the (most) recent/latest/last <noun>", or a shared-history clause
 //   ("…we found/made/built/researched/compiled/put together/worked on/did/wrote").
@@ -55,6 +66,7 @@ function _hasAnchor(t) {
 function detectAsk(text) {
   const t = str(text).trim();
   if (!t) return null;                        // no length cap — a detailed ask is still an ask
+  if (DIRECTED_TASK.test(t)) return null;     // directed code/analysis task → not a pull-up; the operator owns it
   const nounRe = new RegExp(`\\b(?:${NOUN})\\b`, 'i');
   if (!nounRe.test(t)) return null;
   if (LEADS_BUILD.test(t)) return null;
@@ -207,4 +219,4 @@ function searchProducts({ db, query, notesDir = null, limit = 3, now = Date.now(
   return reordered.slice(0, Math.max(1, limit));
 }
 
-module.exports = { detectAsk, detectAskLoose, searchProducts, tokensOf };
+module.exports = { detectAsk, detectAskLoose, searchProducts, tokensOf, isDirectedTask };

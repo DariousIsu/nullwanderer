@@ -54,4 +54,19 @@ function bookingSubject({ deliverable, sentence }) {
   return `${base}#${(h >>> 0).toString(36)}`;
 }
 
-module.exports = { detectPromise, bookingSubject, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE };
+// ACK-ORPHAN (D-orphan, 2026-08-16 drill): the operator RAN but the cloud model ended its final message
+// on a content-free acknowledgement ("writing it now — stand by, I'll paste the output shortly") instead
+// of the actual result. Delivering that verbatim voices a PROMISE as the deliverable — the answer-orphan.
+// True iff the answer is SHORT, LEADS/reads as an ack, and carries NO result payload (digits, a code
+// fence, a markdown table row, a notes/ path, an exit code, or "rows"). A real result that merely OPENS
+// with "on it, here's the data: <numbers>" carries a payload → NOT an orphan (must not over-fire). An
+// honest empty/partial ("the analysis ran but returned 0 rows") carries a payload token → NOT an orphan.
+const _ACK_LEAD = /\b(on it|stand ?by|first pass|writing it (?:now|up)|i'?ll (?:get|paste|send|have|share|run|write)|starting (?:on )?(?:that|it|this|now)|working on it|hang tight|bear with me|give me a (?:moment|sec|minute)|let me (?:get|pull|run|write) (?:that|this|it))\b/i;
+const _RESULT_PAYLOAD = /\d{2,}|```|\| .+ \||\/notes\/|exit=\d|\brows?\b/;
+function isAckOrphan(ans) {
+  const s = String(ans == null ? '' : ans).trim();
+  if (!s || s.length >= 240) return false;      // a long answer is a real deliverable, not a bare ack
+  return _ACK_LEAD.test(s) && !_RESULT_PAYLOAD.test(s);
+}
+
+module.exports = { detectPromise, bookingSubject, isAckOrphan, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD };

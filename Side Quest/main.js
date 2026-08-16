@@ -8793,8 +8793,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     const focusLib = require('./lib/focus');
     const f = focusLib.getCurrent();
-    if (f && focusLib.isDirected(f) && /\b(stop|drop|cancel|forget|abandon|pause|quit|never ?mind|that'?s enough|enough (?:for now|of that))\b/i.test(userMessage)
-        && /\b(task|project|research|focus|working|that|it|this)\b/i.test(userMessage)) {
+    // D-stop + D-bleed (2026-08-16 drill): fire only on a genuine "stop the standing task" command AND when
+    // the current focus is NOT an autonomic beat sweep. The three-tier stop-object gate (strong nouns free /
+    // "enough" family free / bare pronouns only ≤6-word adjacent) + the .beat gate live in the pure,
+    // gate-tested focus.isDirectedStop; the .beat read short-circuits on `f &&` so it never runs on null f.
+    if (f && focusLib.isDirected(f)
+        && focusLib.isDirectedStop(userMessage, { hasBeat: !!(db.getMeta(`focus.${f.id}.beat`) || '').trim() })) {
       // Park-land BEFORE clearing so "what you gathered so far is saved" (the line she says below)
       // is true of the living-document pool, not just the notes file — the next topic-matched seed
       // continues this work instead of restarting at zero.
@@ -8859,7 +8863,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           console.log('[user-work] sequenced follow-up ("when/once … finished") — redirect QUEUED, live focus not parked');
         }
       }
-      if (red && red.topic) {
+      // D-refine (2026-08-16 drill): an EXECUTION imperative ("forget FEC for a second … write me a python
+      // script … run it … paste") is work to DO, never a redirect/refinement CONTROL turn. Folding it into
+      // a topic-matched focus (or parking+registering it) sets directedStopHandled and gates off the
+      // operator → she acknowledges ("on it") and nothing runs (T7). Let it fall through to the operator.
+      // (Bounded: a pivot that is also an exec task runs the task instead of parking the old focus —
+      // delivering the work is the priority, and "forget X for a second" implies temporary anyway.)
+      if (red && red.topic && !_isDirectedTaskR) {
         const focusLib = require('./lib/focus');
         const f = focusLib.getCurrent();
         // REFINEMENT vs PIVOT (2026-08-03): if the steered topic MATCHES the CURRENT directed focus, this
@@ -9344,7 +9354,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         try {
           const pl = require('./lib/product_ledger');
           const loose = pl.detectAskLoose(userMessage);
-          if (loose && pl.searchProducts({ db, query: loose.subject, notesDir: filesLib.resolvePath('notes'), limit: 1 }).length) {
+          // D-pullup (2026-08-16 drill): a directed code/analysis task ("pull up the CRM and write a python
+          // script … run it … paste") must NOT yield to the pull-up door on an incidental held-product match
+          // (T8 hijacked to an unrelated Claim-Form.pdf). The task verb beats the retrieve verb.
+          if (loose && !pl.isDirectedTask(userMessage) && pl.searchProducts({ db, query: loose.subject, notesDir: filesLib.resolvePath('notes'), limit: 1 }).length) {
             _pollRetrievalYield = true;
             console.log(`[poll] yielded — retrieval-shaped ask matches a HELD product; the pull-up door owns this turn`);
           }
@@ -9545,7 +9558,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (opMode !== 'off' && (routeAllowsAny('lookup', 'task') || docSetBlock || selfCodeReview) && (needsExternal || isAssignment || docSetBlock || selfCodeReview || _lookupWantsOp) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && !_rosterOwns && userMessage && userMessage.trim().length > 6) {
       // directed (in-turn completion mode) when this is an assignment (intake gate, or regex
       // fallback) — or a set-analysis ask, or a self-code-review, which need the multi-step budget.
-      const directed = isAssignment || !!docSetBlock || selfCodeReview;
+      // D-route touch 3 (2026-08-16 drill): a genuine EXEC imperative (_isDirectedTaskR, now true for
+      // "write a python script … run it … paste") gets the directed budget even when the cloud intake
+      // tagged it action='none' — else it fires the operator in snappy single-pass mode and starves the
+      // write→run→read-traceback→fix→rerun→paste loop the task needs.
+      const directed = isAssignment || _isDirectedTaskR || !!docSetBlock || selfCodeReview;
       // Immediate feedback — the agent loop can take a few seconds. Use a REQUEST-SERVING placeholder
       // ("on it — starting on that now"), NOT the self-focused "I'm in the middle of something" busy
       // line, which reads as brushing Lucas off the instant he hands her a task.
@@ -9567,7 +9584,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const opRes = _fanoutNote
         ? { answer: _fanoutNote, toolsUsed: ['spawn_agent_async'] }
         : await runCloudOperator({ userMessage, context: _codeReviewSteer + (docSetBlock ? `${docSetBlock}\n\n` : '') + (distilledBrief || retrievedKnowledgeBlock || ''), task: directed, review: selfCodeReview });
-      if (opRes && opRes.answer) {
+      // D-orphan structural gate (2026-08-16 drill): the operator RAN but the model can end on a bare ack
+      // ("writing it now — stand by, I'll paste the output shortly") mid-loop. Delivering that verbatim
+      // (the DELIVER block below) voices a PROMISE as "the complete result of the task you just ran" — the
+      // answer-orphan, now WITH the operator having executed. A directed ack-orphan is REJECTED here and
+      // falls through to the directed honest-hedge (the else-if below), which offers to actually run it.
+      if (opRes && opRes.answer && !(directed && require('./lib/delivery').isAckOrphan(opRes.answer))) {
         operatorAnswer = opRes.answer;
         if (directed) operatorDirected = true;   // verbatim-delivery contract → survives a cloud-voice outage (direct-deliver below)
         if (selfCodeReview) {
@@ -9900,6 +9922,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       db.setTurnModelVisible(userTurnRow.id, composedUserMessage);
     }
   } catch (e) { console.error('[main] model_visible persist failed:', e.message); }
+  // D-EMAIL GUARD (2026-08-16 drill): the unread-inbox digest (source='email' inbounds queued by the
+  // poller ~1992) must NOT front-load into a directed-task / status / control reply (3 emails hijacked a
+  // task answer, T8). Email has its OWN surfacing channel (the heartbeat), so suppressing it here loses
+  // nothing: the row stays queued (consumed_ts NULL) and re-surfaces via heartbeat or the next
+  // conversational reply. Chat-bot inbounds (source!='email') are untouched. Reads the FINAL turnRoute
+  // (after the 9520 re-stamp, so T7's re-stamp→control is honored). routerOn-guarded. ONE filtered set is
+  // reused by BOTH the inject arg AND the irreversible consume below — a deferred email is never dropped.
+  const _emailDigestOK = !routerOn || (require('./lib/turn_router').isConversational(turnRoute.route) && turnRoute.route !== 'lookup');
+  const _promptInbounds = _emailDigestOK ? pendingInbounds : (pendingInbounds || []).filter((i) => i.source !== 'email');
   const messages = buildChatPrompt({
     userName,
     recentReflections: distilledBrief ? [] : recentReflections,
@@ -9911,7 +9942,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     awareness,
     protocols,
     browserBlock,
-    pendingInbounds,
+    pendingInbounds: _promptInbounds,
     retrievedKnowledgeBlock: distilledBrief
       ? `FOCUS BRIEF — the distilled essence of your memory + context relevant to THIS turn. Use it directly; it already contains what matters, so don't ask for more or say you lack context:\n${distilledBrief}`
       : retrievedKnowledgeBlock,
@@ -10476,8 +10507,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Turn succeeded → mark the injected inbounds consumed (they're now in her
   // context). Done AFTER the stream so a model failure above doesn't silently
   // drop a pending inbound — it stays queued to re-surface next turn.
-  if (pendingInbounds && pendingInbounds.length > 0) {
-    for (const i of pendingInbounds) {
+  if (_promptInbounds && _promptInbounds.length > 0) {
+    for (const i of _promptInbounds) {
       try { db.markInboundConsumed(i.id); } catch {}
     }
   }
@@ -12689,7 +12720,7 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
     // DIRECTED TASK → in-turn completion: more steps + a longer budget + a mandate to deliver the WHOLE
     // thing this turn (gather all of it, save long deliverables to a file, don't stop at a teaser).
     const taskNote = task
-      ? '\n\nThis is an ASSIGNED TASK — drive it to a COMPLETE deliverable in THIS turn: gather everything needed across multiple tool steps, do NOT stop after one step or hand back a partial teaser, and produce the FULL result (the entire list / the complete write-up). If the deliverable is long, save it with the file tool (op:"write", a notes/… path) and tell Lucas where it is. Only give a final answer once the deliverable is actually complete.'
+      ? '\n\nThis is an ASSIGNED TASK — drive it to a COMPLETE deliverable in THIS turn: gather everything needed across multiple tool steps, do NOT stop after one step or hand back a partial teaser, and produce the FULL result (the entire list / the complete write-up). If the deliverable is long, save it with the file tool (op:"write", a notes/… path) and tell Lucas where it is. Only give a final answer once the deliverable is actually complete.\n\nYour FINAL message MUST BE the deliverable itself — the actual result/output/answer, an honest PARTIAL (what you ran, what you got, what failed), or ONE genuine clarifying question. NEVER end on a content-free acknowledgement ("on it", "starting now", "stand by", "first pass", "writing it now", "I\'ll paste the output shortly"). A partial REAL result beats a promise.'
       : '';
     // 12/180s (was 8/90s): parity with the chat lane's MAX_ECHO_HOPS=12, and each step now carries
     // full-size tool results (operator.js reads them at toolResultChars, not a 1,200-char keyhole),

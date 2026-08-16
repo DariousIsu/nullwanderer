@@ -537,6 +537,13 @@ const smokes = [
   // a parrot — this is a goals-blocker, not polish.
   'smoke_replay_gate.js',
   'smoke_session_invariant.js',   // the model-visible-means-logged invariant (answer-orphaning structural fix, 2026-08-15)
+  // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
+  // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
+  'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks
+  'smoke_product_ledger_veto.js', // D-pullup: a code/analysis task beats the held-product pull-up door
+  'smoke_directed_stop.js',       // D-stop + D-bleed: false-stop tightening + the autonomic-beat gate
+  'smoke_ack_orphan.js',          // D-orphan: the structural ack-orphan gate at the DELIVER decision point
+  'smoke_email_guard.js',         // D-email: inbox digest suppressed on directed-task / status / control / lookup
   // ── the duplicate-thread ROOT (2026-08-13): the dedup pool was the 50 STALEST threads (ASC) —
   // a fresh sibling was never in the window. newestFirst pool + the token floor now catch the
   // 71-second rephrase with the embedder dead.
