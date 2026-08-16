@@ -21,7 +21,14 @@ const ANALYTIC_RE = /\b(frequen\w*|count\w*|how many|how often|tally|tabulate|co
 const SET_RE = /\b(documents?|docs?|files?|rosters?|lists?|sheets?|spreadsheets?|csvs?|attachments?|drops?|dropped|canvas)\b/i;
 function detectSetAnalysisAsk(text) {
   const s = String(text || '');
-  return ANALYTIC_RE.test(s) && SET_RE.test(s);
+  // A trailing "…and drop/put X ON the canvas" is an OUTPUT destination, not a held document-SET to
+  // analyze (T11 residual, 2026-08-16): "compare … and drop a comparison table on the canvas" false-
+  // matched SET_RE on the word "canvas" and injected 7 irrelevant held docs into an EXTERNAL FEC task.
+  // Strip the output tail (the same net doc_qa uses) before the set-noun test; a canvas that is the
+  // SUBJECT of the analysis ("compare the docs on the canvas") has no output verb at a boundary → kept.
+  let sRef = s;
+  try { sRef = s.replace(require('./doc_qa').CANVAS_OUTPUT_RE, ' '); } catch {}
+  return ANALYTIC_RE.test(s) && SET_RE.test(sRef);
 }
 
 // The recent canvas drops, as a set. Recency-bounded (default 14 days) so a months-old drop pile

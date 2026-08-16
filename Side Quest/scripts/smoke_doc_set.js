@@ -21,6 +21,12 @@ ok(!ds.detectSetAnalysisAsk('how many senators does Ohio have'), 'a plain lookup
 ok(!ds.detectSetAnalysisAsk('read the document I just dropped'), 'a single-doc read (no analytic verb) stays doc-QA');
 ok(!ds.detectSetAnalysisAsk('') && !ds.detectSetAnalysisAsk(null), 'empty/null never throws');
 
+// --- canvas as OUTPUT DESTINATION is not a document-SET to analyze (T11 residual, 2026-08-16) ---
+ok(!ds.detectSetAnalysisAsk('compare the two florida senate candidates FEC numbers and drop a comparison table on the canvas'),
+  'THE T11 residual: external "compare … and drop a table on the canvas" (output tail) → NOT a set-analysis ask');
+ok(ds.detectSetAnalysisAsk('compare the documents on the canvas and tell me the overlap'),
+  'canvas as the SUBJECT of the analysis ("compare the documents on the canvas") → STILL detects (no output verb at a boundary)');
+
 // --- the set: canvas drops only, recency-bounded, newest first ---
 const land = (title, body, source, ts) => {
   const r = db.insertDocument({ title, body, source });
