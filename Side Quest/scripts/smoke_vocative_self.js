@@ -27,6 +27,7 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
 const DB = {
   isSelfName: (n) => ['zoe', 'zoe lane', 'lane'].includes(String(n).trim().toLowerCase()),
   isOwnerName: (n) => ['lucas', 'lucas overby', 'overby'].includes(String(n).trim().toLowerCase()),
+  isPeerName: (n) => ['claude'].includes(String(n).trim().toLowerCase()),
 };
 
 // ── the exact live failure ──────────────────────────────────────────────────────────────────────
@@ -98,6 +99,30 @@ const DB = {
   ok(/\(det && det\.self\) \? null :/.test(rec),
     'active_recall STOPS on a deliberate suppression instead of falling back to the regex');
   ok(/isVocativeSelf\(entTopic\)/.test(rec), 'the final mention is re-checked whatever tier produced it');
+}
+
+// ── ⭐ THE AI PEER "Claude" — bare "Claude" is the peer, not one of the human civic Claudes ────────
+// Live, 2026-08-15: an AI peer introduced itself as "Claude" and every turn re-collided with the human
+// Claude entities (Pepper/Weaver/Kitchin/Keissieh) → "which Claude do you mean?" forever. A durable peer
+// identity (db.getPeerIdentity) + the same exact-alias guard binds bare "Claude" and leaves humans reachable.
+{
+  for (const m of ['Claude', "It's Claude", "I'm Claude", 'this is Claude', 'Hey Claude']) {
+    ok(mention.isVocativeSelf(m, { db: DB }), `"${m}" → the AI peer, not a civic lookup`);
+  }
+  for (const m of ['Claude Pepper', 'Claude Weaver', 'Hey Claude Kitchin']) {
+    ok(!mention.isVocativeSelf(m, { db: DB }), `"${m}" is a human namesake — still looked up`);
+  }
+  const fs = require('fs'), path = require('path');
+  ok(/peerFlags\[i\]/.test(fs.readFileSync(path.join(__dirname, '..', 'lib', 'manifest.js'), 'utf8')),
+    'manifest resolution-skip includes the peer flag (bare "Claude" not sent to civic resolve)');
+  // db.isPeerName against a throwaway db (exact-alias; humans stay resolvable)
+  try {
+    const os = require('os');
+    process.env.SQ_DB_PATH = process.env.SQ_DB_PATH || path.join(os.tmpdir(), `sq_peer_${process.pid}`, 'sq.db');
+    const realDb = require('../lib/db'); realDb.init();
+    ok(realDb.isPeerName('Claude') === true, 'db.isPeerName binds bare "Claude" to the AI peer');
+    ok(realDb.isPeerName('Claude Pepper') === false, 'db.isPeerName leaves the human "Claude Pepper" resolvable');
+  } catch (e) { ok(false, 'db.isPeerName smoke setup failed: ' + e.message); }
 }
 
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);

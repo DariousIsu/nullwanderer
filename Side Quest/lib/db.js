@@ -426,6 +426,11 @@ const MIGRATIONS = [
   // the full source without the store ever holding a copy of it.
   `ALTER TABLE knowledge ADD COLUMN provenance TEXT`,
   `ALTER TABLE turns ADD COLUMN embedding TEXT`,
+  // MODEL-VISIBLE (2026-08-15, deepseek-harness "model-visible means logged"): what the model ACTUALLY
+  // received for this turn (raw message + held-data/attachments/drafted-answer/control injections). NULL on
+  // turns where nothing was injected (replay falls back to `content`). Persisting it lets a later replay
+  // reconstruct the real cause of the reply — the answer-orphaning / apparent-fabrication structural fix.
+  `ALTER TABLE turns ADD COLUMN model_visible TEXT`,
   // permissions — the authoritative list of what Zoe is ALREADY allowed/able to do.
   // The structured source of truth behind "settled permission": always injected so
   // she stops ASKING for / PROPOSING capabilities she already has (chronic under-reach
@@ -1185,6 +1190,11 @@ function turnsAfter(afterId = 0, limit = 4000) {
 // --- episodic recall: turn embeddings (for "what did we say earlier about X") ---
 function setTurnEmbedding(id, embedding) {
   getDb().prepare('UPDATE turns SET embedding = ? WHERE id = ?').run(embedding, id);
+}
+// Persist what the model SAW for a turn (the composed message, not the raw content) — the model_visible
+// invariant. Consumed on replay by lib/context._replayUserContent. Fail-soft; bounded (never an unbounded blob).
+function setTurnModelVisible(id, text) {
+  try { getDb().prepare('UPDATE turns SET model_visible = ? WHERE id = ?').run(String(text == null ? '' : text).slice(0, 24000), id); } catch {}
 }
 // user + ai_said turns that carry an embedding, newest first, capped (small N → cosine in JS).
 function getEmbeddedTurns(limit = 400) {
@@ -2304,6 +2314,22 @@ function isSelfName(name) {
   return getAssistantAliases().some((a) => _ownerNorm(a) === n);
 }
 
+// The AI PEER she works with (Claude). Consulted so a bare conversational "Claude" is NOT mistaken for
+// one of the human "Claude" civic entities (Claude Pepper/Weaver/Kitchin/…) and disambiguated every turn
+// ("which Claude do you mean?"). Same exact-alias shape as isSelfName, so "Claude Pepper" (a superstring)
+// still resolves to the human. Meta-overridable via peer_identity; deliberately NOT a graph node (that
+// would add a 5th ambiguous candidate) — an identity-registry fact consulted BEFORE resolution.
+function getPeerIdentity() {
+  try { const raw = getMeta('peer_identity'); if (raw) return JSON.parse(raw); } catch {}
+  return { canonical: 'Claude', aliases: ['Claude'], type: 'ai_peer', org: 'Anthropic', note: 'The AI peer I work with (Anthropic). Not a civic entity to look up; distinct from the human Claudes.' };
+}
+
+function isPeerName(name) {
+  const n = _ownerNorm(name);
+  if (!n || n.length < 2) return false;
+  return (getPeerIdentity().aliases || []).some((a) => _ownerNorm(a) === n);
+}
+
 // Build the alias set from a full name: full, "First Last", "F. Last", "Last, First", initials, bare last.
 function _ownerAliases(full, userName, email) {
   const set = new Set();
@@ -2793,6 +2819,7 @@ module.exports = {
   getRecentTurns,
   turnsAfter,
   setTurnEmbedding,
+  setTurnModelVisible,
   getEmbeddedTurns,
   getTurnsMissingEmbedding,
   getKnowledgeMissingEmbedding, setKnowledgeEmbedding,
@@ -2911,6 +2938,8 @@ module.exports = {
   getOwnerIdentity,
   isOwnerName,
   isSelfName,
+  getPeerIdentity,
+  isPeerName,
   getAssistantAliases,
   seedOwnerIdentity,
   getMetaKeysLike,

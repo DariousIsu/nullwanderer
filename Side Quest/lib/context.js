@@ -318,6 +318,19 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
  *   then    = alternating user / assistant from recentTurns (assistant carries <think>/<say>)
  *   finally = the new user message
  */
+// MODEL-VISIBLE REPLAY (2026-08-15, deepseek-harness "model-visible means logged"): a prior USER turn is
+// replayed to the model as what the model ACTUALLY saw (model_visible = the composed message: raw +
+// held-data/attachments/drafted-answer), not the raw content — so a reply that referenced injected context no
+// longer reads as unfounded when the turn scrolls back (the answer-orphaning fix). CAVEAT: strip TRANSIENT
+// [CONTROL …] state-directives (e.g. a work-hold "STATE ALREADY CHANGED") — replaying them as history would
+// re-assert a stale state; the load-bearing context is kept. Falls back to raw content when nothing was logged.
+function _replayUserContent(t) {
+  const mv = t && t.model_visible;
+  if (!mv) return (t && t.content) || '';
+  const cleaned = String(mv).replace(/\n*\[CONTROL[^\]]*\]/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  return cleaned || (t && t.content) || '';
+}
+
 function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, selfModelBlock, moodBlock, personalBlock, relevantPastTurns, openQuestionBlock, socialTurn, convoStateBlock, varietyNudge, echoSuitBlock, newUserMessage }) {
   let systemContent = sub(BOOTSTRAP, userName);
 
@@ -459,7 +472,7 @@ Examples:
   let i = 0;
   while (i < recentTurns.length) {
     const t = recentTurns[i];
-    if (t.speaker === 'user') { entries.push({ role: 'user', content: t.content }); i++; }
+    if (t.speaker === 'user') { entries.push({ role: 'user', content: _replayUserContent(t) }); i++; }
     else if (t.speaker === 'ai_thought') {
       // SAME-EXCHANGE ONLY (08-08 audit, defect 2): a thought and its say are inserted together at
       // reply delivery — seconds apart. A suppressed-say thought that continuity persisted can sit
@@ -710,4 +723,4 @@ function buildReflectionPrompt({ userName, turnsSinceLastReflection }) {
   return [{ role: 'user', content: promptText }];
 }
 
-module.exports = { buildChatPrompt, buildReflectionPrompt, buildAwarenessBlock, fitToWindow, historyHandle, HANDLE_MAX, BOOTSTRAP, REFLECTION, BASE_PERSONA };
+module.exports = { buildChatPrompt, buildReflectionPrompt, buildAwarenessBlock, fitToWindow, historyHandle, _replayUserContent, HANDLE_MAX, BOOTSTRAP, REFLECTION, BASE_PERSONA };

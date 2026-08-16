@@ -9583,15 +9583,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         }
         try { db.insertMonologue({ content: `operator drove the turn [${(opRes.toolsUsed || []).join('+') || 'no tools'}]: ${operatorAnswer.slice(0, 200)}`, model: 'operator', type: 'reading' }); } catch {}
         console.log(`[operator] drove turn (${(opRes.toolsUsed || []).join('+') || 'no tools'}) → "${operatorAnswer.slice(0, 80)}"`);
-      } else if (turnRoute.route === 'lookup') {
-        // M1 (2026-08-12 review): the operator FIRED on a factual-external turn but came back
-        // null/empty (cloud down, a leaked-JSON step, a failed force-final) — the old path fell
-        // SILENTLY through to the local voice answering FROM TRAINING, with no hedge and no log,
-        // right after an "on it" busy line. That is the answer-from-training disease re-entering
-        // through the failure door ([[db-is-foundation-no-recall-only]]). The turn still gets an
-        // answer, but an HONEST one: the lookup failed and she says so.
-        composedUserMessage = `${composedUserMessage}\n\n[Calibration: you tried to LOOK THIS UP and the search did NOT complete (a tool failure — not "no results"). Say so plainly and offer to retry in a moment. You may give general background you genuinely hold, but LABEL it as unverified-from-memory and do not state live/specific values as fact.]`;
-        console.log('[operator] EMPTY on a lookup-routed turn → honest-hedge directive injected (never a silent training answer)');
+      } else if (turnRoute.route === 'lookup' || directed || !!docSetBlock) {
+        // M1 (2026-08-12 review) + doc-set replay fix (2026-08-15): the operator FIRED but came back
+        // null/empty (cloud down, a leaked-JSON step, a failed force-final). The old path fell SILENTLY
+        // through to the local voice answering FROM CONTEXT — which on a lookup answered from TRAINING,
+        // and on a directed/analysis turn regurgitated the PRIOR assistant turn verbatim (the desktop
+        // replay). Either way it is the answer-from-nothing disease entering through the failure door
+        // ([[db-is-foundation-no-recall-only]]). The turn still gets an answer, but an HONEST one.
+        if (turnRoute.route === 'lookup') {
+          composedUserMessage = `${composedUserMessage}\n\n[Calibration: you tried to LOOK THIS UP and the search did NOT complete (a tool failure — not "no results"). Say so plainly and offer to retry in a moment. You may give general background you genuinely hold, but LABEL it as unverified-from-memory and do not state live/specific values as fact.]`;
+          console.log('[operator] EMPTY on a lookup-routed turn → honest-hedge directive injected (never a silent training answer)');
+        } else {
+          composedUserMessage = `${composedUserMessage}\n\n[Calibration: you tried to RUN/ANALYZE this and it did NOT complete this turn (a tool failure — the analysis produced nothing usable). Say so plainly and offer to actually run it now — do NOT answer from prior context, and do NOT repeat an earlier reply. Never invent a result you don't have.]`;
+          console.log('[operator] EMPTY on a directed/analysis turn → honest-hedge directive injected (never a silent replay from context)');
+        }
       }
     }
   } catch (e) { console.error('[main] operator turn failed:', e.message); }
@@ -9885,6 +9890,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // (main.js ~1573). Restored to idle right after the (synchronous) build so a block just after attributes as
   // "idle (just-ended: reply-prompt)". See docs/INTEGRATED_BUILD_TRACK_2026-08-10.md §B0.
   markActivity('reply-prompt');
+  // MODEL-VISIBLE INVARIANT (2026-08-15, deepseek-harness "model-visible means logged"): the durable user
+  // turn was written RAW at insert (~6914); the model actually receives composedUserMessage (raw + held-data
+  // / attachments / drafted-answer / control injections), which until now was only a local variable. Persist
+  // what the model SAW on the user turn so a later replay reconstructs the real cause of the reply — killing
+  // the answer-orphaning / apparent-fabrication class at the source. Only when something was injected; fail-soft.
+  try {
+    if (userTurnRow && userTurnRow.id && composedUserMessage && composedUserMessage !== userMessage) {
+      db.setTurnModelVisible(userTurnRow.id, composedUserMessage);
+    }
+  } catch (e) { console.error('[main] model_visible persist failed:', e.message); }
   const messages = buildChatPrompt({
     userName,
     recentReflections: distilledBrief ? [] : recentReflections,
@@ -11455,11 +11470,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               if (verdict.intent === 'pullup') {
                 let _phits = [];
                 try { _phits = require('./lib/product_ledger').searchProducts({ db, query: verdict.subject || userMessage, notesDir: filesLib.resolvePath('notes'), limit: 3 }); } catch {}
-                if (_phits.length) {
-                  presentHeldProduct({ io, channel, sessionId, hit: _phits[0], alternates: _phits.slice(1), subject: verdict.subject || userMessage.slice(0, 120) })
+                // TITLE-MATCH GATE (2026-08-15): searchProducts admits body-only matches (a doc with zero
+                // title overlap but ≥3 generic body-token hits qualifies), so presenting _phits[0] blindly
+                // once landed an unrelated Minnesota doc on the canvas narrated as "the five-largest-tables
+                // doc" — a fabrication. Present only a hit whose TITLE actually carries a subject token; scan
+                // (not [0]) so a real title-match behind a fresher body-only decoy is still found.
+                const _pl = require('./lib/product_ledger');
+                const _stoks = _pl.tokensOf(verdict.subject || userMessage);
+                const _titleHit = (h) => _stoks.length && _stoks.some((w) => String(h.title || '').toLowerCase().includes(w));
+                const _match = _phits.find(_titleHit);
+                if (_match) {
+                  presentHeldProduct({ io, channel, sessionId, hit: _match, alternates: _phits.filter((h) => h !== _match && _titleHit(h)), subject: verdict.subject || userMessage.slice(0, 120) })
                     .catch((e) => console.error('[artifact-router] pull-up failed:', e.message));
                 } else {
-                  // The model judged RETRIEVAL — an honest "we never made one" beats a silent rebuild.
+                  // No product whose TITLE matches the ask — an honest "we never made one" beats presenting a
+                  // body-only decoy as the artifact (the model judged RETRIEVAL, not a fresh build).
                   fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked you to pull up a product ("${(verdict.subject || userMessage).slice(0, 120)}") but NO such product exists in the stores — you two never made one, or it predates the ledger. Say that plainly and OFFER to build it fresh; do not silently substitute a new query's output as if it were the old product.]` })
                     .catch(() => {});
                 }
@@ -11514,13 +11539,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         let _phits = [];
         try { _phits = require('./lib/product_ledger').searchProducts({ db, query: _pask.subject, notesDir: filesLib.resolvePath('notes'), limit: 3 }); }
         catch (e) { console.error('[pull-up] search failed:', e.message); }
-        if (_phits.length) {
+        // TITLE-MATCH GATE (2026-08-15): mirror the artifact-router door — present only a hit whose TITLE
+        // carries a subject token, scanning past fresher body-only decoys; otherwise fall through so a
+        // fresh build is offered rather than a wrong doc substituted.
+        const _plL = require('./lib/product_ledger');
+        const _stoksL = _plL.tokensOf(_pask.subject);
+        const _titleHitL = (h) => _stoksL.length && _stoksL.some((w) => String(h.title || '').toLowerCase().includes(w));
+        const _matchL = _phits.find(_titleHitL);
+        if (_matchL) {
           followupFired = true;
-          console.log(`[pull-up] product ask "${_pask.subject}" → ${_phits.length} held product(s), top: ${_phits[0].label}`);
-          presentHeldProduct({ io, channel, sessionId, hit: _phits[0], alternates: _phits.slice(1), subject: _pask.subject })
+          console.log(`[pull-up] product ask "${_pask.subject}" → ${_phits.length} held product(s), presenting title-match: ${_matchL.label}`);
+          presentHeldProduct({ io, channel, sessionId, hit: _matchL, alternates: _phits.filter((h) => h !== _matchL && _titleHitL(h)), subject: _pask.subject })
             .catch((e) => console.error('[pull-up] present failed:', e.message));
         } else {
-          console.log(`[pull-up] product ask "${_pask.subject}" → no held product matched — falling through (a fresh build must be offered, not substituted)`);
+          console.log(`[pull-up] product ask "${_pask.subject}" → no TITLE-matching held product — falling through (a fresh build must be offered, not substituted)`);
         }
       }
     }
@@ -14483,10 +14515,28 @@ async function _autonomicSchedulerTick() {
             // planner for "the named organizations/people to profile", so a question whose answer
             // is an explanation or a relationship became a roster walk.
             let _kind = 'entity';   // cloud-down fallback = prior behaviour, no surprise
+            let _d = null;
             try {
-              const _d = await require('./lib/intake').classify(cand.content);
+              _d = await require('./lib/intake').classify(cand.content);
               if (_d && ['entity', 'topical', 'forecast'].includes(_d.kind)) _kind = _d.kind;
             } catch (e) { console.error('[user-work] kind classify failed:', e.message); }
+            // OVER-ESCALATION GUARD (2026-08-15 deep-dive): this seed block runs the FULL project machinery
+            // (preflight + plan + canvas contract + overnight driver) for ANY seeded thread — it computed
+            // _d.isProject and threw it away, so a one-shot answerable lookup ("who represents X", "which
+            // five tables…") became a standing overnight project. Honor the SAME signal the in-turn DISCOVER
+            // branch already trusts (intake.route → action:'none' when !isProject): when the cloud says this
+            // is NOT a sustained project, do NOT seed — undo the focus we just set, stamp the thread lane
+            // 'none' (the EXISTING "not driver-drainable, waiting on conversation" disposition at ~14461 —
+            // it stays open + pending + rescuable via the explicit-redirect override), and end the tick so
+            // the thread is answered inline in chat instead. Fail-OPEN when the cloud is down (_d null).
+            if (_d && _d.isProject === false) {
+              try { focusLib.clear('not-project-scale'); } catch {}
+              try { db.setMeta(`thread.${cand.id}.lane`, 'none'); } catch {}
+              try { db.touchOpenThread(cand.id, 'quick lookup — answered inline in chat, not a standing project (not autonomously seeded)', { keepStatus: true }); } catch {}
+              console.log(`[user-work] #${cand.id} not project-scale → not seeded (answered inline in chat)`);
+              _saveSchedState(state);
+              return;
+            }
             try { db.setMeta(`focus.${cand.id}.kind`, _kind); } catch {}
             console.log(`[user-work] #${cand.id} kind=${_kind}${_kind === 'entity' ? '' : ' (was hardcoded entity)'}`);
             // P0 PREFLIGHT (ADAPTIVE_RESEARCH_DESIGN, the universal step-0): "do I know the best

@@ -112,7 +112,7 @@ async function detectMention(text, { context = '', deps = {} } = {}) {
     const m = result.mention || '';
     // a bare initial ("Z" from "Hey Zo") is never a civic entity — suppress it before it disambiguates junk
     if (m.replace(/[^a-zA-Z0-9]/g, '').length <= 1) return { mention: null, self: true, source: 'self-guard' };
-    if (db.isSelfName(m) || db.isOwnerName(m)) return { mention: null, self: true, source: 'self-guard' };
+    if (db.isSelfName(m) || db.isOwnerName(m) || db.isPeerName(m)) return { mention: null, self: true, source: 'self-guard' };
   } catch { /* db not ready → leave mention as-is */ }
 
   return result;
@@ -149,7 +149,7 @@ function isVocativeSelf(mention, deps = {}) {
   if (!m) return false;
   try {
     const db = deps.db || require('./db');
-    return !!(db.isSelfName(m) || db.isOwnerName(m));
+    return !!(db.isSelfName(m) || db.isOwnerName(m) || db.isPeerName(m));
   } catch { return false; }
 }
 

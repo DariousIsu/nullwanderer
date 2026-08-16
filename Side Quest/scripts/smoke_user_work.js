@@ -165,7 +165,8 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
   const spec = uw.buildRedirectAsk('move to the china research');
   ok(spec.task === 'redirect_intent' && /STEERING WHAT SHE WORKS ON/.test(spec.want), 'the prompt states the DISTINCTION, not a phrase list');
   ok(/BACK to finished or in-flight work is steering too/.test(spec.want), 'the prompt counts a re-look at existing work as steering');
-  ok(/NOT steering when he asks a question, plans HIS OWN work/.test(spec.want), 'the prompt names the non-steering shapes (direction grid)');
+  ok(/NOT steering when he asks a QUESTION/.test(spec.want) && /plans HIS OWN work/.test(spec.want), 'the prompt names the non-steering shapes (question, his own work)');
+  ok(/ONE-SHOT lookup\/computation/.test(spec.want) && /do X first/.test(spec.want), 'the prompt excludes a one-shot answerable lookup even phrased "do X first" (2026-08-15 answer-orphaning fix)');
   ok(/immediate=false when he queued it AFTER current work/.test(spec.want), 'immediate-vs-queued is part of the contract');
   const v1 = spec.validate('{"redirect": true, "immediate": false, "topic": "the the China AI and materials research"}');
   ok(v1.valid && v1.value.topic === 'China AI and materials research' && v1.value.immediate === false, 'a queued redirect parses; leading "the the" is cleaned');

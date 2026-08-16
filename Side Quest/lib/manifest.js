@@ -198,6 +198,7 @@ async function buildManifest(text, { userName = 'Lucas', context = '', sessionId
   const ownerResolve = deps.ownerResolve || ((n) => { try { return require('./owner_world').resolve(n); } catch { return null; } });
   const isSelfName = deps.isSelfName || ((n) => { try { return require('./db').isSelfName(n); } catch { return false; } });
   const isOwnerName = deps.isOwnerName || ((n) => { try { return require('./db').isOwnerName(n); } catch { return false; } });
+  const isPeerName = deps.isPeerName || ((n) => { try { return require('./db').isPeerName(n); } catch { return false; } });
 
   let plan;
   try { plan = require('./intake').routeDecomposition(await decompose(t, { recent: String(context || '').slice(0, 400), deps })); }
@@ -206,6 +207,9 @@ async function buildManifest(text, { userName = 'Lucas', context = '', sessionId
   const objects = Array.isArray(plan.objects) ? plan.objects : [];
   const selfFlags = objects.map(o => { try { return !!isSelfName(o.mention); } catch { return false; } });
   const ownerFlags = objects.map(o => { try { return !!isOwnerName(o.mention); } catch { return false; } });
+  // Bare "Claude" (the AI peer) is not a civic entity — skip resolution like self/owner so it never
+  // renders "[ambiguous: Claude Pepper | Claude Weaver | …]" into the grounding block (2026-08-15).
+  const peerFlags = objects.map(o => { try { return !!isPeerName(o.mention); } catch { return false; } });
 
   // Resolve each object. Self/owner mentions are NOT looked up (they'd hit civic namesakes — the Alice
   // problem); they carry their namespace directly. op==='create' means the plan already judged it new →
@@ -226,7 +230,7 @@ async function buildManifest(text, { userName = 'Lucas', context = '', sessionId
     // owner-world FIRST — wins over civic and even over op=create (if we already hold Alice, she isn't new)
     let ow = null; try { ow = ownerResolve(o.mention); } catch {}
     if (ow && ow.object) { resolutions.push(ow); continue; }
-    if (selfFlags[i] || ownerFlags[i] || o.op === 'create') { resolutions.push({ status: 'skip', mention: o.mention }); continue; }
+    if (selfFlags[i] || ownerFlags[i] || peerFlags[i] || o.op === 'create') { resolutions.push({ status: 'skip', mention: o.mention }); continue; }
     let r; try { r = await resolve(o.mention, { preferType: o.type || null }); } catch { r = { status: 'error', mention: o.mention }; }
     resolutions.push(r || { status: 'no-match', mention: o.mention });
   }

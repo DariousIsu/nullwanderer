@@ -536,6 +536,7 @@ const smokes = [
   // classes) + the WRITE-FRESH clause in the reply contract. A personality DB of replays trains
   // a parrot — this is a goals-blocker, not polish.
   'smoke_replay_gate.js',
+  'smoke_session_invariant.js',   // the model-visible-means-logged invariant (answer-orphaning structural fix, 2026-08-15)
   // ── the duplicate-thread ROOT (2026-08-13): the dedup pool was the 50 STALEST threads (ASC) —
   // a fresh sibling was never in the window. newestFirst pool + the token floor now catch the
   // 71-second rephrase with the embedder dead.

@@ -51,7 +51,10 @@ function detectWebIntent(text) {
   // "let's search for an approach" (doesn't start with the verb, no web ref).
   if (search) {
     const searchCmd = /^(?:can|could|would|will|please|hey)?[\s,]*(?:you[\s,]*)?(?:search|look\s*up|google|find)\b/i.test(t)
-      || /\b(google|from here|in (?:the|your) browser|on the (?:web|internet)|online)\b/i.test(t);
+      // soft web-cue branch: a bare cue ("google"/"online"/"from here") anywhere only counts as a search
+      // COMMAND in a SHORT imperative — in a long conversational turn ("everything I read online just
+      // overcomplicates it, what would you do?") it must not hijack the turn into a search (2026-08-15).
+      || (t.trim().split(/\s+/).length <= 10 && /\b(google|from here|in (?:the|your) browser|on the (?:web|internet)|online)\b/i.test(t));
     if (searchCmd) {
       const q = search[1].trim()
         .replace(/[.?!,\s]+$/, '')
@@ -69,14 +72,36 @@ function detectWebIntent(text) {
 // stops refusing and actually sees what's open (e.g. a chat Lucas opened for her).
 const ACT_VERB = /\b(look at|take a look|check|read|see|view|surf|use|interact with|what'?s on|whats on|scroll|explore|go through|browse|play with|talk to|respond to|reply to)\b/i;
 const PAGE_NOUN = /\b(?:the|this|that|her|your)?\s*(page|chat|site|website|tab|conversation|browser|window|bot|character)\b/i;
-// Explicit "read the current page" phrasings that carry no page-noun ("use web read",
-// "web-read", "read it"). These must read the OPEN page, never open a search.
-const EXPLICIT_READ = /\bweb[\s-]?read\b|<web-read\b|\bread (?:it|this|the (?:page|site|tab|chat))\b/i;
+// Explicit "read the current page" phrasings. UNAMBIGUOUS forms ("use web read", "web-read",
+// "read the page/site/tab/chat") fire unconditionally; the BARE object forms ("read it"/"read this")
+// are split out (BARE_READ) because they over-match in long conversation ("I finally read it cover to cover").
+const EXPLICIT_READ = /\bweb[\s-]?read\b|<web-read\b|\bread the (?:page|site|tab|chat)\b/i;
+const BARE_READ = /\bread (?:it|this)\b/i;
+// PROXIMITY GATE (2026-08-15): the bare ACT_VERB && PAGE_NOUN co-occurrence test fired on ANY message
+// that merely CONTAINED both somewhere — a 1400-char conversational turn with "…run it, read the error…"
+// and "…stretch your conversation…" hijacked the turn into a page-read (the two words were ~600 chars
+// apart and about nothing to do with a browser). A real "act on the open page" command puts the verb and
+// the page-noun CLOSE ("look at the page", "read the chat"); scattered matches across a paragraph are
+// conversation. Require them within a short window — every smoke should-fire case has them ≤18 chars apart.
+function _within(re1, re2, t, maxGap) {
+  const idx = (re) => {
+    const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
+    const out = []; let m;
+    while ((m = g.exec(t))) { out.push(m.index); if (m.index === g.lastIndex) g.lastIndex++; }
+    return out;
+  };
+  const A = idx(re1), B = idx(re2);
+  for (const i of A) for (const j of B) if (Math.abs(i - j) <= maxGap) return true;
+  return false;
+}
 function detectActOnOpenPage(text) {
   if (!text) return false;
   const t = String(text);
   if (EXPLICIT_READ.test(t)) return true;
-  return ACT_VERB.test(t) && PAGE_NOUN.test(t);
+  // Bare "read it"/"read this" only counts as a page-read command in a SHORT imperative — in a long
+  // conversational turn it is almost always literal ("I finally read it cover to cover last night").
+  if (BARE_READ.test(t)) return t.trim().split(/\s+/).length <= 8;
+  return _within(ACT_VERB, PAGE_NOUN, t, 40);
 }
 
 // "Pick a character / chat with one / start a scene" — the 24B fumbles this as
