@@ -29,12 +29,27 @@ const EXTRACT_VERB_RE = /\b(pull|extract|list|summari[sz]e|give me|show me|tell 
 // a random held PDF for a document that did not exist yet. He is the subject; she is the recipient.
 const PROVIDE_NEG_RE = /\b(?:pulled|put|dropped|added|loaded|uploaded|attached|placed|moved|brought|threw)\b[^.?!]{0,30}\b(?:into|onto|in|on|to|up (?:on|in))\b[^.?!]{0,20}\b(?:the )?(?:canvas|workspace|screen)\b|\b(?:here(?:'s| are| is)|i (?:gave|sent|shared|added|dropped|uploaded|attached|pulled in))\b[^.?!]{0,25}\b(?:notes|doc|document|file|transcript)\b|\bi(?:'?ll| will| can| am going to|'?m going to| need to| have to|'?m about to)\s+(?:find|get|grab|send|share|dig up|pull up|locate|look for|upload|drop|attach|forward)\b[^.?!]{0,40}\b(?:notes?|docs?|documents?|files?|transcripts?|pdf|minutes)\b/i;
 
+// A trailing OUTPUT instruction — "…and drop/put/save X ON the canvas" — is a DESTINATION for produced
+// work, NOT a reference to a held doc to read FROM. Live miss (T11, 2026-08-16): "…drop a clean
+// comparison table on the canvas" made an EXTERNAL FEC-fetch ("pull their actual FEC numbers") look like
+// a held-doc query, so DOC_REF_RE matched the trailing "on the canvas", doc-QA answered a Florida Senate
+// question from a random Nevada CAFR (matched on "financial"), and the external fetch was blocked. Keyed
+// off a CLAUSE BOUNDARY + a write verb, so it strips the trailing "put it on the canvas" but NOT a read
+// like "what's on the canvas" or "what did you put on the canvas" (there the verb follows a pronoun).
+const CANVAS_OUTPUT_RE = /(?:^|[,;.]|\band\b|\bthen\b)\s*(?:also\s+)?(?:please\s+)?(?:drop|put|place|save|write|land|add|render|paste|stick|throw|pop)\s+[^.?!]{0,40}\b(?:on(?:to)?|to|in)\s+(?:the\s+)?canvas\b/i;
+
 // Is this a request to EXTRACT FROM / ASK ABOUT a document she already holds?
 function isDocQuery(message) {
   const s = str(message).trim();
   if (s.length < 6) return false;
-  if (PROVIDE_NEG_RE.test(s)) return false;          // user is GIVING the doc, not asking about it
-  if (!DOC_REF_RE.test(s)) return false;             // must reference a document she holds
+  // Neutralize a trailing "…and put/drop X ON the canvas" OUTPUT instruction FIRST — the canvas as a
+  // DESTINATION for produced work is neither a held-doc reference to read FROM nor the user PROVIDING a
+  // doc (T11 fix, 2026-08-16). A genuine held-doc reference or a real provide survives via its OTHER
+  // wording; this also un-breaks "summarize the notes and put it on the canvas", which PROVIDE_NEG_RE
+  // used to wrongly reject on the "put … on the canvas" tail.
+  const sRef = s.replace(CANVAS_OUTPUT_RE, ' ');
+  if (PROVIDE_NEG_RE.test(sRef)) return false;       // user is GIVING the doc, not asking about it
+  if (!DOC_REF_RE.test(sRef)) return false;          // must reference a document she holds
   return EXTRACT_VERB_RE.test(s) || /\?\s*$/.test(s);  // an extraction verb, or a question
 }
 
@@ -97,6 +112,6 @@ function buildExtractPrompt({ question = '', docTitle = '', docText = '' } = {})
 }
 
 module.exports = {
-  DOC_REF_RE, EXTRACT_VERB_RE, PROVIDE_NEG_RE, READING_REF_RE,
+  DOC_REF_RE, EXTRACT_VERB_RE, PROVIDE_NEG_RE, READING_REF_RE, CANVAS_OUTPUT_RE,
   isDocQuery, isReadingQuery, readingSearchTerms, pickRelevantDoc, buildExtractPrompt,
 };

@@ -32,6 +32,21 @@ ok(dq.isDocQuery('research the top 5 think tanks for their VPs') === false, 'a r
 ok(dq.isDocQuery('how are you today?') === false, 'chit-chat → NOT a doc query');
 ok(dq.isDocQuery('what time is it') === false, 'no doc reference → NOT a doc query');
 
+// --- CANVAS AS OUTPUT DESTINATION is not a held-doc reference (T11 live miss, 2026-08-16). "drop a
+// table ON the canvas" is where produced work GOES, not a held doc to read FROM — the false match sent
+// an external FEC fetch to a random Nevada CAFR and blocked the fetch. Strip the output tail; a genuine
+// held-doc ref (or a real canvas READ) survives.
+ok(dq.isDocQuery("give me the two florida senate candidates' actual FEC numbers, compute burn rate, and drop a clean comparison table on the canvas") === false,
+  'THE T11 miss: external FEC fetch + "drop a table on the canvas" (output tail) → NOT a doc query');
+ok(dq.isDocQuery('pull the top 10 employers by FEC contributions and put it on the canvas') === false,
+  'external fetch + "and put it on the canvas" (output tail) → NOT a doc query');
+ok(dq.isDocQuery('summarize the meeting notes and put it on the canvas') === true,
+  'a REAL held-doc query with a canvas-output tail → STILL a doc query (survives via "the notes"; also un-breaks the old PROVIDE_NEG false-reject)');
+ok(dq.isDocQuery("what's on the canvas right now?") === true,
+  'a READ ("what\'s on the canvas") → STILL a doc query (no output verb at a clause boundary → not stripped)');
+ok(dq.isDocQuery('what did the team decide in the doc I dropped?') === true,
+  'a held-doc question ("the doc I dropped") → STILL a doc query (canvas-output strip does not touch it)');
+
 // --- isReadingQuery: HER readings referenced declaratively (memory slice 1 #6) ---
 ok(dq.isReadingQuery('you read something about neuromorphic chips, right?') === true, '"you read something about X" → reading query');
 ok(dq.isReadingQuery('what was that paper you read on state AI task forces?') === true, '"that paper you read" → reading query');
