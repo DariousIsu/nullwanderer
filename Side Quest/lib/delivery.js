@@ -83,4 +83,18 @@ function isAckOrphan(ans) {
   return _EXPLORE_LEAD.test(s.slice(0, 240)) && _PLAN_CHAIN.test(s) && !_RESULT_STRONG.test(s);
 }
 
-module.exports = { detectPromise, bookingSubject, isAckOrphan, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD, _EXPLORE_LEAD, _PLAN_CHAIN, _RESULT_STRONG };
+// FALSE-NON-DELIVERY guard (T10, 2026-08-16 drill): the operator BUILT + saved a deliverable but the reply
+// DENIED it ("I couldn't pin down the data … I can't build you a brief from data I don't hold") — a stale
+// pre-operator "searched-miss" draft beat the operator's late success. claimsNonDelivery detects that denial
+// SHAPE. Apostrophes hardened to straight AND curly ['’] (the cloud writer re-voices with U+2019). EXEMPT
+// any answer carrying a strong result token (_RESULT_STRONG: decimal/currency/table/rows/notes/list) — a
+// real partial ("0 rows", "$7.6 Million") is never a denial. Used by the main.js operator-success drop.
+const _NONDELIVERY_RE = /\b(?:could ?n['’]?t|can ?not|can['’]?t|un(?:able|available)|was ?n['’]?t able|not able|failed to|no way to)\b[^.!?\n]{0,60}\b(?:find|pin ?down|locate|build|compile|assemble|pull|produce|generate|deliver|put together|track down)\b|\bI (?:do ?n['’]?t|don['’]?t) (?:have|hold)\b|\bdata I (?:do ?n['’]?t|don['’]?t) hold\b|\bno (?:data|records?|results?|numbers?)\b(?![^.!?\n]*\brows?\b)|\bsearch (?:failed|came up (?:empty|short))\b|\bcouldn['’]?t pin down\b/i;
+function claimsNonDelivery(ans) {
+  const s = String(ans == null ? '' : ans).trim();
+  if (!s) return false;
+  if (_RESULT_STRONG.test(s)) return false;   // a real result / partial is never a denial
+  return _NONDELIVERY_RE.test(s);
+}
+
+module.exports = { detectPromise, bookingSubject, isAckOrphan, claimsNonDelivery, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD, _EXPLORE_LEAD, _PLAN_CHAIN, _RESULT_STRONG, _NONDELIVERY_RE };

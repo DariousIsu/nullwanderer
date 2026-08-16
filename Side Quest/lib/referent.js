@@ -152,6 +152,10 @@ function resolveDemonstrative(text, turns, { maxBack = 12 } = {}) {
   for (let i = list.length - 1; i >= 0 && scanned < maxBack; i--) {
     const t = list[i];
     if (!t || !t.content) continue;
+    // FALSE-NON-DELIVERY guard (T10, 2026-08-16): only USER turns and DURABLE assistant replies (ai_said)
+    // may be a referent — never the ai_thought / monologue rail. Else "those numbers you just pulled"
+    // anchors to an interstitial musing instead of the delivered answer.
+    if (t.speaker !== 'user' && t.speaker !== 'ai_said') continue;
     // Skip the current message itself — recent-turn history usually includes the just-asked question,
     // whose "that Trump story" would otherwise match its own key and resolve to itself.
     if (String(t.content).trim() === self) continue;

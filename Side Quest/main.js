@@ -8611,6 +8611,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (userQv) relevantPastTurns = await memoryLib.retrieveTurns(userMessage, { k: recall ? 4 : 3, excludeIds: recentTurns.map(t => t.id), qv: userQv, userOnly: recall, dropQuestions: recall });
   } catch (e) { console.error('[main] episodic recall failed:', e.message); }
 
+  // FALSE-NON-DELIVERY guard (T10, 2026-08-16 drill): capture the two EARLY non-delivery drafts (the
+  // calibration hedge below + the cognition searched-miss) so the operator-success block downstream can
+  // STRIP them if the operator actually delivers. Declared HERE (before their 8625/8777 assignments) so
+  // the later drop can see them without a TDZ throw — same function scope as operatorAnswer.
+  let cognitionMissBlock = null; let calibrationHedgeBlock = null;
   // CALIBRATED METACOGNITION (self-awareness, Layer 3) — match her assertiveness to her ACTUAL
   // grounding, computed from what this turn already retrieved. A factual question with nothing
   // grounded → tell her to admit the gap, not confabulate; partial grounding → separate what she
@@ -8623,6 +8628,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const dir = meta.groundingDirective({ userMessage, knowledgeRows: rkRows, pastTurns: relevantPastTurns, userName });
       if (dir) {
         composedUserMessage = `${composedUserMessage}\n\n${dir}`;
+        calibrationHedgeBlock = dir;   // remember it → operator-success drop strips this hedge too (false-non-delivery guard)
         console.log(`[main] calibration: ${meta.assessGrounding({ knowledgeRows: rkRows, pastTurns: relevantPastTurns }).level} grounding → directive injected`);
       }
     } catch (e) { console.error('[main] metacognition directive failed:', e.message); }
@@ -8774,7 +8780,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             } catch {}
             const res = await require('./lib/cognition').answerGrounded({ userMessage, grounding, object: recallResult && recallResult.object, userName, scope: _scope, deps: { contextTerms: _ctxTerms, forecast: () => lastForecast } });
             if (res && res.say) {
-              composedUserMessage = `${composedUserMessage}\n\n${ad.buildVoiceBlock(res.say, userName)}`;
+              const _voice = ad.buildVoiceBlock(res.say, userName);
+              composedUserMessage = `${composedUserMessage}\n\n${_voice}`;
+              if (res.missed) cognitionMissBlock = _voice;   // a searched-miss DRAFT → strip it if the operator later delivers (false-non-delivery guard)
               openThreads = [];   // grounded answer owns the turn — no standing-work primacy bleed
               drafted = true;
               console.log(`[main] cognition → ${res.missed ? 'searched-miss' : res.enriched ? 'enriched:' + res.enrichSource : 'grounded'} → "${res.say.slice(0, 70)}"`);
@@ -9592,6 +9600,22 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       if (opRes && opRes.answer && !(directed && require('./lib/delivery').isAckOrphan(opRes.answer))) {
         operatorAnswer = opRes.answer;
         if (directed) operatorDirected = true;   // verbatim-delivery contract → survives a cloud-voice outage (direct-deliver below)
+        // FALSE-NON-DELIVERY GUARD (T10, 2026-08-16 drill): the operator DELIVERED — strip any earlier
+        // pre-operator NON-DELIVERY draft (the cognition searched-miss + the calibration hedge) so the reply
+        // writer sees ONLY the operator's DELIVER block. She built + saved the FEC brief but a stale "I
+        // couldn't pin down the data" draft won the reply; this makes the LATE operator success AUTHORITATIVE
+        // by structure, not a prompt line. If the operator ITSELF honestly denies delivery, the drop does NOT
+        // fire (both agree — an honest miss is never manufactured into a false success).
+        try {
+          const _del = require('./lib/delivery');
+          if (!_del.claimsNonDelivery(operatorAnswer)) {
+            for (const _b of [cognitionMissBlock, calibrationHedgeBlock]) {
+              if (_b && composedUserMessage.includes(_b)) composedUserMessage = composedUserMessage.split(`\n\n${_b}`).join('');
+            }
+            if (cognitionMissBlock || calibrationHedgeBlock) console.log('[main] operator delivered → dropped competing non-delivery draft(s) (false-non-delivery guard)');
+            cognitionMissBlock = null; calibrationHedgeBlock = null;
+          }
+        } catch (e) { console.error('[main] false-non-delivery drop failed:', e.message); }
         if (selfCodeReview) {
           // 2.5.4 DIRECT-DELIVER BY DEFAULT for reviews: the review IS the deliverable — re-voicing it
           // (cloud or local) paraphrases and truncates (measured 2026-08-02). No DELIVER block is
@@ -10529,6 +10553,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     if (say && !require('./lib/gmeet').active() && !meetJoinStarted && require('./lib/metacognition').claimsMeetingAction(say)) {
       console.warn(`[main] WARN meeting-confab? reply claims a join/in-call with NO meeting active: "${String(say).replace(/\s+/g, ' ').slice(0, 90)}"`);
+    }
+  } catch {}
+
+  // FALSE-NON-DELIVERY BACKSTOP (log-only, T10) — the reply already streamed; if the operator delivered a
+  // real answer this turn but the final say DISOWNS it ("I couldn't … / I don't have the data …"), flag it.
+  // Counting firings > trusting the drop above caught every path.
+  try {
+    const _del = require('./lib/delivery');
+    if (say && operatorAnswer && !_del.claimsNonDelivery(operatorAnswer) && _del.claimsNonDelivery(say)) {
+      console.warn(`[main] WARN false-non-delivery? operator delivered but reply disowns it: "${String(say).replace(/\s+/g, ' ').slice(0, 90)}"`);
     }
   } catch {}
 
@@ -12226,8 +12260,14 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
         // Lucas kept seeing (e.g. the "I put the contacts on your canvas" answer). Flag by ACTUAL context:
         // a synchronous chat-turn followup is prompted (0); only a background action-completion (runActionStep,
         // no user waiting) stays unprompted (1). Live routing already handles both (currentAiTurnDiv gate).
-        const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: sayOut, model: followupWriter, unprompted: prompted ? 0 : 1 });
-        db.setMeta('last_ai_utterance_at', String(Date.now()));
+        // FALSE-NON-DELIVERY root fix (T10, 2026-08-16): only persist this followup as a DURABLE ai_said row
+        // when it is the TERMINAL hop (no follow-on tags queued). A NON-terminal interstitial ("Those search
+        // results don't get me the data … Let me run that now", which then goes on to deliver) still streams
+        // live but must NOT become a referent-able ai_said row — else next turn's "those numbers" anchors to
+        // the stale fragment instead of the real delivered answer. A terminal honest miss IS still persisted.
+        const _terminalHop = chainTags.length === 0;
+        const saidRow = _terminalHop ? db.insertTurn({ sessionId, speaker: 'ai_said', content: sayOut, model: followupWriter, unprompted: prompted ? 0 : 1 }) : null;
+        if (_terminalHop) db.setMeta('last_ai_utterance_at', String(Date.now()));
         if (channel === 'discord') {
           try { await discordLib.sendDM(sayOut); } catch (e) { console.error('[main] followup discord DM failed:', e.message); }
         } else {
@@ -12235,7 +12275,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
           // `true`, so every find→do→answer reply was live-labeled autonomous and reached the
           // transcript only by winning the renderer's currentAiTurnDiv race (chat.js:322 files the
           // losers in the sheep rail). The stored row was always right; the live event now agrees.
-          try { if (io && io.onComplete) io.onComplete(followupDisclaimed ? { saidId: saidRow.id, truncated: 0, unprompted: !prompted, say: sayOut } : { saidId: saidRow.id, truncated: 0, unprompted: !prompted }); } catch {}
+          try { if (io && io.onComplete) io.onComplete(followupDisclaimed ? { saidId: saidRow ? saidRow.id : null, truncated: 0, unprompted: !prompted, say: sayOut } : { saidId: saidRow ? saidRow.id : null, truncated: 0, unprompted: !prompted }); } catch {}
         }
         console.log('[main] tool follow-up delivered via', channel);
       }
