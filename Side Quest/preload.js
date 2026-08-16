@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld('sq', {
   browserStatus: () => ipcRenderer.invoke('browser:status'),
   onBrowserStatus: (cb) => ipcRenderer.on('browser:status', (_e, info) => cb(info)),
   onEchoStatus: (cb) => ipcRenderer.on('echo:status', (_e, info) => cb(info)),
+  // Live activity chips: code-running (analyze_data/python) keyed by run-id, and swarm-in-flight.
+  onCodeStatus: (cb) => ipcRenderer.on('code:status', (_e, info) => cb(info)),
+  onSwarmStatus: (cb) => ipcRenderer.on('swarm:status', (_e, info) => cb(info)),
   onInboundArrived: (cb) => ipcRenderer.on('inbound:arrived', (_e, info) => cb(info)),
   onInboundTimeout: (cb) => ipcRenderer.on('inbound:timeout', (_e, info) => cb(info)),
 

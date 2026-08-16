@@ -99,6 +99,57 @@ function setEchoStatus(s) {
 if (window.sq && window.sq.onEchoStatus) {
   window.sq.onEchoStatus((s) => setEchoStatus(s));
 }
+
+// --- Code-running indicator (analyze_data / python) ---
+// Up to 3 cloud-operator runs overlap, so key by run-id in a Set — a single boolean would let one run's
+// 'end' clear another run's chip. Shows 'running…' (or 'running · N' when several overlap), else 'idle'.
+const codeStatus = document.getElementById('code-status');
+const activeCodeRuns = new Set();
+function renderCodeStatus() {
+  if (!codeStatus) return;
+  const n = activeCodeRuns.size;
+  if (n > 0) {
+    codeStatus.textContent = n > 1 ? `running · ${n}` : 'running…';
+    codeStatus.classList.add('running');
+    codeStatus.classList.remove('disconnected');
+    codeStatus.title = `${n} code run(s) executing`;
+  } else {
+    codeStatus.textContent = 'idle';
+    codeStatus.classList.add('disconnected');
+    codeStatus.classList.remove('running');
+    codeStatus.title = 'no code running';
+  }
+}
+if (window.sq && window.sq.onCodeStatus) {
+  window.sq.onCodeStatus((s) => {
+    if (!s || !s.id) return;
+    if (s.phase === 'start') activeCodeRuns.add(s.id);
+    else if (s.phase === 'end') activeCodeRuns.delete(s.id);
+    renderCodeStatus();
+  });
+}
+
+// --- Swarm-in-flight indicator (the "swarm the LA roster" verb: N parallel workers draining a roster) ---
+// Latest-wins status object; shows 'swarm · Nw done/target' while out, else 'swarm: off'.
+const swarmStatus = document.getElementById('swarm-status');
+function setSwarmStatus(s) {
+  if (!swarmStatus) return;
+  if (s && s.active) {
+    const prog = (s.done != null && s.target != null) ? ` ${s.done}/${s.target}` : '';
+    swarmStatus.textContent = `swarm · ${s.workers || 0}w${prog}`;
+    swarmStatus.classList.add('swarming');
+    swarmStatus.classList.remove('disconnected');
+    swarmStatus.title = `swarm in flight${s.state ? ' — ' + s.state : ''}`;
+  } else {
+    swarmStatus.textContent = 'swarm: off';
+    swarmStatus.classList.add('disconnected');
+    swarmStatus.classList.remove('swarming');
+    swarmStatus.title = 'no swarm running';
+  }
+}
+if (window.sq && window.sq.onSwarmStatus) {
+  window.sq.onSwarmStatus((s) => setSwarmStatus(s));
+}
 // Initial status query
 if (window.sq && window.sq.browserStatus) {
   window.sq.browserStatus().then(s => setBrowserStatus(s)).catch(() => {});

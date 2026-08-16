@@ -576,6 +576,10 @@ html, body {
 }
 .browser-status.disconnected { color: #6a6a72; background: #1a1a1f; }
 .browser-status.connected { color: #a8d8a8; background: #1f2a1f; }
+/* code-running = amber (something is executing), swarm-in-flight = blue (a parallel burst is out) —
+   distinct from the connected/green so the three states read apart at a glance (2026-08-16). */
+.browser-status.running { color: #d8c28a; background: #2a2418; }
+.browser-status.swarming { color: #8ab4d8; background: #16232e; }
 
 .sheep.inbound { border-left: 2px solid #5a9a6a; padding-left: 8px; }
 .sheep.inbound .sheep-time { color: #5a9a6a; }

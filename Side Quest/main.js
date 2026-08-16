@@ -7134,6 +7134,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           const _workers = Math.max(1, Math.min(_workerOverride || _workerCount(), _rosterTasks.length));
           say = `On it — swarming the ${_frame.state} roster: ${_workers} worker(s) draining ${_rosterTasks.length} localities in parallel (directed, un-throttled). I'll re-assemble the sheet and give you the honest count when it lands.`;
           console.log(`[swarm] START local-roster ${_rosterState}: ${_rosterTasks.length} tasks across ${_workers} worker(s) (directed, un-throttled)`);
+          // SWARM-IN-FLIGHT INDICATOR (2026-08-16): light the chat-window chip while the burst is out.
+          try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('swarm:status', { active: true, workers: _workers, target: _rosterTasks.length, done: 0, state: _frame.state }); } catch {}
+          let _swLanded = 0;
           // Fire-and-forget: the turn returns the ack immediately; completion surfaces via a followup.
           (async () => {
             try {
@@ -7145,7 +7148,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                 const res = await runCloudOperator({ userMessage: _rq.buildPrompt(item), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'directed', budgetMult: 0.75 });
                 return _rq.applyOutcome(item, res && res.answer ? String(res.answer) : '');
               };
-              await _lr.drainSwarm({ tasks: _rosterTasks, workers: _workers, runTask });
+              await _lr.drainSwarm({ tasks: _rosterTasks, workers: _workers, runTask,
+                onResult: () => { _swLanded++; try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('swarm:status', { active: true, workers: _workers, target: _rosterTasks.length, done: _swLanded, state: _frame.state }); } catch {} } });
               const cov = _lr.coverage(_rosterState);
               let sheetLine = '';
               try {
@@ -7157,6 +7161,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               console.log(`[swarm] DONE local-roster ${_rosterState}: coverage ${cov.filled}/${cov.denominator}${sheetLine}`);
               await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${_frame.state} roster swarm just finished. Coverage is now ${cov.filled}/${cov.denominator} localities filled${sheetLine}. Tell Lucas the honest count in one or two sentences — every blank that remains is a verified "not found", never an un-attempted lookup.]` });
             } catch (e) { console.error('[swarm-roster] directed completion failed:', e.message); }
+            finally { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('swarm:status', { active: false }); } catch {} }
           })();
         } else {
           const r = await startSwarm({ target: _swarmTarget, requestedBy: 'chat' });
@@ -12661,6 +12666,11 @@ const operatorTools = {
   // R3 (2026-07-23) — the ONE-OFF analysis lane: run throwaway python READ-ONLY over her own data
   // and get the RESULT. Ephemeral, no adoption; the DBs open mode=ro so writes are rejected.
   analyze_data: async ({ code, workbench, timeoutMs, goal } = {}) => {
+    // CODE-RUNNING INDICATOR (2026-08-16): announce this run to the chat-window chip, keyed by a run-id
+    // (up to 3 operator runs overlap → the renderer keys a Set, never a boolean). Spans the WHOLE call
+    // incl. the kimi hardening hop below; the finally clears the chip on every path (success/error/timeout).
+    const _runId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('code:status', { phase: 'start', id: _runId, tool: 'analyze_data', label: workbench ? 'workbench' : 'python' }); } catch {}
     try {
       let finalCode = String(code == null ? '' : code);
       // CODE MODEL (Lucas 2026-08-16: "python script writing done through kimi 2.7 code"): the operator is a
@@ -12685,6 +12695,7 @@ const operatorTools = {
       }
       return await require('./lib/analysis_lane').run({ code: finalCode, workbench, timeoutMs });
     } catch (e) { return 'ERROR: ' + e.message; }
+    finally { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('code:status', { phase: 'end', id: _runId, tool: 'analyze_data' }); } catch {} }
   },
   // THE SKILL SHELF (O1, slice 5) — the operator's pull. The briefs carry matched trigger lines;
   // the body dereferences here (lib/skills — flow recipes / proven procedures / stored shapes).
