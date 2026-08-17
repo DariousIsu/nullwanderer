@@ -241,9 +241,14 @@ async function _emergentFromUnmatched(learnRows, matched, { apply, embedFn, now 
  * idle time pursues her AGENDA (reusing the focus lifecycle's caps + the frontier push). Returns the
  * spawned focus or null. focusLib/rng injectable; gated by `prob` so she isn't 100% on-agenda.
  */
-async function maybeSpawnFocus({ focusLib = null, prob = 0.8, rng = Math.random, now = Date.now() } = {}) {
+// opts.background (2026-08-16, Lucas: "she should be able to wonder and work at the same time"): the
+// PRIMARY lane yields if the single focus slot is busy (the old, starved behavior); the BACKGROUND lane
+// spawns the interest as a CONCURRENT background focus — its own thread, never CURRENT_KEY — so it runs
+// alongside the research sweep, isolated by thread/store (writes only interests/self_model). Returns the
+// threadId so the caller can register it in the wondering lane for the background driver to advance.
+async function maybeSpawnFocus({ focusLib = null, prob = 0.8, rng = Math.random, now = Date.now(), background = false } = {}) {
   const focus = focusLib || require('./focus');
-  try { if (focus.isActive()) return null; } catch {}
+  if (!background) { try { if (focus.isActive()) return null; } catch {} }   // primary lane only: don't fight the single slot
   if (rng() > prob) return null;              // leave room for free-association / conversation pull
   const pick = sampleTopic({ rng });
   if (!pick) return null;
@@ -254,9 +259,19 @@ async function maybeSpawnFocus({ focusLib = null, prob = 0.8, rng = Math.random,
   let threadId = null;
   try { const row = db.insertOpenThread({ content, sourceTurnId: null }); threadId = row.id; } catch { return null; }
   let set = null;
-  try { set = focus.setCurrent(threadId); } catch { return null; }
+  try {
+    if (background) {
+      set = (typeof focus.setBackground === 'function') ? focus.setBackground(threadId) : focus.setCurrent(threadId);
+      // background flag routes the pass outcome to the background run-state (never a chat announce); origin
+      // 'self' marks it a musing, not his work, so it's never mistaken for a user-directed task.
+      try { db.setMeta(`focus.${threadId}.background`, '1'); } catch {}
+      try { db.setMeta(`focus.${threadId}.origin`, 'self'); } catch {}
+    } else {
+      set = focus.setCurrent(threadId);
+    }
+  } catch { return null; }
   if (set) recordVisit(pick.id, now);
-  return set ? { focus: set, interest: pick } : null;
+  return set ? { focus: set, interest: pick, threadId } : null;
 }
 
 module.exports = {

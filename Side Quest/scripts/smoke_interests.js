@@ -73,6 +73,14 @@ const get = (slug) => db.getDb().prepare('SELECT * FROM interests WHERE slug=?')
     ok(afterVisits === beforeVisits + 1, 'a visit was recorded for the pursued interest');
     const gated = await interests.maybeSpawnFocus({ focusLib: fakeFocus, prob: 0.8, rng: mkRng([0.95]) });  // 0.95 > 0.8 → skip
     ok(gated === null, 'prob gate can skip (leaves room for free-association)');
+
+    // 5b. THE WONDERING LANE (2026-08-16): background:true runs CONCURRENTLY with work — it does NOT yield to
+    // a busy primary, and spawns via setBackground (its own thread), returning threadId for the driver.
+    const busyFocus = { isActive: () => true, setCurrent: (tid) => ({ id: tid, kind: 'primary' }), setBackground: (tid) => ({ id: tid, kind: 'bg' }) };
+    const bg = await interests.maybeSpawnFocus({ focusLib: busyFocus, prob: 0.8, rng: mkRng([0.1, 0.0]), background: true });
+    ok(bg && bg.focus && bg.focus.kind === 'bg' && bg.threadId, 'background lane spawns via setBackground EVEN when the primary is busy (wonder + work in parallel), returns threadId');
+    const primGated = await interests.maybeSpawnFocus({ focusLib: busyFocus, prob: 0.8, rng: mkRng([0.1, 0.0]), background: false });
+    ok(primGated === null, 'the PRIMARY lane still yields when the single focus slot is busy (unchanged behavior)');
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   } finally {
@@ -91,11 +99,14 @@ const get = (slug) => db.getDb().prepare('SELECT * FROM interests WHERE slug=?')
       'B1: the spawn attempt is cadence-gated (the 07-01 noise-audit ruling stands)');
     ok(/focus wonder self-dialogue error/.test(mono),
       'B1: a <wonder> on a focus tick fires self-dialogue instead of being silently discarded');
-    // 2026-08-15 consciousness-allocation ruling: the organs get a SLOT, not just a wire — the
-    // 7h live measurement showed the driver back-to-backs foci so the organs never got a turn.
+    // 2026-08-16 PARALLEL WONDERING LANE (Lucas: "she should wonder and work at the same time"): the
+    // 08-15 primary-slot allocation still starved it (~1 spawn/day) because it competed for the ONE focus.
+    // It now has a DEDICATED background lane, driven concurrently with the research workers.
     const mainSrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
-    ok(/WONDERING SLOT → interest focus/.test(mainSrc),
-      'allocation: the beat scheduler yields the free slot to a starved wondering organ (6h clock)');
+    ok(/_fillWonderLane/.test(mainSrc) && /st\.wonder\s*&&\s*st\.wonder\.thread\)\s*backgroundWorkerPass/.test(mainSrc),
+      'allocation: the wondering organ has a DEDICATED PARALLEL lane (_fillWonderLane + a background-driver line), not a primary-slot competition');
+    ok(/maybeSpawnFocus\(\{ background: true \}\)/.test(mainSrc),
+      'allocation: the lane spawns interest pursuit as a BACKGROUND focus (concurrent, isolated by thread — no cross-contamination)');
     ok(/interests\.last_spawn_at/.test(mono) && /interests\.last_spawn_at/.test(mainSrc),
       'allocation: successful spawns stamp the shared starvation clock at BOTH spawn sites');
     ok(/self_explore\.idle_at/.test(mono),

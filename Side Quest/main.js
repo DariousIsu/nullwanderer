@@ -14816,23 +14816,11 @@ async function _autonomicSchedulerTick() {
     }
     if (t && t.status === 'resolved') { bs.status = 'done'; bs.doneAt = Date.now(); state.beats[nextId] = bs; _saveSchedState(state); return; }
   }
-  // THE WONDERING SLOT (2026-08-15, Lucas: "dedicate allocation to the new simulated consciousness
-  // organs"): the overnight driver back-to-backs directed foci, so the interest organ's 45min
-  // attempts found the slot occupied for 7 straight hours (measured, boot_p42) — armed but never
-  // fired. When the slot is genuinely FREE here and no interest focus has spawned in 6h, the
-  // wondering organ takes the slot FIRST and the next beat waits one cycle. One-focus-at-a-time
-  // stands; her own curiosity just stops being the lane that always yields.
-  try {
-    const _lastWonder = parseInt(db.getMeta('interests.last_spawn_at') || '0', 10) || 0;
-    if (Date.now() - _lastWonder > 6 * 3600e3) {
-      const sp = await require('./lib/interests').maybeSpawnFocus();
-      if (sp) {
-        db.setMeta('interests.last_spawn_at', String(Date.now()));
-        console.log(`[autonomic] WONDERING SLOT → interest focus "${String((sp.focus && sp.focus.goal) || (sp.interest && sp.interest.topic) || '').slice(0, 70)}" (the next beat waits a cycle)`);
-        return;
-      }
-    }
-  } catch (e) { console.error('[autonomic] wondering-slot attempt failed:', e && e.message); }
+  // THE WONDERING SLOT moved to a DEDICATED PARALLEL LANE (2026-08-16, Lucas: "she should be able to wonder
+  // and work at the same time without cross-contaminating"). It no longer competes for this single primary
+  // slot — that starved it to ~1 spawn/day, 14/15 interests untouched 46 days. _fillWonderLane + the
+  // background driver (startBackgroundWorkers) now run her interest pursuit CONCURRENTLY with the sweep,
+  // isolated by its own thread/store. See _fillWonderLane below.
   // SEED a fresh run.
   const r = await seedBeatRun(beat);
   if (r && r.ok) { bs.thread = r.focusId; bs.sliceStartCovered = 0; bs.lastRun = Date.now(); state.sliceIndex = (state.sliceIndex || 0) + 1; state.beats[nextId] = bs; _saveSchedState(state); console.log(`[autonomic] seeded ${laneUsed}:${nextId}`); }
@@ -15000,13 +14988,58 @@ function startBackgroundWorkers() {
       // autonomic tick that empties the slots) — a swarm is Lucas-commanded, so it keeps driving.
       if (!_userDirectedActive()) {
         for (const w of Object.values(st.workers || {})) { const bid = w && w.beatId; const th = bid && st.beats[bid] && st.beats[bid].thread; if (th) backgroundWorkerPass(th).catch(() => {}); }
+        if (st.wonder && st.wonder.thread) backgroundWorkerPass(st.wonder.thread).catch(() => {});   // the WONDERING lane — driven IN PARALLEL with research; yields to his directed work like the fleet
       }
       if (st.swarm && st.swarm.parts) for (const p of Object.values(st.swarm.parts)) { if (p && p.thread && !p.done) backgroundWorkerPass(p.thread).catch(() => {}); }   // drive the swarm partitions too
     } catch {}
+    _fillWonderLane().catch(() => {});   // keep the wondering lane populated (self-contained load/save; async, fire-and-forget)
   }, DIRECTED_CADENCE_MS);
   console.log(`[worker] ${_bgSlots()} background research worker(s) started`);
 }
 function kickBackgroundWorkers() { startBackgroundWorkers(); }
+
+// THE WONDERING LANE (2026-08-16, Lucas: "she should be able to wonder and work at the same time without
+// cross-contaminating"). Her self-development — interest pursuit via interests.maybeSpawnFocus — was starved
+// because it competed for the single PRIMARY focus slot the research sweep holds continuously (measured: it
+// attempted constantly but succeeded ~1/day; 14/15 interests untouched 46 days). This gives it a DEDICATED
+// background lane: its own concurrent focus, isolated by thread/store (writes only interests/self_model,
+// never CURRENT_KEY), advanced by the same backgroundWorkerPass the research workers use. It YIELDS to his
+// directed work (the driver guards it with !_userDirectedActive, like the fleet) but runs ALONGSIDE the
+// autonomic sweep. One lane, cadence-gated. Kill: ZOE_WONDER_LANE=0. Cadence: ZOE_WONDER_INTERVAL_MIN (45).
+async function _fillWonderLane() {
+  try {
+    if (String(process.env.ZOE_WONDER_LANE || '') === '0') return;
+    let st = _loadSchedState();
+    if (!st.wonder) st.wonder = {};
+    // Yield to the SAME holds the research fleet respects: his directed work takes all bandwidth; a work-hold
+    // or a paused sweep stops NEW wondering (an in-flight thread drains on its own).
+    let held = false;
+    try { held = _mappingPaused() || _userDirectedActive(); } catch {}
+    try { if (!held) { const wh = require('./lib/work_hold'); held = !!(wh && wh.active && wh.active()); } } catch {}
+    if (held) {
+      if (st.wonder.thread) { try { db.setMeta(`focus.${st.wonder.thread}.background`, ''); } catch {} st.wonder = {}; _saveSchedState(st); }
+      return;
+    }
+    // Still wondering its current thread? leave it to the driver.
+    if (st.wonder.thread) {
+      let t = null; try { t = db.getOpenThread(st.wonder.thread); } catch {}
+      if (t && ['pending', 'active'].includes(t.status)) return;
+      st.wonder = {}; _saveSchedState(st);   // resolved/dead → free the lane
+    }
+    // Cadence gate: only start a new wonder when overdue (shares interests.last_spawn_at with the old organ).
+    const _last = parseInt(db.getMeta('interests.last_spawn_at') || '0', 10) || 0;
+    const _interval = (parseInt(process.env.ZOE_WONDER_INTERVAL_MIN || '', 10) || 45) * 60e3;
+    if (Date.now() - _last < _interval) return;
+    let sp = null;
+    try { sp = await require('./lib/interests').maybeSpawnFocus({ background: true }); }
+    catch (e) { console.error('[wonder-lane] spawn failed:', e && e.message); return; }
+    if (sp && sp.threadId) {
+      const st2 = _loadSchedState(); st2.wonder = { thread: sp.threadId }; _saveSchedState(st2);
+      try { db.setMeta('interests.last_spawn_at', String(Date.now())); } catch {}
+      console.log(`[wonder-lane] → parallel interest focus #${sp.threadId} "${String((sp.interest && sp.interest.topic) || '').slice(0, 50)}" (runs ALONGSIDE research, its own thread)`);
+    }
+  } catch (e) { console.error('[wonder-lane] fill failed:', e && e.message); }
+}
 
 // ═══ SWARM-ON-COMMAND (research-allocation Slice S5) ══════════════════════════════════════════════
 // A SURGE mode on top of the steady allocator: `swarm on <X>` reallocates BACKGROUND workers onto ONE thing
