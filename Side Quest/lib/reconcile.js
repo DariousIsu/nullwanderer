@@ -159,6 +159,14 @@ function reconcile(claim, incumbent, opts = {}) {
   }
   // stable / permanent — supersede iff newer AND corroboration >= incumbent's (or the incumbent was retracted)
   if (newer && (_corrobAtLeast(sc, incScore) || retracted)) {
+    // AMBIENT-LANE GUARD (opts.ambient): a fire-and-forget single read must NOT unilaterally RETIRE a stable
+    // belief on recency alone — it must clear the same corroboration bar volatile uses (tier>=corroborated OR
+    // authority>=3, or the incumbent retracted), else ASK (write nothing, keep the incumbent). Keeps a lone
+    // autonomous page from dropping a held fact — incl. weakly/un-cited canonical facts whose surfaced
+    // corroboration is 'none'. Deliberate lanes (recovery, chat-correction, news) leave opts.ambient unset.
+    if (opts.ambient && !(_tierRank(sc.tier) >= TIER_RANK.corroborated || sc.authority >= 3 || retracted)) {
+      return { action: 'ask', reason: 'ambient-stable-contradiction-below-bar' };
+    }
     return { action: 'supersede', reason: 'stable-newer+corroborated', supersedes_ref: supersedeRef, corroboration: sc };
   }
   return { action: 'reject', reason: 'stable-contradiction-insufficient' };

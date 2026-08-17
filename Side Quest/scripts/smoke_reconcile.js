@@ -69,6 +69,16 @@ const cite = (o) => Object.assign({ authority_tier: 1 }, o);
   const stableStrong = { ...stableClaim, citations: [cite({ title: 'A', url: 'https://a.com', authority_tier: 3 }), cite({ title: 'B', url: 'https://b.com', authority_tier: 3 }), cite({ title: 'C', url: 'https://c.com', authority_tier: 3 }), cite({ title: 'D', url: 'https://d.com', authority_tier: 3 }), cite({ title: 'E', url: 'https://e.com', authority_tier: 3 }) ] };
   ok(R.reconcile(stableStrong, stableInc, { relation: 'contradict' }).action === 'supersede', 'reconcile: stable contradiction, corroboration >= incumbent + newer → supersede');
 
+  // ── AMBIENT-LANE GUARD (opts.ambient) — a lone fire-and-forget read must not RETIRE a stable belief on
+  // recency alone (protects weakly/un-cited incumbents whose surfaced corroboration is 'none'). ──
+  const weakInc = { value: 'The capital of Foo is Bar', as_of: '2026-06-01', ref: 88 };   // no corroboration surfaced
+  const ambientSingle = { kind: 'entity', value: 'The capital of Foo is Baz', as_of: '2026-08-17', ttl_class: 'permanent', citations: [cite({ title: 'one blog', url: 'https://blog/x', authority_tier: 2 })] };
+  ok(R.reconcile(ambientSingle, weakInc, { relation: 'contradict' }).action === 'supersede', 'reconcile: stable single-source contradiction of a weak incumbent → supersede WITHOUT the ambient guard (deliberate lanes unchanged)');
+  const amb = R.reconcile(ambientSingle, weakInc, { relation: 'contradict', ambient: true });
+  ok(amb.action === 'ask' && amb.reason === 'ambient-stable-contradiction-below-bar', 'reconcile(ambient): a lone single-source read → ASK (never retires a stable belief on one page)');
+  const ambientCorrob = { ...ambientSingle, citations: [cite({ title: 'AP', url: 'https://apnews.com/x', authority_tier: 2 }), cite({ title: 'Reuters', url: 'https://reuters.com/y', authority_tier: 2 })] };
+  ok(R.reconcile(ambientCorrob, weakInc, { relation: 'contradict', ambient: true }).action === 'supersede', 'reconcile(ambient): a CORROBORATED contradiction still supersedes — the guard only blocks lone reads');
+
   // agrees → merge + boosted corroboration (union of citations)
   const agree = R.reconcile({ ...bondiClaim, citations: [cite({ title: 'new report', url: 'https://c.com' })] }, { ...bondiIncumbent, citations: [cite({ title: 'old report', url: 'https://d.com' })] }, { relation: 'agree' });
   ok(agree.action === 'merge' && agree.corroboration.reports === 2, 'reconcile: agrees → merge, corroboration boosted (union of distinct reports)');

@@ -161,6 +161,61 @@ const LONG = 'Florida Top Dog is a cheer team based in Tampa Bay; the squad hold
     const recN = [];
     const newR = await learning.captureRecovered({ query: 'who founded Acme Corp', answer: 'Jane Doe founded Acme Corp.', url: 'https://acme.com/about', source: 'wiki', now: Date.parse('2026-07-02'), storeFn: async (r) => { recN.push(r); return { id: 5 }; } });
     ok(newR.action === 'new' && newR.captured === 1 && recN[0].source === 'verified_fact', 'captureRecovered: no incumbent → NEW verified_fact (backward-compatible)');
+
+    // ── REALTIME RECONCILE (2026-08-17): maybeCaptureLearnings now routes a DATED claim through the SAME
+    // belief-revision pipeline captureRecovered uses — it no longer blind-appends a second verified_fact to a
+    // slot (or silently drops a same-date contradiction). Learnings still append (many facts per topic). The
+    // incumbent lookup / retire / live snapshot are injected → hermetic (no live-DB dependency). Anchors of
+    // every mock claim appear in RCON so the grounding gate passes.
+    const RCON = ('Acme Corp was founded in 1999 in Denver by Jane Doe. The Nile is a river in Africa. ').repeat(6);
+
+    // A) DATED claim, NO incumbent → delegates to reviseBelief, action 'new'; the incumbent lookup WAS consulted.
+    const stA = [], seenA = [];
+    const capA = await learning.maybeCaptureLearnings({ query: 'Acme history', content: RCON, urls: ['https://src/acme'],
+      deps: { skipThrottle: true, live: [], storeFn: async (r) => { stA.push(r); return { id: 1 }; },
+        lookupIncumbent: (k) => { seenA.push(k); return null; }, onSupersede: () => { throw new Error('new must not retire'); },
+        extract: async () => 'Acme Corp was founded in 1999. | Acme founding | 1999' } });
+    ok(capA.verified === 1 && stA.length === 1 && stA[0].provenance.action === 'new', 'realtime dated claim → reviseBelief action NEW (not a raw append)');
+    ok(seenA.includes('acme-founding'), 'the belief incumbent WAS consulted with the claim subject_key (reconcile, not blind bank)');
+
+    // B) DATED claim AGREEING with the incumbent → MERGE (one write, corroboration boost); nothing retired.
+    const stB = [];
+    const capB = await learning.maybeCaptureLearnings({ query: 'Acme history', content: RCON, urls: ['https://src/acme'],
+      deps: { skipThrottle: true, live: [], storeFn: async (r) => { stB.push(r); return { id: 1 }; },
+        lookupIncumbent: () => ({ value: 'Acme Corp was founded in 1999.', as_of: '2020', ref: 42, citations: [] }),
+        onSupersede: () => { throw new Error('merge must not retire'); },
+        extract: async () => 'Acme Corp was founded in 1999. | Acme founding | 2026' } });
+    ok(capB.verified === 1 && capB.merged === 1 && stB.length === 1 && stB[0].provenance.action === 'merge', 'realtime agreeing dated claim → MERGE (not a duplicate second verified_fact)');
+
+    // C) DATED single-source claim CONTRADICTING a stable incumbent → the AMBIENT GUARD holds: reconcile ASKs,
+    // so we write NOTHING and KEEP the incumbent (a lone fire-and-forget read must never retire a held belief).
+    const stC = []; let retiredC = null;
+    const capC = await learning.maybeCaptureLearnings({ query: 'Acme history', content: RCON, urls: ['https://src/acme'],
+      deps: { skipThrottle: true, live: [], storeFn: async (r) => { stC.push(r); return { id: 1 }; },
+        lookupIncumbent: () => ({ value: 'Acme Corp was founded in 2001.', as_of: '2020', ref: 77, citations: [] }),
+        onSupersede: (ref) => { retiredC = ref; return true; },
+        extract: async () => 'Acme Corp was founded in 1999. | Acme founding | 2026' } });
+    ok(capC.superseded === 0 && capC.verified === 0 && retiredC === null && stC.length === 0, 'realtime single-source contradiction of a stable incumbent → ASK/keep (ambient guard: a lone read never retires a belief)');
+
+    // D) UNDATED learning NEVER consults the incumbent (the append lane is deliberate — many facts per topic).
+    const stD = [], seenD = [];
+    const capD = await learning.maybeCaptureLearnings({ query: 'geography', content: RCON, urls: ['https://src/geo'],
+      deps: { skipThrottle: true, live: [], storeFn: async (r) => { stD.push(r); return { id: 1 }; },
+        lookupIncumbent: (k) => { seenD.push(k); return null; },
+        extract: async () => 'The Nile is a river in Africa. | Nile | UNKNOWN' } });
+    ok(capD.learned === 1 && stD.length === 1 && stD[0].source === 'learning', 'realtime undated claim → learning append (unchanged)');
+    ok(seenD.length === 0, 'the learning lane does NOT consult the belief incumbent (only dated facts reconcile)');
+
+    // E) END-TO-END via the DEFAULT lookup (incumbentFromLive off the live snapshot; no injected incumbent): a
+    // real no-citation verified_fact in the DB is NOT retired by a lone single-source realtime contradiction —
+    // exercises corroboration-surfacing + the ambient guard on the PRODUCTION path (the HIGH adversarial find).
+    db.insertKnowledge({ kind: 'note', content: 'The capital of Foo is Bar.', source: 'verified_fact', importance: 0.9, embedding: null, provenance: { subject_key: 'capital-of-foo', as_of: '2026-06-01' } });
+    const stE = [];
+    const capE = await learning.maybeCaptureLearnings({ query: 'geography of Foo', content: ('The capital of Foo is Baz, not Bar, per a single travel blog. ').repeat(6), urls: ['https://blog/foo'],
+      deps: { skipThrottle: true, storeFn: async (r) => { stE.push(r); return { id: 1 }; },
+        extract: async () => 'The capital of Foo is Baz. | capital of Foo | 2026-08-17' } });
+    const foo = db.getDb().prepare("SELECT source, importance FROM knowledge WHERE content = 'The capital of Foo is Bar.'").get();
+    ok(capE.superseded === 0 && foo && foo.source === 'verified_fact' && foo.importance === 0.9, 'default path: a held no-citation belief is NOT retired by a lone single-source realtime contradiction (incumbentFromLive + ambient guard, on the real DB)');
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   } finally {

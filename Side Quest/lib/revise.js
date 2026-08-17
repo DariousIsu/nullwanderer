@@ -53,13 +53,14 @@ function toVerifiedRecord(claim, decision, { subjectKey, capturedBy, now = Date.
 // THE PIPELINE. claim → reconcile(claim, incumbent) → on new|merge|supersede|append, produce + write the
 // verified_fact record. reject|ask → write nothing (the caller may surface an ASK). Returns the outcome so a
 // producer/UI can report ("superseded the stale record", "asked which entity", "rejected — no citation").
-async function reviseBelief(claim, { lookupIncumbent = null, writeFact = null, onSupersede = null, capturedBy = null, now = Date.now(), importance = VERIFIED_IMPORTANCE, deps = {} } = {}) {
+async function reviseBelief(claim, { lookupIncumbent = null, writeFact = null, onSupersede = null, capturedBy = null, now = Date.now(), importance = VERIFIED_IMPORTANCE, ambient = false, deps = {} } = {}) {
   const R = deps.reconcile || require('./reconcile');
   const subjectKey = subjectKeyOf(claim, deps);
   let incumbent = null;
   if (lookupIncumbent && subjectKey) { try { incumbent = await lookupIncumbent(subjectKey, claim); } catch { incumbent = null; } }
   const resolution = (claim && claim.subject && claim.subject.resolution) || undefined;
-  const decision = R.reconcile(claim, incumbent, { deps, now, resolution });
+  // ambient=true marks a fire-and-forget single-read lane (realtime capture) → reconcile guards stable supersede.
+  const decision = R.reconcile(claim, incumbent, { deps, now, resolution, ambient });
   const doWrite = decision.action === 'new' || decision.action === 'merge' || decision.action === 'supersede' || decision.action === 'append';
   if (!doWrite) return { action: decision.action, reason: decision.reason, wrote: false, record: null, decision, subjectKey };
   const record = toVerifiedRecord(claim, decision, { subjectKey, capturedBy, now, importance });

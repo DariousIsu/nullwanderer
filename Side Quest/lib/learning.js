@@ -201,7 +201,7 @@ async function extractClaims({ query, content, deps = {} }) {
 // Live banked knowledge (verified_fact + learning) for the realtime dedup. Superseded facts are
 // parked and excluded. Direct getDb() use mirrors cloud_curator's style.
 function _liveLearnings() {
-  try { return db.getDb().prepare("SELECT id, content, provenance FROM knowledge WHERE source IN ('verified_fact','learning')").all(); }
+  try { return db.getDb().prepare("SELECT id, content, provenance, source FROM knowledge WHERE source IN ('verified_fact','learning')").all(); }
   catch { return []; }
 }
 function _provOf(row) { try { return row.provenance ? JSON.parse(row.provenance) : {}; } catch { return {}; } }
@@ -251,24 +251,55 @@ async function maybeCaptureLearnings({ query, content, urls, deps = {} } = {}) {
     });
     if (droppedUngrounded) console.warn(`[learning] dropped ${droppedUngrounded} ungrounded claim(s) — anchors absent from the read text (invented, not extracted; gate held)`);
     if (!grounded.length) return { captured: 0, skipped: 'none-grounded', dropped_ungrounded: droppedUngrounded };
-    const live = _liveLearnings();
+    const live = deps.live || _liveLearnings();
     const storeFn = deps.storeFn || ((rec) => memory.store(rec));
     const captureDate = deps.captureDate || require('./tz').dayKey(now);   // Eastern day — a 9pm capture is TODAY's
-    let verified = 0, learned = 0;
+    // RECONCILE the dated facts against the belief they fill the slot of — never blind-append. Injectable
+    // (deps.*) so offline smokes stay hermetic; live defaults to the same verifiedFactBySlot/retireVerifiedFact
+    // pipeline captureRecovered uses (realtime read = authority tier 2; deliberate recovery = 3).
+    const revise = require('./revise').reviseBelief;
+    const lookupIncumbent = deps.lookupIncumbent || ((k) => incumbentFromLive(live, k));
+    const onSupersede = deps.onSupersede || ((ref) => retireVerifiedFact(ref, { by: 'realtime', now }));
+    let verified = 0, learned = 0, superseded = 0, merged = 0;
     for (const c of grounded) {
       const isVerified = !!c.asOf;                                            // source gave a real date → time-sensitive
       if (_isReplay(c, live, isVerified)) continue;
+      if (isVerified) {
+        // A dated claim goes through belief revision, NOT a blind append: no incumbent → new; agreeing → merge
+        // (corroboration boost); a NEWER contradiction that clears the ttl-weighted bar → supersede + retire the
+        // stale record (the Pam-Bondi law); a weak/volatile contradiction → ask (writes nothing, KEEPS the
+        // incumbent). That closes the old bug where a second verified_fact was appended to the same slot (or a
+        // same-date contradiction was silently dropped, keeping the wrong value).
+        let r;
+        try {
+          r = await revise({
+            kind: 'entity', subject: { name: c.subject, key: c.subjectKey },
+            value: c.claim, as_of: c.asOf,
+            citations: [{ url: c.url, title: String(query || '').slice(0, 80), authority_tier: 2 }],
+            provenance: 'read', lane: 'research',
+          }, { lookupIncumbent, writeFact: (rec) => storeFn(rec), onSupersede, ambient: true, capturedBy: 'realtime', now });
+        } catch (e) { r = { wrote: false, error: e.message }; }
+        if (r && r.wrote) {
+          verified++;
+          if (r.action === 'supersede') superseded++;
+          else if (r.action === 'merge') merged++;
+          live.push({ content: c.claim, provenance: JSON.stringify({ subject_key: c.subjectKey, as_of: c.asOf }) });
+        }
+        continue;
+      }
+      // UNDATED learning — append. Distinct facts about ONE topic must all accrue (NOT slot-deduped), so this
+      // lane deliberately does NOT reconcile; _isReplay already blocked an identical-text re-bank.
       await storeFn({
         kind: 'note', content: c.claim,
-        source: isVerified ? 'verified_fact' : 'learning',
-        importance: isVerified ? VERIFIED_IMPORTANCE : LEARNING_IMPORTANCE,
+        source: 'learning',
+        importance: LEARNING_IMPORTANCE,
         level: 'fact',
-        provenance: { url: c.url, as_of: c.asOf || captureDate, dated: isVerified, subject: c.subject, subject_key: c.subjectKey, query: String(query || '').slice(0, 200), capturedBy: 'realtime' }
+        provenance: { url: c.url, as_of: captureDate, dated: false, subject: c.subject, subject_key: c.subjectKey, query: String(query || '').slice(0, 200), capturedBy: 'realtime' }
       });
       live.push({ content: c.claim, provenance: JSON.stringify({ subject_key: c.subjectKey, as_of: c.asOf }) });
-      if (isVerified) verified++; else learned++;
+      learned++;
     }
-    return { captured: verified + learned, verified, learned, dropped_ungrounded: droppedUngrounded };
+    return { captured: verified + learned, verified, learned, superseded, merged, dropped_ungrounded: droppedUngrounded };
   } catch (e) { return { error: e.message }; }
 }
 
@@ -292,7 +323,32 @@ function verifiedFactBySlot(subjectKey) {
     let p = {}; try { p = JSON.parse(r.provenance || '{}'); } catch {}
     if (p.subject_key !== subjectKey || p.superseded) continue;   // skip already-retired records
     const ms = Date.parse(p.as_of || '') || 0;
-    if (ms >= bestMs) { bestMs = ms; best = { value: r.content, as_of: p.as_of || null, ref: r.id, citations: Array.isArray(p.citations) ? p.citations : [] }; }
+    if (ms >= bestMs) { bestMs = ms; best = _incumbentRecord(r.content, r.id, p); }
+  }
+  return best;
+}
+// Shape a verified_fact row into a reconcile INCUMBENT. Crucially SURFACES corroboration (stored, else scored
+// from the row's own citations) so reconcile's corroboration compare is REAL — without it a lone single-source
+// read out-"corroborates" a widely-reported incumbent (tier 'none') and wrongly supersedes it.
+function _incumbentRecord(content, ref, p) {
+  const cites = Array.isArray(p.citations) ? p.citations : [];
+  let corroboration = p.corroboration || null;
+  if (!corroboration) { try { corroboration = require('./reconcile').score(cites); } catch { corroboration = null; } }
+  return { value: content, as_of: p.as_of || null, ref, citations: cites, corroboration };
+}
+// The current verified_fact for a slot, picked from the ALREADY-LOADED live snapshot (no extra per-claim DB
+// scan — the hot-path lookup for maybeCaptureLearnings). Same shape as verifiedFactBySlot; skips retired rows;
+// newest as_of wins. Rows pushed mid-batch (live.push) carry no source → ignored (we reconcile against the
+// batch-start belief, which is fresh enough for a fire-and-forget capture).
+function incumbentFromLive(live, subjectKey) {
+  if (!subjectKey || !Array.isArray(live)) return null;
+  let best = null, bestMs = -1;
+  for (const r of live) {
+    if (r.source !== 'verified_fact') continue;
+    let p = {}; try { p = r.provenance ? (typeof r.provenance === 'string' ? JSON.parse(r.provenance) : r.provenance) : {}; } catch {}
+    if (p.subject_key !== subjectKey || p.superseded) continue;
+    const ms = Date.parse(p.as_of || '') || 0;
+    if (ms >= bestMs) { bestMs = ms; best = _incumbentRecord(r.content, r.id, p); }
   }
   return best;
 }
