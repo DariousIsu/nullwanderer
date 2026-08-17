@@ -1,5 +1,17 @@
 const OLLAMA_BASE = process.env.OLLAMA_BASE || 'http://localhost:11434';
 
+// keep_alive policy (2026-08-16, Lucas). A CLOUD call (base != local) is proxied to ollama.com, which does
+// NOT hold local VRAM — a long keep_alive is harmless there. A LOCAL call pins the model in the RX 7900 XT's
+// VRAM for the whole window, and the ONLY thing that runs local now is the demoted-cold front FALLBACK (it
+// fires when the cloud is throttled/down; chat + musings are cloud). A 24h pin meant one transient cloud blip
+// squatted 8.4 GB for a full day, defeating the 08-04 "front cold, VRAM reserved for image-gen" intent. So a
+// local call gets a SHORT keep_alive → the fallback model unloads when idle. Env-tunable (ZOE_LOCAL_KEEP_ALIVE);
+// the explicit boot warm-hold (ZOE_WARM_FRONT, main.js) still pins its own 24h independently of this default.
+function _keepAlive(base) {
+  const isCloud = !!(base && base !== OLLAMA_BASE);
+  return isCloud ? '24h' : (String(process.env.ZOE_LOCAL_KEEP_ALIVE || '').trim() || '5m');
+}
+
 // TRANSIENT CONCURRENCY 429 BACKOFF (2026-08-16). ollama.com admits a bounded number of concurrent
 // requests per account (measured live: ~12 clean, HTTP 429 "too many concurrent requests" past ~12-19).
 // A wide swarm (up to config.maxWorkers, each operator turn firing several nested calls) can transiently
@@ -36,7 +48,7 @@ async function streamChat({ model, messages, options = {}, onToken, onThinking, 
     model,
     messages,
     stream: true,
-    keep_alive: '24h',
+    keep_alive: _keepAlive(base),
     options: {
       temperature: 0.8,
       top_p: 0.9,
@@ -250,7 +262,7 @@ async function completeDetailed({ model, messages, options = {}, base = OLLAMA_B
       method: 'POST',
       headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
       body: JSON.stringify(Object.assign({
-        model, messages, stream: false, keep_alive: '24h',
+        model, messages, stream: false, keep_alive: _keepAlive(base),
         options: Object.assign({ temperature: 0, top_p: 0.9, num_ctx: 8192 }, options),
       }, typeof think === 'boolean' ? { think } : {})),   // think:false → reasoning models emit the answer directly, not hidden in `thinking`
       signal: ctrl.signal,
@@ -571,4 +583,4 @@ async function streamCognition({ messages, options = {}, onToken, onThinking, si
   return streamChat({ model: front, messages, options, onToken, onThinking, signal, inactivityMs, maxMs, think });
 }
 
-module.exports = { streamChat, streamCognition, complete, completeDetailed, pickText, isReasoningModel, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded, sayLooksCutOff, _maybeBackoff429, _CONCURRENCY_429_RE };
+module.exports = { streamChat, streamCognition, complete, completeDetailed, pickText, isReasoningModel, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded, sayLooksCutOff, _maybeBackoff429, _CONCURRENCY_429_RE, _keepAlive };

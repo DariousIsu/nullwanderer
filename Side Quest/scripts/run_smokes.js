@@ -550,6 +550,7 @@ const smokes = [
   'smoke_false_incompleteness.js', // FEC loop (08-16 audit): the MIRROR — an unprompted say re-nags a request she ALREADY delivered; the PURE gates (delivery.isOwedClaim + resultBearingDeliveries)
   'smoke_renag_judge.js',          // FEC loop (08-16 audit): the bounded model judge behind the gates — routing + FAIL-OPEN (injected classify, no network)
   'smoke_route_judge.js',          // tiered router (08-16): the model tier that arbitrates conflicting route signals — parse + FAIL-OPEN (injected classify)
+  'smoke_keepalive.js',            // keep_alive policy (08-16): local fallback gets a SHORT keep_alive so a transient cloud blip never squats VRAM 24h; cloud stays 24h
   // ── the duplicate-thread ROOT (2026-08-13): the dedup pool was the 50 STALEST threads (ASC) —
   // a fresh sibling was never in the window. newestFirst pool + the token floor now catch the
   // 71-second rephrase with the embedder dead.
