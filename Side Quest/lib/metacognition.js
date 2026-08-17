@@ -242,8 +242,21 @@ const _ART_IMG_CTX_RE = new RegExp('\\b(?:' + _ART_IMG_NOUN + '|artwork)\\b', 'i
 const _ART_IMG_MAKE_RE = new RegExp('\\b(?:generated|drew|rendered|created|made|produced|painted|sketched|whipped up|cooked up)\\b[^.!?\\n]*\\b(?:' + _ART_IMG_NOUN + ')\\b', 'i');
 const _ART_IMG_PROGRESS_RE = /\b(?:generating|rendering|drawing|creating|painting)\b[^.!?\n]*\b(?:now|it|them|this|that|one|for you)\b|\bhere (?:it|they) (?:is|are)\b|\bon (?:your|the) canvas\b|\bputting (?:it|them|these|those)\b[^.!?\n]*\bcanvas\b|\b(?:it'?s|they'?re|it is|they are)\s+(?:ready|done)\b|\bcoming (?:right )?up\b/i;
 
+// Strong SUBJECT anchors in a claim: capitalized proper nouns ≥4 chars, minus sentence-openers / generic
+// artifact words. Used ONLY by the content-aware canvas check (does the LANDED doc match the claim?).
+const _CLAIM_ANCHOR_STOP = new Set(['this', 'that', 'these', 'those', 'your', 'their', 'here', 'there', 'they', 'then', 'with', 'have', 'made', 'from', 'into', 'onto', 'list', 'report', 'canvas', 'document', 'contacts', 'contact', 'now', 'them', 'and', 'the', 'put', 'you', 'its']);
+function _claimAnchors(s) {
+  const out = [];
+  for (const m of String(s || '').match(/\b[A-Z][A-Za-z]{3,}\b/g) || []) {
+    const lw = m.toLowerCase();
+    if (_CLAIM_ANCHOR_STOP.has(lw) || out.includes(lw)) continue;
+    out.push(lw);
+  }
+  return out.slice(0, 6);
+}
+
 // Verify falsifiable artifact claims in `say` against reality. Returns { ok, violations:[{kind,claim}] }.
-function verifyArtifactClaims(say, { fileExists = null, canvasWroteThisTurn = null, imageGenThisTurn = null, dbWroteThisTurn = null } = {}) {
+function verifyArtifactClaims(say, { fileExists = null, canvasWroteThisTurn = null, canvasLandedText = null, imageGenThisTurn = null, dbWroteThisTurn = null } = {}) {
   const violations = [];
   const sentences = String(say || '').split(/(?<=[.!?])\s+|\n+/);
   const _imgCtx = typeof imageGenThisTurn === 'function' && _ART_IMG_CTX_RE.test(String(say || ''));
@@ -264,6 +277,24 @@ function verifyArtifactClaims(say, { fileExists = null, canvasWroteThisTurn = nu
     if (typeof canvasWroteThisTurn === 'function' && _ART_CANVAS_DONE_RE.test(s) && _ART_CANVAS_VERB_RE.test(s)) {
       let wrote = true; try { wrote = !!canvasWroteThisTurn(); } catch { wrote = true; }   // fail OPEN
       if (!wrote) violations.push({ kind: 'canvas', claim: s.slice(0, 90) });
+      // CONTENT-AWARE (2026-08-17, the #12338 wrong-doc): a write DID land — but does it MATCH the claim, or was
+      // an unrelated doc mislabeled as it? If the claim names strong SUBJECT anchors (proper nouns) and the
+      // LANDED doc shares NONE of them, the write is the wrong artifact. FAILS OPEN hard: no landed text, no
+      // anchor, or ANY anchor present → no violation (never scold a paraphrase / synonym / table delivery).
+      else if (typeof canvasLandedText === 'function' && !violations.some((v) => v.kind === 'canvas')) {
+        // ABSTAIN when an image rendered this turn — an image block carries no matchable text, and an "on your
+        // canvas" line may be about the IMAGE (the image check owns that), not a doc. Fail OPEN (error → abstain).
+        let _imgThisTurn = true; try { _imgThisTurn = typeof imageGenThisTurn === 'function' ? !!imageGenThisTurn() : false; } catch { _imgThisTurn = true; }
+        try {
+          const anchors = _imgThisTurn ? [] : _claimAnchors(s);
+          // landed text UNIONS every doc written this turn (see canvas_docs.lastWriteText), so a real multi-doc
+          // or multi-block delivery still matches; only a wrong doc sharing NONE of the claim's anchors trips it.
+          const landed = anchors.length ? String(canvasLandedText() || '').toLowerCase() : '';
+          if (anchors.length && landed.length > 20 && !anchors.some((a) => landed.includes(a))) {
+            violations.push({ kind: 'canvas', claim: s.slice(0, 90) });
+          }
+        } catch { /* fail OPEN */ }
+      }
     }
     // IMAGE: an image-creation/delivery claim with NO generation this turn. Tier 1 (create-verb + image-noun)
     // fires anywhere; Tier 2 (bare progress/delivery) only inside image context, so "generating the report

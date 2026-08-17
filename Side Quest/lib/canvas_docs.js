@@ -146,4 +146,38 @@ function clear() {
 // actually happen this turn?" before trusting a reply's "…on your canvas" claim. 0 if none / on error.
 function lastWriteTs() { try { const r = _db().prepare('SELECT MAX(updated_at) AS m FROM docs').get(); return (r && r.m) || 0; } catch { return 0; } }
 
-module.exports = { init, _db, close, recordTab, recordBlock, clearTabBlocks, all, forget, prune, clear, lastWriteTs, MAX_BLOCK_BYTES, KEEP_DOCS };
+// The TITLES + body text of every doc written since `sinceTs` (each doc's title + ALL its blocks) — the
+// evidence for the anti-fab CONTENT check ("did the landed doc actually match the claim, or was a wrong doc
+// mislabeled?", the #12338 fabrication). Crucially UNIONS all this-turn docs + all their blocks so a real
+// multi-doc / multi-block delivery is never false-scolded (a claim about doc A finds A's text even when doc B
+// is newest). sinceTs=0 → just the single newest doc (back-compat). Fail-soft → ''.
+function lastWriteText(sinceTs = 0) {
+  try {
+    const d = _db();
+    const docs = sinceTs > 0
+      ? d.prepare('SELECT tab_key, title FROM docs WHERE updated_at >= ? ORDER BY updated_at DESC LIMIT 6').all(sinceTs)
+      : (() => { const o = d.prepare('SELECT tab_key, title FROM docs ORDER BY updated_at DESC LIMIT 1').get(); return o ? [o] : []; })();
+    if (!docs.length) return '';
+    const CAP = 8000;
+    let out = '';
+    const add = (t) => { if (t && out.length < CAP) out += ' ' + String(t); };
+    for (const doc of docs) {
+      if (out.length >= CAP) break;
+      add(doc.title);
+      try {
+        const blks = d.prepare('SELECT data FROM blocks WHERE tab_key = ? ORDER BY position LIMIT 30').all(doc.tab_key);
+        for (const blk of blks) {
+          if (out.length >= CAP) break;
+          if (!blk || !blk.data) continue;
+          let body = '';
+          try { const j = JSON.parse(blk.data); body = String(j.markdown || j.text || (Array.isArray(j.headers) ? [].concat(j.headers, ...((j.rows || []).slice(0, 40))).join(' ') : '') || ''); }
+          catch { body = String(blk.data).slice(0, 500); }
+          add(body);
+        }
+      } catch {}
+    }
+    return out.slice(0, CAP).trim();
+  } catch { return ''; }
+}
+
+module.exports = { init, _db, close, recordTab, recordBlock, clearTabBlocks, all, forget, prune, clear, lastWriteTs, lastWriteText, MAX_BLOCK_BYTES, KEEP_DOCS };

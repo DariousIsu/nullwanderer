@@ -11549,7 +11549,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           });
           if (verdict && verdict.intent) {
             _artifactJudged = true;                                   // judgment is final either way
-            if (verdict.intent !== 'none') {
+            // DUAL-EMISSION GUARD (2026-08-17, the #12338 pull-up): the operator path feeds the MAIN reply
+            // WITHOUT setting followupFired, so a retrieval pull-up here can fire a SECOND, contradictory turn on
+            // top of the operator's answer. Suppress the pull-up ONLY when the operator gave a SUBSTANTIVE answer
+            // (NOT a miss) — else (adversarial find) a real title-matched product would be dropped to keep the
+            // operator's "I don't have it," which is the wrong resolution; when the operator missed, let the
+            // pull-up try (its title-match gate is high-precision). On suppress, set followupFired so no OTHER net
+            // fires a different second emission (true single voice). report/canvas_create are unaffected.
+            const _pullupSuppressed = verdict.intent === 'pullup' && !!operatorAnswer
+              && !(() => { try { return require('./lib/delivery').claimsNonDelivery(operatorAnswer); } catch { return false; } })();
+            if (_pullupSuppressed) { followupFired = true; console.log('[artifact-router] pull-up suppressed — operator gave a substantive answer this turn (single voice)'); }
+            if (verdict.intent !== 'none' && !_pullupSuppressed) {
               followupFired = true;
               console.log(`[artifact-router] intent=${verdict.intent}${verdict.subject ? ` subject="${verdict.subject}"` : ''}${verdict.instruction ? ` instruction="${verdict.instruction.slice(0, 60)}"` : ''}`);
               if (verdict.intent === 'canvas_edit' && _fresh) {
@@ -12279,6 +12289,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       const _av = _mc.verifyArtifactClaims(sayOut, {
         fileExists: (p) => { try { const _p = require('path'); const abs = _p.isAbsolute(p) ? p : _p.join(__dirname, p); return require('fs').existsSync(abs); } catch { return true; } },
         canvasWroteThisTurn: () => { if (!_fuAnchor) return true; try { return require('./lib/canvas_docs').lastWriteTs() >= _fuAnchor; } catch { return true; } },
+        canvasLandedText: () => { if (!_fuAnchor) return ''; try { return require('./lib/canvas_docs').lastWriteText(_fuAnchor); } catch { return ''; } },   // content-aware: RIGHT doc? (unions this-turn docs)
         imageGenThisTurn: () => !_fuAnchor || (lastImageGenTs || 0) >= _fuAnchor,
         dbWroteThisTurn: () => { if (!_fuAnchor) return true; try { return require('./lib/echo_suit').lastContactWriteTs() >= _fuAnchor; } catch { return true; } },
       });
@@ -16338,6 +16349,7 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
     const av = _mc.verifyArtifactClaims(out, {
       fileExists: (p) => { try { const _p = require('path'); const abs = _p.isAbsolute(p) ? p : _p.join(__dirname, p); return require('fs').existsSync(abs); } catch { return true; } },
       canvasWroteThisTurn: () => { try { return require('./lib/canvas_docs').lastWriteTs() >= (turnStartTs || 0); } catch { return true; } },
+      canvasLandedText: () => { try { return require('./lib/canvas_docs').lastWriteText(turnStartTs || 0); } catch { return ''; } },   // content-aware: RIGHT doc? (unions all this-turn docs)
       imageGenThisTurn: () => (lastImageGenTs || 0) >= (turnStartTs || 0),   // a real image rendered this turn?
       dbWroteThisTurn: () => { try { return require('./lib/echo_suit').lastContactWriteTs() >= (turnStartTs || 0); } catch { return true; } },   // a contact write that LANDED this turn?
     });

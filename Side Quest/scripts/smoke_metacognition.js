@@ -149,6 +149,24 @@ ok(m.verifyArtifactClaims('It’s on your canvas now.', { canvasWroteThisTurn: C
   'canvas: curly-apostrophe "It’s on your canvas" + no write → violation too');
 ok(m.verifyArtifactClaims("It's on your canvas now.", { canvasWroteThisTurn: CW_YES }).ok,
   'canvas: "It\'s on your canvas" WITH a write → ok (no false scold)');
+// CONTENT-AWARE (2026-08-17, the #12338 wrong-doc): a write landed but the WRONG doc — the claim's proper-noun
+// anchor absent from the landed text → violation; present → ok (no false scold); no probe → fail-open.
+ok(m.verifyArtifactClaims('I put the Louisiana elected-official contacts on your canvas', { canvasWroteThisTurn: CW_YES, canvasLandedText: () => 'Inquiry — Which layer is causing the dispatch-timeout failure' }).violations.some(v => v.kind === 'canvas'),
+  'canvas content: a write landed but the WRONG doc (no "Louisiana" in it) → violation (the #12338 catch)');
+ok(m.verifyArtifactClaims('I put the Louisiana elected-official contacts on your canvas', { canvasWroteThisTurn: CW_YES, canvasLandedText: () => 'Louisiana officials — Baton Rouge, Shreveport, Monroe; 183 rows with emails' }).ok,
+  'canvas content: a write landed with the RIGHT doc (contains "Louisiana") → ok (no false scold)');
+ok(m.verifyArtifactClaims('I put the Louisiana contacts on your canvas', { canvasWroteThisTurn: CW_YES }).ok,
+  'canvas content: no landed-text probe → fail OPEN (unchanged behavior)');
+ok(m.verifyArtifactClaims('I put the list on your canvas', { canvasWroteThisTurn: CW_YES, canvasLandedText: () => 'some entirely unrelated doc content here' }).ok,
+  'canvas content: claim has NO proper-noun anchor → no violation (never scold a generic claim)');
+// FALSE-SCOLD FIXES (2026-08-17 adversarial): must NOT scold a real multi-doc / image delivery. Landed text
+// UNIONS every this-turn doc; the check ABSTAINS when an image rendered.
+ok(m.verifyArtifactClaims('The Cleco brief is on your canvas.', { canvasWroteThisTurn: CW_YES, canvasLandedText: () => 'Cleco — rate case brief. Entergy — merger brief.' }).ok,
+  'canvas content: multi-doc turn — claim about doc A finds its anchor in the UNION → no false scold');
+ok(m.verifyArtifactClaims("I drew the Gonzalez portrait — it's on your canvas.", { canvasWroteThisTurn: CW_YES, imageGenThisTurn: () => true, canvasLandedText: () => 'Acme Q3 revenue table with many rows' }).ok,
+  'canvas content: an IMAGE rendered this turn → abstain (image has no matchable text) → no false scold');
+ok(m.verifyArtifactClaims('I put the Louisiana contacts on your canvas', { canvasWroteThisTurn: CW_YES, imageGenThisTurn: () => false, canvasLandedText: () => 'Inquiry — dispatch-timeout failure analysis' }).violations.some(v => v.kind === 'canvas'),
+  'canvas content: no image + wrong doc (no "Louisiana") still caught (#12338)');
 
 // --- IMAGE anti-fab (the #10872 "…Generating now." confab; no generation ran) ---
 const SOCCER = "Got it — more realistic. I'll push the soccer image toward photorealism. Generating now.";
