@@ -206,7 +206,7 @@ const _ART_PATH_RE = /((?:[A-Za-z]:)?[\w.\-]*[\/\\][\w.\-\/\\]*\.\w{1,6}|[\w.\-]
 // corrections erode trust), so branch 2 requires an is/has-been + completion verb, never a bare "at".
 const _ART_FILE_DONE_RE = /\b(saved|wrote|written|stored|created|generated|exported|compiled)\b[^.!?\n]*\b(?:at|to|in|as|into)\b|\b(?:dossier|file|document|report|note|brief|memo|spreadsheet|markdown|deliverable)\b[^.!?\n]*\b(?:is|has been|it'?s|now)\s*(?:saved|stored|written|created|generated)\b/i;
 const _ART_CANVAS_DONE_RE = /\bcanvas\b/i;
-const _ART_CANVAS_VERB_RE = /\b(put|placed|added|dropped|posted|loaded|saved|filled|wrote|is on|are on|onto|now on|updated)\b/i;
+const _ART_CANVAS_VERB_RE = /\b(put|placed|added|dropped|posted|loaded|saved|filled|wrote|is on|are on|it['’]?s on|they['’]?re on|onto|now on|updated)\b/i;
 // DB-WRITE: a claim that a contact/record was SAVED to the contacts DB / CRM this turn, when no write actually
 // landed (live 2026-08-05: "Done — Tom Arceneaux is in the contacts database with mayor@…" — the row's email
 // stayed NULL; the write never persisted). Branch 1 = a save/add VERB into a store ("added it to the contacts

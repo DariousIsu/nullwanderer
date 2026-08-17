@@ -141,6 +141,14 @@ ok(m.verifyArtifactClaims('I put 994 contacts on your canvas', { canvasWroteThis
   'canvas: "put ... on your canvas" + no write → violation');
 ok(m.verifyArtifactClaims('I put 994 contacts on your canvas', { canvasWroteThisTurn: CW_YES }).ok,
   'canvas: same claim WITH a write this turn → ok');
+// PHRASING GAP (2026-08-17, the #12338 fabrication): "It's on your canvas now" slipped past — the verb regex
+// had "is on" but not "'s on". Both straight and curly apostrophes (the cloud writer re-voices with U+2019).
+ok(m.verifyArtifactClaims("It's on your canvas now.", { canvasWroteThisTurn: CW_NO }).violations.some(v => v.kind === 'canvas'),
+  'canvas: "It\'s on your canvas" (straight apostrophe) + no write → violation (the phrasing-gap fix)');
+ok(m.verifyArtifactClaims('It’s on your canvas now.', { canvasWroteThisTurn: CW_NO }).violations.some(v => v.kind === 'canvas'),
+  'canvas: curly-apostrophe "It’s on your canvas" + no write → violation too');
+ok(m.verifyArtifactClaims("It's on your canvas now.", { canvasWroteThisTurn: CW_YES }).ok,
+  'canvas: "It\'s on your canvas" WITH a write → ok (no false scold)');
 
 // --- IMAGE anti-fab (the #10872 "…Generating now." confab; no generation ran) ---
 const SOCCER = "Got it — more realistic. I'll push the soccer image toward photorealism. Generating now.";

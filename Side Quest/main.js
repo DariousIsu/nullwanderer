@@ -11591,6 +11591,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                 // doc" — a fabrication. Present only a hit whose TITLE actually carries a subject token; scan
                 // (not [0]) so a real title-match behind a fresher body-only decoy is still found.
                 const _pl = require('./lib/product_ledger');
+                // tokensOf now strips generic verbs/connectors too (the #17067 fabrication) — so a subject that
+                // reduces to only generic words ("the list we put together") yields ZERO tokens, the title gate
+                // below holds (`_stoks.length &&`), and we honest-miss instead of landing a wrong doc.
                 const _stoks = _pl.tokensOf(verdict.subject || userMessage);
                 const _titleHit = (h) => _stoks.length && _stoks.some((w) => String(h.title || '').toLowerCase().includes(w));
                 const _match = _phits.find(_titleHit);

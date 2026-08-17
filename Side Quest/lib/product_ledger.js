@@ -115,7 +115,17 @@ function detectAskLoose(text) {
 
 // Significant search tokens from a subject phrase.
 function tokensOf(subject) {
-  const STOP = new Set(['list', 'report', 'brief', 'briefing', 'dossier', 'document', 'documents', 'doc', 'docs', 'file', 'files', 'note', 'notes', 'table', 'tables', 'spreadsheet', 'spreadsheets', 'summary', 'memo', 'paper', 'papers', 'deliverable', 'deliverables', 'profile', 'profiles', 'roster', 'rosters', 'write-up', 'writeup', 'people', 'person', 'info', 'information', 'most', 'recent', 'latest', 'last', 'ten', 'top']);
+  const STOP = new Set(['list', 'report', 'brief', 'briefing', 'dossier', 'document', 'documents', 'doc', 'docs', 'file', 'files', 'note', 'notes', 'table', 'tables', 'spreadsheet', 'spreadsheets', 'summary', 'memo', 'paper', 'papers', 'deliverable', 'deliverables', 'profile', 'profiles', 'roster', 'rosters', 'write-up', 'writeup', 'people', 'person', 'info', 'information', 'most', 'recent', 'latest', 'last', 'ten', 'top',
+    // generic VERBS + connectors carry NO topic — "the list we PUT TOGETHER" must not title-match a doc on
+    // put/together (the #17067 pull-up fabrication, 2026-08-17). The subject's TOPIC nouns are the only
+    // discriminator; a subject that reduces to these alone yields zero tokens → the title gate holds → honest miss.
+    'put', 'together', 'run', 'ran', 'make', 'made', 'get', 'got', 'gotten', 'pull', 'pulled', 'pulling', 'give',
+    'gave', 'given', 'check', 'checked', 'grab', 'grabbed', 'compile', 'compiled', 'build', 'built', 'draft',
+    'drafted', 'find', 'found', 'show', 'send', 'sent', 'want', 'need', 'work', 'worked', 'thing', 'things',
+    'stuff', 'one', 'ones', 'version', 'that', 'these', 'those', 'about', 'for',
+    // common articles / pronouns / aux-verbs — never a topic
+    'the', 'you', 'your', 'our', 'and', 'with', 'was', 'were', 'are', 'this', 'his', 'her', 'its', 'who',
+    'what', 'from', 'have', 'has', 'had', 'not', 'she', 'him', 'them', 'they', 'their', 'ours']);
   const raw = str(subject).toLowerCase().match(/[a-z][a-z0-9'-]{2,}/g) || [];
   const out = [];
   for (const w of raw) if (!STOP.has(w) && !out.includes(w)) out.push(w);
@@ -153,7 +163,9 @@ function searchProducts({ db, query, notesDir = null, limit = 3, now = Date.now(
       // A FAILURE RECORD is not a product (08-08 audit, defect 4: doc #14529 — an inquiry closure
       // whose body says "list could not be obtained" — was pulled up and presented as "the ACTUAL
       // artifact"). An inquiry doc whose head records a miss documents the ABSENCE of the product;
-      // it must never rank as the product itself.
+      // it must never rank as the product itself. (A SUCCESSFUL inquiry product still ranks — the
+      // #17067 wondering-organ fabrication is stopped upstream by the pull-up's content-token title
+      // gate, main.js, NOT by excluding all inquiry docs, which would drop real inquiry deliverables.)
       if (str(r.source) === 'inquiry'
         && /could not be (?:obtained|found|verified|located)|unable to (?:obtain|find|locate)|no (?:such|matching|results?)|nothing (?:was )?found|came up empty/.test(body.slice(0, 400))) continue;
       let score = 0;

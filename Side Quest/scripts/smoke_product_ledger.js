@@ -94,6 +94,17 @@ fs.writeFileSync(path.join(notesDir, 'louisiana-energy-companies.md'), '# Louisi
 const dif = pl.searchProducts({ db: { getDb: () => { throw new Error('notes only'); } }, query: 'louisiana', notesDir, limit: 5, now });
 ok('distinct products stay unclustered', dif.some((h) => /energy/.test(h.path || '')) && dif.some((h) => /parishes-leadership/.test(h.path || '')));
 
+// ── GENERIC-TOKEN GUARD (2026-08-17, the #17067 pull-up fabrication) ─────────────────────────────
+// tokensOf strips generic verbs/connectors, so a subject that is ALL generic ("the list we put together")
+// yields NO tokens → the pull-up's title gate (_stoks.length && …) holds → honest miss, never a wrong-doc land.
+ok('generic-only subject yields no tokens (title gate holds → honest miss)', pl.tokensOf('the list we put together').length === 0);
+ok('"that thing we made for you" is all-generic → no tokens', pl.tokensOf('that thing we made for you').length === 0);
+{
+  const t = pl.tokensOf('the Louisiana contact list we put together');
+  ok('a real TOPIC survives the generic strip (louisiana/contact kept, put/together dropped)',
+    t.includes('louisiana') && t.includes('contact') && !t.includes('put') && !t.includes('together'));
+}
+
 console.log(`smoke_product_ledger: ${pass} passed, ${fail} failed`);
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 process.exit(fail ? 1 : 0);
