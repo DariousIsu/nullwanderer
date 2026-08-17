@@ -192,8 +192,12 @@ function heldContext(subject, { limit = 3 } = {}) {
       const terms = toks.map((t) => t.replace(/[^a-z0-9]/g, '')).filter(Boolean).map((t) => `${t}*`);
       if (terms.length) {
         try {
+          // ORDER BY bm25 (RELEVANCE), not created_ts: a common token ("county") matches thousands of docs,
+          // and ORDER BY d.created_ts DESC would force the JOIN to materialize + sort EVERY match before LIMIT
+          // (live-measured 200–470ms). bm25 lets fts5 return the top-K internally → 2–14ms (live-measured),
+          // and the most-relevant held doc is a better "check this first" hint than merely the newest.
           rows = db().getDb().prepare(
-            `SELECT d.id, d.title, d.source, d.created_ts FROM documents_fts f JOIN documents d ON d.id = f.rowid WHERE documents_fts MATCH ? ORDER BY d.created_ts DESC LIMIT ?`
+            `SELECT d.id, d.title, d.source, d.created_ts FROM documents_fts f JOIN documents d ON d.id = f.rowid WHERE documents_fts MATCH ? ORDER BY bm25(documents_fts) LIMIT ?`
           ).all(terms.join(' AND '), limit);
         } catch { rows = null; }   // malformed MATCH → fall through to the LIKE, never throw
       }
