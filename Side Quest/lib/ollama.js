@@ -555,6 +555,32 @@ async function sweepLoaded({ keep = [], minVramBytes = 2e9, base = OLLAMA_BASE }
 // monologue.generateThought's cloud-first policy — while preserving token streaming (parser.feed /
 // sheep). Falls back to the local front model ONLY if no cloud subconscious is set or no cloud source
 // is reachable, so the local model stays genuinely COLD unless the cloud is truly unavailable.
+/**
+ * cognitionWindow — the context window an idle-COGNITION call will actually be served.
+ *
+ * streamCognition (below) routes to the CLOUD subconscious model (kimi, 262k) whenever a cloud source
+ * with a token is configured — by THIS very check — else the local front model (8k). A caller that
+ * trims its own prompt before handing it over (the heartbeat's fitToWindow) must budget against the
+ * model that will serve, not the legacy hardcoded 8192 — that number is the LOCAL model's window (see
+ * lib/cloud_window), and sizing the cloud heartbeat to it front-dropped ~10 turns of conversation
+ * every tick against 1/16th of kimi's real window. Cached per model by cloud_window → a Map hit after
+ * the first tick. Deps are injectable for tests. Never throws; fails safe to the 8192 floor.
+ */
+async function cognitionWindow(deps = {}) {
+  const FLOOR = 8192;
+  try {
+    const subconsciousModel = deps.subconsciousModel || require('./config').subconsciousModel;
+    const sources = deps.sources || require('./models').sources;
+    const resolve = deps.resolve || require('./cloud_window').resolve;
+    const subModel = subconsciousModel();
+    if (!subModel) return { num_ctx: FLOOR, isCloud: false, model: null };
+    const cloud = (sources() || []).find(s => s.tier === 'cloud' && s.token);
+    if (!cloud) return { num_ctx: FLOOR, isCloud: false, model: subModel };
+    const w = await resolve({ model: subModel, base: cloud.base, token: cloud.token });
+    return { num_ctx: (w && w.num_ctx) ? w.num_ctx : FLOOR, isCloud: true, model: subModel };
+  } catch { return { num_ctx: FLOOR, isCloud: false, model: null }; }
+}
+
 async function streamCognition({ messages, options = {}, onToken, onThinking, signal, inactivityMs, maxMs, think, lane = 'idle' } = {}) {
   let subModel = '';
   try { subModel = require('./config').subconsciousModel(); } catch {}
@@ -583,4 +609,4 @@ async function streamCognition({ messages, options = {}, onToken, onThinking, si
   return streamChat({ model: front, messages, options, onToken, onThinking, signal, inactivityMs, maxMs, think });
 }
 
-module.exports = { streamChat, streamCognition, complete, completeDetailed, pickText, isReasoningModel, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded, sayLooksCutOff, _maybeBackoff429, _CONCURRENCY_429_RE, _keepAlive };
+module.exports = { streamChat, streamCognition, cognitionWindow, complete, completeDetailed, pickText, isReasoningModel, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded, sayLooksCutOff, _maybeBackoff429, _CONCURRENCY_429_RE, _keepAlive };

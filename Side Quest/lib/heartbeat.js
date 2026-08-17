@@ -279,20 +279,30 @@ async function maybeHeartbeat() {
     // past the line the daemon silently front-drops the system head, protocols first). Same organ
     // and numbers as the chat sites in main.js; the num_predict below makes the reserve real.
     const HB_NUM_PREDICT = 1200;
+    // WINDOW SIZED TO THE MODEL THAT ACTUALLY SERVES (2026-08-17): streamCognition runs the heartbeat on
+    // the CLOUD subconscious model (kimi, 262k) whenever a cloud source is configured, else local gemma
+    // (8k). The old hardcoded num_ctx:8192 was the LOCAL model's window (see lib/cloud_window header): it
+    // made fitToWindow trim EVERY heartbeat to ~1/16th of kimi's real window and front-drop ~10 turns of
+    // conversation for nothing — measured 73 drops in a single run. cognitionWindow() resolves the real
+    // window on the cloud path (cached per model → a Map hit after the first tick) and holds the 8192
+    // floor only when we will genuinely fall back to local. Fit budget AND the num_ctx we send now match.
+    let _hbNumCtx = 8192;
+    try { _hbNumCtx = (await require('./ollama').cognitionWindow()).num_ctx || 8192; } catch { /* fail-safe → 8192 floor */ }
     let _hbMessages = messages;
     try {
-      const fit = require('./context').fitToWindow(messages, { numCtx: 8192, numPredict: HB_NUM_PREDICT });
+      const fit = require('./context').fitToWindow(messages, { numCtx: _hbNumCtx, numPredict: HB_NUM_PREDICT });
       _hbMessages = fit.messages;
       if (fit.report) console.warn(`[fit] heartbeat prompt ${fit.report.before}ch > ${fit.report.budget}ch budget — dropped ${fit.report.droppedTurns} old turn(s), system -${fit.report.systemCut}ch, final -${fit.report.finalCut}ch → ${fit.report.after}ch`);
     } catch (e) { console.error('[fit] heartbeat fit failed — sending unfitted:', e.message); }
 
     // Cloud-first cognition: her unprompted surfacing runs on the cloud subconscious model (kimi,
     // already warm) so the demoted local front stays cold; falls back to local gemma only if the
-    // cloud is unset/down. Same streaming contract — tokens still feed the tag parser.
+    // cloud is unset/down. Same streaming contract — tokens still feed the tag parser. num_ctx matches
+    // the fit budget above so what we trimmed-to is exactly what the model is told to expect.
     await streamCognition({
       messages: _hbMessages,
       onToken: (chunk) => parser.feed(chunk),
-      options: { num_ctx: 8192, num_predict: HB_NUM_PREDICT }
+      options: { num_ctx: _hbNumCtx, num_predict: HB_NUM_PREDICT }
     });
 
     const { thought: _hbThought, say, post, truncated } = parser.finalize();

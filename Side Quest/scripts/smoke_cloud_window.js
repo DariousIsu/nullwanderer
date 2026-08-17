@@ -118,6 +118,52 @@ const ctxOf = (n) => ({ modelContext: async () => n });
     ok(!/think: false,[\s\S]{0,120}num_predict: 900/.test(m), 'REGRESSION: the reply call no longer pins 900 output tokens');
   }
 
+  // ── cognitionWindow: idle cognition budgets against the model that WILL serve ─────────────────
+  // The heartbeat trims its own prompt (fitToWindow) BEFORE streamCognition picks cloud-vs-local, so it
+  // must know the window up front. cognitionWindow runs the SAME cloud-source check streamCognition does.
+  {
+    const { cognitionWindow } = require('../lib/ollama');
+    const cloudSrc = () => [{ tier: 'cloud', token: 'x', base: 'https://ollama.com' }];
+    const localOnly = () => [{ tier: 'local', token: null, base: null }];
+    const kimi = () => 'kimi-k2.6';
+
+    const c = await cognitionWindow({ sources: cloudSrc, subconsciousModel: kimi, resolve: async () => ({ num_ctx: 131072 }) });
+    ok(c.isCloud === true && c.num_ctx === 131072, "cloud source configured → the heartbeat budgets against kimi's real window, not 8192");
+
+    const l = await cognitionWindow({ sources: localOnly, subconsciousModel: kimi, resolve: async () => ({ num_ctx: 131072 }) });
+    ok(l.isCloud === false && l.num_ctx === 8192, 'no cloud source → hold the 8192 floor (local gemma really is 8k)');
+
+    const t = await cognitionWindow({ sources: cloudSrc, subconsciousModel: kimi, resolve: async () => { throw new Error('probe down'); } });
+    ok(t.num_ctx === 8192, 'FAIL-SAFE: a window-resolution failure holds the floor — an idle tick never throws');
+
+    const n = await cognitionWindow({ sources: cloudSrc, subconsciousModel: () => '', resolve: async () => ({ num_ctx: 131072 }) });
+    ok(n.num_ctx === 8192, 'no subconscious model configured → floor');
+  }
+
+  // ── the END-TO-END EFFECT: the resolved window is what stops the 73×/run history amputation ──
+  // A realistic heartbeat prompt (~29k chars) fits with ZERO drops at the cloud window but is trimmed
+  // at 8192 — the exact behaviour the boot_p46 run showed 73 times.
+  {
+    const { fitToWindow } = require('../lib/context');
+    const big = [{ role: 'system', content: 'S'.repeat(4000) }];
+    for (let i = 0; i < 40; i++) big.push({ role: i % 2 ? 'assistant' : 'user', content: 'turn '.repeat(120) });   // ~29k chars total
+    const atCloud = fitToWindow(big.map(m => ({ ...m })), { numCtx: 131072, numPredict: 1200 });
+    ok(atCloud.report === null, 'at the cloud window the full heartbeat history fits — no turns dropped');
+    const at8192 = fitToWindow(big.map(m => ({ ...m })), { numCtx: 8192, numPredict: 1200 });
+    ok(at8192.report && at8192.report.droppedTurns > 0, 'at the old 8192 the same prompt loses turns (the bug we removed)');
+  }
+
+  // ── WIRING: the heartbeat cloud path no longer hardcodes the local window ─────────────────────
+  // This guard checked cloud_logic / cloud_curator / main but MISSED heartbeat.js — which is exactly how
+  // the 8192 survived there for the one cloud call that trims its own prompt. Pin it so it cannot regress.
+  {
+    const fs = require('fs'), path = require('path');
+    const hb = fs.readFileSync(path.join(__dirname, '..', 'lib', 'heartbeat.js'), 'utf8');
+    const hbCode = hb.split(/\r?\n/).filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    ok(!/num_ctx: ?8192/.test(hbCode) && !/numCtx: ?8192/.test(hbCode), 'REGRESSION: the heartbeat no longer hardcodes the 8192 local window on its cloud path');
+    ok(/cognitionWindow\(\)/.test(hbCode), "the heartbeat resolves the serving model's window before fitting + sending");
+  }
+
   console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
