@@ -358,6 +358,17 @@ const MIGRATIONS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_documents_ref ON documents(ref)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_promoted ON documents(promoted)`,
+  // documents_fts — EXTERNAL-CONTENT fts5 keyword index over documents(title, body) (2026-08-17).
+  // heldContext (recheck_queue) built EVERY metabolism verification prompt with a full-table
+  // `title LIKE '%tok%' OR body LIKE '%tok%'` scan over ~17k docs / 1.29GB body — a MEASURED ~1.4s
+  // SYNCHRONOUS main-thread block per call, fired 1–3× per metabolism tick: the confirmed carrier of the
+  // ~3.4s metabolism stall (adversarially verified — the applyOutcome-transaction hypothesis was a red
+  // herring; WAL+synchronous=NORMAL means no per-commit fsync). A MATCH over this index is ~1ms.
+  // content='documents' → the FTS stores ONLY the inverted index, NOT a second copy of the 1.29GB body
+  // (disk-cheap). Kept fresh by syncDocumentsFts (a forward-watermark C-side INSERT…SELECT from a background
+  // tick — NO trigger on the doc-write path, no body marshalled into JS). heldContext falls back to the LIKE
+  // scan until this index is built, so the change can never regress recall.
+  `CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(title, body, content='documents', content_rowid='id')`,
   // agent_events — the BLACKBOARD. One append-only timeline that every idle loop
   // writes to at the end of its tick and reads from at the top, so tick N+1 sees
   // tick N (the "continuous consciousness" substrate). Reference-not-copy: each
@@ -2809,9 +2820,47 @@ function graphCounts() {
   };
 }
 
+// ── documents_fts: keep the keyword index fresh for heldContext (recheck_queue) ────────────────────
+// A FORWARD watermark (the max documents.id already indexed) drives a bounded C-side INSERT…SELECT chunk
+// per call: it fills the index once (oldest→newest, ~1s/chunk, no body pulled into JS) then appends only
+// NEW docs. No trigger on the doc-write path (zero blast radius on landing); this store is append-dominant
+// so a rare update/delete causing minor advisory drift is harmless (heldContext is advisory + fail-soft).
+// Never throws — a sync hiccup must never break an idle tick.
+let _docFtsReady = false;
+function documentsFtsReady() {
+  if (_docFtsReady) return true;                                  // once built, stays built (in-memory)
+  try {
+    if (getMeta('documents_fts.built') !== '1') return false;     // not built yet — re-check next call
+    _docFtsReady = !!getDb().prepare('SELECT rowid FROM documents_fts LIMIT 1').get();   // guard a manual drop
+  } catch { return false; }
+  return _docFtsReady;
+}
+function syncDocumentsFts({ batch = 1500 } = {}) {
+  try {
+    const d = getDb();
+    let w = parseInt(getMeta('documents_fts.max_id') || '0', 10) || 0;
+    const max = d.prepare('SELECT MAX(id) m FROM documents').get().m || 0;
+    if (w >= max) {                                                // fully caught up
+      if (getMeta('documents_fts.built') !== '1') { setMeta('documents_fts.built', '1'); _docFtsReady = true; }
+      return { added: 0, watermark: w, caughtUp: true };
+    }
+    const ids = d.prepare('SELECT id FROM documents WHERE id > ? ORDER BY id ASC LIMIT ?').all(w, batch);   // IDs only — cheap
+    if (!ids.length) { setMeta('documents_fts.built', '1'); _docFtsReady = true; return { added: 0, watermark: w, caughtUp: true }; }
+    const hi = ids[ids.length - 1].id;
+    // C-SIDE tokenization — the body text never leaves SQLite (no JS marshalling of the 1.29GB corpus).
+    d.prepare('INSERT INTO documents_fts(rowid, title, body) SELECT id, title, body FROM documents WHERE id > ? AND id <= ?').run(w, hi);
+    setMeta('documents_fts.max_id', String(hi));
+    const done = hi >= max;
+    if (done) { setMeta('documents_fts.built', '1'); _docFtsReady = true; }
+    return { added: ids.length, watermark: hi, caughtUp: done };
+  } catch (e) { try { console.error('[documents_fts] sync failed:', e && e.message); } catch {} return { added: 0, error: (e && e.message) || String(e) }; }
+}
+
 module.exports = {
   init,
   getDb,
+  documentsFtsReady,
+  syncDocumentsFts,
   startSession,
   endSession,
   recordBrowserAction,

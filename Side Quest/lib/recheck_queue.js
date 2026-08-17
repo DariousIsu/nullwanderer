@@ -182,11 +182,29 @@ function heldContext(subject, { limit = 3 } = {}) {
   try {
     const toks = (str(subject).toLowerCase().match(/[a-z][a-z0-9'-]{3,}/g) || []).slice(0, 5);
     if (!toks.length) return '';
-    const like = toks.map(() => `(title LIKE ? OR body LIKE ?)`).join(' AND ');
-    const params = []; for (const w of toks) params.push(`%${w}%`, `%${w}%`);
-    const rows = db().getDb().prepare(
-      `SELECT id, title, source, created_ts FROM documents WHERE ${like} ORDER BY created_ts DESC LIMIT ?`
-    ).all(...params, limit);
+    let rows = null;
+    // FAST PATH (2026-08-17): documents_fts MATCH is ~1ms vs the ~1.4s full-table LIKE this replaced — the
+    // confirmed carrier of the metabolism main-thread stall (this scan ran 1–3× per metabolism prompt over
+    // 17k docs / 1.29GB body). Each token → an fts5 PREFIX term (alnum-sanitized) AND-joined, so a row must
+    // carry every token in title OR body — the same intent as the LIKE. The JOIN reads display columns from
+    // documents (documents_fts is external-content, no stored copy).
+    if (db().documentsFtsReady && db().documentsFtsReady()) {
+      const terms = toks.map((t) => t.replace(/[^a-z0-9]/g, '')).filter(Boolean).map((t) => `${t}*`);
+      if (terms.length) {
+        try {
+          rows = db().getDb().prepare(
+            `SELECT d.id, d.title, d.source, d.created_ts FROM documents_fts f JOIN documents d ON d.id = f.rowid WHERE documents_fts MATCH ? ORDER BY d.created_ts DESC LIMIT ?`
+          ).all(terms.join(' AND '), limit);
+        } catch { rows = null; }   // malformed MATCH → fall through to the LIKE, never throw
+      }
+    }
+    if (!rows) {   // FALLBACK — the original full-table LIKE (index not built yet, or MATCH errored). Never worse than before.
+      const like = toks.map(() => `(title LIKE ? OR body LIKE ?)`).join(' AND ');
+      const params = []; for (const w of toks) params.push(`%${w}%`, `%${w}%`);
+      rows = db().getDb().prepare(
+        `SELECT id, title, source, created_ts FROM documents WHERE ${like} ORDER BY created_ts DESC LIMIT ?`
+      ).all(...params, limit);
+    }
     if (!rows.length) return '';
     const lines = rows.map((r) => `- doc#${r.id} [${r.source || 'held'}] "${str(r.title).slice(0, 90)}" (${Math.round((Date.now() - r.created_ts) / 86400000)}d old — read it with your localdb/doc tools)`);
     return `\nALREADY HELD on this subject — CHECK THESE FIRST, they may already answer:\n${lines.join('\n')}\n`;
@@ -338,4 +356,4 @@ function applyOutcome(item, ans, { now = Date.now() } = {}) {
   return { action: 'deferred' };
 }
 
-module.exports = { enqueue, due, openByKind, complete, defer, stats, sweepAbsences, buildPrompt, parseVerdict, parseRoster, parseLocalRoster, applyOutcome, backoffMs, isBatchable, buildBatchPrompt, parseBatchVerdicts, BATCH_MAX };
+module.exports = { enqueue, due, openByKind, complete, defer, stats, sweepAbsences, buildPrompt, heldContext, parseVerdict, parseRoster, parseLocalRoster, applyOutcome, backoffMs, isBatchable, buildBatchPrompt, parseBatchVerdicts, BATCH_MAX };

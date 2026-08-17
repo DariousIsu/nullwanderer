@@ -1148,6 +1148,19 @@ app.whenReady().then(() => {
     finally { markActivity('idle'); ingestRunning = false; }
   };
   setInterval(() => { maybeDrainIngest().catch(() => {}); }, INGEST_CHECK_MS).unref?.();
+  // documents_fts KEEP-FRESH (2026-08-17): a bounded C-side INSERT…SELECT chunk fills the keyword index
+  // once (oldest→newest, ~1s/chunk, attributed to 'docfts-sync' — a one-time transient) then appends new
+  // docs each tick (cheap when caught up). heldContext uses MATCH once built (~1ms) instead of the ~1.4s
+  // full-table LIKE that carried the metabolism stall. Kill switch ZOE_DOCFTS_SYNC=0.
+  if (String(process.env.ZOE_DOCFTS_SYNC || '1').trim() !== '0') {
+    const DOCFTS_SYNC_MS = parseInt(process.env.ZOE_DOCFTS_SYNC_MS, 10) || 30000;
+    setInterval(() => {
+      markActivity('docfts-sync');
+      try { const r = db.syncDocumentsFts(); if (r && r.added) console.log(`[documents_fts] indexed ${r.added} doc(s) → watermark ${r.watermark}${r.caughtUp ? ' (caught up)' : ''}`); }
+      catch (e) { console.error('[documents_fts] tick failed:', e && e.message); }
+      finally { markActivity('idle'); }
+    }, DOCFTS_SYNC_MS).unref?.();
+  }
   // F3 RESEARCH-TO-CLOSE-THE-GAP — the third outcome, wired live. Pulls the RESEARCH band from tenant
   // staging (mid-band 0.72–0.90, or promote-conf-but-ungrounded relations), runs research_lane.runResearchItem
   // backed by the AUTHORITATIVE tool surface (FEC/LegiScan/MediaWiki/GDELT) + her LIVE browser
