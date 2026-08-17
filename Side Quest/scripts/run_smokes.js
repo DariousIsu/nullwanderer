@@ -292,6 +292,7 @@ const smokes = [
   'smoke_doc_extract_host.js',
   'smoke_documents_fts.js',
   'smoke_image_intent.js',
+  'smoke_contacts_recovery.js',
   // (smoke_file_ingest.js was registered here a SECOND time — review M6: the "396" headline ran 395
   // unique suites with one counted twice. Kept at its first registration above.)
   'smoke_editor_import.js',

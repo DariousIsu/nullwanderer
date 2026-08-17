@@ -10938,6 +10938,48 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   });
   // Embed her reply too (async) so it's recallable later via episodic retrieval.
   try { memoryLib.embed(finalSaid).then(v => { if (v && saidRow && saidRow.id) db.setTurnEmbedding(saidRow.id, JSON.stringify(v)); }).catch(() => {}); } catch {}
+  // CONTACTS→CANVAS RECOVERY (2026-08-17, disease A / #12335 — the twin of the image_intent backstop): she
+  // CLAIMED contacts on the canvas but nothing landed (the anti-fab correction just fired above). Instead of
+  // ONLY correcting, RECOVER — extract the FILTER she meant and actually place the held contacts, so her own
+  // words come true. Fire-and-forget; FAIL CLOSED (a vague/whole-CRM claim → no dispatch); fires ONLY when
+  // nothing landed this turn (never double-emits over a real contacts-lane delivery) and only if she HOLDS a
+  // matching set (else the honest correction stands). Reuses the contacts helpers; does not touch the live lane.
+  {
+    const _crTs = (userTurnRow && userTurnRow.ts) || 0;
+    (async () => {
+      try {
+        const _cr = require('./lib/contacts_recovery');
+        if (!_crTs || !_cr.looksLikeUnfiredContactsClaim(finalSaid)) return;
+        const _landed = (() => {
+          try { if (require('./lib/canvas_docs').lastWriteTs() >= _crTs) return true; } catch {}
+          try { if (require('./lib/echo_suit').lastContactWriteTs() >= _crTs) return true; } catch {}
+          return false;
+        })();
+        if (_landed) return;                                   // she actually placed them — nothing to recover
+        const ask = await _cr.recoverContactsFilter(finalSaid);
+        if (!ask) return;                                      // fail-closed — no concrete filter, no dispatch
+        const cq = require('./lib/contacts_query');
+        // canonicalize the recovered state NAME → 2-letter CODE (the model emits "Louisiana"; gatherHeldContacts
+        // / cq.select need "LA", else the state filter silently drops and nothing matches — adversarial catch).
+        const _st2 = /^[A-Za-z]{2}$/.test(ask.state || '') ? String(ask.state).toUpperCase() : (cq.stateFrom(ask.state || '') || '');
+        const _ask2 = { ...ask, state: _st2 };
+        const rows = await gatherHeldContacts(_st2);
+        const sel = cq.select(rows, { sectors: ask.sectors, limit: 200, type: ask.type, state: _st2 });
+        if (!sel || !sel.total) return;                        // nothing held that matches → leave the correction
+        const lbl = cq.label(_ask2);
+        const tbl = cq.toTable(sel);
+        const tabKey = `contacts-${String(lbl).replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 32)}-${Date.now().toString(36)}`;
+        const callTool = pollCallTool();
+        await callTool('saga_canvas_open_tab', { mode: 'DOC', tab_key: tabKey, title: lbl });
+        const _blk = await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'table', data: { headers: tbl.headers, rows: tbl.rows, caption: tbl.caption } });
+        // MIRROR to canvas_docs (as the roster/promiseArtifactEmit path does) so lastWriteTs bumps — the block
+        // survives a reboot AND the announce's own anti-fab sees the write (no false "it didn't land" scold).
+        try { canvasMirror(tabKey, 'DOC', lbl, (_blk && _blk.block_id) || null, 'table', { headers: tbl.headers, rows: tbl.rows, caption: tbl.caption }); } catch {}
+        console.log(`[contacts-recovery] recovered "${lbl}" → ${sel.shown}/${sel.total} on canvas (${sel.withEmail} w/ email)`);
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You'd said you put ${lbl} on ${userName}'s canvas but it hadn't actually landed — you just PUT IT THERE for real: ${sel.total} ${lbl} you already hold${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''}, ${sel.withEmail} with emails. Tell him plainly it's on his canvas NOW — you went and did the thing you'd said, no permission-asking. One or two sentences, your own voice; do NOT re-list them.]` }); } catch {}
+      } catch (e) { console.error('[contacts-recovery] failed:', e.message); }
+    })();
+  }
   // OPEN-QUESTION STACK (conversation harness, Piece 1): if her reply asked Lucas something,
   // record it as pending conversational state so his next message binds to it — she stops
   // forgetting she asked. Detection runs on the main chat say-storage (the dominant path).
