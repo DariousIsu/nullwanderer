@@ -73,13 +73,15 @@ function personaPressure({ lastAttendAt = 0, now = Date.now(), floorH = PERSONA_
   };
 }
 
-function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
+function buildManifest({ db = null, now = Date.now(), skip = [], deps = {} } = {}) {
   const dbm = db || require('./db');
   let d = null;
   try { d = dbm.getDb(); } catch { /* no db → empty manifest, decide() will decline */ }
   const sections = [];
   const counts = {};
+  const _skip = Array.isArray(skip) ? skip : [];
   const grab = (label, fn) => {
+    if (_skip.includes(label)) return;   // caller (liveDigest) skips expensive sections it discards — no scan
     try { const s = fn(); if (s) sections.push(s); }
     catch (e) { console.error(`[autonomy] manifest source failed (${label}):`, e.message); }
   };
@@ -132,33 +134,33 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
   });
 
   grab('encounters', () => {
-    const n = d.prepare('SELECT COUNT(*) n FROM encounters').get().n;
+    // n (COUNT *), the UNKNOWN-authority count, and the single-source ranking ALL ride ONE 6h cache now (was:
+    // only the ranking). The two COUNTs used to scan every tick — the unknown count a FULL-TABLE scan (2.43s
+    // over 482,720 rows, 2026-08-07) that made autonomy-tick the stall attributor's top offender. The ranking
+    // only shifts as new claims land, so 6h is plenty. Steady-state cost per tick: one cache read, no scan; on
+    // a miss, one scan set per 6h (and the unknown count is now index-backed — idx_encounters_authority).
+    let n = 0, unknown = 0, singles = [];
+    const hasMeta = typeof dbm.getMeta === 'function' && typeof dbm.setMeta === 'function';
+    let cached = null;
+    if (hasMeta) { try { cached = JSON.parse(dbm.getMeta('autonomy.encounters_cache') || 'null'); } catch {} }
+    if (cached && now - (cached.ts || 0) < 6 * 3600e3 && typeof cached.n === 'number') {
+      n = cached.n; unknown = cached.unknown || 0; singles = Array.isArray(cached.singles) ? cached.singles : [];
+    } else {
+      try {
+        n = d.prepare('SELECT COUNT(*) n FROM encounters').get().n;
+        if (n) {
+          unknown = d.prepare("SELECT COUNT(*) n FROM encounters WHERE authority = 'unknown'").get().n;
+          singles = d.prepare(`
+            SELECT MAX(object_label) object_label, COUNT(*) c,
+                   COUNT(DISTINCT COALESCE(origin_host, source_ref, 'x')) srcs
+            FROM encounters WHERE object_label IS NOT NULL
+            GROUP BY object_key HAVING srcs = 1 ORDER BY c DESC LIMIT 3`).all();
+        }
+        if (hasMeta) dbm.setMeta('autonomy.encounters_cache', JSON.stringify({ ts: now, n, unknown, singles }));
+      } catch (e) { console.error('[autonomy] encounters section failed (degrades to counts):', e.message); }
+    }
     counts.encounters = n;
     if (!n) return '';
-    const unknown = d.prepare("SELECT COUNT(*) n FROM encounters WHERE authority = 'unknown'").get().n;
-    // Largest single-source object clusters = the best corroboration targets (one origin vouches
-    // for many claims and nothing else does).
-    // ⚠ THE manifest's one expensive query — measured 2.43s SYNCHRONOUS over 482,720 rows
-    // (2026-08-07), which made autonomy-tick the stall attributor's top named offender (n=43,
-    // ~210s blocked). Two fixes together: the double GROUP BY (full-table subquery, then group
-    // again) folds into ONE pass with HAVING (same 3 rows, measured 1.56s) — and the ranking only
-    // changes as new claims land, so it rides a 6h meta cache like the pass-status/approvals
-    // snapshots. Steady-state cost per tick: one COUNT + one cache read.
-    let singles = [];
-    try {
-      const hasMeta = typeof dbm.getMeta === 'function' && typeof dbm.setMeta === 'function';
-      const cached = hasMeta ? (() => { try { return JSON.parse(dbm.getMeta('autonomy.singles_cache') || 'null'); } catch { return null; } })() : null;
-      if (cached && now - (cached.ts || 0) < 6 * 3600e3 && Array.isArray(cached.rows)) {
-        singles = cached.rows;
-      } else {
-        singles = d.prepare(`
-          SELECT MAX(object_label) object_label, COUNT(*) c,
-                 COUNT(DISTINCT COALESCE(origin_host, source_ref, 'x')) srcs
-          FROM encounters WHERE object_label IS NOT NULL
-          GROUP BY object_key HAVING srcs = 1 ORDER BY c DESC LIMIT 3`).all();
-        if (hasMeta) dbm.setMeta('autonomy.singles_cache', JSON.stringify({ ts: now, rows: singles }));
-      }
-    } catch (e) { console.error('[autonomy] singles ranking failed (section degrades to counts):', e.message); }
     return `• CLAIMS HELD (encounters): ${n.toLocaleString()}, ${unknown.toLocaleString()} with UNKNOWN authority.`
       + (singles.length ? ` Largest single-source clusters (uncorroborated):\n` + singles.map((r) => `   - ${r.object_label} (${r.c} claims, one source)`).join('\n') : '');
   });
@@ -385,10 +387,14 @@ const LIVE_SECTIONS = [
   'CAPABILITY GAPS SHE HAS NAMED', 'FINISHED DELEGATED WORK', 'DEVELOPING STORIES YOU FOLLOW',
   'CONVERSATION HARVEST', 'LEARNED CONSTRAINTS',
 ];
+// The static-inventory sections liveDigest NEVER surfaces (not in LIVE_SECTIONS) but whose queries are
+// EXPENSIVE — skip them so the ~10-min subconscious synthesis path stops paying a full encounters scan it
+// then discards (the 14.7s post-heartbeat main-thread stall).
+const LIVE_SKIP = ['encounters'];
 function liveDigest({ db = null, now = Date.now(), maxChars = 3000, deps = {} } = {}) {
   let text = '';
   const build = deps.buildManifest || buildManifest;   // injectable → offline-smokeable
-  try { text = (build({ db, now, deps }) || {}).text || ''; } catch { return ''; }
+  try { text = (build({ db, now, skip: LIVE_SKIP, deps }) || {}).text || ''; } catch { return ''; }
   if (!text) return '';
   const blocks = text.split(/\n(?=• )/).filter(Boolean);
   const out = [];

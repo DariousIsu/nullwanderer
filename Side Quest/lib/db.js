@@ -671,6 +671,9 @@ const MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_encounters_object ON encounters(object_key, claim_class)`,
   `CREATE INDEX IF NOT EXISTS idx_encounters_type ON encounters(object_type)`,
   `CREATE INDEX IF NOT EXISTS idx_encounters_source ON encounters(source_ref)`,
+  // authority='unknown' COUNT rode the manifest every autonomy tick as a FULL-TABLE scan (no index) — 2.43s
+  // over 482k rows on 2026-08-07, a main-thread stall culprit. Index it so the count is index-only.
+  `CREATE INDEX IF NOT EXISTS idx_encounters_authority ON encounters(authority)`,
 
   // MEETING TRANSCRIPT (M1): durable, timestamped record of every caption line, so a meeting
   // chunk can purge from her active context yet remain a queryable, time-anchored transcript.

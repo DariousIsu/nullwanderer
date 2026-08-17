@@ -69,7 +69,12 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     const store = {};
     const mdb = { getDb: () => mem, getMeta: (k) => store[k] || '', setMeta: (k, v) => { store[k] = v; } };
     const m1 = auto.buildManifest({ db: mdb, now: NOW });
-    ok(/Acme PAC \(2 claims, one source\)/.test(m1.text) && !!store['autonomy.singles_cache'], 'first meta-capable build computes the singles ranking and banks the 6h cache');
+    ok(/Acme PAC \(2 claims, one source\)/.test(m1.text) && !!store['autonomy.encounters_cache'], 'first meta-capable build computes the singles ranking and banks the 6h cache');
+    // the two COUNTs (n + unknown-authority) now ride the SAME cache (was: recomputed every tick) — one read, no scan
+    const _ecb = (() => { try { return JSON.parse(store['autonomy.encounters_cache']); } catch { return {}; } })();
+    ok(typeof _ecb.n === 'number' && typeof _ecb.unknown === 'number' && Array.isArray(_ecb.singles), 'the encounters cache banks n + unknown-authority count + singles together (no per-tick full scan)');
+    // liveDigest SKIPS the encounters section entirely (not in LIVE_SECTIONS) → no scan on the ~10-min subc path
+    ok(!/CLAIMS HELD \(encounters\)/.test(auto.liveDigest({ db: mdb, now: NOW }) || ''), 'liveDigest skips the expensive encounters section it would only discard (the stall fix)');
     mem.prepare("INSERT INTO encounters (object_key,object_label,claim_class,origin_host,authority,ingested_at) VALUES ('k9','Fresh Corp','role','solo.org','unknown',?)").run(NOW);
     const m2 = auto.buildManifest({ db: mdb, now: NOW + 60e3 });
     ok(/Acme PAC/.test(m2.text) && !/Fresh Corp/.test(m2.text), 'within the TTL the ranking serves from cache — no full-table pass per tick');
