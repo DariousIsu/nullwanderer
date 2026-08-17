@@ -10152,7 +10152,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // IMAGE GENERATION (2026-08-04) — REAL now: local SDXL on the GPU (ComfyUI, on-device, private).
             // She GENERATES the picture; it auto-lands in chat + a "creations" canvas tab. She does NOT add_block
             // it herself. This is the answer to "can you make/draw an image" — yes, she genuinely can.
-            { key: 'generate an image (draw)', label: 'CREATE a brand-new picture from a text description — you actually draw it, locally on the GPU (private, on-device). Use for illustrations, concept art, visual mockups, "draw me X", risk/disinfo visualizations. Put ONLY the image description inside <draw>…</draw>; it is generated and placed on Lucas\'s canvas + shown in chat automatically — do NOT saga_canvas_add_block it yourself. Write a rich, specific prompt (subject, setting, lighting, style). This is a genuine capability now, so own it — never say you cannot make images', how: '<draw>a red origami crane on a weathered oak desk, soft morning light, shallow depth of field, photorealistic</draw>' },
+            { key: 'generate an image (draw)', label: 'CREATE a brand-new picture from a text description — you actually draw it, locally on the GPU (private, on-device). Use for illustrations, concept art, visual mockups, "draw me X", risk/disinfo visualizations. Put ONLY the image description inside <draw>…</draw>; it is generated and placed on Lucas\'s canvas + shown in chat automatically — do NOT saga_canvas_add_block it yourself. Write a rich, specific prompt (subject, setting, lighting, style). This is a genuine capability now, so own it — never say you cannot make images. And ONE-STEP: the moment you decide to make an image, EMIT the <draw> tag in THIS reply — never narrate it as "I\'ll render it" or "give me a moment", there is no later, the tag renders now or nothing does. (If you promise an image but forget the tag, nothing appears and you have broken your word)', how: '<draw>a red origami crane on a weathered oak desk, soft morning light, shallow depth of field, photorealistic</draw>' },
             { key: 'valid block_type values', label: 'these RENDER on the canvas — compose with them freely, not just paragraphs: heading, paragraph, list, code, table, chart, metric_card, callout, image, audio, video, diagram, document_file. (knowledge_graph/map/three/browser_snapshot are not drawn yet — avoid.) A tag with any other block_type is rejected', how: 'prefer chart over a table of numbers; diagram over a prose process; metric_card to open a brief; callout for a caveat' },
             // PACKAGING IS NOT HERS TO INVOKE. Lucas, 2026-07-21: she builds in plain markdown; when
             // the content is right HE asks for it to be packaged, and the house style is applied then
@@ -11430,8 +11430,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // (2026-08-04): image generation is ENABLED and runs on the LOCAL ComfyUI (SDXL on the GPU, no key).
   // On success: save it, show it in chat + on the "creations" canvas tab, and have her comment via a
   // tool-followup. On failure: tell Lucas honestly (never pretend she made one).
-  if (imageGenToRun.length > 0) {
+  {
+    const _imgTurnStart = (userTurnRow && userTurnRow.ts) || 0;
     (async () => {
+      // BACKSTOP (2026-08-17 live audit) — the image sibling of the LIVE-INFO SAFETY NET below: she PROMISED an
+      // image ("I'll render… give me a moment") but emitted NO <draw>, a dangling commitment the anti-fab gate
+      // skips (future-tense = "not falsifiable"). If no tag fired AND no image rendered this turn by any path,
+      // recover the prompt she described (lib/image_intent, FAILS CLOSED) and dispatch it, so her promise lands
+      // "in a moment" instead of silently no-oping. The manifest steer aims her at one-step; this catches the rest.
+      if (imageGenToRun.length === 0 && (lastImageGenTs || 0) < _imgTurnStart) {
+        try {
+          const _rec = await require('./lib/image_intent').recoverUnfiredPrompt(say);
+          if (_rec) { imageGenToRun.push(_rec); console.log(`[image-intent] recovered a promised-but-undrawn image → dispatching <draw>: "${String(_rec).slice(0, 80)}"`); }
+        } catch (e) { console.error('[image-intent] recover failed:', e && e.message); }
+      }
+      if (imageGenToRun.length === 0) return;
       const vision = require('./lib/vision');
       for (const prompt of imageGenToRun.slice(0, 4)) {   // cap matches the draw-intercept _MAX_IMG
         try {
