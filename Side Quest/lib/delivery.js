@@ -54,6 +54,34 @@ function bookingSubject({ deliverable, sentence }) {
   return `${base}#${(h >>> 0).toString(36)}`;
 }
 
+// The SUBJECT (topic) a delivery promise is ABOUT — what to feed buildReportFromHeld(topic) /
+// buildLocalRosterDeliverable(subject) when the backstop DELIVERS the promise instead of nagging. Pure +
+// best-effort: take the promise clause (before any "and park/save/send …" tail), strip the commit lead /
+// deliver-verb / deliverable-noun / articles / filler, and prefer an explicit "on|about|of|for X" clause.
+// A weak/empty result is fine and SAFE — the builder honest-misses on an unknown topic (never fabricates).
+function deliverySubjectFrom(say, deliverable) {
+  let s = String(say || '').trim();
+  if (!s) return '';
+  // keep only the promise clause — drop a "… and park/save/send it" tail (that's the destination, not the topic)
+  s = s.split(/\b(?:and (?:then )?(?:park|save|drop|put|stick|store|send|email|share|file)\b)|,\s*then\b|;\s/i)[0].trim();
+  s = s.replace(_PROMISE_LEAD, ' ');
+  // an explicit topic clause wins: "report ON the Hartfield Foundation", "roster FOR Louisiana"
+  const on = s.match(/\b(?:on|about|regarding|covering|of|for)\s+(.+)$/i);
+  let subj = on && on[1] ? on[1] : s;
+  subj = subj
+    .replace(_DELIVER_VERB, ' ')
+    .replace(_DELIVERABLE_OBJ, ' ')
+    .replace(/\b(?:a|an|the|raw|final|complete|full|whole|updated|latest|current|entire)\b/gi, ' ')
+    .replace(/\b(?:for you|together|up|now|please|real quick|right away|that|it|them|those|this)\b/gi, ' ')
+    .replace(/[^\w&/,\- ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^(?:on|about|of|for|and|with|to)\s+/i, '')
+    .replace(/[\s,]+(?:on|about|of|for|and|with)$/i, '')
+    .trim();
+  return subj.slice(0, 120);
+}
+
 // ACK-ORPHAN (D-orphan, 2026-08-16 drill): the operator RAN but the cloud model ended its final message
 // on a content-free acknowledgement ("writing it now — stand by, I'll paste the output shortly") instead
 // of the actual result. Delivering that verbatim voices a PROMISE as the deliverable — the answer-orphan.
@@ -139,4 +167,4 @@ function resultBearingDeliveries(turns, max = 3) {
   return out;
 }
 
-module.exports = { detectPromise, bookingSubject, isAckOrphan, claimsNonDelivery, isOwedClaim, resultBearingDeliveries, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD, _EXPLORE_LEAD, _PLAN_CHAIN, _RESULT_STRONG, _NONDELIVERY_RE, _OWED_RE };
+module.exports = { detectPromise, bookingSubject, deliverySubjectFrom, isAckOrphan, claimsNonDelivery, isOwedClaim, resultBearingDeliveries, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD, _EXPLORE_LEAD, _PLAN_CHAIN, _RESULT_STRONG, _NONDELIVERY_RE, _OWED_RE };

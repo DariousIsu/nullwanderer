@@ -41,5 +41,30 @@ ok(!has('I prefer working from primary sources.'), 'FP: a stated preference → 
   ok(/^roster#/.test(a), 'bookingSubject: keyed by the deliverable noun');
 }
 
+// ── deliverySubjectFrom: the TOPIC to compose from a promise (feeds the deliver-not-nag backstop) ─────────
+{
+  const subj = (say) => { const p = d.detectPromise(say)[0]; return d.deliverySubjectFrom(say, p && p.deliverable); };
+  ok(/ENSO/i.test(subj("I'll pull the raw ENSO, AMOC, and dust indicators together and park them in a note file")), 'subject: "ENSO … indicators" extracted (the "and park … file" destination tail is dropped)');
+  ok(d.deliverySubjectFrom('I\'ll build the final report on the Hartfield Foundation', 'report') === 'Hartfield Foundation', 'subject: "report ON X" → the topic X (Hartfield Foundation)');
+  ok(/louisiana/i.test(subj('Let me compile the Louisiana parish roster.')), 'subject: "Louisiana parish roster" → the state modifier survives (feeds resolveState)');
+  ok(!/\b(report|roster|file|spreadsheet)\b/i.test(subj('I\'ll draft the report on donor trends')), 'subject: the deliverable NOUN is stripped, leaving the topic (donor trends)');
+  ok(d.deliverySubjectFrom('', 'report') === '', 'subject: empty say → empty (SAFE: the builder honest-misses on an unknown topic, never fabricates)');
+}
+
+// ── the backstop's OUTWARD classifier: a send/hand-off is HIS call (announced "ready to send", never auto-
+// sent); composing a file/report is self-work she just finishes. (Mirrors _surfaceOpenPromise's `outward`.) ─
+{
+  let ia = null; try { ia = require('../lib/internal_action'); } catch {}
+  if (ia && ia._OUTWARD_RE) {
+    const outward = (say) => ia._OUTWARD_RE.test(say);
+    ok(outward('I\'ll send the roster to the committee'), 'classify: an outward SEND → his call (composed, announced ready-to-send, never auto-sent)');
+    ok(outward('I\'ll email the brief to legal'), 'classify: an outward EMAIL → his call');
+    ok(!outward("I'll pull the raw ENSO, AMOC, and dust indicators together and park them in a note file"), 'classify: composing a note file is SELF-WORK → just finish it');
+    ok(!outward('I\'ll build the final report on the Hartfield Foundation'), 'classify: building a report is self-work → just finish it');
+  } else {
+    console.log('  (skipped OUTWARD classifier asserts — internal_action not loadable under plain node)');
+  }
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

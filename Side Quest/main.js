@@ -5710,8 +5710,8 @@ async function buildLocalRosterDeliverable({ io, channel, sessionId, userName, s
   const _lr = require('./lib/local_roster');
   const state = _lf.resolveState(subject || '');
   if (!state) {
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked to build a local-government roster ("${String(subject || '').slice(0, 100)}") but the STATE wasn't clear. Ask him which state (e.g. "the Louisiana parish roster"). Do NOT invent one or claim a file exists.]` });
-    return;
+    if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked to build a local-government roster ("${String(subject || '').slice(0, 100)}") but the STATE wasn't clear. Ask him which state (e.g. "the Louisiana parish roster"). Do NOT invent one or claim a file exists.]` });
+    return { delivered: false, miss: 'no-state', subject };   // outcome for the off-turn delivery backstop (live callers ignore it)
   }
   // R2 — SERVE-vs-REBUILD trust gate: if a held roster product for this state is still current (fresh AND no
   // coverage gained since it was built), SERVE it instead of pointlessly re-assembling + re-writing the sheet.
@@ -5727,8 +5727,8 @@ async function buildLocalRosterDeliverable({ io, channel, sessionId, userName, s
       const relHeld = require('path').relative(__dirname, held.path).replace(/\\/g, '/');
       const ageMin = Math.round((Date.now() - held.ts) / 60000);
       console.log(`[roster-door] ${state}: SERVE held product (${decision.reason}) — ${held.filled}/${held.denominator} at ${relHeld} (${ageMin}m old)`);
-      await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${state} roster already exists and is current — ${held.filled} of ${held.denominator} localities verified, saved as an openable spreadsheet at "${relHeld}" (built ${ageMin} minute(s) ago). Nothing has changed since, so I'm SERVING the existing sheet rather than rebuilding it. Point Lucas to the file and the honest ${held.filled}/${held.denominator} count, and offer to refresh it if he wants a rebuild.]` });
-      return;
+      if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${state} roster already exists and is current — ${held.filled} of ${held.denominator} localities verified, saved as an openable spreadsheet at "${relHeld}" (built ${ageMin} minute(s) ago). Nothing has changed since, so I'm SERVING the existing sheet rather than rebuilding it. Point Lucas to the file and the honest ${held.filled}/${held.denominator} count, and offer to refresh it if he wants a rebuild.]` });
+      return { delivered: true, served: true, rel: relHeld, subject: state, filled: held.filled, denominator: held.denominator };
     }
   } catch (e) { console.error('[roster-door] serve-vs-rebuild check failed (rebuilding):', e.message); }
   let del, filePath = null, format = null, openable = false;
@@ -5744,15 +5744,20 @@ async function buildLocalRosterDeliverable({ io, channel, sessionId, userName, s
     // R2: record the held-product meta so a later build request can serve-vs-rebuild against it.
     if (filePath) { try { db.setMeta(`roster.product.${state}`, JSON.stringify({ ts: Date.now(), filled: del.filled, denominator: del.denominator, path: filePath })); } catch {} }
   } catch (e) {
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[Building the ${state} local roster FAILED (${e.message}). Tell Lucas plainly it didn't produce a file; never claim one exists.]` });
-    return;
+    if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[Building the ${state} local roster FAILED (${e.message}). Tell Lucas plainly it didn't produce a file; never claim one exists.]` });
+    return { delivered: false, miss: 'build-failed', subject: state, reason: e.message };
   }
   // enqueue the whole state top-down so the metabolism fills the gaps over time (deduped — a re-run coalesces).
   let queued = 0;
   try { const q = _lr.enqueueState(state); queued = q.enqueued; } catch (e) { console.error('[roster-door] enqueue failed:', e.message); }
   const rel = filePath ? require('path').relative(__dirname, filePath).replace(/\\/g, '/') : null;
   console.log(`[roster-door] ${state}: assembled ${del.filled}/${del.denominator} verified → ${format} ${openable ? '(openable)' : '(UNVERIFIED)'}${rel ? ' ' + rel : ''}; queued ${queued} for research`);
-  await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${state} local-government roster is ASSEMBLED and saved as an openable ${format} spreadsheet at "${rel}". HONEST COVERAGE — lead with this: ${del.filled} of ${del.denominator} localities are VERIFIED (their governing body + officials confirmed and in the sheet); the remaining ${del.denominator - del.filled} are marked "(researching)" and ${queued} were just queued for me to fill top-down from official sources over time. Tell Lucas exactly that — the file, the ${del.filled}/${del.denominator} verified count, and that the rest fill in as I research. Do NOT claim it is complete, and do NOT invent any official you have not verified.]` });
+  if (!filePath) {   // spreadsheet_out returned {ok:false} without throwing → no openable file; never claim one
+    if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[Building the ${state} local roster did not produce an openable file this time. Tell Lucas plainly it didn't produce a file; never claim one exists.]` });
+    return { delivered: false, miss: 'no-file', subject: state };
+  }
+  if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${state} local-government roster is ASSEMBLED and saved as an openable ${format} spreadsheet at "${rel}". HONEST COVERAGE — lead with this: ${del.filled} of ${del.denominator} localities are VERIFIED (their governing body + officials confirmed and in the sheet); the remaining ${del.denominator - del.filled} are marked "(researching)" and ${queued} were just queued for me to fill top-down from official sources over time. Tell Lucas exactly that — the file, the ${del.filled}/${del.denominator} verified count, and that the rest fill in as I research. Do NOT claim it is complete, and do NOT invent any official you have not verified.]` });
+  return { delivered: true, rel, subject: state, filled: del.filled, denominator: del.denominator, queued };
 }
 
 // SPLIT the current research canvas doc into TWO documents, one per named subject (lib/canvas_split).
@@ -5896,8 +5901,8 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   } catch (e) { console.error('[report-cmd] notes retrieval failed:', e.message); }
   if (!rows.length && !civicBlock && !notesBlock) {
     console.log(`[report-cmd] "${t.slice(0, 80)}" — no held material (docs + civic store all empty), honest miss relayed`);
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[You were asked to BUILD A REPORT on "${t}" but you hold NO research documents about it — nothing in the document store matches. Say so plainly in one or two sentences, name what you'd need to go gather, and offer to run the research. Do NOT invent a document.]` });
-    return;
+    if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[You were asked to BUILD A REPORT on "${t}" but you hold NO research documents about it — nothing in the document store matches. Say so plainly in one or two sentences, name what you'd need to go gather, and offer to run the research. Do NOT invent a document.]` });
+    return { delivered: false, miss: 'no-material', topic: t };   // outcome for the off-turn delivery backstop (live callers ignore it)
   }
   // notesBlock leads (after the civic digest): the hand-built deliverables/dossiers are the richest,
   // most-complete material — the composer should stand on them first, then the thinner doc_store rows.
@@ -5910,15 +5915,15 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   let md = '';
   try { md = await condenseComplete(msgs, { numPredict: 2600 }); } catch (e) { console.error('[report-cmd] compose call failed:', e.message); }
   if (!md || !md.trim()) {
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[You tried to compose the "${t}" report from ${rows.length} held document(s) but the composer returned nothing. Tell Lucas plainly that the compose step failed and the material is still there to retry — do NOT claim a document exists.]` });
-    return;
+    if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[You tried to compose the "${t}" report from ${rows.length} held document(s) but the composer returned nothing. Tell Lucas plainly that the compose step failed and the material is still there to retry — do NOT claim a document exists.]` });
+    return { delivered: false, miss: 'compose-empty', topic: t };
   }
   // PAYLOAD CONTRACT (M6, 08-08 audit site #8): a "report" that opens as the composer's own
   // process talk is not a report — refuse and say so, exactly like the canvas doors.
   if (require('./lib/canvas_command').isNarration(md)) {
     console.log(`[report-cmd] compose output REJECTED (narration, not a report) — nothing landed`);
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[The "${t}" report compose produced narration instead of a document and was NOT delivered — nothing is on the canvas or in notes. Tell Lucas plainly the compose failed its output check; the ${rows.length} held document(s) are still there to retry.]` });
-    return;
+    if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The "${t}" report compose produced narration instead of a document and was NOT delivered — nothing is on the canvas or in notes. Tell Lucas plainly the compose failed its output check; the ${rows.length} held document(s) are still there to retry.]` });
+    return { delivered: false, miss: 'narration', topic: t };
   }
   md = md.trim();
   const slug = t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'report';
@@ -5934,8 +5939,9 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   ].filter(Boolean).join(' + ') || 'held material';
   try { require('fs').writeFileSync(filesLib.resolvePath(rel), `# Report — ${t}\n\n${md}\n\n---\n_Composed from ${_srcAttr}._\n`, 'utf8'); saved = true; }
   catch (e) { console.error('[report-cmd] save failed:', e.message); }
-  try { await promiseArtifactEmit({ slug: `report-${slug}`, title: `Report — ${t}`.slice(0, 60), markdown: md }); } catch {}
-  console.log(`[report-cmd] report on "${t}" composed (${md.length}ch) → ${saved ? rel : '(save failed)'} + canvas`);
+  let landed = false;
+  try { landed = (await promiseArtifactEmit({ slug: `report-${slug}`, title: `Report — ${t}`.slice(0, 60), markdown: md })) === true; } catch {}
+  console.log(`[report-cmd] report on "${t}" composed (${md.length}ch) → ${saved ? rel : '(save failed)'}${landed ? ' + canvas' : ' (canvas emit failed)'}`);
   // MEMORY FIRST, THEN RESEARCH THE GAPS — ONE FLOW (Lucas 2026-08-08: "why would those be
   // separate tracks?"). The compose contract already forces "## Open questions" naming what the
   // held documents do NOT answer; consuming it was the missing half. Each open question enqueues
@@ -5956,7 +5962,9 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
     }
   } catch (e) { console.error('[report-cmd] open-question enqueue failed:', e.message); }
   const planNote = openQs ? ` The report names ${openQs} open question(s) the held material could not answer — each is now QUEUED for autonomous research; the report deepens as they resolve. State that plan in one sentence.` : '';
-  await fireToolFollowup({ io, channel, sessionId, resultText: `[The report Lucas asked for is BUILT and delivered — it is on his Canvas${saved ? ` and saved at ${rel}` : ''}, composed from ${rows.length} document(s) you already held (${rows.map((r) => '#' + r.id).join(', ')}). Tell him it's ready, where it is, and give the ONE most substantive finding in it — in your own voice, two or three sentences.${planNote} Do not re-paste the whole report.]` });
+  if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The report Lucas asked for is BUILT and delivered — it is on his Canvas${saved ? ` and saved at ${rel}` : ''}, composed from ${rows.length} document(s) you already held (${rows.map((r) => '#' + r.id).join(', ')}). Tell him it's ready, where it is, and give the ONE most substantive finding in it — in your own voice, two or three sentences.${planNote} Do not re-paste the whole report.]` });
+  // delivered reflects what ACTUALLY landed (canvas OR notes) — never a compose-only claim; nothing landed → miss.
+  return { delivered: (landed || saved), canvas: landed, topic: t, rel: saved ? rel : null, canvasTab: landed ? `promise-report-${slug}` : null, docCount: rows.length, openQs, miss: (landed || saved) ? undefined : 'nothing-landed' };
 }
 
 async function promiseArtifactEmit({ slug, title, markdown }) {
@@ -16459,37 +16467,107 @@ function _bookDeliveryPromises(say, { sessionId, turnStartTs = 0 } = {}) {
     const dueTs = Date.now() + PROMISE_GRACE_MS;   // a grace window: she may still deliver before we surface it
     for (const p of promises) {
       const subject = dlv.bookingSubject(p);
-      const r = rq.enqueue({ kind: 'promise', subject, detail: { say: p.sentence, deliverable: p.deliverable, sessionId }, priority: 6, dueTs, bornFrom: 'delivery-binding' });
+      const topic = dlv.deliverySubjectFrom(p.sentence, p.deliverable);   // the TOPIC to compose, captured while context is fresh
+      const r = rq.enqueue({ kind: 'promise', subject, detail: { say: p.sentence, deliverable: p.deliverable, topic, sessionId }, priority: 6, dueTs, bornFrom: 'delivery-binding' });
       if (r && r.ok && !r.existing) console.log(`[delivery] booked unkept promise → recheck#${r.id}: ${p.deliverable}`);
     }
   } catch (e) { console.error('[delivery] promise-booking failed:', e.message); }
 }
 
-// SPINE 3 A2.2 — close the loop: surface an open, past-grace delivery-promise to Lucas so it is never
-// silently dropped. Picks the OLDEST due promise, asks honestly whether to deliver it now, and CLOSES the
-// row (surfacing IS the binding — the debt is now visible; if he says yes it becomes fresh work, if not it
-// was honestly raised). One per tick, respects surface etiquette (heartbeat delivers when he's present).
+// SPINE 3 A2.2 → SELF-SUFFICIENCY (2026-08-17): an open, past-grace delivery-promise is HER OWN unfinished
+// work, so she FINISHES it — she does not ask permission. Picks the OLDEST due promise: one that needs HIS
+// decision (an outward send / hand-off) is STATED as ready (never "want me to?"); everything else is composed
+// via the SAME builders a live order uses and announced in her voice — done + where, or an honest "I don't
+// hold the material for it yet, I'm gathering it" (a research pursuit is seeded so that is TRUE, not a fresh
+// dangling promise). Claim-first so a racing tick can't double-dispatch. One per tick, in a lull. This
+// REPLACES the permission nag ("Want me to do that now, or keep it on the list?").
 const PROMISE_GRACE_MS = 3 * 60 * 1000;
+
+// Off-turn voice announce (the announceDigReturn pattern): her voice via condenseComplete with a deterministic
+// fallback, persisted + pushed to the renderer. Lets the delivery backstop OWN a finished/owed deliverable in
+// her own voice instead of a canned nag. Fully fail-soft.
+async function _announceOffTurn(sid, voicePrompt, fallback, model = 'delivery') {
+  try {
+    if (!sid) return false;
+    let msg = String(fallback || '').trim();
+    try {
+      let persona = ''; try { persona = String(require('./lib/context').BASE_PERSONA || '').replaceAll('[user]', (db.getMeta('user_name') || 'Lucas')); } catch {}
+      const out = await condenseComplete([
+        { role: 'system', content: `${persona}\n\nYou are speaking to Lucas unprompted, in your own voice — one or two sentences, no preamble, no stage directions.` },
+        { role: 'user', content: voicePrompt },
+      ], { numPredict: 220 });
+      const cleaned = String(out || '').replace(/^\s*(okay|alright|sure|so)[,:]?\s*/i, '').replace(/<\/?[a-z_-]+>/gi, '').trim();
+      if (cleaned.length > 20) msg = cleaned;
+    } catch (e) { console.error('[delivery] announce voice gen failed:', e.message); }
+    if (!msg) return false;
+    const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model, unprompted: 1 });
+    try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+    try { require('./lib/blackboard').append({ source: 'delivery', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
+    return true;
+  } catch (e) { console.error('[delivery] announce failed:', e.message); return false; }
+}
+
 async function _surfaceOpenPromise() {
   try {
     const sid = currentSessionId;
     if (!sid) return;
-    if (_conversationActive()) return;   // surface a "still owe you X" in a lull, never mid-exchange
+    if (_conversationActive()) return;   // act on a debt in a lull, never mid-exchange
     const rq = require('./lib/recheck_queue');
     const items = rq.openByKind({ kind: 'promise', limit: 1 });
     if (!items.length) return;
     const it = items[0];
     const d = it.detail || {};
     const what = String(d.deliverable || 'that').replace(/\s+/g, ' ').trim();
-    const uname = (() => { try { return db.getMeta('user_name') || 'you'; } catch { return 'you'; } })();
-    const msg = `Earlier I said I'd get that ${what} together for ${uname}, and I haven't actually delivered it yet. Want me to do that now, or keep it on the list?`;
-    const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'delivery', unprompted: 1 });
-    try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
-    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
-    try { require('./lib/blackboard').append({ source: 'delivery', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
-    rq.complete(it.id, { outcome: 'surfaced-to-user' });
-    console.log(`[delivery] surfaced open promise → recheck#${it.id} closed: ${what}`);
-  } catch (e) { console.error('[delivery] surface failed:', e.message); }
+    const topic = String(d.topic || '').trim();
+    const say = String(d.say || '');
+    const t = topic || what;
+    const uname = (() => { try { return db.getMeta('user_name') || 'Lucas'; } catch { return 'Lucas'; } })();
+
+    // COMPOSE the deliverable (self-work) via the SAME builders a live "build the report/roster" order uses.
+    // Claim the row FIRST (before the async compose) so a racing tick can't double-dispatch. She never
+    // AUTO-SENDS — the builders only compose + land on canvas; if the promise's own step was an outward
+    // send/hand-off, that stays HIS to trigger and is reflected in the announce ("ready to send"), not performed.
+    const ia = require('./lib/internal_action');
+    const outward = ia._OUTWARD_RE.test(say);
+    rq.complete(it.id, { outcome: 'pursuing-delivery' });
+    let outcome = null;
+    try {
+      if (/roster/i.test(what) || /roster/i.test(topic)) {
+        outcome = await buildLocalRosterDeliverable({ io: null, channel: 'chat', sessionId: sid, userName: uname, subject: t });
+      } else {
+        outcome = await buildReportFromHeld({ io: null, channel: 'chat', sessionId: sid, userName: uname, topic: t });
+      }
+    } catch (e) { console.error('[delivery] pursue-delivery build threw:', e.message); }
+
+    // (3) ANNOUNCE the real outcome in her voice — delivered (done + where) or an honest miss. NEVER a nag,
+    // never a claim of delivery on a miss.
+    if (outcome && outcome.delivered) {
+      const rel = outcome.rel || null;
+      // say "on your canvas" ONLY when the canvas tab actually landed (adversarial fabrication fix); else the file
+      const loc = outcome.canvas ? `on your canvas${rel ? ` and saved at ${rel}` : ''}` : (rel ? `saved at ${rel}` : 'ready for you');
+      const cov = outcome.filled != null ? ` (${outcome.filled} of ${outcome.denominator} verified, the rest researching)` : '';
+      await _announceOffTurn(sid,
+        outward
+          ? `[You FINISHED the ${what}${t ? ` on ${t}` : ''} you owed ${uname} — it is ${loc}${cov} and READY for HIM to send/hand off whenever he wants; you did NOT send it yourself (that is his call). Tell him it's done, where it is, and that it's ready to send — your own voice, one or two sentences, own it, no permission-asking.]`
+          : `[You just FINISHED and delivered the ${what}${t ? ` on ${t}` : ''} you owed ${uname} — it is ${loc}${cov}. Tell him it's done and where it is, in your own voice — you finished it on your own, so own it. No permission-asking, no re-paste.]`,
+        outward
+          ? `I finished the ${what}${t ? ` on ${t}` : ''} — it's ${loc} and ready for you to send whenever you want.`
+          : `I went ahead and finished the ${what}${t ? ` on ${t}` : ''} I owed you — it's ${loc}.`,
+        'delivery-done');
+      console.log(`[delivery] pursued + DELIVERED${outward ? ' (ready-to-send)' : ''} → recheck#${it.id}: ${t}`);
+    } else {
+      const reason = (outcome && outcome.miss) || 'no-outcome';
+      // seed a real research pursuit so "I'm gathering it" is TRUE (the idle loop advances open inquiries),
+      // not a new empty promise. Fail-soft.
+      try { require('./lib/inquiry').open({ question: `Gather the material needed to build the ${what} on ${t} for ${uname}.`.slice(0, 300), bornFrom: 'delivery-pursuit' }); } catch (e) { console.error('[delivery] miss-pursuit seed failed:', e.message); }
+      await _announceOffTurn(sid,
+        `[You went to finish the ${what}${t ? ` on ${t}` : ''} you owed ${uname}, but you hold no material to build it from yet. Tell him plainly, in ONE sentence, that you don't have what you need for it yet and you're going to gather it — a statement of the plan, never "want me to?" and never a claim it's done.]`,
+        `I don't have what I need to finish the ${what}${t ? ` on ${t}` : ''} yet — I'm going to go gather it.`,
+        'delivery-miss');
+      console.log(`[delivery] pursued, honest miss (${reason}) → recheck#${it.id}: ${t}`);
+    }
+  } catch (e) { console.error('[delivery] surface/deliver failed:', e.message); }
 }
 
 // SELF-EXPLORATION SHARE (2026-08-13, "tell me about it as you go"): lib/self_explore banks the
