@@ -3797,11 +3797,15 @@ async function extractFileMarkdown(filePath) {
     catch (e) { return { text: '', via: 'read-failed' }; }
   }
   const fi = require('./lib/file_ingest');
-  const de = require('./lib/doc_extract');
+  // OFF-MAIN-THREAD (2026-08-17): pdfjs decode + @napi-rs/canvas rasterization are CPU-bound and lib/doc_extract
+  // ran them ON the main process — the dl-ingest idle path froze the event loop ~4.8s per document (measured
+  // 101s across one run). doc_extract_host runs the SAME doc_extract in an Electron utilityProcess (fail-safe:
+  // in-process if the child can't spawn). Only a filePath crosses the boundary; results are markdown / base64.
+  const deHost = require('./lib/doc_extract_host');
   const vis = require('./lib/vision');
   const r = await fi.extractDroppedFile(filePath, { deps: {
-    extractToMarkdown: (p) => de.extractToMarkdown(p),
-    rasterizePdf: (p, opts) => de.rasterizePdf(p, opts),
+    extractToMarkdown: (p) => deHost.extractToMarkdown(p),
+    rasterizePdf: (p, opts) => deHost.rasterizePdf(p, opts),
     describe: (o) => vis.describe(o),
     readFileBase64: (p) => fsm.readFileSync(p).toString('base64'),
     fileExists: (p) => fsm.existsSync(p),

@@ -49,9 +49,15 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const map = await ss.sourceMap();
   ok(/ranked by how much/.test(map), 'the map declares its ranking');
   ok(/main\.js \(\d+KB/.test(map), 'main.js (the entry point) ranks into the default budget');
-  ok(/lib\/board\.js \(\d+KB, used by \d+/.test(map), 'a leaned-on lib module ranks in, carrying its inbound count');
+  // Canary is the INVARIANT, not a boundary module: the map is char-budgeted to the top-N by inbound count,
+  // so pinning one low-count example (was lib/board.js) made this fail whenever a new lib module reshuffled
+  // the cut. Assert the FORM instead — some leaned-on lib module ranks in carrying its "used by N" count.
+  ok(/lib\/\w+\.js \(\d+KB, used by \d+\)/.test(map), 'a leaned-on lib module ranks in, carrying its inbound count');
   ok(/lib\/db\.js/.test(map), 'the most-required module is present');
-  ok(/THE WORKSTREAM BOARD|workstream/i.test(map), "modules carry their own header line (the repo's headers ARE her self-description)");
+  // Anchor on lib/db.js (used-by-300 — the most-required module, never falls off the budget) carrying real
+  // header text after its "— " separator: proves the repo's own headers surface as her self-description,
+  // without pinning a boundary module whose survival depends on the current module set.
+  ok(/lib\/db\.js \([^)]*\)\s*—\s*\S/.test(map), "modules carry their own header line (the repo's headers ARE her self-description)");
   ok(!/\.env|sq\.db|node_modules/.test(map), 'the map never mentions secrets/data/dependencies');
   ok(/meeting/i.test(await ss.sourceMap({ focus: 'meeting scribe notes' })), 'a focus pulls topically-matching files into the map');
 
