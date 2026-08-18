@@ -135,6 +135,21 @@ contextBridge.exposeInMainWorld('sq', {
     issues: () => ipcRenderer.invoke('poll:issues')
   },
 
+  // QR Studio — branded QR builder over the engine's qr_* tools. generate = live preview; save = gallery
+  // + tracked /r/<slug> redirect; the rest back the gallery + per-QR scan analytics. Thin pass-throughs.
+  qr: {
+    designOptions: () => ipcRenderer.invoke('qr:design-options'),
+    payloadTypes: () => ipcRenderer.invoke('qr:payload-types'),
+    generate: (args) => ipcRenderer.invoke('qr:generate', args || {}),
+    save: (args) => ipcRenderer.invoke('qr:save', args || {}),
+    list: (opts) => ipcRenderer.invoke('qr:list', opts || {}),
+    renderSaved: (slug, fmt) => ipcRenderer.invoke('qr:render-saved', { slug, fmt: fmt || 'png' }),
+    analytics: (slug, windowDays) => ipcRenderer.invoke('qr:analytics', { slug, window_days: windowDays || 30 }),
+    archive: (slug) => ipcRenderer.invoke('qr:archive', { slug }),
+    clone: (args) => ipcRenderer.invoke('qr:clone', args || {}),
+    download: (dataUrl, filename) => ipcRenderer.invoke('qr:download', { dataUrl, filename })
+  },
+
   // CRM (Rolodex) — read-only contact browser (facets + search + paginated browse + detail).
   crm: {
     facets: (filters) => ipcRenderer.invoke('crm:facets', filters || {}),

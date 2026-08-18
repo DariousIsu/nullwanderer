@@ -10,6 +10,17 @@ const subEl = document.getElementById('surface-sub');
 const phTitle = document.getElementById('ph-title');
 const phSub = document.getElementById('ph-sub');
 
+// An Electron <webview> guest only receives keyboard input while the <webview> element itself
+// holds focus. Nothing focused it, so every surface's text field (the search boxes, the QR URL
+// box, …) silently swallowed keystrokes. Focus the surface webview whenever it (re)loads, when
+// the window regains focus, and right after a surface swap so inputs accept typing immediately.
+function focusSurface() { try { view.focus(); } catch (e) { /* webview not ready yet */ } }
+view.addEventListener('dom-ready', focusSurface);
+window.addEventListener('focus', focusSurface);
+// A click anywhere on the host chrome (rail, topbar) hands focus back to the surface so the next
+// keystroke lands in the surface, not on a rail button.
+document.addEventListener('mouseup', () => setTimeout(focusSurface, 0));
+
 function select(btn) {
   if (btn.disabled) return;
   document.querySelectorAll('.surface').forEach(b => b.classList.toggle('active', b === btn));

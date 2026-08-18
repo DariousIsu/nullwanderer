@@ -4661,6 +4661,61 @@ ipcMain.handle('poll:issues', async () => {
   } catch (e) { console.error('[poll] issues failed:', e.message); return { ok: false, error: e.message }; }
 });
 
+// ============================ QR STUDIO (studio — branded QR builder) ========================
+// White-label QR builder over the engine's qr_* tools (the exact toolset behind Echo's QR Studio).
+// These handlers are thin pass-throughs: the engine renders the QR (python-qrcode + PIL) and returns
+// a decode-verified data: URL, so the renderer just draws what comes back — same as Polling/CRM call
+// their engine tools. qr_generate powers the live preview; qr_save mints a tracked slug + gallery row;
+// qr_list / qr_analytics / qr_render_saved / qr_archive / qr_clone back the gallery. No local model,
+// no local QR lib — the builder IS the engine surface, surfaced in My Workspace.
+function qrPass(tag, tool, mapArgs) {
+  ipcMain.handle(`qr:${tag}`, async (_e, args = {}) => {
+    try {
+      if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+      const callTool = pollCallTool();
+      const r = await callTool(tool, mapArgs ? mapArgs(args || {}) : (args || {}));
+      if (r && typeof r === 'object') return r;               // engine payloads already carry {ok,…}
+      return { ok: false, error: 'unexpected engine response' };
+    } catch (e) { console.error(`[qr] ${tag} failed:`, e.message); return { ok: false, error: e.message }; }
+  });
+}
+qrPass('design-options', 'qr_design_options');
+qrPass('payload-types', 'qr_payload_types');
+qrPass('generate', 'qr_generate');                            // live preview — renderer sends the full design
+qrPass('save', 'qr_save');                                    // gallery + tracked /r/<slug> redirect
+qrPass('list', 'qr_list', (a) => ({ active_only: a.active_only !== false, campaign: a.campaign || '' }));
+qrPass('render-saved', 'qr_render_saved', (a) => ({ slug: a.slug, fmt: a.fmt || 'png' }));
+qrPass('analytics', 'qr_analytics', (a) => ({ slug: a.slug, window_days: a.window_days || 30, limit: a.limit || 200 }));
+qrPass('archive', 'qr_archive', (a) => ({ slug: a.slug }));
+qrPass('clone', 'qr_clone', (a) => ({ source_slug: a.source_slug, data: a.data || '', label: a.label || '', campaign: a.campaign || '', overrides: a.overrides || null }));
+
+// qr:download — persist a rendered QR (data: URL from qr_generate / qr_render_saved) to disk and hand it
+// to the OS. Mirrors canvas:export-doc: this Electron build silently drops renderer blob-anchor downloads,
+// so the bytes are written main-side into data/exports/qr/ and opened via shell.openPath.
+ipcMain.handle('qr:download', async (_e, { dataUrl = '', filename = '' } = {}) => {
+  try {
+    const fs = require('fs');
+    let raw = String(dataUrl || '');
+    let ext = 'png';
+    const m = raw.match(/^data:([^;,]+)[^,]*,/);
+    if (m) { const mime = m[1]; ext = mime.includes('svg') ? 'svg' : (mime.split('/')[1] || 'png').replace('+xml', ''); }
+    raw = raw.includes(',') ? raw.slice(raw.indexOf(',') + 1) : raw;
+    if (!raw) return { ok: false, error: 'empty image' };
+    const buf = Buffer.from(raw, 'base64');
+    if (!buf.length) return { ok: false, error: 'could not decode image' };
+    const outDir = path.join(__dirname, 'data', 'exports', 'qr');
+    try { fs.mkdirSync(outDir, { recursive: true }); } catch (e) { /* may exist */ }
+    const d = new Date();
+    const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}${String(d.getSeconds()).padStart(2, '0')}`;
+    const safe = String(filename || 'qr').replace(/\.(png|svg)$/i, '').replace(/[^\w.-]+/g, '_').slice(0, 60) || 'qr';
+    const outPath = path.join(outDir, `${safe}-${stamp}.${ext}`);
+    fs.writeFileSync(outPath, buf);
+    try { await shell.openPath(outPath); } catch (e) { console.error('[qr] open export failed:', e.message); }
+    console.log(`[qr] exported → ${outPath}`);
+    return { ok: true, path: outPath };
+  } catch (e) { console.error('[qr] download failed:', e.message); return { ok: false, error: e.message }; }
+});
+
 // ============================ CRM / ROLODEX (studio — data browser) ==========================
 // Read-only surface over the engine's contact tools. main unwraps the MCP envelope and maps each
 // payload to the standardized view shape (studio/crm_view.js); the renderer draws. No model.
