@@ -191,6 +191,11 @@ const DISPLAY_HISTORY_LIMIT = 50;
 let mainWindow = null;
 let currentSessionId = null;
 let currentSessionStartedAt = null;
+// Elastic memory E1b: which stale episodes she has already offered to refresh THIS session, so the
+// "that was a while back — want me to pull the latest?" offer fires at most once per topic per session
+// (no nag on a multi-turn discussion of one old topic). sessionId -> Set(top-hit turn id). Per-process,
+// resets on reboot (session-scoped semantics); a Set per session is a negligible footprint.
+const _episodicRefreshOffered = new Map();
 let inboxPollTimer = null;     // setInterval id for the inbox poller (cleared on shutdown)
 let inboxPollTimeout = null;   // initial-sweep setTimeout id
 let emailIntakeTimer = null;   // setInterval id for the read-only newsletter/meeting-notes intake lane
@@ -7619,7 +7624,27 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           return `  • (${when}) ${who}: "${safe}"`;
         };
         const lines = hits.map(fmt).join('\n');
-        const resultText = `[${userName} is asking you to recall an EARLIER conversation about this. You DO remember it — here is what your memory surfaces from past conversations (both of you spoke), each dated:\n${lines}\n\nRecall this DIRECTLY in your own voice: say what was discussed and roughly WHEN. Do NOT say you'll "check", "look", or "pull it up" — you already have it, right here. If the most recent of these is itself old, you may note how long ago it was.]`;
+        // E1b — STALENESS OFFER: if even the NEWEST recalled mention is old, what she holds may have aged
+        // since; date it and offer (at most ONCE per topic per session) to refresh before building on it —
+        // Lucas's spec ("that was a few months ago; want me to update that record before we continue?").
+        // A recently-discussed topic has a fresh newest hit → no offer (recall ≠ fact-viability: reaching
+        // the episode is age-neutral; the FRESHNESS of its facts is the separate, recency-aware judgment).
+        const STALE_DAYS = 30;
+        const newestTs = Math.max(0, ...hits.map((h) => h.ts || 0));
+        const ageDays = newestTs ? (Date.now() - newestTs) / 86400000 : 0;
+        const topId = hits[0] && hits[0].id;
+        let staleNote = ' If the most recent of these is itself old, note roughly how long ago it was.';
+        if (ageDays >= STALE_DAYS && topId != null) {
+          const offered = _episodicRefreshOffered.get(sessionId) || new Set();
+          if (!offered.has(topId)) {
+            offered.add(topId); _episodicRefreshOffered.set(sessionId, offered);
+            const months = Math.max(1, Math.round(ageDays / 30));
+            const howLong = months === 1 ? 'about a month' : `about ${months} months`;
+            staleNote = ` The most recent time this came up was ${howLong} ago, so what you hold on it may have aged. After you recall it, OFFER — briefly, ONCE — to refresh or re-check the current state before you both build on it (something like "that was a while back, though — want me to pull the latest before we go on?"). If they decline, let it go.`;
+            console.log(`[episodic-recall] stale topic (~${Math.round(ageDays)}d) → refresh offer armed (top #${topId}, session ${sessionId})`);
+          }
+        }
+        const resultText = `[${userName} is asking you to recall an EARLIER conversation about this. You DO remember it — here is what your memory surfaces from past conversations (both of you spoke), each dated:\n${lines}\n\nRecall this DIRECTLY in your own voice: say what was discussed and roughly WHEN. Do NOT say you'll "check", "look", or "pull it up" — you already have it, right here.${staleNote}]`;
         db.setMeta('last_ai_utterance_at', String(Date.now()));
         resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
         try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[episodic-recall] followup failed:', e.message); }
