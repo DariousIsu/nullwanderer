@@ -53,7 +53,7 @@ ok(!R.parseRosterAsk('what is the weather today').ok, 'FP: unrelated → not a r
 const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/const _rosterAsk = \(\(\) => \{ try \{ return require\('\.\/lib\/roster_intake'\)\.parseRosterAsk\(userMessage\)/.test(src),
   '_rosterAsk is computed once before the ambiguity gate');
-ok(/recallResult\.ambiguous[\s\S]{0,160}?&& !_rosterAsk\.ok\)/.test(src),
+ok(/recallResult\.ambiguous[\s\S]{0,160}?&& !_rosterAsk\.ok\b/.test(src),
   'the ambiguity ASK gate is guarded by !_rosterAsk.ok (roster asks are not derailed)');
 ok(/const _ros = _rosterAsk;/.test(src), 'the roster handler REUSES the single parse (no double-parse drift)');
 

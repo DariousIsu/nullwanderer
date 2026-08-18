@@ -8018,6 +8018,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // came from RAG pulling her self_dev nodes into a "what are you doing" answer).
   let activityQ = false;
   try { activityQ = require('./lib/activity').isActivityQuestion(userMessage); } catch (e) { console.error('[main] activity detect failed:', e.message); }
+  // SELF-ACTIVITY RECALL (elastic memory E2) — "what did YOU work on today / walk me through what you
+  // did". A PAST self-activity question is about HER, answered from her own activity log — not an entity
+  // lookup. Gated off present-activity (activityQ owns "what are you doing now") and off recall ("what did
+  // you SAY"). It suppresses the ambiguous-entity ASK ("four people named You") and injects her real log.
+  let selfActivityQ = false;
+  try { selfActivityQ = require('./lib/activity').isSelfActivityRecall(userMessage) && !isRecallQuery(userMessage) && !activityQ; } catch (e) { console.error('[main] self-activity detect failed:', e.message); }
 
   // SCHEDULE ("when is the BGov meeting", "my next meeting", "what's on my calendar") — answerable
   // from the events she ALREADY holds (HIS WEEK), not the records/web ladder. Detected here so the
@@ -8244,7 +8250,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // fired a spurious disambiguation FIRST (followupFired=true), and starved the roster handler → the ask fell
   // through to a category dump. Computed once here; the ambiguity gate and the roster handler both consult it.
   const _rosterAsk = (() => { try { return require('./lib/roster_intake').parseRosterAsk(userMessage); } catch { return { ok: false }; } })();
-  if (recallResult && recallResult.ambiguous && recallResult.ambiguous.candidates && recallResult.ambiguous.candidates.length >= 2 && !followupFired && !socialTurn && !_isSpeechQ && !_rosterAsk.ok) {
+  if (recallResult && recallResult.ambiguous && recallResult.ambiguous.candidates && recallResult.ambiguous.candidates.length >= 2 && !followupFired && !socialTurn && !_isSpeechQ && !_rosterAsk.ok && !(selfActivityQ && /^\s*(?:you|your|yourself|zoe)\s*$/i.test((recallResult.ambiguous && recallResult.ambiguous.mention) || ''))) {
     const amb = recallResult.ambiguous;
     const cg = require('./lib/concept_ground');
     // ASK only when it's a genuine collision of 2+ distinct PEOPLE (a lookup can't tell which he means).
@@ -8283,6 +8289,32 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const block = selfDev.buildBlock(selfDev.recentEntries(8), userName);
       if (block) { retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block; console.log('[main] self-dev ledger surfaced'); }
     } catch (e) { console.error('[main] self-dev block failed:', e.message); }
+  }
+
+  // SELF-ACTIVITY LOG (elastic memory E2) — "what did you work on today / walk me through what you did"
+  // is answered from HER OWN activity log (agent_events: her thoughts, readings, reflections, things she
+  // said), most-recent-last. Drops HIS messages (source='user') and focus bookkeeping. This gives the
+  // reply model her real recent record so she recalls it directly — instead of the entity resolver
+  // shipping "which of the four people named 'You'?". Her own actions answer "what did I do", never
+  // vouch for a world-fact (RFC-2308).
+  if (selfActivityQ) {
+    try {
+      // pull 80 then filter — user turns + focus bookkeeping dominate the raw stream, so a smaller
+      // window can starve the 14 real events even when genuine activity sits just outside it.
+      const evs = (db.getRecentAgentEvents(80) || []).filter((e) => e && e.source !== 'user'
+        && !['focus_set', 'focus_resolve'].includes(e.kind) && e.content && String(e.content).trim());
+      const recent = evs.slice(-14);
+      if (recent.length) {
+        const fmtE = (e) => {
+          const t = e.ts ? new Date(e.ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+          const safe = String(e.content).replace(/\s+/g, ' ').replace(/[[\]]/g, '').slice(0, 150);
+          return `  • (${t}) [${e.kind}] ${safe}`;
+        };
+        const block = `WHAT YOU (ZOE) HAVE BEEN DOING — ${userName} is asking about YOUR OWN work, not his. This is YOUR real activity log (your thoughts, readings, reflections, and things you said), most-recent LAST. Answer in the FIRST PERSON about what YOU have been doing — walk ${userName} through it directly from this record. Do NOT describe ${userName}'s activity or say you "don't have a record of what he did" (he is asking about YOU), do NOT ask which person he means, and do NOT say you'll check.\n${recent.map(fmtE).join('\n')}`;
+        retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block;
+        console.log(`[main] self-activity recall → injected ${recent.length} agent-event(s)`);
+      }
+    } catch (e) { console.error('[main] self-activity block failed:', e.message); }
   }
 
   // SELF-STATE LEDGER — on a "what can you see / what's running / status" question, prepend her real

@@ -15,6 +15,17 @@ ok(act.isActivityQuestion('you busy?'), '"you busy" → activity question');
 ok(!act.isActivityQuestion('how many think tanks did you find'), 'a deliverable question is NOT an activity question');
 ok(!act.isActivityQuestion('thanks, that was great'), 'gratitude is NOT an activity question');
 
+// --- PAST self-activity recall (E2): "what did YOU do today" — answered from her own activity log ---
+ok(act.isSelfActivityRecall('what did you actually work on earlier today? walk me through it'), 'T6: "what did you actually work on today" → self-activity recall');
+ok(act.isSelfActivityRecall('walk me through what you did today'), '"walk me through what you did" → self-activity recall');
+ok(act.isSelfActivityRecall('what have you been up to?'), '"what have you been up to" → self-activity recall');
+ok(act.isSelfActivityRecall('what were you working on this morning'), '"what were you working on" → self-activity recall');
+ok(act.isSelfActivityRecall('how was your day?'), '"how was your day" → self-activity recall');
+ok(!act.isSelfActivityRecall('what are you doing?'), 'present "what are you doing" is NOT past self-activity (activityQ owns it)');
+ok(!act.isSelfActivityRecall('what can you do?'), 'a capability question is NOT self-activity recall');
+ok(!act.isSelfActivityRecall('what did you say about the schema'), 'a recall-of-statement is NOT self-activity (isRecallQuery owns it)');
+ok(!act.isSelfActivityRecall('who is Bill Cassidy'), 'an entity lookup is NOT self-activity recall');
+
 // --- a snapshot with all three lanes active ---
 const snap = {
   research: { goal: 'study every right-of-center think tank', covered: ['Heritage', 'Cato', 'AEI'], target: { name: 'Hoover' } },

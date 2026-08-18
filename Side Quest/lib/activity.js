@@ -24,6 +24,17 @@ const ACTIVITY_RE = /\b(what(?:'?re| are| you| ya)?\s+(?:you\s+)?(?:doing|up to|
 
 function isActivityQuestion(text) { return ACTIVITY_RE.test(String(text || '')); }
 
+// PAST / reflective SELF-ACTIVITY recall (elastic memory E2, 2026-08-18) — "what did you work on
+// earlier today", "walk me through what you did", "how was your day". Distinct from isActivityQuestion
+// (present tense, answered from the live lane snapshot): this asks what she DID, answered from her own
+// activity log (agent_events). The gap it closes (drill T6): "what did you actually work on today"
+// fell through BOTH the present-activity poll and the self-dev changelog, got grabbed by the entity
+// resolver, and shipped a "which of the four people named 'You' did you mean?" disambiguation.
+// Enumerated fillers (actually/really/just/manage to…) so "what did you actually work on" matches
+// without a wildcard; caller also gates on !isRecallQuery and !activityQ.
+const SELF_ACTIVITY_RECALL_RE = /\bwhat (?:did|were|have) you\s+(?:(?:actually|really|even|mostly|mainly|just|end up|wind up|get to|manage to|been|be)\s+){0,2}(?:do(?:ing|ne)?|work(?:ing|ed)?\s+on|get(?:ting)?\s+done|accomplish\w*|look(?:ing|ed)?\s+(?:at|into)|read(?:ing)?|research\w*|up\s+to|busy\s+with|spend\w*|been\s+(?:doing|working|up\s+to))\b|\bwalk me through (?:your day|what you (?:did|worked on|got done|found|looked at|were up to|been up to))\b|\bhow (?:was|did) your (?:day|morning|afternoon|week)\b/i;
+function isSelfActivityRecall(text) { return SELF_ACTIVITY_RECALL_RE.test(String(text || '')); }
+
 function _short(s, n = 80) { return String(s || '').replace(/\s+/g, ' ').trim().slice(0, n); }
 
 // One pointer line per active lane: "Now: <activity> "<title>" → <ref>". The ref is a handle the
@@ -79,4 +90,4 @@ function summarize(snapshot = {}) {
   return { active, block, pointers: pointers(snapshot) };
 }
 
-module.exports = { isActivityQuestion, summarize, pointers, ACTIVITY_RE };
+module.exports = { isActivityQuestion, isSelfActivityRecall, summarize, pointers, ACTIVITY_RE, SELF_ACTIVITY_RECALL_RE };
