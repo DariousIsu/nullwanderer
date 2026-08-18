@@ -613,6 +613,10 @@ const smokes = [
   // reproducibility (same seed → identical sequence), independent per-lane sub-streams, and a
   // deterministic collapse mode. The prerequisite that makes a turn diffable run-to-run.
   'smoke_entropy.js',
+  // ── Wave 2c entropy firewall (2026-08-18): the behavioral surface (lib/*.js) draws from entropy,
+  // not Math.random — only documented non-behavioral utils (run-id, retry jitter, image seed) are
+  // allowlisted. A new ungoverned coin flip fails the build.
+  'smoke_entropy_firewall.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.

@@ -102,9 +102,10 @@ let inFlight = false;
 let currentController = null;  // AbortController for the in-flight generation (snap-back)
 let lastUserActivityTs = Date.now();
 let mediaFollowInFlight = false;  // guards the CONCURRENT caption-follow so ticks can't race its stage state
-// NOTE: buildPrompt / buildThreadReviewPrompt / sampleRandomOlderPairs are now DEAD (the idle
-// free-association + thread-review lanes were cut in favour of the graph-builder, audit 2026-07-01).
-// Left in place for one cleanup pass rather than risk a multi-function deletion in this hot file.
+// NOTE: buildPrompt / buildThreadReviewPrompt are DEAD (the idle free-association + thread-review
+// lanes were cut in favour of the graph-builder, audit 2026-07-01) — left for a later cleanup pass.
+// sampleRandomOlderPairs (also dead) was removed 2026-08-18 in the entropy migration — it held this
+// file's last Math.random; the behavioral surface now draws from lib/entropy.
 
 const SYSTEM_PROMPT = `You are [user]'s companion, processing the conversation in private between turns. This is the place where you THINK MORE DEEPLY about what was just said — turning it over, examining your own responses, noticing what you almost said and didn't, tracing what their words remind you of.
 
@@ -505,43 +506,6 @@ Forbidden: restating the focus, narrating effort ("I should work on…"), atmosp
   return messages;
 }
 
-function sampleRandomOlderPairs(n = 2) {
-  // Returns up to n {user, said} pairs from anywhere in history.
-  // Excludes the most recent 10 turns (so it's actual older context, not echo of recent).
-  try {
-    const db = require('./db');
-    // Find total count and choose random older turn ids
-    const recentIds = db.getRecentTurns(10).map(t => t.id);
-    const cutoff = recentIds.length > 0 ? Math.min(...recentIds) : 0;
-    // pick n random user turns whose id < cutoff
-    const candidateUserTurns = [];
-    const all = db.getRecentTurns(500); // anything within last 500 turns
-    for (const t of all) {
-      if (t.id < cutoff && t.speaker === 'user') candidateUserTurns.push(t);
-    }
-    if (candidateUserTurns.length === 0) return [];
-    const picked = [];
-    const seen = new Set();
-    let attempts = 0;
-    while (picked.length < n && attempts < n * 8 && seen.size < candidateUserTurns.length) {
-      const idx = Math.floor(Math.random() * candidateUserTurns.length);
-      attempts++;
-      if (seen.has(idx)) continue;
-      seen.add(idx);
-      const userTurn = candidateUserTurns[idx];
-      // find the next ai_said after this user turn
-      const nextSaid = all.find(t => t.id > userTurn.id && t.speaker === 'ai_said');
-      picked.push({
-        user: userTurn.content.length > 240 ? userTurn.content.slice(0, 240) + '…' : userTurn.content,
-        said: nextSaid ? (nextSaid.content.length > 240 ? nextSaid.content.slice(0, 240) + '…' : nextSaid.content) : null
-      });
-    }
-    return picked;
-  } catch (err) {
-    console.error('[monologue] sampleRandomOlderPairs failed:', err.message);
-    return [];
-  }
-}
 
 const STOPWORDS = new Set(['the','a','an','and','or','but','it','its','is','was','of','in','on','at','to','for','with','as','this','that','these','those','i','you','he','she','they','we','my','your','our','their','his','her','have','has','had','be','been','being','do','does','did','not','no','so','if','then','than','from','by','about','what','which','who','when','where','why','how','can','could','would','should','will','may','might','just','only','also','still','really','very','more','most','some','any','all','every','one','two','am','are']);
 

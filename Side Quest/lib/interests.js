@@ -92,7 +92,7 @@ async function upsert(topic, { source = 'emergent', embedFn = null, now = Date.n
  * otherwise softmax over weight/τ with a per-item share CAP so no single interest can dominate
  * (anti-fixation). rng injectable for deterministic smokes. Returns the row or null.
  */
-function sampleTopic({ epsilon = DEFAULT_EPSILON, tau = DEFAULT_TAU, rng = Math.random } = {}) {
+function sampleTopic({ epsilon = DEFAULT_EPSILON, tau = DEFAULT_TAU, rng = require('./entropy').stream('interests.topic') } = {}) {
   const rows = getActive();
   if (!rows.length) return null;
   if (rng() < epsilon) {
@@ -246,7 +246,7 @@ async function _emergentFromUnmatched(learnRows, matched, { apply, embedFn, now 
 // spawns the interest as a CONCURRENT background focus — its own thread, never CURRENT_KEY — so it runs
 // alongside the research sweep, isolated by thread/store (writes only interests/self_model). Returns the
 // threadId so the caller can register it in the wondering lane for the background driver to advance.
-async function maybeSpawnFocus({ focusLib = null, prob = 0.8, rng = Math.random, now = Date.now(), background = false } = {}) {
+async function maybeSpawnFocus({ focusLib = null, prob = 0.8, rng = require('./entropy').stream('interests.spawn'), now = Date.now(), background = false } = {}) {
   const focus = focusLib || require('./focus');
   if (!background) { try { if (focus.isActive()) return null; } catch {} }   // primary lane only: don't fight the single slot
   if (rng() > prob) return null;              // leave room for free-association / conversation pull
