@@ -169,6 +169,22 @@ function classifyQuery(text) {
 const RECALL_RE = /\bwhat did (?:i|we|you) (?:say|tell|mention|discuss|talk about|decide|agree)\b|\bremind me what\b|\bwhat (?:are|were) my\b|\bdo you remember (?:what|when|that|me)\b|\bwhat was (?:my|the|our)\b|\bwhat did we (?:cover|land on)\b/i;
 function isRecallQuery(text) { return !!text && RECALL_RE.test(String(text)); }
 
+// EPISODIC REFERENCE (elastic memory E1a, 2026-08-18) — "remember when we talked about X",
+// "when did X first come up", "have we ever discussed Y", "the first time we talked about Z",
+// "back when we…". A recall of an OLDER EPISODE (a topic + roughly WHEN), spanning BOTH
+// speakers' turns — distinct from isRecallQuery ("what did I say", user-statements, recent
+// window). It drives a DEEP, age-neutral scan so a months-old conversation is reachable, not
+// just the newest ~400 turns. Kept OFF "remember TO …" (a reminder, not a recall) by requiring
+// a memory/conversation anchor after remember|recall; self-limited downstream (the interceptor
+// only acts when the deep recall actually finds a real hit, else the turn falls through).
+// Tightened 2026-08-18 (adversarial): dropped bare "we were/had" (obligation/reminder — "remember we
+// were supposed to file"), "go over"/"get into" (idioms — "go over budget", "get into trouble"), and
+// gated "come up" behind a conversational anchor ("between us" / "in our conversations") so "when did the
+// error come up in the logs" (arise) no longer fires. "remember when|that time|how we" still catch the
+// target probes. An actionable turn ("… pull it up") is separately excluded at the interceptor.
+const EPISODIC_REF_RE = /\b(?:remember|recall)\s+(?:when|that\s+time|the\s+time|how\s+we|we\s+(?:talked|discussed|spoke|chatted)|us\s+(?:talking|discussing)|you\s+and\s+i)\b|\bwhen\s+did\s+(?:we|you\s+and\s+i)\s+(?:first\s+)?(?:talk|discuss|bring\s+up|cover)\b|\bwhen\s+did\s+.{1,48}?\s+(?:first\s+)?come\s+up\s+(?:between\s+us|in\s+(?:our|the)\s+(?:conversations?|chats?|talks?))\b|\bhave\s+we\s+(?:ever\s+)?(?:talked|spoken|discussed)\b|\b(?:the\s+)?first\s+time\s+(?:we|you\s+and\s+i)\b|\bback\s+when\s+we\b/i;
+function isEpisodicReference(text) { return !!text && EPISODIC_REF_RE.test(String(text)); }
+
 // ACTIONABLE turn — the message hands her something concrete to act on: a URL, a file/path
 // reference, or an imperative task verb aimed at a thing ("open this", "read the sheet",
 // "try it"). On such turns the TASK owns the context, so off-topic between-turn musing must
@@ -262,4 +278,4 @@ function detectSpeechQuery(text) {
   return { speaker: speaker || null, cue: hasTranscript ? 'transcript' : 'speech' };
 }
 
-module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, isActionable, isSocialTurn, detectSpeechQuery, SEARCH_HOME };
+module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, isEpisodicReference, isActionable, isSocialTurn, detectSpeechQuery, SEARCH_HOME };

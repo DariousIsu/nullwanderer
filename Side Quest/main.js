@@ -6851,7 +6851,7 @@ function extractUrls(text) {
   return [...new Set(matches)].slice(0, 3);
 }
 
-const { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, isActionable, isSocialTurn } = require('./lib/intent');
+const { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, isEpisodicReference, isActionable, isSocialTurn } = require('./lib/intent');
 const preferences = require('./lib/preferences');
 const personal = require('./lib/personal');
 const playSession = require('./lib/play_session');
@@ -7585,6 +7585,51 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   } catch (err) { console.error('[read-inbox] interceptor failed:', err.message); }
   // === END READ-INBOX INTERCEPTOR ===
+
+  // === EPISODIC-REFERENCE INTERCEPTOR (elastic memory E1a, 2026-08-18) ===
+  // "Remember when we talked about X?", "when did X first come up?", "have we discussed Y?" —
+  // a recall of an OLDER EPISODE (topic + roughly WHEN), spanning BOTH speakers. The passive
+  // recall window is the newest ~400 embedded turns (db.getEmbeddedTurns cap), so a conversation
+  // from months ago is NEVER EVEN SCANNED — measured live 2026-07-20: the answer to "what did
+  // you say about having a body" sat in a June turn ~2,000 rows outside the window and she
+  // reported she couldn't find it. Recency-bias belongs to FACT viability, not to whether an
+  // episode is REACHABLE (recall ≠ fact-viability). So fire an AGE-NEUTRAL deep scan over ALL
+  // embedded eligible turns (pure cosine, no recency term, no window truncation) — this-morning
+  // and months-ago equally reachable. Self-limited: acts only when the deep recall finds a real
+  // hit (else the turn falls through to the normal pipeline); off-switch via meta.
+  const EPISODIC_RECALL_SCAN = 12000;   // covers all ~6.2k embedded eligible turns today + headroom; capped so cost stays bounded
+  try {
+    // !isActionable — a turn that also hands her a task ("… pull it up", "open it") is owned by the
+    // planner downstream; recalling instead of acting would swallow the task (the isSocialTurn lesson).
+    if (db.getMeta('elastic.episodic_recall') !== 'off' && isEpisodicReference(userMessage) && !isActionable(userMessage)) {
+      const qv = await memoryLib.embed(userMessage).catch(() => null);
+      if (qv && userTurnRow && userTurnRow.id) { try { db.setTurnEmbedding(userTurnRow.id, JSON.stringify(qv)); } catch {} }
+      const recentIds = db.getRecentTurns(RECENT_TURN_LIMIT).map(t => t.id);
+      // userOnly:false — an episode is what BOTH of you said about it; dropQuestions:true so an OLD
+      // meta-question ("what did we say about X?") doesn't crowd out the substantive turn (memory.js
+      // rationale). minSim 0.48 — a firmer floor than the 0.45 default because the pool is 30× wider
+      // (scan-all vs 400), so a loose 0.42 would let almost any topical turn clear the bar and hijack.
+      const hits = qv ? await memoryLib.retrieveTurns(userMessage, { k: 6, excludeIds: recentIds, qv, minSim: 0.48, dropQuestions: true, scan: EPISODIC_RECALL_SCAN }) : [];
+      if (hits.length) {
+        const fmt = (h) => {
+          const who = h.speaker === 'user' ? userName : 'You';
+          const when = h.ts ? new Date(h.ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'earlier';
+          // strip brackets from replayed content so a past turn can't break out of the [ … ] directive frame
+          const safe = (h.content || '').replace(/\s+/g, ' ').replace(/[[\]]/g, '').slice(0, 240);
+          return `  • (${when}) ${who}: "${safe}"`;
+        };
+        const lines = hits.map(fmt).join('\n');
+        const resultText = `[${userName} is asking you to recall an EARLIER conversation about this. You DO remember it — here is what your memory surfaces from past conversations (both of you spoke), each dated:\n${lines}\n\nRecall this DIRECTLY in your own voice: say what was discussed and roughly WHEN. Do NOT say you'll "check", "look", or "pull it up" — you already have it, right here. If the most recent of these is itself old, you may note how long ago it was.]`;
+        db.setMeta('last_ai_utterance_at', String(Date.now()));
+        resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+        try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[episodic-recall] followup failed:', e.message); }
+        console.log(`[episodic-recall] deep-scan (scan=${EPISODIC_RECALL_SCAN}) surfaced ${hits.length} episode turn(s) for "${userMessage.slice(0, 50)}"`);
+        return { ok: true, recalled: 'episodic', say: null };
+      }
+      console.log(`[episodic-recall] episodic-reference matched but deep scan found no hit → falling through for "${userMessage.slice(0, 50)}"`);
+    }
+  } catch (err) { console.error('[episodic-recall] interceptor failed:', err.message); }
+  // === END EPISODIC-REFERENCE INTERCEPTOR ===
 
   // === RECALL INTERCEPTOR ===
   // "What did I say about X" — she HAS the answer in past turns (and the passive recall block

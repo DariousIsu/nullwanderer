@@ -305,7 +305,7 @@ async function retrieveTurns(query, { k = 3, excludeIds = [], minSim = 0.45, qv 
     if (sim >= minSim) scored.push([sim, r]);
   }
   scored.sort((a, b) => b[0] - a[0]);
-  return scored.slice(0, k).map(([sim, r]) => ({ id: r.id, speaker: r.speaker, content: r.content, _sim: sim }));
+  return scored.slice(0, k).map(([sim, r]) => ({ id: r.id, speaker: r.speaker, content: r.content, ts: r.ts, _sim: sim }));
 }
 
 // One-time/idempotent backfill: embed recent user/ai_said turns lacking an embedding so

@@ -1213,7 +1213,7 @@ function setTurnModelVisible(id, text) {
 // user + ai_said turns that carry an embedding, newest first, capped (small N → cosine in JS).
 function getEmbeddedTurns(limit = 400) {
   return getDb()
-    .prepare("SELECT id, speaker, content, embedding FROM turns WHERE embedding IS NOT NULL AND speaker IN ('user','ai_said') ORDER BY id DESC LIMIT ?")
+    .prepare("SELECT id, speaker, content, ts, embedding FROM turns WHERE embedding IS NOT NULL AND speaker IN ('user','ai_said') ORDER BY id DESC LIMIT ?")
     .all(limit);
 }
 // recent user/ai_said turns MISSING an embedding (for one-time backfill), newest first.
