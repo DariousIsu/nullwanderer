@@ -609,6 +609,10 @@ const smokes = [
   // ── W1b structural firewall (2026-08-18): the epistemic-path modules carry NO ungoverned randomness
   // and never import the behavioral entropy module — "smooth dynamics, never source" as a gate.
   'smoke_epistemic_firewall.js',
+  // ── Wave 2 governed entropy (2026-08-18): the one seedable PRNG behind all behavioral randomness —
+  // reproducibility (same seed → identical sequence), independent per-lane sub-streams, and a
+  // deterministic collapse mode. The prerequisite that makes a turn diffable run-to-run.
+  'smoke_entropy.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
