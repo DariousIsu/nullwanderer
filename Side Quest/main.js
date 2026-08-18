@@ -8356,6 +8356,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           want: ai.wantText({ workingFresh: _freshEarly, workingTitle: db.getMeta('canvas.working_title') || '' }),
           validate: ai.validate, numPredict: 180, think: false,
         });
+        // DEMOTE a spurious "report" on a bare lookup question → "none" (2026-08-18, the Cassidy false-non-
+        // delivery): a question is answered LIVE by the operator/lookup, never composed hollow from held docs.
+        if (_artifactVerdictEarly && _artifactVerdictEarly.intent) _artifactVerdictEarly.intent = ai.demoteReport(_artifactVerdictEarly.intent, userMessage);
         if (_artifactVerdictEarly && _artifactVerdictEarly.intent && _artifactVerdictEarly.intent !== 'none' && _contactsQ.isQuery) {
           console.log(`[turn-router] contacts route YIELDED — the artifact intent owns this turn (intent=${_artifactVerdictEarly.intent})`);
           _contactsQ = { isQuery: false };
@@ -11675,6 +11678,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             want: ai.wantText({ workingFresh: _fresh, workingTitle: db.getMeta('canvas.working_title') || '' }),
             validate: ai.validate, numPredict: 180, think: false,
           });
+          if (verdict && verdict.intent) verdict.intent = ai.demoteReport(verdict.intent, userMessage);   // question ≠ report (Cassidy false-non-delivery); covers the infra-retry path the early demote missed
           if (verdict && verdict.intent) {
             _artifactJudged = true;                                   // judgment is final either way
             // DUAL-EMISSION GUARD (2026-08-17, the #12338 pull-up): the operator path feeds the MAIN reply

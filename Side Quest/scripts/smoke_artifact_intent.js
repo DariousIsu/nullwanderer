@@ -38,5 +38,39 @@ ok('roster door describes the parish/county roster + state subject', /parish|cou
 ok('typo doctrine rides the contract', /typos/i.test(noSession) && /pullet/.test(noSession));
 ok('unsure→none doctrine rides the contract', /When unsure, "none"/.test(noSession));
 
+// ── demoteReport: a lookup judged "report" is demoted to "none" (2026-08-18, the Cassidy false-non-delivery
+// + two adversarial families). The report door composes from HELD docs only, so a mis-routed lookup ships a
+// hollow "we don't hold this" while the operator found the answer live. ──────────────────────────────────
+// INTERROGATIVE lookups → none (the incident + questions that happen to contain a report noun):
+ok('the Cassidy question demotes', ai.demoteReport('report', "What are U.S. Senator Bill Cassidy's three most recent bills or resolutions this Congress? Give me the bill numbers, titles, and current status.") === 'none');
+ok('"who represents LA-06?" demotes', ai.demoteReport('report', "who currently represents Louisiana's 6th congressional district?") === 'none');
+ok('"is there a summary of the meeting?" demotes (question beats the noun)', ai.demoteReport('report', 'is there a summary of the meeting?') === 'none');
+ok('"who wrote the brief on X?" demotes (a lookup for who authored it)', ai.demoteReport('report', 'who wrote the brief on the donor network?') === 'none');
+ok('"can you find me a report on X?" demotes (find ≠ compose)', ai.demoteReport('report', 'can you find me a report on the Hartfield Foundation?') === 'none');
+// bare facts / SOFT-noun lookups with no compose verb → none (the adversarial HIGH — near-synonyms of the incident):
+ok('"give me X\'s numbers" (no report noun) demotes', ai.demoteReport('report', "give me Rick Scott's latest FEC numbers") === 'none');
+ok('"give me a summary of X\'s bills" demotes (soft noun, no compose verb)', ai.demoteReport('report', "give me a summary of Bill Cassidy's recent bills") === 'none');
+ok('"give me a rundown of X" demotes', ai.demoteReport('report', 'give me a rundown of the situation in Louisiana') === 'none');
+ok('"give me an analysis of X" demotes', ai.demoteReport('report', 'give me an analysis of the recent vote') === 'none');
+ok('a bare fragment (no report noun, no verb) demotes', ai.demoteReport('report', "Bill Cassidy's recent bills and their status") === 'none');
+// genuine report-DOCUMENT orders → keep report (the adversarial MEDIUM — noun-last / verb-less / question-phrased must survive):
+ok('"put together everything we have on X into a report" keeps (verb-last, hard noun)', ai.demoteReport('report', 'Put together everything we have on the Hartfield Foundation into a proper report') === 'report');
+ok('"turn our research into a report" keeps (hard noun, verb not listed)', ai.demoteReport('report', 'turn our research on the donor network into a report') === 'report');
+ok('"write me a report on X" keeps', ai.demoteReport('report', 'write me a report on the Hartfield Foundation') === 'report');
+ok('"compose a dossier on Y" keeps (hard noun)', ai.demoteReport('report', 'compose a dossier on Green South Solutions') === 'report');
+ok('"give me a report on X" keeps (hard report-document noun)', ai.demoteReport('report', 'give me a report on the donor network') === 'report');
+ok('"draft a summary of X" keeps (soft noun + compose verb)', ai.demoteReport('report', 'draft a summary of the committee findings') === 'report');
+ok('"a Hartfield dossier — build it" keeps (hard noun anywhere)', ai.demoteReport('report', 'a Hartfield Foundation dossier — build it') === 'report');
+ok('"can you write me a report on X?" keeps (compose order, politely question-phrased)', ai.demoteReport('report', 'can you write me a report on the donor network?') === 'report');
+ok('"can you summarize our research into a report?" keeps (question-phrased, verb=summarize)', ai.demoteReport('report', 'can you summarize our research into a report?') === 'report');
+ok('"could you knock together a dossier on X?" keeps (question-phrased, verb=knock together)', ai.demoteReport('report', 'could you knock together a dossier on Green South?') === 'report');
+ok('"could you flesh out our findings into a dossier?" keeps', ai.demoteReport('report', 'could you flesh out our findings into a dossier?') === 'report');
+// …but "who WROTE the brief?" (past-tense authorship question) stays a lookup — "wrote" is deliberately NOT a compose verb
+ok('"who wrote the brief on X?" stays none (wrote ≠ compose)', ai.demoteReport('report', 'who wrote the brief on the donor network?') === 'none');
+// only "report" is ever touched — every other intent passes through unchanged
+for (const i of ['canvas_edit', 'canvas_create', 'roster', 'pullup', 'none']) ok(`${i} passes through demoteReport unchanged`, ai.demoteReport(i, 'what are the latest numbers?') === i);
+// the sharpened wantText carries the question≠report doctrine
+ok('wantText says a bare question is NOT a report', /bare QUESTION/i.test(noSession) && /answered live/i.test(noSession));
+
 console.log(`smoke_artifact_intent: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

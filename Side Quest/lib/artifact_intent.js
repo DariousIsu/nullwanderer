@@ -40,14 +40,52 @@ function wantText({ workingFresh = false, workingTitle = '' } = {}) {
   return `Lucas runs a research assistant whose artifacts land on a shared canvas and in files. Read his MESSAGE and route it. Typos are common — read intent, not spelling ("pullet the list" = "bullet the list"). Intents:\n`
     + editLine
     + `- "canvas_create": an order to put NEW content onto the canvas (a fresh doc/list/table).\n`
-    + `- "report": an order to COMPOSE/BUILD a report-shaped artifact about a subject from held research.\n`
+    + `- "report": an EXPLICIT ORDER to COMPOSE/WRITE a report-shaped DOCUMENT about a subject from held research ("write me a report on X", "put together a brief/dossier on Y"). A bare QUESTION asking for facts or a lookup ("what are X's recent bills?", "give me X's numbers", "who represents Y") is NOT a report — it is answered live; route it "none".\n`
     + `- "roster": an order to BUILD/COMPILE the roster of a US state's LOCAL governing bodies — its counties or (in Louisiana) PARISHES and their officials ("build the Louisiana parish roster", "compile a spreadsheet of Texas county commissioners"). The subject is the STATE.\n`
     + `- "pullup": a request to RETRIEVE/hand over a product that was ALREADY MADE ("that list we made", "pull up the …", "where's the … you built").\n`
-    + `- "none": conversation, questions about content, research asks, anything else. When unsure, "none" — a wrong route is worse than the ordinary reply path.\n`
+    + `- "none": conversation, QUESTIONS / lookups asking for information or facts, research asks, anything else. When unsure, "none" — a wrong route is worse than the ordinary reply path.\n`
     + `Reply ONLY strict JSON: {"intent":"${(workingFresh ? ['canvas_edit'] : []).concat(['canvas_create', 'report', 'roster', 'pullup', 'none']).join('|')}","subject":"<for report/pullup/roster: the subject phrase (for roster: the state)>","instruction":"<for canvas_*: his instruction, normalized, typos corrected>"}.`;
 }
 
 const INTENTS = new Set(['canvas_edit', 'canvas_create', 'report', 'roster', 'pullup', 'none']);
+
+// A bare QUESTION / lookup ask is NOT a report order (2026-08-18, the Cassidy false-non-delivery). Live:
+// "What are Bill Cassidy's three most recent bills?" was judged "report" → buildReportFromHeld composed a
+// hollow "the provided documents do not contain his legislative activity" from unrelated held docs, WHILE
+// the operator had just web-excavated congress.gov and found S.5285 — she found it, then said she didn't
+// have it. Per Lucas: ONLY an explicit compose-a-report order routes to the held-report door; a question is
+// a lookup the operator answers LIVE (compose-from-held preempting live research is the same LPSC disease).
+// The wantText prompt is sharpened to say this; demoteReport is the deterministic backstop. The lookup-vs-
+// report-order line is partly SEMANTIC ("give me a summary of X" can be either), so the MODEL owns the
+// residual; the backstop keys on the one thing a regex CAN read — does the message name a report DOCUMENT.
+// Demoting to "none" is SAFE by design: "none" is the live operator/lookup path (researches + grounds),
+// strictly better than a hollow held-report for anything that isn't a clear report-document order.
+// Two adversarially-hardened rules (an earlier verb→noun-proximity cut both under-demoted "give me a
+// summary of X" AND over-demoted verb-last "put together … into a report"):
+//   1. an explicit COMPOSE VERB + a report noun (hard OR soft) = an order — keep, even if question-phrased
+//      ("can you write me a report on X?");
+//   2. else an interrogative lead with NO compose order = a lookup → "none"; a HARD report-document noun on
+//      its own ("… into a report", "a Hartfield dossier — build it") = keep; anything else (bare facts,
+//      "give me a summary/rundown of X" with a soft noun and no compose verb) = a lookup → "none".
+const _Q_LEAD = /^\s*(?:what|what'?s|who|whom|whose|which|when|where|why|how|does|do|did|is|are|was|were|can|could|would|will|should|has|have|had)\b/i;
+const _HARD_REPORT_NOUN = /\b(?:report|dossier|brief(?:ing)?|write-?up|memo|one-?pager|backgrounder|white\s?paper)\b/i;
+const _SOFT_REPORT_NOUN = /\b(?:summary|rundown|overview|analysis|profile|breakdown|work-?up)\b/i;
+// NB: "writ\w+" matches write/writing/writes but NOT "wrote" — deliberately, so "who WROTE the brief?" stays
+// a lookup (Q_LEAD) rather than reading as a compose order. The list must be reasonably COMPLETE for common
+// report verbs, since a question-phrased compose order whose verb is absent falls through to the Q_LEAD demote
+// and loses its document (adversarial re-review: "can you summarize … into a report?").
+const _REPORT_COMPOSE_VERB = /\b(?:writ\w+|compos\w+|build\w*|draft\w*|assembl\w+|generat\w+|prepar\w+|produc\w+|creat\w+|summariz\w+|recap\w*|compil\w+|put\s+together|pull\s+together|throw\s+together|knock\s+together|cobble\s+together|whip\s+up|flesh\s+out)\b/i;
+
+/** demoteReport(intent, message) → the intent, with a spurious "report" on a lookup demoted to "none".
+ * Only "report" is touched; every other intent passes through unchanged. Pure. */
+function demoteReport(intent, message) {
+  if (intent !== 'report') return intent;
+  const s = str(message).trim();
+  if (_REPORT_COMPOSE_VERB.test(s) && (_HARD_REPORT_NOUN.test(s) || _SOFT_REPORT_NOUN.test(s))) return 'report';  // explicit compose-a-report order (even if politely question-phrased)
+  if (_Q_LEAD.test(s)) return 'none';                    // an interrogative with no compose order = a lookup
+  if (_HARD_REPORT_NOUN.test(s)) return 'report';        // a verb-less report-document reference
+  return 'none';                                          // bare facts / "give me a summary of X" = a lookup
+}
 
 /** validate(raw) → { valid, value:{intent, subject, instruction} } — strict-JSON gate for ask(). */
 function validate(raw) {
@@ -60,4 +98,4 @@ function validate(raw) {
   } catch (e) { return { valid: false, error: e.message }; }
 }
 
-module.exports = { prefilter, wantText, validate, NOMINATE, INTENTS };
+module.exports = { prefilter, wantText, validate, demoteReport, NOMINATE, INTENTS };
