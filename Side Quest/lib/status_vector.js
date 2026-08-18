@@ -77,6 +77,7 @@ function assemble({ deps = {}, nowMs = Date.now() } = {}) {
 
   // machine (Loop C) + memory substrate (Loop D) — read their stored samples, never re-sample
   try { const m = JSON.parse(_db(deps).getMeta('machine_vitals') || 'null'); if (m && m.at) v.machine = m; } catch {}
+  try { const p = JSON.parse(_db(deps).getMeta('producer_vitals') || 'null'); if (p && p.at) v.producers = p; } catch {}
   try { const h = JSON.parse(_db(deps).getMeta('db_health') || 'null'); if (h && h.at) v.memory = h; } catch {}
 
   // drives — C1's journal, fail-absent until that circuit exists (measured, never asserted)
@@ -148,6 +149,7 @@ function line({ deps = {}, nowMs = Date.now() } = {}) {
   if (v.quota && v.quota.known) bits.push(`quota ${v.quota.usedPct}% used, ${v.quota.hoursLeft}h to reset${v.quota.idleOpen ? '' : ' (idle lane closed)'}`);
   if (v.gateMode) bits.push(`gate ${v.gateMode}`);
   if (v.machine) { const m = require('./machine_vitals').describe(v.machine); if (m) bits.push(m); }
+  if (v.producers) { const pd = require('./producer_vitals').describe(v.producers); if (pd) bits.push(pd); }
   if (v.memory && v.memory.sq && v.memory.sq.sizeMB != null) bits.push(`memory ${(v.memory.sq.sizeMB / 1024).toFixed(1)}GB${v.memory.quickCheck && !v.memory.quickCheck.ok ? ' INTEGRITY-FAIL' : ''}`);
   if (!bits.length) return null;
   let delta = '';

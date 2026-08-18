@@ -602,6 +602,10 @@ const smokes = [
   // Refuses exact-repeat lookups, replans (does not stop) on no-progress, protects productive/build
   // chains, forces the honest miss only once the no-progress budget is spent. The Glen Womack phone loop.
   'smoke_chain_guard.js',
+  // ── Wave 1 producer heartbeat (2026-08-18): interoception for the machine's ORGAN lanes. Catches a
+  // silently-dark producer (the synthesis 48-day case) without false-flagging a lane that just hasn't
+  // ticked yet this boot; a stall escalates through obs_bus → self_watch. lib/producer_vitals.js.
+  'smoke_producer_vitals.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.

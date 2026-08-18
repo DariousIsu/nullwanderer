@@ -4875,6 +4875,7 @@ try {
 try {
   const _svTick = setInterval(async () => {
     try { await require('./lib/machine_vitals').sample(); } catch {}
+    try { require('./lib/producer_vitals').sample(); } catch {}   // Wave 1: organ-lane stall watchdog (obs_bus → self_watch)
     try {
       require('./lib/status_vector').refresh({
         deps: {
