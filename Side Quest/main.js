@@ -8379,6 +8379,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // the live dossier — the LPSC lesson above). The generic focus is suppressed too, so the unscoped
   // directed pass can't run in parallel and pollute the store with the row offices the organ excludes.
   const _rosterOwns = !!(_artifactVerdictEarly && _artifactVerdictEarly.intent === 'roster');
+  // CANVAS OWNS THE TURN under _discoverAssignment too (2026-08-18, the operator-narration leak). Same shape
+  // as _rosterOwns: a canvas_create/canvas_edit order is DELIVERED by the canvas door (buildCanvasFromOrder /
+  // buildCanvasEditFromOrder). CREATE always grounds via its own runCloudOperator; EDIT caged-composes first
+  // and either grounds via its operator FALLBACK (on a rejected caged output) or lands the doc with any
+  // un-fillable field marked "(pending verification)" and QUEUED to the metabolism — an honest deliver-now,
+  // research-the-blanks flow. Either way the main operator here is redundant (unlike report, where compose-
+  // from-held genuinely preempts a live dossier — the LPSC lesson) and only leaked a plan-narration ("I need
+  // to complete this brief… the file write was cut off… Let me search…") AHEAD of the canvas delivery. Stand
+  // the operator + generic focus DOWN and let the one-voice ack + the artifact router's canvas door own it,
+  // even when intake tagged the order discover. TRADE (adversarial-noted): a canvas_edit needing LIVE external
+  // data now lands that field pending + queued rather than fetched THIS turn — honest, and the metabolism
+  // fills it; the pre-fix operator run fetched live but leaked the narration this removes. Live-data edits
+  // through the edit-lane operator fallback are a separate follow-up if that trade ever bites.
+  const _canvasOwns = !!(_artifactVerdictEarly && (_artifactVerdictEarly.intent === 'canvas_create' || _artifactVerdictEarly.intent === 'canvas_edit'));
   // TIER-2 escalation: on a CONFLICT (signals imply ≥2 routes) resolveTurnRoute asks lib/route_judge (a
   // bounded model call) to arbitrate; the clear majority stays on the cheap cascade. Gated by turn.router
   // (master) + turn.router.escalate (default on) so it's reversible; fail-open to the cheap decision.
@@ -9658,7 +9672,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         });
       } catch { return false; }
     })();
-    if (opMode !== 'off' && (routeAllowsAny('lookup', 'task') || docSetBlock || selfCodeReview) && (needsExternal || isAssignment || docSetBlock || selfCodeReview || _lookupWantsOp) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && !_rosterOwns && userMessage && userMessage.trim().length > 6) {
+    if (opMode !== 'off' && (routeAllowsAny('lookup', 'task') || docSetBlock || selfCodeReview) && (needsExternal || isAssignment || docSetBlock || selfCodeReview || _lookupWantsOp) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && !_rosterOwns && !_canvasOwns && userMessage && userMessage.trim().length > 6) {
       // directed (in-turn completion mode) when this is an assignment (intake gate, or regex
       // fallback) — or a set-analysis ask, or a self-code-review, which need the multi-step budget.
       // D-route touch 3 (2026-08-16 drill): a genuine EXEC imperative (_isDirectedTaskR, now true for
@@ -9755,7 +9769,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // i.e. intakeRoute is null). Either way we only CREATE a run when there's a real project to run.
     const intakeSaysProject = !!(intakeRoute && intakeRoute.action !== 'none');
     const regexFallback = (intakeRoute === null) && (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
-    if (opModeOn && routeAllows('task') && (intakeSaysProject || regexFallback) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && !_rosterOwns) {
+    if (opModeOn && routeAllows('task') && (intakeSaysProject || regexFallback) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && !_rosterOwns && !_canvasOwns) {
       const already = (() => { try { const f = focusLib.getCurrent(); return !!(f && focusLib.isDirected(f)); } catch { return false; } })();
       if (!already) {
         // Prefer the RESOLUTION-grounded clarify (e.g. "which Curtis?" / "I don't have a match for the
@@ -9973,9 +9987,23 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const _discoverAssignment = !!(isAssignment && intakeRoute && intakeRoute.action === 'discover');
   let _artifactAckAppended = false;
   if (_artifactVerdictEarly && _artifactVerdictEarly.intent && _artifactVerdictEarly.intent !== 'none'
-    && !followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled && (!_discoverAssignment || _rosterOwns)) {
+    && !followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled && (!_discoverAssignment || _rosterOwns || _canvasOwns)) {
     composedUserMessage = `${composedUserMessage}\n\n[A deterministic door (${_artifactVerdictEarly.intent}) is handling this order and will report its own outcome — landed, rejected, or failed — in a separate message. Your reply: ONE short sentence acknowledging you're on it — phrased as STARTING ("on it", "let me get that going"), NEVER as the action already underway or finished (no "splitting/building/done" — live 2026-08-12: "split and building" preceded a split that did not happen). Do NOT describe steps or sources, do NOT promise specifics, and do NOT claim anything landed — the door's report is the only truth about the outcome.]`;
     _artifactAckAppended = true;
+    // LANE-AGNOSTIC false-non-delivery guard (2026-08-18): a deterministic door OWNS this turn and will
+    // report its own outcome, so a pre-emptive cognition searched-miss / calibration hedge draft is moot —
+    // strip it here (the SAME drop the operator-success path does at ~9721, but not gated to the operator
+    // branch). Without this, standing the operator down for a factual-subject canvas order ("put the LA PSC
+    // commissioners on my canvas") would ORPHAN the drop and the reply would DENY a delivery the door then
+    // lands — the false-non-delivery contradiction. The ack directive above already says the door's report
+    // is the only truth, so a competing "I couldn't find it" must not survive into the reply.
+    try {
+      for (const _b of [cognitionMissBlock, calibrationHedgeBlock]) {
+        if (_b && composedUserMessage.includes(_b)) composedUserMessage = composedUserMessage.split(`\n\n${_b}`).join('');
+      }
+      if (cognitionMissBlock || calibrationHedgeBlock) console.log('[one-voice] artifact door owns → dropped competing non-delivery draft(s) (lane-agnostic false-non-delivery guard)');
+      cognitionMissBlock = null; calibrationHedgeBlock = null;
+    } catch (e) { console.error('[one-voice] hedge-drop failed:', e.message); }
     console.log(`[one-voice] ack directive reached the reply writer (intent=${_artifactVerdictEarly.intent})`);
   }
 
@@ -11631,7 +11659,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // canvas" clause spawned an unordered create attempt).
     // ...and a DISCOVER assignment is owned by directed research (see ONE VOICE PART 2) — the
     // compose/retrieve doors stand down so they can't preempt the real web-researched dossier.
-    if (!followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled && (!_discoverAssignment || _rosterOwns)
+    if (!followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled && (!_discoverAssignment || _rosterOwns || _canvasOwns)
       && !/^(0|false|off)$/i.test(String(process.env.ZOE_ARTIFACT_ROUTER || '').trim())) {
       // (The finalize verb is handled UPSTREAM, before the redirect lane — see the intercept at
       // the user-work section. directedStopHandled marks the turn fully handled there.)
