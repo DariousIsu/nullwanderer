@@ -44,7 +44,7 @@ From the stochastic-layer verdict: **adopt, narrow + governed.** The "~94 `Math.
 - **2b. Boot seed + two test modes.** Prod reads `ZOE_ENTROPY_SEED`, else draws crypto-random and **logs it once** (any session replayable post-hoc). `ZOE_ENTROPY_MODE=deterministic` collapses expressive variance for byte-comparable grounding drills; `=seeded` keeps real sampling but reproducible for behavioral drills. **Effort S · blast low.**
 - **2c. Migrate existing sites, all-or-nothing per lane** + a lint forbidding new `Math.random` in the behavioral surface (allowlist the non-behavioral utils: temp-filename/run-id, ollama/vision jitter). **Effort M · blast med · verify:** same `:8767` turn twice under a pinned seed is byte-identical.
 
-> Consolidation is the safe core — it adds **zero** new stochastic decision points. The one genuinely new draw (an idle-lane mixture) is deferred to *after* cleanup, behind the proven `interests.js` slice, and only if desired.
+> Consolidation is the safe core — it adds **zero** new stochastic decision points. The one genuinely new draw (an idle-lane mixture) is **in scope** (Lucas 08-18), sequenced *after* cleanup and behind the proven `interests.js` slice.
 
 ### Wave 3 — The replan audit (Lucas's invariant, generalized)
 `chain_guard` is instance #1. Audit every other retry loop for the analyze→replan layer; add it where a loop can re-hammer a known failure:
@@ -55,31 +55,33 @@ From the stochastic-layer verdict: **adopt, narrow + governed.** The "~94 `Math.
 ### Wave 4 — Restore dark producers, then drain the backlog
 Producers first (so drains don't re-accumulate), then the piles.
 
-- **4a. Restore the subconscious synthesis + self-dialogue lanes** — the `type=synthesis` / `self_q`/`self_a` structural early-return in `subconscious.js`; wire `<wonder>` back into the heartbeat. **Effort M · blast med.**
+- **4a. Subconscious synthesis + self-dialogue lanes** — ⚠️ **UPDATE (Wave-1 heartbeat, live 2026-08-18): synthesis is NOT dark — it wrote 8 min ago.** The audit's "dark 48d" was a stale point-in-time memory. This narrows 4a to *confirm-and-close* synthesis and verify `self_q`/`self_a` self-dialogue separately. **Effort S · blast low.**
 - **4b. Drain + wire the queues** (each: fix the producer/consumer, *then* drain): entity-resolution adjudication (34,162) + link-grounding (10,232); surface the 160 finished deliverables + add the store-init guard that blocks a research run when the store is down; triage the 58 never-run passes (wanted vs dead) and fix/de-register the 4 broken ones; the Echo pass-fleet + identity crosswalk graded-wave repair (carve aftermath — **DO NOT mass-repoint**); restart the news/source lane (206 refs, 54d stale) and drain the decompose/contacts backlogs. **Effort L–XL · blast med–high · verify:** live count deltas + the heartbeat staying green.
 
-### Wave 5 — Smoothing organ (optional, post-cleanup)
-Per the [seam-map](CONSCIOUSNESS_THEORIES_AS_SMOOTHING_2026-08-18.md): the internal-state-vector organ (mood-decay Slice 1, idle-competition Slice 2) absorbs three seams; the two standalone wins (rumination gradient, graded salience) are separately queueable. **Gated on Lucas** — this is behavior change, and it must ride Waves 1–2 (observability + reproducibility) so it can be measured and replayed. Verify the `monologue.js:105` dead-code caveat first.
+### Wave 5 — Smoothing organ (in scope, behind Waves 1–2)
+Per the [seam-map](CONSCIOUSNESS_THEORIES_AS_SMOOTHING_2026-08-18.md): the internal-state-vector organ (mood-decay Slice 1, idle-competition Slice 2) absorbs three seams; the two standalone wins (rumination gradient, graded salience) are separately queueable. **In scope (Lucas 08-18), behind Waves 1–2** — it's behavior change, so it must ride observability + reproducibility to be measured and replayed. Verify the `monologue.js:105` dead-code caveat first.
 
 ## Cleanup clusters → wave map
 
 | Cluster (live count) | Root | Wave | Effort | Blast |
 |---|---|---|---|---|
 | Producer-failure blindness | no last-write watchdog | 1a | M | low |
-| Synthesis/self-dialogue DARK (48d) | `subconscious.js` early-return | 4a | M | med |
+| Synthesis measured ALIVE 08-18 (heartbeat); verify self-dialogue | stale audit → confirm-and-close | 4a | S | low |
 | Entity-resolution + link queues (34,162 + 10,232) | adjudication/grounding never drains | 4b | L | med |
-| Unsurfaced deliverables (160) + store-uninitialized | no surface path + no store-init guard | 4b | M | low |
-| Saga passes (58 never-run + 4 broken) | registry never triaged; `pass18d` SQL error | 4b | M | low |
+| Unsurfaced deliverables (160) + store-uninitialized | **discard tainted** (Lucas 08-18) + surface clean; add store-init guard | 4b | M | low |
+| Saga passes (58 never-run + 4 broken) | **dead-post-carve → de-register/archive** (Lucas 08-18); fix/drop the 4 broken | 4b | S | low |
 | Echo fleet + crosswalk frozen (carve) | husk-DB repoint; 97,630 unlinked | 4b | XL | high |
 | News/source frozen (206, 54d) + decompose/contacts | arrival-path coupling; lane stopped | 4b | L | med |
 
-## Decision points for Lucas
+## Decisions (RESOLVED — Lucas 2026-08-18)
 
-1. **Wave 5 (smoothing organ) — build now behind Waves 1–2, or hold?** It re-justifies the queued internal-state proposal; nothing starts without your call.
-2. **The 58 never-run passes — which are still wanted?** Triage needs your intent (some are dead post-carve; some are real enrichment).
-3. **Echo graded-wave repair scope** — how far to push the crosswalk/Puller recovery (largest stranded-data mass, highest blast).
-4. **The 160 finished briefs** — surface them, or discard the ones that ran with the store uninitialized (quality-tainted)?
-5. **The one new stochastic draw (idle mixture)** — in scope, or consolidation-only?
+1. **Wave 5 (smoothing organ)** — **build, behind Waves 1–2.** In scope; sequenced after observability + reproducibility so it's measurable and replayable.
+2. **The 58 never-run passes** — **treat as dead-post-carve.** De-register / archive; do not run. Wave 4b for this cluster is cleanup, not execute.
+3. **Echo graded-wave repair** — **agreed.** Proceed with the graded-wave crosswalk/Puller recovery (never a mass-repoint).
+4. **The 160 finished briefs** — **discard the store-tainted ones**, surface only the clean.
+5. **The idle-mixture stochastic draw** — **in scope** (the one genuinely new draw, behind the proven `interests.js` slice per W2).
+
+Next build item: **Wave 1 — the producer heartbeat** (foundation for all of it).
 
 ## Testing sequence (honors "cleanup lands before hard testing")
 
