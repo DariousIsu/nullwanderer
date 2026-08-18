@@ -606,6 +606,9 @@ const smokes = [
   // silently-dark producer (the synthesis 48-day case) without false-flagging a lane that just hasn't
   // ticked yet this boot; a stall escalates through obs_bus → self_watch. lib/producer_vitals.js.
   'smoke_producer_vitals.js',
+  // ── W1b structural firewall (2026-08-18): the epistemic-path modules carry NO ungoverned randomness
+  // and never import the behavioral entropy module — "smooth dynamics, never source" as a gate.
+  'smoke_epistemic_firewall.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
