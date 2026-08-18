@@ -72,5 +72,13 @@ const obs2 = [
 ok(C.fromObservations(obs2, 'old@acme.com', { attr: 'email' }).conflicted === true, 'the bounced value is conflicted');
 ok(C.fromObservations(obs2, 'new@acme.com', { attr: 'email' }).conflicted === false, 'a different held value is NOT dragged down by the old bounce');
 
+console.log('== firewall: no randomness in the confidence-write path (2026-08-18) ==');
+const fs = require('fs'), path = require('path');
+const certSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'certainty.js'), 'utf8');
+ok(!/Math\.random/.test(certSrc), 'lib/certainty.js has NO Math.random() — pTrue inputs are deterministic');
+// identity-less gradeable observations collapse to ONE source bucket (never inflate corroboration by count)
+const idless = [{ value: 'x', kind: 'verified' }, { value: 'x', kind: 'verified' }];  // grade B, no source/id
+ok(C.fromObservations(idless, 'x', { attr: 'email' }).corroboration === 1, 'two identity-less same-kind obs count as ONE source, not two');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

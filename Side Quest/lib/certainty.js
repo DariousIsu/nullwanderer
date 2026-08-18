@@ -83,7 +83,13 @@ function fromObservations(observations, value, { ageDays = 0, attr = 'email', pr
   for (const o of (Array.isArray(observations) ? observations : [])) {
     if (want && String(o.value == null ? '' : o.value).trim().toLowerCase() !== want) continue;
     const grade = puller.gradeOf(o);
-    if (grade && grade !== 'neg') srcs.add(String(o.source || o.kind || o.id || Math.random()));
+    // Deterministic source identity — NO randomness in the confidence-write path (the firewall: smooth
+    // dynamics, never source; stochastic eval 2026-08-18). A gradeable obs always has a truthy .kind
+    // (gradeOf keys on it), so o.kind wins here today and the old random fallback was unreachable dead
+    // code — but a chance "source" must never sit in a pTrue input. The 'unsourced' terminal is
+    // defensive: if the grade gate ever admits a kind-less obs, identity-less observations collapse to
+    // ONE bucket rather than each inflating independent corroboration.
+    if (grade && grade !== 'neg') srcs.add(String(o.source || o.kind || o.id || 'unsourced'));
   }
   const corroboration = Math.max(1, srcs.size);
   const c = certainty({ grade: q.grade || 'E', corroboration, attr, predicate, ageDays, conflicted: q.conflicted });
