@@ -1193,6 +1193,15 @@ function getRecentTurns(n) {
   return rows.reverse();
 }
 
+// This session's USER turns, ASC by id (oldest first) — for the topic-return resolver (lib/topic_stack).
+// Ordered so index 0 is the conversationally-FIRST user turn of the session; the last entry is the
+// current turn. Cap is generous (sessions are short); the first turn is always included.
+function getSessionUserTurns(sessionId, limit = 100) {
+  return getDb()
+    .prepare(`SELECT id, content FROM turns WHERE session_id = ? AND speaker = 'user' ORDER BY id ASC LIMIT ?`)
+    .all(sessionId, Math.max(1, limit | 0));
+}
+
 // SPOKEN turns past a watermark, oldest first — the conversation-objects scan (lib/conversation_objects).
 // Thoughts are excluded at the query: window gaps are measured on what was actually SAID in the chat.
 function turnsAfter(afterId = 0, limit = 4000) {
@@ -2869,6 +2878,7 @@ module.exports = {
   recordBrowserAction,
   insertTurn,
   getRecentTurns,
+  getSessionUserTurns,
   turnsAfter,
   setTurnEmbedding,
   setTurnModelVisible,

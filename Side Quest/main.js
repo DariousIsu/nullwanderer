@@ -7591,6 +7591,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   } catch (err) { console.error('[read-inbox] interceptor failed:', err.message); }
   // === END READ-INBOX INTERCEPTOR ===
 
+  // A within-session ANAPHORIC RETURN ("circle back to the first thing we talked about") must reach the
+  // E3a resolver below — NOT the recall/episodic interceptors, whose cross-day salience scan is the exact
+  // D2 mechanism E3a exists to defeat (the drill T4 string contains "what was the" → isRecallQuery). So
+  // both interceptors defer when this is a structural return. (elastic memory E3a, 2026-08-18)
+  const _isTopicReturn = (() => { try { return db.getMeta('elastic.topic_steer') !== 'off' && require('./lib/topic_stack').detectReturn(userMessage).isReturn; } catch { return false; } })();
+
   // === EPISODIC-REFERENCE INTERCEPTOR (elastic memory E1a, 2026-08-18) ===
   // "Remember when we talked about X?", "when did X first come up?", "have we discussed Y?" —
   // a recall of an OLDER EPISODE (topic + roughly WHEN), spanning BOTH speakers. The passive
@@ -7606,7 +7612,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     // !isActionable — a turn that also hands her a task ("… pull it up", "open it") is owned by the
     // planner downstream; recalling instead of acting would swallow the task (the isSocialTurn lesson).
-    if (db.getMeta('elastic.episodic_recall') !== 'off' && isEpisodicReference(userMessage) && !isActionable(userMessage)) {
+    if (db.getMeta('elastic.episodic_recall') !== 'off' && isEpisodicReference(userMessage) && !isActionable(userMessage) && !_isTopicReturn) {
       const qv = await memoryLib.embed(userMessage).catch(() => null);
       if (qv && userTurnRow && userTurnRow.id) { try { db.setTurnEmbedding(userTurnRow.id, JSON.stringify(qv)); } catch {} }
       const recentIds = db.getRecentTurns(RECENT_TURN_LIMIT).map(t => t.id);
@@ -7662,7 +7668,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // and ignores it. Same fix as act-on-page/inbox: pull what the USER actually said and feed
   // it back with a hard directive to state it directly — bypassing the deflection reflex.
   try {
-    if (isRecallQuery(userMessage)) {
+    if (isRecallQuery(userMessage) && !_isTopicReturn) {
       const qv = await memoryLib.embed(userMessage).catch(() => null);
       if (qv && userTurnRow && userTurnRow.id) { try { db.setTurnEmbedding(userTurnRow.id, JSON.stringify(qv)); } catch {} }
       const recentIds = db.getRecentTurns(RECENT_TURN_LIMIT).map(t => t.id);
@@ -8824,6 +8830,33 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const recall = isRecallQuery(userMessage);
     if (userQv) relevantPastTurns = await memoryLib.retrieveTurns(userMessage, { k: recall ? 4 : 3, excludeIds: recentTurns.map(t => t.id), qv: userQv, userOnly: recall, dropQuestions: recall });
   } catch (e) { console.error('[main] episodic recall failed:', e.message); }
+
+  // E3a — ANAPHORIC RETURN resolver (elastic memory). "circle back to the first thing we talked about"
+  // resolves to the conversationally-FIRST topic BY TURN ORDER, not to an emotionally-salient older
+  // memory (drill T4: "the weakest part of that first thing" wrongly recalled an old sycophancy critique).
+  // Directive-only (rides in composedUserMessage; deletes nothing), fail-soft, off-switchable via meta.
+  try {
+    if (db.getMeta('elastic.topic_steer') !== 'off' && !socialTurn) {
+      const _ts = require('./lib/topic_stack');
+      const _ret = _ts.detectReturn(userMessage);
+      if (_ret.isReturn) {
+        const _sessTurns = db.getSessionUserTurns(sessionId, 100);
+        const _ref = _ts.referentForOrdinal(_sessTurns, _ret.ordinal);
+        if (_ref) {
+          composedUserMessage = `${composedUserMessage}\n\n${_ts.returnDirective(userName, _ref, _ret.ordinal)}`;
+          // M2 — RE-ANCHOR the episodic recall on the REFERENT topic. The salience recall at 8825 keyed on
+          // the anaphoric phrase and pulls the WRONG (emotionally-salient) memory; re-key it on the first
+          // topic's own words so relevantPastTurns carries THAT topic's real discussion (age-neutral deep
+          // scan), the content behind the directive. Overwrites relevantPastTurns for this turn only.
+          try {
+            const _refQv = await memoryLib.embed(_ref.content).catch(() => null);
+            if (_refQv) relevantPastTurns = await memoryLib.retrieveTurns(_ref.content, { k: 4, excludeIds: recentTurns.map((t) => t.id), qv: _refQv, dropQuestions: true, scan: 12000 });
+          } catch (e2) { console.error('[topic] referent re-anchor failed:', e2.message); }
+          console.log(`[topic] anaphoric RETURN (${_ret.ordinal}) → resume turn #${_ref.id} "${String(_ref.content).replace(/\s+/g, ' ').slice(0, 50)}"`);
+        }
+      }
+    }
+  } catch (e) { console.error('[topic] return resolver failed:', e.message); }
 
   // FALSE-NON-DELIVERY guard (T10, 2026-08-16 drill): capture the two EARLY non-delivery drafts (the
   // calibration hedge below + the cognition searched-miss) so the operator-success block downstream can
