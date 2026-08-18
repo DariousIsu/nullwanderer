@@ -1,0 +1,90 @@
+# Pre–Hard-Testing Build Scope
+
+*Written 2026-08-18. The integrated, sequenced scope that must land before the next hard testing rounds. Draws on the live backlog audit (pulled 2026-08-18), the stochastic-layer evaluation workflow, the [smoothing seam-map](CONSCIOUSNESS_THEORIES_AS_SMOOTHING_2026-08-18.md), and Lucas's "no loop without analyze→replan" invariant.*
+
+## Thesis
+
+Two things gate honest hard testing, and both are in this scope before any new capability:
+
+1. **Observability** — you cannot trust an agent you cannot watch. The backlog exists because producers failed *silently*; the same blindness would hide a regression during testing.
+2. **Reproducibility** — you cannot hard-test a non-deterministic agent. The `:8767` diff harness must be replayable run-to-run, which the scattered randomness currently erodes.
+
+Everything else (drains, smoothing) sequences behind those two.
+
+## The one governing invariant
+
+Every item here obeys one line, already honored by the two fixes shipped this session:
+
+> **Smooth dynamics and strategy — how a value moves, which approach is tried, when a behavior fires. Never smooth source — where a fact comes from.**
+
+- The [chain-guard replan layer](../lib/chain_guard.js) changes *strategy* (try a different approach), never invents a fact.
+- The [certainty.js](../lib/certainty.js) hygiene fix removed a chance-valued *source* from the confidence path.
+- The stochastic `entropy` module (Wave 2) is allowed *which/when*, firewalled from *find/rank/ground/verify/cite/write*.
+- The [smoothing primitives](CONSCIOUSNESS_THEORIES_AS_SMOOTHING_2026-08-18.md) smooth measured *trajectories*, never the measurement.
+
+## Shipped this session (Wave 0)
+
+| Commit | What | Proof |
+|---|---|---|
+| `0bf75d5` | Chain-guard replan layer — no retry loop hammers a known failure; refuse exact repeats, analyze→replan each no-progress hop, honest miss only when the full hop budget is spent | Gate 541-green, 31-assert smoke, live-verified (Womack loop gone, grounded answer) |
+| `040e35a` | Removed dead chance-valued "source" from the confidence path + firewall lint (`certainty.js` has no `Math.random`) | Gate 541-green, `smoke_certainty` 20/20 |
+
+## The waves
+
+### Wave 1 — Foundation: observability + structural firewall  *(do first)*
+The disease behind the backlog **and** the prerequisite for trusting the test rounds.
+
+- **1a. Producer heartbeat / last-write watchdog.** A standing check that flags when a lane that *should* be writing has gone quiet (synthesis dark 48d, sources 54d stale, 15,227 jobs stuck `running`, the 4 broken passes). This is the single move that would have caught every red-tier backlog item the day it broke. **Effort M · blast low · verify:** a smoke that trips the watchdog on a synthetically-stalled lane + a live check that it surfaces the real stalls.
+- **1b. Structural firewall test.** The `certainty.js` lint generalizes: a unit test asserting the epistemic modules (`memory.js` retrieve paths, `metacognition.js`, `verify_claim.js`, `route_judge.js`, `renag_judge.js`, `certainty.js`) carry no ungoverned randomness and never `require('./entropy')`. **Effort S · blast none · verify:** the test itself.
+
+### Wave 2 — Reproducibility: the governed `entropy` module  *(prerequisite for hard testing)*
+From the stochastic-layer verdict: **adopt, narrow + governed.** The "~94 `Math.random` sites" was a monorepo-grep artifact; the real live behavioral randomness is small (`interests.js`, and the *possibly-dead* `monologue.js` older-pair pick) plus hardcoded LLM temperatures (0.7–0.95) scattered across `mood.js`/`play_session.js`/`self_dialogue.js`/`monologue.js`.
+
+- **2a. `lib/entropy.js`** — one seedable PRNG (in-repo, no dep), named distributions (`pick`/`epsilonGreedy`/`softmax`/`bernoulli`/`jitter`), a **required `lane`** per call, per-lane sub-streams (`splitmix64(seed ^ fnv(lane))`) so adding a draw in one lane can't shift another's sequence, and a structured log line per sampled decision. **Effort M · blast med.**
+- **2b. Boot seed + two test modes.** Prod reads `ZOE_ENTROPY_SEED`, else draws crypto-random and **logs it once** (any session replayable post-hoc). `ZOE_ENTROPY_MODE=deterministic` collapses expressive variance for byte-comparable grounding drills; `=seeded` keeps real sampling but reproducible for behavioral drills. **Effort S · blast low.**
+- **2c. Migrate existing sites, all-or-nothing per lane** + a lint forbidding new `Math.random` in the behavioral surface (allowlist the non-behavioral utils: temp-filename/run-id, ollama/vision jitter). **Effort M · blast med · verify:** same `:8767` turn twice under a pinned seed is byte-identical.
+
+> Consolidation is the safe core — it adds **zero** new stochastic decision points. The one genuinely new draw (an idle-lane mixture) is deferred to *after* cleanup, behind the proven `interests.js` slice, and only if desired.
+
+### Wave 3 — The replan audit (Lucas's invariant, generalized)
+`chain_guard` is instance #1. Audit every other retry loop for the analyze→replan layer; add it where a loop can re-hammer a known failure:
+
+- the operator tool loop, the roster swarm, the research/adaptive loops, the fetch-escalation lane.
+**Effort M · blast med · verify:** per-loop smoke asserting a repeated-failure input replans rather than repeats.
+
+### Wave 4 — Restore dark producers, then drain the backlog
+Producers first (so drains don't re-accumulate), then the piles.
+
+- **4a. Restore the subconscious synthesis + self-dialogue lanes** — the `type=synthesis` / `self_q`/`self_a` structural early-return in `subconscious.js`; wire `<wonder>` back into the heartbeat. **Effort M · blast med.**
+- **4b. Drain + wire the queues** (each: fix the producer/consumer, *then* drain): entity-resolution adjudication (34,162) + link-grounding (10,232); surface the 160 finished deliverables + add the store-init guard that blocks a research run when the store is down; triage the 58 never-run passes (wanted vs dead) and fix/de-register the 4 broken ones; the Echo pass-fleet + identity crosswalk graded-wave repair (carve aftermath — **DO NOT mass-repoint**); restart the news/source lane (206 refs, 54d stale) and drain the decompose/contacts backlogs. **Effort L–XL · blast med–high · verify:** live count deltas + the heartbeat staying green.
+
+### Wave 5 — Smoothing organ (optional, post-cleanup)
+Per the [seam-map](CONSCIOUSNESS_THEORIES_AS_SMOOTHING_2026-08-18.md): the internal-state-vector organ (mood-decay Slice 1, idle-competition Slice 2) absorbs three seams; the two standalone wins (rumination gradient, graded salience) are separately queueable. **Gated on Lucas** — this is behavior change, and it must ride Waves 1–2 (observability + reproducibility) so it can be measured and replayed. Verify the `monologue.js:105` dead-code caveat first.
+
+## Cleanup clusters → wave map
+
+| Cluster (live count) | Root | Wave | Effort | Blast |
+|---|---|---|---|---|
+| Producer-failure blindness | no last-write watchdog | 1a | M | low |
+| Synthesis/self-dialogue DARK (48d) | `subconscious.js` early-return | 4a | M | med |
+| Entity-resolution + link queues (34,162 + 10,232) | adjudication/grounding never drains | 4b | L | med |
+| Unsurfaced deliverables (160) + store-uninitialized | no surface path + no store-init guard | 4b | M | low |
+| Saga passes (58 never-run + 4 broken) | registry never triaged; `pass18d` SQL error | 4b | M | low |
+| Echo fleet + crosswalk frozen (carve) | husk-DB repoint; 97,630 unlinked | 4b | XL | high |
+| News/source frozen (206, 54d) + decompose/contacts | arrival-path coupling; lane stopped | 4b | L | med |
+
+## Decision points for Lucas
+
+1. **Wave 5 (smoothing organ) — build now behind Waves 1–2, or hold?** It re-justifies the queued internal-state proposal; nothing starts without your call.
+2. **The 58 never-run passes — which are still wanted?** Triage needs your intent (some are dead post-carve; some are real enrichment).
+3. **Echo graded-wave repair scope** — how far to push the crosswalk/Puller recovery (largest stranded-data mass, highest blast).
+4. **The 160 finished briefs** — surface them, or discard the ones that ran with the store uninitialized (quality-tainted)?
+5. **The one new stochastic draw (idle mixture)** — in scope, or consolidation-only?
+
+## Testing sequence (honors "cleanup lands before hard testing")
+
+1. Wave 1 live: heartbeat surfaces the real stalls; firewall test green.
+2. Wave 2 live: same `:8767` turn twice under a pinned seed → byte-identical. **This is the gate that unlocks hard testing.**
+3. Wave 3 live: each audited loop replans on a repeated-failure drill.
+4. Wave 4 live: heartbeat stays green as producers restart; count deltas confirm drains.
+5. Only then — the hard testing rounds, now reproducible and observable.
