@@ -12459,7 +12459,7 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
 // runaway chain is a real failure — but 4 was set when a turn meant "look one thing up". Building a
 // document is open the tab, write the contract, then go and read; four hops cannot hold that.
 const MAX_ECHO_HOPS = require('./lib/config').maxEchoHops();
-async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0, prompted = true, finalNudge = false, lastSay = '' }) {
+async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0, prompted = true, finalNudge = false, lastSay = '', noChain = false }) {
   // TURN ISOLATION — if a newer chat turn has started since this follow-up's turn, discard it: a prior
   // turn's fire-and-forget tool result must never render into the current turn (the cross-turn bleed).
   if (io && io._gen != null && io._gen !== _chatTurnGen) { console.log(`[main] stale tool-followup discarded (gen ${io._gen} vs ${_chatTurnGen})`); return; }
@@ -12484,7 +12484,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     // Echo chaining: while hops remain and the suit is connected, let her emit ONE more echo tag
     // to continue a find→do flow (this is the fix for the find→do stall — the followup used to
     // strip her <echo-do> and dispatch nothing). Other tool tags are still forbidden here.
-    const canChain = echoHop < MAX_ECHO_HOPS && !!(echoSuit && echoSuit.connected);
+    const canChain = !noChain && echoHop < MAX_ECHO_HOPS && !!(echoSuit && echoSuit.connected);
     const note = canChain
       ? `[An Echo tool you just used returned the result below. Use it to answer ${userName}. If you found a tool and now need to RUN it (or need one more lookup to get the answer — e.g. <echo-do name="db_query">…</echo-do>, <echo-do name="get_db_map">…</echo-do>, <echo-find>…</echo-find>), emit that ONE Echo tag now and nothing else. If you already have the answer, just give it in your own voice. Don't emit non-Echo tool tags.]\n\n${String(resultText || '').slice(0, require('./lib/config').followupResultChars())}`
       : `[A tool you just used returned the result below. Respond to ${userName} NOW, in your own voice, using it directly to answer what they asked. Do NOT emit any more tool tags — just talk to them.]\n\n${String(resultText || '').slice(0, require('./lib/config').followupResultChars())}`;
@@ -12628,7 +12628,29 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       const runTags = chainTags.slice(0, MAX_TAGS_PER_HOP);
       const deferredTags = chainTags.length - runTags.length;
       const hopParts = [];
+      // ANALYSIS + REPLAN LAYER (2026-08-18, Lucas). A retry loop must never hammer an approach it
+      // already knows fails: an exact repeat is REFUSED, and every no-progress hop gets an analyze→
+      // replan nudge that names what was tried and pushes a DIFFERENT approach (another tool/tier, or
+      // the web). A PRODUCTIVE chain keeps its full MAX_ECHO_HOPS budget; only a chain that keeps
+      // failing hits the no-progress ceiling and is turned into an honest miss. See lib/chain_guard.js.
+      const _cg = require('./lib/chain_guard');
+      if (io && !io._chainState) io._chainState = _cg.newState();
+      const _cs = (io && io._chainState) || _cg.newState();
+      let _needsReplan = false, _exhausted = false;
       for (const t of runTags) {
+        const _sig = _cg.tagSignature(t);
+        const _isRet = _cg.isRetrievalTag(t);
+        const _label = _cg.tagLabel(t);
+        // REFUSE an exact repeat: re-running the same lookup she already tried this turn cannot make
+        // progress (retrieval-only — a repeated write/build hop is legitimate). It counts as no-progress
+        // and triggers the replan layer below rather than another wasted dispatch.
+        if (_isRet && _sig && _cs.seen.has(_sig)) {
+          const _ev = _cg.evaluateHop(_cs, { signature: _sig, label: _label, emptyThisHop: true, retrieval: true }, MAX_ECHO_HOPS);
+          _needsReplan = true; if (_ev.exhausted) _exhausted = true;
+          hopParts.push(`[Refused: you already ran "${_label}" this turn with the same input — it will not return anything new.]`);
+          console.log(`[chain-guard] repeat refused (hop ${echoHop + 1}): ${_sig}`);
+          continue;
+        }
         try {
           const r = await echoSuit.dispatch(t);
           const label = t.kind === 'do' ? `echo ${t.name}` : `echo ${t.kind}`;
@@ -12645,15 +12667,32 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
           console.log(`[main] echo chain hop ${echoHop + 1}: ${label} → ${r.ok ? 'ok' : 'ERR'}`);
           // Expect-vs-actual on the chain too: an empty result is a signal, not an answer.
           const _hopEmpty = !r.isError && !(r.text || '').trim();
+          const _ev = _cg.evaluateHop(_cs, { signature: _sig, label: _label, emptyThisHop: _hopEmpty, retrieval: _isRet }, MAX_ECHO_HOPS);
+          if (_ev.needsReplan) _needsReplan = true;
+          if (_ev.exhausted) _exhausted = true;
           hopParts.push(content
             + (r.isError ? '\n[That call errored — fix the args or pick another tool with <echo-find>.]' : '')
             + (_hopEmpty ? '\n[Empty result — it did not answer the need. Adjust the args, try another tool, or say plainly it was not found.]' : ''));
         } catch (e) { console.error('[main] echo chain hop failed:', e.message); }
       }
       if (deferredTags > 0) hopParts.push(`[${deferredTags} more tag${deferredTags === 1 ? '' : 's'} you emitted this turn were DEFERRED (per-hop bound) — re-emit any that still matter.]`);
+      // ANALYSIS + REPLAN: after a no-progress hop, name what has been tried and push a DIFFERENT
+      // approach (or the web) on the next hop — the chain CONTINUES, it does not die. Only once the
+      // no-progress budget is spent do we stop and force the honest miss.
+      if (_needsReplan && !_exhausted) hopParts.push(_cg.replanNote(_cs, { userName }));
       if (hopParts.length) {
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: hopParts.join('\n\n'), echoHop: echoHop + 1, prompted, finalNudge, lastSay: sayOut || lastSay }); }
-        catch (e) { console.error('[main] echo chain follow-up failed:', e.message); }
+        if (_exhausted) {
+          // She has replanned through the no-progress budget and still hasn't landed it (or is
+          // hammering a known failure). Stop chaining and force the honest miss — try DIFFERENT things,
+          // but don't loop forever on lookups our records can't satisfy (the Glen Womack phone loop).
+          console.log(`[chain-guard] no-progress ceiling hit — forcing honest miss (hop ${echoHop + 1}, noProgress ${_cs.noProgress})`);
+          hopParts.push(_cg.honestMissNote(_cs, { userName }));
+          try { await fireToolFollowup({ io, channel, sessionId, echoHop: echoHop + 1, prompted, finalNudge: true, noChain: true, resultText: hopParts.join('\n\n') }); }
+          catch (e) { console.error('[main] chain-guard forced answer failed:', e.message); }
+        } else {
+          try { await fireToolFollowup({ io, channel, sessionId, resultText: hopParts.join('\n\n'), echoHop: echoHop + 1, prompted, finalNudge, lastSay: sayOut || lastSay }); }
+          catch (e) { console.error('[main] echo chain follow-up failed:', e.message); }
+        }
       }
     } else if (!finalNudge && (sayOut || lastSay) && require('./lib/leakguard').isUnkeptPromiseSay(sayOut || lastSay)) {
       // THE UNKEPT PROMISE (live 9341→9344→9346): the chain is OVER — no tags to run — and her

@@ -598,6 +598,10 @@ const smokes = [
   'smoke_diagnosis.js',
   'smoke_internal_state.js',
   'smoke_thread_hygiene.js',
+  // ── the analysis+replan layer (2026-08-18, Lucas): a retry loop must never hammer a known-failure.
+  // Refuses exact-repeat lookups, replans (does not stop) on no-progress, protects productive/build
+  // chains, forces the honest miss only once the no-progress budget is spent. The Glen Womack phone loop.
+  'smoke_chain_guard.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
