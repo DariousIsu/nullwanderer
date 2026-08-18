@@ -38,6 +38,22 @@ async function _maybeBackoff429(status, bodyText, attempt, ctrl, model, { maxRet
 // simply had no way to point this at it or to attach the bearer token. That mattered once the cloud
 // started writing the user-facing reply — a long generation with no token flow is indistinguishable
 // from a hang, and the stall watchdog below only works if tokens are actually arriving to reset it.
+// ENTROPY-governed sampling policy (Wave 2, docs/PRE_HARD_TESTING_SCOPE_2026-08-18.md). Returns a COPY
+// of options with the reproducibility mode applied: temperature → 0 (greedy) in deterministic mode, the
+// real temperature otherwise, and a FIXED ollama seed threaded in the test modes (seeded/deterministic)
+// or whenever ZOE_ENTROPY_SEED is pinned — so the daemon's own sampling replays run-to-run. Prod-default
+// is a no-op (base temperature, no forced seed). "Smooth dynamics, never source": it only moves a
+// sampling knob toward determinism; the fact path (completeDetailed) is temperature 0 already, untouched.
+function _govern(options) {
+  const o = Object.assign({}, options);
+  try {
+    const _ent = require('./entropy');
+    if (o.temperature != null) o.temperature = _ent.temperature('ollama.sample', o.temperature);
+    if (_ent.getMode() !== 'prod' || process.env.ZOE_ENTROPY_SEED) o.seed = Number(_ent.getSeed() % 2147483647n);
+  } catch { /* entropy must never block a generation */ }
+  return o;
+}
+
 async function streamChat({ model, messages, options = {}, onToken, onThinking, signal, inactivityMs = 90000, maxMs = 0, think, base = OLLAMA_BASE, headers = {}, lane = undefined }) {
   // AMBIENT SPEND-TIER FALLBACK (2026-08-12 review M5): a caller that doesn't know its tier inherits
   // the run's ambient spendTier (declared once by the orchestrator via lane.run) before the legacy
@@ -57,6 +73,9 @@ async function streamChat({ model, messages, options = {}, onToken, onThinking, 
       ...options
     }
   };
+  // Wave 2 reproducibility: collapse expressive sampling in a test mode (temperature → 0 in
+  // deterministic mode; a fixed seed threaded in the test modes) so a turn is diffable run-to-run.
+  body.options = _govern(body.options);
   // Optional top-level `think` toggle for reasoning models (ollama /api/chat) — e.g. the meeting
   // scribe disables thinking so its whole budget goes to the minutes, not hidden reasoning.
   if (typeof think === 'boolean') body.think = think;
@@ -609,4 +628,4 @@ async function streamCognition({ messages, options = {}, onToken, onThinking, si
   return streamChat({ model: front, messages, options, onToken, onThinking, signal, inactivityMs, maxMs, think });
 }
 
-module.exports = { streamChat, streamCognition, cognitionWindow, complete, completeDetailed, pickText, isReasoningModel, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded, sayLooksCutOff, _maybeBackoff429, _CONCURRENCY_429_RE, _keepAlive };
+module.exports = { streamChat, streamCognition, cognitionWindow, complete, completeDetailed, pickText, isReasoningModel, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded, sayLooksCutOff, _maybeBackoff429, _CONCURRENCY_429_RE, _keepAlive, _govern };

@@ -617,6 +617,10 @@ const smokes = [
   // not Math.random — only documented non-behavioral utils (run-id, retry jitter, image seed) are
   // allowlisted. A new ungoverned coin flip fails the build.
   'smoke_entropy_firewall.js',
+  // ── Wave 2 local-model chokepoint (2026-08-18): ollama.streamChat collapses expressive sampling in a
+  // test mode (temperature → 0 in deterministic mode; a fixed replayable seed in the test modes) so a
+  // turn is diffable run-to-run. Prod is a no-op. The fact path (completeDetailed) is temp 0 already.
+  'smoke_ollama_entropy.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
