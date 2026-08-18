@@ -12419,7 +12419,11 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       const _mc = require('./lib/metacognition');
       const _fuAnchor = lastUserTurnStartTs || 0;
       const _av = _mc.verifyArtifactClaims(sayOut, {
-        fileExists: (p) => { try { const _p = require('path'); const abs = _p.isAbsolute(p) ? p : _p.join(__dirname, p); return require('fs').existsSync(abs); } catch { return true; } },
+        // Resolve a claimed relative path against BOTH the app's file workspace (files.resolvePath →
+      // data/zoe_workspace) AND the repo root — reports/notes save to the WORKSPACE, so a __dirname-only check
+      // false-CORRECTED real deliveries ("[Correction — the file I named isn't actually there]" on a file that
+      // WAS saved; 2026-08-18, the Cassidy report). Any hit = exists; fail OPEN so an error never false-scolds.
+      fileExists: (p) => { try { const _p = require('path'), fs = require('fs'); if (_p.isAbsolute(p)) return fs.existsSync(p); const cands = []; try { cands.push(require('./lib/files').resolvePath(p)); } catch {} cands.push(_p.join(__dirname, p)); return cands.some((c) => { try { return fs.existsSync(c); } catch { return false; } }); } catch { return true; } },
         canvasWroteThisTurn: () => { if (!_fuAnchor) return true; try { return require('./lib/canvas_docs').lastWriteTs() >= _fuAnchor; } catch { return true; } },
         canvasLandedText: () => { if (!_fuAnchor) return ''; try { return require('./lib/canvas_docs').lastWriteText(_fuAnchor); } catch { return ''; } },   // content-aware: RIGHT doc? (unions this-turn docs)
         imageGenThisTurn: () => !_fuAnchor || (lastImageGenTs || 0) >= _fuAnchor,
@@ -16479,7 +16483,11 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
     } catch {}
     // (2) ARTIFACT CLAIMS — a saved file that isn't there, a canvas item that never landed.
     const av = _mc.verifyArtifactClaims(out, {
-      fileExists: (p) => { try { const _p = require('path'); const abs = _p.isAbsolute(p) ? p : _p.join(__dirname, p); return require('fs').existsSync(abs); } catch { return true; } },
+      // Resolve a claimed relative path against BOTH the app's file workspace (files.resolvePath →
+      // data/zoe_workspace) AND the repo root — reports/notes save to the WORKSPACE, so a __dirname-only check
+      // false-CORRECTED real deliveries ("[Correction — the file I named isn't actually there]" on a file that
+      // WAS saved; 2026-08-18, the Cassidy report). Any hit = exists; fail OPEN so an error never false-scolds.
+      fileExists: (p) => { try { const _p = require('path'), fs = require('fs'); if (_p.isAbsolute(p)) return fs.existsSync(p); const cands = []; try { cands.push(require('./lib/files').resolvePath(p)); } catch {} cands.push(_p.join(__dirname, p)); return cands.some((c) => { try { return fs.existsSync(c); } catch { return false; } }); } catch { return true; } },
       canvasWroteThisTurn: () => { try { return require('./lib/canvas_docs').lastWriteTs() >= (turnStartTs || 0); } catch { return true; } },
       canvasLandedText: () => { try { return require('./lib/canvas_docs').lastWriteText(turnStartTs || 0); } catch { return ''; } },   // content-aware: RIGHT doc? (unions all this-turn docs)
       imageGenThisTurn: () => (lastImageGenTs || 0) >= (turnStartTs || 0),   // a real image rendered this turn?
