@@ -82,6 +82,64 @@ function deliverySubjectFrom(say, deliverable) {
   return subj.slice(0, 120);
 }
 
+// GROUND THE DELIVERY CLAIM IN THE ARTIFACT (2026-08-18 live probe). Three artifact-delivery say sites
+// (buildCanvasFromOrder, the canvas edit door, the report-cmd) tell the reply-writer to describe "what it
+// holds" / "the ONE most substantive finding in it" but hand it only the TITLE + line count — never the
+// composed markdown, which was built in a SEPARATE cloud call the reply-writer never saw. So she re-imagines
+// the contents: a live Louisiana-energy brief that actually held CCS / offshore-wind / LPSC got announced as
+// "the $4.1B gas plant rate recovery and Governor Landry's industrial growth framework" — plausible, real,
+// and NOT what landed. holdsDigest returns a compact, FAITHFUL digest of the artifact (its heading, a lead /
+// exec-summary sentence, and the item / section labels) to inject into the say so the claim is grounded in
+// the artifact by construction — the discipline the directed-dossier announce already uses (main.js ~16986).
+// PURE: it only slices/extracts md, so it can introduce nothing md does not already contain. Empty md → ''.
+function holdsDigest(md, { cap = 500, maxItems = 8 } = {}) {
+  // Strip markdown/structural punctuation to SPACES (never WELD tokens: "2*3" must stay "2 3", not become
+  // the fabricated "23"), and drop [] so a composed "]" cannot close the bracketed say-instruction this is
+  // injected into (nor smuggle a directive across the content firewall).
+  const clean = (s) => String(s).replace(/[*_`#\[\]]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const text = String(md == null ? '' : md).replace(/\r/g, '').trim();
+  if (!text) return '';
+  let heading = '', sawHeading = false, inFence = false, stop = false;
+  const leadLines = [];
+  const items = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^(?:```|~~~)/.test(line)) { inFence = !inFence; continue; }   // fence markers + fenced code are not prose
+    if (inFence) continue;
+    // TITLE: the first heading of ANY level (# … ######), else the first prose line (a bare/"##" title must
+    // still register — else the exec-summary lead below never fires and the finding is re-guessed).
+    if (!sawHeading) {
+      const h = line.match(/^#{1,6}\s+(.+)$/);
+      if (h) { heading = clean(h[1]).slice(0, 120); sawHeading = true; continue; }
+      if (!/^(?:[-*]\s|\d+[.)]\s|>|\|)/.test(line)) { heading = clean(line).slice(0, 120); sawHeading = true; continue; }
+    }
+    if (stop) continue;                                                // everything after Open questions is not a holding
+    if (/^#{2,6}\s+open questions?\b/i.test(line)) { stop = true; continue; }
+    // LEAD / exec-summary: the consecutive prose lines right after the title (bounded) — where the ONE
+    // substantive finding lives. Accumulate (a 2-4 sentence summary can span lines), stop at any structure.
+    if (sawHeading && !items.length && leadLines.join(' ').length < 300
+        && !/^(?:#{1,6}\s|[-*]\s|\d+[.)]\s|\*\*|>|\|)/.test(line)) { leadLines.push(clean(line)); continue; }
+    if (items.length >= maxItems) continue;
+    let m = line.match(/^(?:[-*]|\d+[.)])?\s*\*\*([^*]{2,90})\*\*/);   // bolded item / section label
+    if (m) { items.push(clean(m[1])); continue; }
+    m = line.match(/^#{2,6}\s+(.+)$/);                                 // sub-heading label
+    if (m) { const s = clean(m[1]).slice(0, 90); if (s) items.push(s); continue; }
+    m = line.match(/^(?:[-*]|\d+[.)])\s+(.+)$/);                       // list-item label: split ONLY on a SPACED
+    if (m) {                                                           // dash / " : " — never a bare "." or ":" that
+      const s = clean(m[1]).split(/\s[—–-]\s|\s:\s/)[0].trim().slice(0, 90);   // lives inside $1.8B, 3.5%, Dr., U.S.
+      if (s) items.push(s); continue;
+    }
+  }
+  const lead = leadLines.join(' ').slice(0, 260);
+  const parts = [];
+  if (heading) parts.push(`"${heading}"`);
+  if (lead) parts.push(lead);
+  if (items.length) parts.push(`covering: ${items.slice(0, maxItems).join('; ')}`);
+  let out = parts.join(' — ') || clean(text);   // no structure captured → a cleaned prose slice
+  return out.length > cap ? out.slice(0, cap).replace(/\s+\S*$/, '') + '…' : out;
+}
+
 // ACK-ORPHAN (D-orphan, 2026-08-16 drill): the operator RAN but the cloud model ended its final message
 // on a content-free acknowledgement ("writing it now — stand by, I'll paste the output shortly") instead
 // of the actual result. Delivering that verbatim voices a PROMISE as the deliverable — the answer-orphan.
@@ -167,4 +225,4 @@ function resultBearingDeliveries(turns, max = 3) {
   return out;
 }
 
-module.exports = { detectPromise, bookingSubject, deliverySubjectFrom, isAckOrphan, claimsNonDelivery, isOwedClaim, resultBearingDeliveries, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD, _EXPLORE_LEAD, _PLAN_CHAIN, _RESULT_STRONG, _NONDELIVERY_RE, _OWED_RE };
+module.exports = { detectPromise, bookingSubject, deliverySubjectFrom, holdsDigest, isAckOrphan, claimsNonDelivery, isOwedClaim, resultBearingDeliveries, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD, _EXPLORE_LEAD, _PLAN_CHAIN, _RESULT_STRONG, _NONDELIVERY_RE, _OWED_RE };

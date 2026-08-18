@@ -5572,7 +5572,8 @@ async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
   const lines = md.split('\n').filter((l) => l.trim()).length;
   _stampWorkingCanvasDoc({ slug, title, md });
   console.log(`[canvas-cmd] order executed → "${title}" landed on canvas (${md.length}ch, ${lines} line(s))`);
-  await fireToolFollowup({ io, channel, sessionId, resultText: `[The canvas doc Lucas ordered IS LANDED — "${title}", ${lines} content line(s), on his Canvas now. Tell him it's there and what it holds in one sentence, and invite him to verify. Do NOT add extras he didn't ask for and do NOT offer follow-on work — he said slow, one step at a time.]` });
+  const _holds = require('./lib/delivery').holdsDigest(md);
+  await fireToolFollowup({ io, channel, sessionId, resultText: `[The canvas doc Lucas ordered IS LANDED — "${title}", ${lines} content line(s), on his Canvas now. Tell him it's there and, in ONE sentence, what it holds — described ONLY from its actual contents below, naming nothing not present in them:\n${_holds}\nThen invite him to verify. Do NOT add extras he didn't ask for and do NOT offer follow-on work — he said slow, one step at a time.]` });
 }
 
 // The WORKING canvas doc — what "the document we're building" refers to. Stamped at every
@@ -5714,7 +5715,8 @@ async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
       planNote = ` ${queued} entr${queued === 1 ? 'y is' : 'ies are'} still marked pending — each is now QUEUED for autonomous research (about ${Math.ceil(queued / perHour)} hour(s) at the current pace); state that plan plainly.`;
     }
   } catch (e) { console.error('[canvas-cmd] pending-plan enqueue failed:', e.message); }
-  await fireToolFollowup({ io, channel, sessionId, resultText: `[The edit Lucas ordered IS APPLIED — "${title}" updated in place on his Canvas (${lines} line(s) now). Tell him in one sentence what changed and invite him to verify.${planNote} No extras beyond that — he is driving step by step.]` });
+  const _editHolds = require('./lib/delivery').holdsDigest(md);
+  await fireToolFollowup({ io, channel, sessionId, resultText: `[The edit Lucas ordered IS APPLIED — "${title}" updated in place on his Canvas (${lines} line(s) now). Tell him in one sentence what changed and invite him to verify — any specifics you name must appear in its actual current contents below (name nothing not present):\n${_editHolds}\n${planNote} No extras beyond that — he is driving step by step.]` });
 }
 
 // Land a HELD product (found by the pull-up gate) on the canvas and hand it over honestly: what it
@@ -6017,7 +6019,8 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
     }
   } catch (e) { console.error('[report-cmd] open-question enqueue failed:', e.message); }
   const planNote = openQs ? ` The report names ${openQs} open question(s) the held material could not answer — each is now QUEUED for autonomous research; the report deepens as they resolve. State that plan in one sentence.` : '';
-  if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The report Lucas asked for is BUILT and delivered — it is on his Canvas${saved ? ` and saved at ${rel}` : ''}, composed from ${rows.length} document(s) you already held (${rows.map((r) => '#' + r.id).join(', ')}). Tell him it's ready, where it is, and give the ONE most substantive finding in it — in your own voice, two or three sentences.${planNote} Do not re-paste the whole report.]` });
+  const _reportHolds = require('./lib/delivery').holdsDigest(md, { cap: 800 });
+  if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The report Lucas asked for is BUILT and delivered — it is on his Canvas${saved ? ` and saved at ${rel}` : ''}, composed from ${rows.length} document(s) you already held (${rows.map((r) => '#' + r.id).join(', ')}). Tell him it's ready, where it is, and give the ONE most substantive finding in it — drawn ONLY from its actual contents below, naming nothing not present in them:\n${_reportHolds}\nIn your own voice, two or three sentences.${planNote} Do not re-paste the whole report.]` });
   // delivered reflects what ACTUALLY landed (canvas OR notes) — never a compose-only claim; nothing landed → miss.
   return { delivered: (landed || saved), canvas: landed, topic: t, rel: saved ? rel : null, canvasTab: landed ? `promise-report-${slug}` : null, docCount: rows.length, openQs, miss: (landed || saved) ? undefined : 'nothing-landed' };
 }
