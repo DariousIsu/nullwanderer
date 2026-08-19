@@ -4,40 +4,32 @@
  *   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_deep_budgets.js
  */
 'use strict';
-const fs = require('fs'), path = require('path');
 const cfg = require('../lib/config');
 const decompLane = require('../lib/decomp_lane');
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.log('  ✗', m); } };
-// ⭐ SANDBOX-AWARE (2026-08-07). The lane ceilings below are tuned in the LIVE .env (values just under
-// the measured burn so they bite); a rehearsal sandbox deliberately has NO .env — it holds secrets and
-// is never copied — so config falls back to the code DEFAULTS (300k/150k) and these two assertions
-// mismatch. That made the full gate red in every sandbox (deterministic, survived a retry), keeping the
-// R2 proposal card out of reach. Skip the .env-tuned ceilings in a sandbox; assert them fully on the
-// live tree. Marker: a .rehearsal.json at the app root.
-const IN_SANDBOX = (() => { try { return fs.existsSync(path.join(require('../lib/self_source').ROOT, '.rehearsal.json')); } catch { return false; } })();
+// (2026-08-19) The lane ceilings below were RESTORED to the code defaults (see the ceilings block), so a
+// LIVE .env and a no-.env rehearsal sandbox now AGREE — the old sandbox-skip for that divergence is gone.
 
 // --- bold config defaults ---
 ok(cfg.deepNumCtx() === 32768, `deepNumCtx default 32768 (was an 8192 window) — got ${cfg.deepNumCtx()}`);
 ok(cfg.deepNumPredict() === 3000, `deepNumPredict default 3000 (was 200-1000) — got ${cfg.deepNumPredict()}`);
 ok(cfg.sectionNumPredict() === 6000, `sectionNumPredict default 6000 (research sections, was 1800-2000) — got ${cfg.sectionNumPredict()}`);
 
-// --- lane ceilings ---
-// ⚠ REVERSED 2026-07-31, deliberately. These were lifted (60k→300k, 40k→150k) so the fatter deep
-// calls would not throttle to a trickle — correct when the ALLOWANCE was not the binding constraint.
-// It is now: the weekly cloud quota hit 90.8% with two days left, and the ceilings were so far above
-// actual burn (~42k/h graphwalk against a 300k cap) that they could never bind. A cap 7x above what a
-// lane spends is not a cap. The .env values below are just under the measured rate so they bite, and
-// lib/quota is the thing that decides from here — it paces against remaining/time-to-reset, which is
-// a question no fixed hourly number can answer.
-// If the quota stops being the constraint, raise these again ON PURPOSE rather than by drift.
-if (IN_SANDBOX) {
-  console.log('  ⏭ graphwalk/puller .env-tuned ceilings — skipped (rehearsal sandbox has no .env; config falls back to code defaults)');
-} else {
-  ok(cfg.graphwalkBudgetTokensPerHour() === 15000, `graphwalk ceiling BOUND to 15k — measured burn was ~42k/h against a 300k cap — got ${cfg.graphwalkBudgetTokensPerHour()}`);
-  ok(cfg.pullerBudgetTokensPerHour() === 3000, `puller ceiling BOUND to 3k — measured burn was ~1.3k/h against a 150k cap — got ${cfg.pullerBudgetTokensPerHour()}`);
-}
+// --- lane ceilings (RESTORED 2026-08-19) ---
+// Lifted to defaults for Slice 1 ("don't throttle the fat deep calls"), REVERSED to a hard 15k/3k/10k on
+// 07-31 (cloud quota hit 90.8% — an emergency brake), then RESTORED here. lib/quota was loosened on 08-15
+// ("fund the consciousness organs") but these per-lane caps were left at the 07-31 values, binding TIGHTER
+// than the pool pacer they were meant to defer to — measured 08-19 at ~53% of sustainable used, half the
+// weekly pool stranded. All three idle lanes ALSO pass quota_gate.allow('idle') (monologue.js:1249/1878/
+// 2115), so lib/quota — pacing against remaining/time-to-reset, chat reserve intact — is the real backstop,
+// exactly as the 07-31 note intended ("lib/quota is the thing that decides"). This is the on-purpose raise
+// that note asked for once the quota stopped being the constraint (16.6% used). .env now matches these
+// defaults, so live == sandbox.
+ok(cfg.graphwalkBudgetTokensPerHour() === 300000, `graphwalk ceiling at the default 300k (pool pacer governs) — got ${cfg.graphwalkBudgetTokensPerHour()}`);
+ok(cfg.pullerBudgetTokensPerHour() === 150000, `puller ceiling at the default 150k (pool pacer governs) — got ${cfg.pullerBudgetTokensPerHour()}`);
+ok(cfg.subcBudgetTokensPerHour() === 120000, `subconscious ceiling at the default 120k (the consciousness organs) — got ${cfg.subcBudgetTokensPerHour()}`);
 
 // --- Slice 4: denser subconscious (concurrent lanes + graph-walk burst) ---
 ok(cfg.subcMovesPerTick() === 3, `subcMovesPerTick default 3 (graph-walk burst) — got ${cfg.subcMovesPerTick()}`);
