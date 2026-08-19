@@ -387,6 +387,8 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
     if (!steps.length) return null;                  // JSON artifact / empty + nothing gathered → nothing to voice
     return await _forceFinalFromWork();              // narrated-done / un-parseable JSON → compile from work
   };
+  const _cg = require('./chain_guard');
+  const _guard = _cg.newState();   // Wave 3 replan layer: track repeated / no-progress retrieval steps this run
   for (let i = 0; i < maxSteps; i++) {
     if (nowFn() - t0 > maxMs) break;   // over the wall-clock budget → stop looping, force a final below
     // Compact BEFORE building the prompt, and verify the drop actually happened (O1: eviction is
@@ -479,6 +481,34 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
     }
     if (dropped) entry += `\n  [NOT RUN: ${dropped} action(s) over the ${MAX_BATCH}-per-step limit — ask again for the ones you still need.]`;
     histParts.push(entry);
+
+    // ── ANALYSIS + REPLAN (Wave 3, [[chain-guard-replan-invariant]]): a retrieval step that returns
+    // UNSATISFIED, or an EXACT repeat of one already tried this run, is a NO-PROGRESS hop. Reuse
+    // lib/chain_guard's logic so the loop can't hammer a known-empty lookup — name what was tried and
+    // demand a DIFFERENT step; force the honest final only once the no-progress budget (maxSteps) is
+    // spent. A productive step (new data) resets the streak; writes/builds are never judged
+    // (isRetrievalTag=false for create_/update_/propose_/saga_canvas_/run_/…). Directives are written in
+    // the operator's JSON-step voice, not chain_guard's echo-tag voice.
+    let _needsReplan = false, _exhausted = false;
+    for (const d of done) {
+      const _tag = { kind: 'do', name: d.tool, args: d.args };
+      const _v = _cg.evaluateHop(_guard, {
+        signature: _cg.tagSignature(_tag), label: d.tool,
+        emptyThisHop: /\[UNSATISFIED/.test(String(d.result || '')), retrieval: _cg.isRetrievalTag(_tag),
+      }, maxSteps);
+      _needsReplan = _needsReplan || _v.needsReplan;
+      _exhausted = _exhausted || _v.exhausted;
+    }
+    const _tried = Array.from(_guard.tried).join(', ') || 'the lookups so far';
+    if (_exhausted) {
+      histParts.push(`\n[STOP: you've tried ${_tried} without landing it. Do NOT run another lookup. Answer now in plain words — what you were after, that you couldn't find it, and offer to search the web live.]`);
+      console.log(`[operator] replan budget spent (${_guard.noProgress} no-progress steps) → honest miss`);
+      return _finalize(steps, await _forceFinalFromWork());
+    }
+    if (_needsReplan) {
+      histParts.push(`\n[ANALYZE & REPLAN: you've already tried ${_tried} and it didn't answer the need. Do NOT re-issue the same call. Ask WHY it came up empty (our records may not hold this), then take a GENUINELY DIFFERENT step — different args, a different tool, or web_search if it's public info — or give the honest final answer naming what you couldn't find.]`);
+      console.log(`[operator] no-progress step → analyze&replan injected (tried: ${_tried})`);
+    }
   }
   // out of steps → force a final answer from what we gathered (same compile as the narrated-done path)
   return _finalize(steps, await _forceFinalFromWork());
