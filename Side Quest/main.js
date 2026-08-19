@@ -5565,7 +5565,7 @@ async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
 // produces the grounded content; promiseArtifactEmit lands it; the delivery claim is true by
 // construction. A CANNOT: answer is relayed plainly — never a narrated success.
 async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
-  const recent = (db.getRecentTurns(10) || []).filter((t) => t.speaker === 'user').sort((a, b) => (a.ts || 0) - (b.ts || 0)).slice(-4)
+  const recent = (db.getRecentTurns(10, sessionId) || []).filter((t) => t.speaker === 'user').sort((a, b) => (a.ts || 0) - (b.ts || 0)).slice(-4)
     .map((t) => `- ${String(t.content).slice(0, 300)}`).join('\n');
   // Held rosters ride along here too (M5.5) — a create naming civic bodies should use store names,
   // same contract as the edit door.
@@ -5707,7 +5707,7 @@ async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
     // parish doc", "get on with it") usually points at a CONCRETE standing instruction he already
     // gave a few turns back — live 08-08, "Prioritize editing…" CANNOTed twice while the real
     // conversion order sat in the transcript.
-    const recent = (db.getRecentTurns(12) || []).filter((t) => t.speaker === 'user').sort((a, b) => (a.ts || 0) - (b.ts || 0)).slice(-5)
+    const recent = (db.getRecentTurns(12, sessionId) || []).filter((t) => t.speaker === 'user').sort((a, b) => (a.ts || 0) - (b.ts || 0)).slice(-5)
       .map((t) => `- ${String(t.content).slice(0, 400)}`).join('\n');
     // HELD ROSTERS, INJECTED (2026-08-08, the all-pending fill): the store's matching rosters ride
     // IN the prompt — deterministic, not dependent on the model choosing to query. A pending mark
@@ -7675,7 +7675,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (db.getMeta('elastic.episodic_recall') !== 'off' && isEpisodicReference(userMessage) && !isActionable(userMessage) && !_isTopicReturn) {
       const qv = await memoryLib.embed(userMessage).catch(() => null);
       if (qv && userTurnRow && userTurnRow.id) { try { db.setTurnEmbedding(userTurnRow.id, JSON.stringify(qv)); } catch {} }
-      const recentIds = db.getRecentTurns(RECENT_TURN_LIMIT).map(t => t.id);
+      const recentIds = db.getRecentTurns(RECENT_TURN_LIMIT, sessionId).map(t => t.id);
       // userOnly:false — an episode is what BOTH of you said about it; dropQuestions:true so an OLD
       // meta-question ("what did we say about X?") doesn't crowd out the substantive turn (memory.js
       // rationale). minSim 0.48 — a firmer floor than the 0.45 default because the pool is 30× wider
@@ -7731,7 +7731,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (isRecallQuery(userMessage) && !_isTopicReturn) {
       const qv = await memoryLib.embed(userMessage).catch(() => null);
       if (qv && userTurnRow && userTurnRow.id) { try { db.setTurnEmbedding(userTurnRow.id, JSON.stringify(qv)); } catch {} }
-      const recentIds = db.getRecentTurns(RECENT_TURN_LIMIT).map(t => t.id);
+      const recentIds = db.getRecentTurns(RECENT_TURN_LIMIT, sessionId).map(t => t.id);
       const hits = qv ? await memoryLib.retrieveTurns(userMessage, { k: 4, excludeIds: recentIds, qv, userOnly: true, dropQuestions: true }) : [];
       if (hits.length) {
         const lines = hits.map(h => `  • You said: "${(h.content || '').replace(/\s+/g, ' ').slice(0, 240)}"`).join('\n');
@@ -8229,7 +8229,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     const ref = require('./lib/referent');
     if (ref.isElliptical(userMessage)) {
-      const prior = ref.resolveReferent(db.getRecentTurns(30) || []);
+      const prior = ref.resolveReferent(db.getRecentTurns(30, sessionId) || []);
       const block = prior ? ref.buildBlock(prior.text, userName) : null;
       if (block) {
         retrievedKnowledgeBlock = block;   // REPLACES retrieval — the whole point is that it was wrong
@@ -8248,7 +8248,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // 2026-07-26: "that Trump story" → three UNRELATED Trump items instead of the one just discussed).
       // Resolve it to the recent turn that actually raised it and anchor there. Only fires when a turn
       // truly matches the distinctive key — otherwise it falls through and behaves as before.
-      const dem = ref.resolveDemonstrative(userMessage, db.getRecentTurns(30) || []);
+      const dem = ref.resolveDemonstrative(userMessage, db.getRecentTurns(30, sessionId) || []);
       if (dem) {
         const block = ref.buildDemonstrativeBlock(dem.text, dem.refNoun, userName);
         if (block) {
@@ -12034,7 +12034,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // ("[I'll research…]") without emitting a tag, so it never happens. Derive the subject from recent
     // user turns and run a real web lookup now, answering in this flow. Fires before live-info.
     if (!followupFired && noRetrievalTag && curiosityLib.isResearchCommand(userMessage)) {
-      const recentU = (db.getRecentTurns(8) || []).filter(t => t.speaker === 'user').sort((a, b) => (a.ts || 0) - (b.ts || 0)).map(t => t.content);
+      const recentU = (db.getRecentTurns(8, sessionId) || []).filter(t => t.speaker === 'user').sort((a, b) => (a.ts || 0) - (b.ts || 0)).map(t => t.content);
       const subject = curiosityLib.deriveResearchSubject(userMessage, recentU);
       if (subject) {
         followupFired = true;
@@ -12107,7 +12107,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // Recent conversation as context so a DEICTIC promise ("I'll keep adding them THERE") resolves —
       // the artifact (canvas/doc) is usually named a turn or two earlier, not in this say. Her prior
       // says + his recent messages both count (either could have named the canvas).
-      const _promiseCtx = [userMessage, ...((db.getRecentTurns(6) || []).map(t => t && t.content))].filter(Boolean).join(' ');
+      const _promiseCtx = [userMessage, ...((db.getRecentTurns(6, sessionId) || []).map(t => t && t.content))].filter(Boolean).join(' ');
       const dp = require('./lib/leakguard').deliveryPromise(finalSaid || '', { context: _promiseCtx });
       if (dp && dp.topic) {
         const slug = dp.topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
@@ -12534,7 +12534,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
   if (_topHop) { try { pauseMonologue(); pauseHeartbeat(); pauseContinuity(); pauseReflection(); selfDialogue.pause(); } catch {} }
   try {
     const userName = db.getMeta('user_name') || 'them';
-    const recentTurns = db.getRecentTurns(8);
+    const recentTurns = db.getRecentTurns(8, sessionId);
     let awareness = buildAwarenessBlock({
       chosenName: db.getMeta('chosen_name'),
       sessionStartedAt: currentSessionStartedAt,
@@ -18852,7 +18852,7 @@ async function runActionStep(io, depth = 0) {
       if (directive) {
         const awareness = buildAwarenessBlock({ chosenName: db.getMeta('chosen_name'), sessionStartedAt: currentSessionStartedAt, cumulativeMs: db.getCumulativeSessionTime() });
         const messages = buildChatPrompt({
-          userName, recentReflections: [], recentTurns: db.getRecentTurns(4), recentMonologue: [],
+          userName, recentReflections: [], recentTurns: db.getRecentTurns(4, currentSessionId), recentMonologue: [],
           recentReadings: [], heldCommitments: [], openThreads: [], awareness,
           protocols: db.getActiveProtocols(), browserBlock: emailLib.buildPromptBlock(),
           pendingInbounds: [], retrievedKnowledgeBlock: null,
