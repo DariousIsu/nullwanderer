@@ -276,6 +276,11 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
     + 'better than a claim that cannot be checked.');
   if (mustCite) lines.push('• Cite the source for factual claims — the recipe, document, or URL it came from.');
   lines.push('• Answer the question that was asked. If you also need to raise something else, answer first.');
+  // PRONOUNS (2026-08-19 audit): a brief on a legislator guessed "her" from the name Tracy Hester. A
+  // guessed gender is a fabricated fact — same family as the no-fabricate rule above, stated for people.
+  lines.push('• PRONOUNS: when you do not KNOW a person\'s gender, use they/them — never infer it from '
+    + 'their name. A name is not a pronoun, and a wrong guess misgenders a real person; use he/him or '
+    + 'she/her only when their own usage is actually established (they said so, or a source records it).');
   // ⭐ REFERENT. The awareness block near the top of this package names whatever background research
   // is running, and that subject rotates every few minutes. Live 2026-07-20, mid-conversation about
   // the Turing test: "have there been confirmed passes?" → "16 confirmed passes for the governing
