@@ -247,6 +247,7 @@ const smokes = [
   'smoke_canvas_route.js',
   'smoke_leakguard.js',
   'smoke_research.js',
+  'smoke_topical_matrix.js',   // bounded multi-target (target × aspect) coverage matrix — the anti-china-2026 hollow-deliverable cure
   'smoke_research_enrich.js',
   'smoke_known.js',
   'smoke_calendar.js',

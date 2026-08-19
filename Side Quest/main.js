@@ -10020,7 +10020,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             const _shape = (intakeRoute && intakeRoute.shape) || null;
             const _anchor = (intakeRoute && intakeRoute.anchor) ? String(intakeRoute.anchor).trim() : '';
             let _bounded, _intended;
-            if (_shape) {
+            // ENUMERATED MULTI-TARGET (2026-08-19): the request named a LIST of ≥2 things to work EACH —
+            // "review … across Utah, Arizona, Texas, …". intake already decomposed them into intendedTargets;
+            // honor that as a BOUNDED per-target run REGARDLESS of shape/kind. Without this a topical review
+            // dropped the list (shape is null for topical, so the profile-only gate below left _intended=[]),
+            // so the run had no per-target dimension and quit after ~4 shallow national passes with the states
+            // gone (the anti-china-2026 hollow deliverable). A single named subject (<2) still routes normally.
+            const _seedList = (assignmentSeed && Array.isArray(assignmentSeed.intendedTargets)) ? assignmentSeed.intendedTargets.filter(Boolean) : [];
+            if (_seedList.length >= 2) {
+              _bounded = true; _intended = _seedList;
+              console.log(`[focus] #${r.focus.id} ENUMERATED ${_seedList.length}-target run → scope=bounded: ${_seedList.slice(0, 8).join(', ')}${_seedList.length > 8 ? '…' : ''}`);
+            } else if (_shape) {
               _bounded = _shape === 'profile';
               _intended = _bounded
                 ? ((assignmentSeed && assignmentSeed.intendedTargets && assignmentSeed.intendedTargets.length) ? assignmentSeed.intendedTargets : [_classifyTarget].filter(Boolean))
@@ -18553,6 +18563,22 @@ async function runTopicalResearchPass(focus) {
     _hostile = (pl && pl.hostile_reader) ? String(pl.hostile_reader) : '';
   } catch {}
   if (!planFacets.length) planFacets = ['Current state & key developments', 'Drivers & causes', 'Implications & what to watch', 'Sources & evidence'];
+  // BOUNDED MULTI-TARGET (2026-08-19): an enumerated "review X across Utah, Arizona, …" walks the
+  // (target × aspect) MATRIX — every aspect FOR every named target — not one national pass per aspect
+  // (the anti-china-2026 hollow deliverable: 7 states dropped, ~4 shallow passes, then "it's done").
+  // Flattening target×aspect into composite facets reuses the whole facet-walk below UNCHANGED: the
+  // heading becomes "## Utah — Legislative activity", the pass is state-scoped by the facet name, and the
+  // run only completes once every state's every aspect is covered.
+  let _isMatrix = false;
+  try {
+    const _mtScope = (db.getMeta(`focus.${focus.id}.scope`) || 'open').trim();
+    const _mtTargets = JSON.parse(db.getMeta(`focus.${focus.id}.intended_targets`) || '[]');
+    if (_mtScope === 'bounded' && Array.isArray(_mtTargets) && _mtTargets.length >= 2 && planFacets.length) {
+      planFacets = rs.topicalMatrix(_mtTargets, planFacets);
+      _isMatrix = true;
+      console.log(`[topical] #${focus.id} BOUNDED ${_mtTargets.length}-target run → ${planFacets.length}-unit matrix (${_mtTargets.length} targets × aspects)`);
+    }
+  } catch (e) { console.error('[topical] matrix expansion failed (falls back to facet-only):', e.message); }
   let covered = []; try { covered = JSON.parse(db.getMeta(`focus.${focus.id}.topical_covered`) || '[]'); } catch {}
 
   let progressed = false, done = false, note = '', sig = '';
@@ -18637,7 +18663,7 @@ Reply ONLY: {"verdict": "survives"|"refuted", "attack": "<the strongest single a
     catch (e) { console.error('[topical] append failed:', e.message); }
     // Mirror the section onto the Canvas as a live-growing block, and check the aspect off the TODO.
     try { const blk = require('./studio/canvas_emit').orgSectionBlock(section); await canvasEmit({ focusId: focus.id, title: goal, tabMode: 'RESEARCH', blockType: blk.blockType, data: blk.data }); } catch {}
-    covered.push(nextFacet); try { db.setMeta(`focus.${focus.id}.topical_covered`, JSON.stringify(covered.slice(-40))); } catch {}
+    covered.push(nextFacet); try { db.setMeta(`focus.${focus.id}.topical_covered`, JSON.stringify(covered.slice(-200))); } catch {}
     // ⭐ TOPICAL ADAPTATION (the missing organ, 2026-08-06): the living-plan loop lived ONLY in the
     // entity lane — a briefing covered its planned aspects and never chased what it learned. Now a
     // pass's OPEN: questions become NEW ASPECTS (the run covers them before it may complete — the
@@ -18645,7 +18671,7 @@ Reply ONLY: {"verdict": "survives"|"refuted", "attack": "<the strongest single a
     // Same gates as the entity site: user lanes always; beat-origin only behind _adaptiveBgOn();
     // beat steering notes stay log-only via _surfaceSteeringNote's silence rule.
     const _isBeatTopical = !!(() => { try { return (db.getMeta(`focus.${focus.id}.beat`) || '').trim(); } catch { return ''; } })();
-    if (section && (!_isBeatTopical || _adaptiveBgOn())) {
+    if (section && (!_isBeatTopical || _adaptiveBgOn()) && !_isMatrix) {   // matrix runs don't grow aspects per-tick — that would multiply by every target
       try {
         const rc = require('./lib/run_closure');
         const oq = rs.parseOpenQuestions(section);

@@ -196,6 +196,19 @@ function buildTopicalPrompt({ goal = '', facet = '', covered = [], guidance = ''
   return `You are researching a SUBJECT for Lucas to produce a BRIEFING. You are NOT profiling organizations and NOT gathering anyone's personal contact details (emails/phones) — this is a subject brief.\n\nSUBJECT / TASK: ${goal}${g}${done}\n\nTHIS PASS: research this ONE aspect of the subject and nothing else — "${facet}". Use web_search / browser_read / echo / recall. Ground EVERY claim in what the tools actually return, name the source inline, and never invent. Write 1-3 tight, substantive paragraphs on this aspect (do NOT compile a leadership roster or chase emails/phones unless the aspect itself is explicitly about contacts).\nIf this aspect asks for a NUMBER or PROBABILITY (a total, a count, a percentage, a likelihood): COMPUTE it, never estimate it in prose — call analyze_data (python over what we have banked; import zoe_data) for counts/cross-tabs/totals AND for probability estimates (code the base rate + assumptions so the estimate is auditable); forecast_query answers ELECTORAL odds only (races/chambers). If the data needed is not banked, state exactly what is missing instead of inventing a figure.\nBefore the final line, add up to 2 lines "OPEN: <question>" for genuinely unresolved questions this aspect surfaced (omit when none) — a real question you would chase next, not filler.\nIf this aspect is already well covered by what we hold, reply with exactly COVERED.\nEnd with a final line: ASPECT: ${facet}`;
 }
 
+// BOUNDED MULTI-TARGET matrix (2026-08-19): flatten each (target × aspect) into ONE composite facet so
+// the existing topical facet-walk covers every aspect FOR every named target — heading "## Utah —
+// Legislative activity", pass state-scoped by the facet name, run complete only when every state's every
+// aspect is covered. Target-outer so each target's sections land together. Pure; driver walks one/tick.
+// The cure for the anti-china-2026 hollow deliverable: 7 states enumerated, dropped, ~4 shallow passes.
+function topicalMatrix(targets = [], aspects = []) {
+  const tg = (Array.isArray(targets) ? targets : []).map((t) => String(t || '').trim()).filter(Boolean);
+  const fc = (Array.isArray(aspects) ? aspects : []).map((f) => String(f || '').trim()).filter(Boolean);
+  const out = [];
+  for (const t of tg) for (const f of fc) out.push(`${t} — ${f}`);
+  return out;
+}
+
 // New-target pass: pick ONE not-yet-done org and establish an overview (deepened over later passes).
 // COVERAGE LINE — the run's denominator, when it is known. Without it the pass has no idea whether
 // it is 9-of-64 or done, which is how a partial run came to be reported as "the complete dossier".
@@ -487,7 +500,7 @@ module.exports = {
   parsePass, newContentChars, decideAdvance, facetsSummary,
   buildUnderstandTargetPrompt, parseOpenQuestions,
   isClarification, buildGuidanceBlock, isStatusRequest,
-  buildNewTargetPrompt, buildTopicalPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, targetIsCovered, allTargetsCovered, isConcreteTarget, coverageLine,
+  buildNewTargetPrompt, buildTopicalPrompt, topicalMatrix, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, targetIsCovered, allTargetsCovered, isConcreteTarget, coverageLine,
   facetToolset, buildCoveragePlan, searchSignature,
   pickEnrichTarget, facetLabel, buildEnrichPrompt, buildOrganizeEnrichPrompt,
   buildWebLanePrompt, buildDeepLanePrompt, buildMergeLanesPrompt,
