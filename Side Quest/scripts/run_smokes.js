@@ -198,6 +198,9 @@ const smokes = [
   'smoke_preferences.js',
   'smoke_personal_facts.js',
   'smoke_metacognition.js',
+  // the canvas anti-fab CONTENT seam (2026-08-18): lastWriteTs keys on BLOCKS, so a bare open_tab can't
+  // silence the "…on your canvas" gate; a real block still registers (no false scold). lib/canvas_docs.
+  'smoke_canvas_antifab_seam.js',
   'smoke_verify_claim.js',
   'smoke_delivery.js',
   'smoke_spreadsheet_out.js',

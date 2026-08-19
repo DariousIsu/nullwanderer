@@ -141,10 +141,15 @@ function clear() {
   return _db().prepare(`DELETE FROM docs`).run().changes;
 }
 
-// Most-recent canvas write timestamp (ms). recordBlock bumps docs.updated_at, so MAX reflects any block
-// write. Cheap single-row query — used by the anti-fabrication reply gate to check "did a canvas write
-// actually happen this turn?" before trusting a reply's "…on your canvas" claim. 0 if none / on error.
-function lastWriteTs() { try { const r = _db().prepare('SELECT MAX(updated_at) AS m FROM docs').get(); return (r && r.m) || 0; } catch { return 0; } }
+// Most-recent canvas CONTENT-write timestamp (ms) — MAX over BLOCKS, not docs. A block is real content; a
+// bare saga_canvas_open_tab bumps docs.updated_at with NO block (recordTab), so keying on docs let an
+// opened-but-empty tab — or one whose add_block lands late/fails (see main._mirrorCanvasWrite, "opens the
+// tab in the reply, then adds blocks as the chain continues") — read as "content landed" and SILENCED the
+// anti-fab reply gate on an ungrounded "…on your canvas" claim: canvasWrites=0 (blocks) while the gate
+// stayed quiet (docs). Measured 2026-08-18. recordBlock bumps BOTH tables, so a real delivery still
+// registers. Used by the anti-fab gate + delivery-promise booking to ask "did content actually land this
+// turn?". 0 if no blocks / on error.
+function lastWriteTs() { try { const r = _db().prepare('SELECT MAX(updated_at) AS m FROM blocks').get(); return (r && r.m) || 0; } catch { return 0; } }
 
 // The TITLES + body text of every doc written since `sinceTs` (each doc's title + ALL its blocks) — the
 // evidence for the anti-fab CONTENT check ("did the landed doc actually match the claim, or was a wrong doc
