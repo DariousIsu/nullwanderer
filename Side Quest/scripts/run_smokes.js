@@ -549,6 +549,11 @@ const smokes = [
   // a parrot — this is a goals-blocker, not polish.
   'smoke_replay_gate.js',
   'smoke_session_invariant.js',   // the model-visible-means-logged invariant (answer-orphaning structural fix, 2026-08-15)
+  // ── the cross-session context-bleed guard (2026-08-19): getRecentTurns(n, sessionId) scopes the
+  // reply window to ONE conversation — the cure for the s1188→s1195 bleed. Covers the whole KIND
+  // (referent/demonstrative, recall excludeIds, canvas orders, promise/followup ctx; db10345 + the
+  // 3eac230 sweep). Global stays for the affect/telemetry lanes. Isolated temp DB, no model/network.
+  'smoke_recent_turns_session_scope.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks
