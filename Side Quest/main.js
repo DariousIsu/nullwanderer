@@ -1792,6 +1792,11 @@ app.whenReady().then(() => {
   try { createCompanionWindow(); } catch (e) { console.error('[companion] spawn failed:', e.message); }   // floating desktop presence (gated on her .vrm)
   try { ensureYtPlayerServer(); } catch {}   // warm the clean-player server so the Monitors videos load fast
   try { ensureComfyUI(); } catch (e) { console.error('[comfyui] ensure failed:', e.message); }   // local image-gen server (SDXL/FLUX on the 7900 XT)
+  // SKULD AUTONOMY (2026-08-19, full restore per Lucas). The saga periodic scheduler + jobs worker
+  // went dark ~08-15 when the documented launcher (skuld-server.cjs) disappeared and nothing replaced
+  // it — so heartbeat reapers, 6h backups, integrity checks, calendar sync AND pass/dedup dispatch all
+  // stopped. Spawn both ~20s after boot so the engine + DBs settle first. See ensureSkuldStack below.
+  setTimeout(() => { try { ensureSkuldStack(); } catch (e) { console.error('[skuld] ensure failed:', e.message); } }, 20 * 1000);
   // Zoe's Canvas auto-spawns AFTER the engine attaches (see the engine .finally above) so its first
   // load finds Echo connected — staggered behind the server, no "not connected" flash.
 
@@ -3002,6 +3007,7 @@ app.on('window-all-closed', async () => {
   if (forecastLoopTimeout) { clearTimeout(forecastLoopTimeout); forecastLoopTimeout = null; }
   try { require('./lib/news_poll').stop(); } catch {}
   try { stopComfyUI(); } catch {}
+  try { stopSkuldStack(); } catch {}
   try { newsVideoLane && newsVideoLane.stop(); } catch {}
   try { stopScribeHeartbeat(); } catch {}
   try { actionLoop.abort(); } catch {}
@@ -3367,6 +3373,45 @@ function ensureComfyUI() {
   } catch (e) { console.error('[comfyui] spawn failed:', e.message); comfyProc = null; }
 }
 function stopComfyUI() { comfyStopping = true; try { if (comfyProc && comfyProc.pid) { require('child_process').spawn('taskkill', ['/PID', String(comfyProc.pid), '/T', '/F'], { windowsHide: true }); } } catch {} comfyProc = null; }
+
+// SKULD AUTONOMY STACK (2026-08-19). Two app-owned Echo children that together run the background
+// autonomy. (1) the saga.db PERIODIC SCHEDULER (huey consumer on echo.queue.huey) — fires the 5-min
+// heartbeat (agent/pass-run reapers + txtai backfill + bridge staleness), pass_runner_tick, calendar
+// sync, refresh, hourly cultivator/fleet, daily integrity check, 6h backups, per-minute user-jobs; it
+// only ENQUEUES passes. (2) the jobs.db WORKER (nx-echo worker) — EXECUTES the enqueued run_pass /
+// enrich_entity / transcribe / delegated-agent jobs (this is where the dedup adjudication + link
+// grounding actually run and drain the resolution_proposals/link_candidates queues). Both are children
+// of the electron root, so a reboot's `taskkill /T` reaps them and the next boot respawns them —
+// unlike the vanished skuld-server.cjs. Per-consumer restart on crash. Disable with ZOE_SKULD_ENABLED=0.
+let skuldProcs = {}, skuldStopping = false;
+const SKULD_SPECS = [
+  { tag: 'scheduler', args: ['-m', 'huey.bin.huey_consumer', 'echo.queue.huey', '-w', '4', '-k', 'thread'], log: 'data/skuld_scheduler.log' },
+  { tag: 'worker',    args: ['-m', 'echo.main', 'worker', '-w', '4'],                                        log: 'data/skuld_worker.log' },
+];
+function ensureSkuldStack() {
+  if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_SKULD_ENABLED || '1').trim())) { console.log('[skuld] disabled (ZOE_SKULD_ENABLED=0)'); return; }
+  const fs = require('fs');   // fs is not module-level in main.js (required inline per-callsite)
+  const cwd = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
+  const py = process.env.ECHO_PYTHON || path.join(cwd, '.venv', 'Scripts', 'python.exe');
+  if (!fs.existsSync(py)) { console.warn(`[skuld] Echo python not found at ${py} — autonomy stack NOT started`); return; }
+  const { spawn } = require('child_process');
+  for (const s of SKULD_SPECS) {
+    if (skuldProcs[s.tag]) continue;   // already running — leave it
+    try {
+      const out = fs.openSync(path.join(__dirname, s.log), 'a');
+      const proc = spawn(py, s.args, { cwd, env: process.env, stdio: ['ignore', out, out], windowsHide: true });
+      skuldProcs[s.tag] = proc;
+      console.log(`[skuld] spawned ${s.tag} (pid ${proc.pid}) → ${s.log}`);
+      proc.on('exit', (code) => {
+        delete skuldProcs[s.tag];
+        if (skuldStopping) return;
+        console.warn(`[skuld] ${s.tag} exited (code ${code}) — restarting in 5s`);
+        setTimeout(() => { try { ensureSkuldStack(); } catch (e) { console.error('[skuld] restart failed:', e.message); } }, 5000);
+      });
+    } catch (e) { console.error(`[skuld] spawn ${s.tag} failed:`, e.message); }
+  }
+}
+function stopSkuldStack() { skuldStopping = true; for (const tag of Object.keys(skuldProcs)) { const p = skuldProcs[tag]; try { if (p && p.pid) require('child_process').spawn('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true }); } catch {} } skuldProcs = {}; }
 
 // FULL-INGESTION gate: launch a YouTube video in its OWN dedicated canvas pane with AUDIO ON, so the
 // soundtrack can be transcribed (for videos/lives without CCs). Opens/focuses the Canvas + tells the
