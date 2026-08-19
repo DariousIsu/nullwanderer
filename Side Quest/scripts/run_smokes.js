@@ -201,6 +201,9 @@ const smokes = [
   // the canvas anti-fab CONTENT seam (2026-08-18): lastWriteTs keys on BLOCKS, so a bare open_tab can't
   // silence the "…on your canvas" gate; a real block still registers (no false scold). lib/canvas_docs.
   'smoke_canvas_antifab_seam.js',
+  // the enrichment-job orphan reaper (2026-08-19 W4): a row stuck 'running' past 2h (a reboot skips
+  // EnrichmentJob.__exit__) → 'failed' + marker; recent/complete/failed/null spared; fail-soft. lib/enrichment_reaper.
+  'smoke_enrichment_reaper.js',
   'smoke_verify_claim.js',
   'smoke_delivery.js',
   'smoke_spreadsheet_out.js',

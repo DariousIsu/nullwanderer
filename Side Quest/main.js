@@ -1629,6 +1629,20 @@ app.whenReady().then(() => {
   // quit). We only ever kill what WE spawned. The suit (her MCP tool surface) attaches once the
   // engine is healthy, and the 60s heartbeat re-attaches if the connection ever drops.
   const ECHO_CWD = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
+  // ENRICHMENT ORPHAN REAPER (2026-08-19 W4). Echo's enrichment_job goes 'running' on EnrichmentJob
+  // __enter__ and only advances on __exit__, so a Side Quest reboot tree-kills the Echo stack mid-dive
+  // and orphans the row 'running' forever (~15k had piled up). Echo has the sibling reaper in its saga
+  // heartbeat, but that runs in huey_consumer, which is DARK in this deployment — so SQ owns it (SQ's
+  // reboots are what orphan them). Fail-soft; first pass ~90s after boot (clears any accumulated since
+  // the last run), then every 15 min. Marks >2h 'running' → 'failed'. See lib/enrichment_reaper.
+  {
+    const _electoralDb = path.join(ECHO_CWD, 'data', 'foundations', 'electoral.db');
+    // firstPass logs even on 0 (a boot liveness signal — so "ran, nothing stale" is distinguishable
+    // from "never armed"); steady-state ticks stay quiet unless they actually reap something.
+    const _reapEjobs = (firstPass) => { try { const n = require('./lib/enrichment_reaper').reapOrphanedEnrichmentJobs({ dbPath: _electoralDb }); if (n || firstPass) console.log(`[enrichment-reaper] ${firstPass ? 'armed — first pass ' : ''}reaped ${n} orphaned enrichment_job(s)`); } catch (e) { console.error('[enrichment-reaper] failed:', e && e.message); } };
+    setTimeout(() => _reapEjobs(true), 90 * 1000).unref?.();
+    setInterval(() => _reapEjobs(false), 15 * 60 * 1000).unref?.();
+  }
   const echoCfg = readEchoConfig(ECHO_CWD);
   echoHttp = { base: `http://${echoCfg.host}:${echoCfg.port}`, token: echoCfg.token };   // for GET /canvas
   echoSuit = echoSuitLib.createSuit({ client: require('./lib/echo').fromEnv({ url: echoCfg.url, token: echoCfg.token }) });
