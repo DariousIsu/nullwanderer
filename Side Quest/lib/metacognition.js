@@ -49,6 +49,12 @@ const SELF_INNER_RE = new RegExp(
   ')\\b', 'i');
 const SOCIAL_RE = /\b(how are you|how'?s it going|how was your|good morning|good night|goodnight|thanks?|thank you|hello\b|hey\b|^hi\b|love you|miss you|you ok|you okay|you there)/i;
 const CREATIVE_CMD_RE = /\b(write|draft|compose|summari[sz]e|rewrite|edit|translate|generate|make me|create|brainstorm|outline|explain|describe how|walk me through|help me|give me a)\b/i;
+// ADVICE / SUGGESTION / SUBJECTIVE-QUALITY (Lucas 2026-08-18 over-routing finding): a soft "what's a good
+// way to X", "what makes X feel/taste Y", "any tips for …" is answerable from her own knowledge — it is NOT
+// a factual-external lookup, so it shouldn't spin the operator or fire a web search. Kept TIGHT: sensory
+// "makes X feel/taste/look Y", never causal "what makes X happen" (that stays factual). Runs AFTER the
+// currency guard below, so a live-news object still wins.
+const ADVICE_RE = /\b(?:good|great|nice|easy|best|simple|effective|better|healthy)\s+ways?\s+to\b|\bmakes\s+[\w'’\-\s]{1,40}?\b(?:feel|feels|taste|tastes|look|looks|sound|sounds|smell|smells|cozy|comfortable|comfy|calm|calmer|relaxing|peaceful|inviting|welcoming)\b|\b(?:any|some|got\s+any)\s+(?:tips|advice|suggestions|ideas|recommendations|pointers)\b|\btips\s+(?:for|on)\b|\badvice\s+(?:for|on|about)\b/i;
 const FACTUAL_Q_RE = /\b(who|what|what'?s|when|when'?s|where|where'?s|which|whose|how many|how much|how old|how long|did|does|do|is|are|was|were|has|have|had|tell me about|remind me|look up)\b/i;
 
 // A retrieval ask names its OBJECT even when phrased as a command — "Just give me the latest new
@@ -72,6 +78,7 @@ function classifyClaimType(text) {
   if (OPINION_RE.test(s) || SELF_INNER_RE.test(s) || SOCIAL_RE.test(s)) return 'other';
   if (CURRENCY_OBJECT_RE.test(s)) return 'factual';   // the object demands current facts, whatever the mood
   if (CREATIVE_CMD_RE.test(s)) return 'other';
+  if (ADVICE_RE.test(s)) return 'other';   // advice / suggestion / subjective-quality → her own knowledge, not a lookup
   const looksFactual = s.includes('?') || FACTUAL_Q_RE.test(s);
   return looksFactual ? 'factual' : 'other';
 }

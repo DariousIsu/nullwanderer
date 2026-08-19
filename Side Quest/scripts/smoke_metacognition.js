@@ -30,6 +30,18 @@ ok(m.classifyClaimType('summarize the news on Iran') === 'factual', 'currency ob
 ok(m.classifyClaimType('write me a short poem about the sea') === 'other', 'creative stays creative when nothing current is asked for');
 ok(m.classifyClaimType('what do you think about the news coverage of you AIs') === 'other', 'opinion still outranks currency — her take is hers');
 
+// --- advice / suggestion / subjective-quality → other (Lucas 2026-08-18 over-routing finding: soft
+// "what's a good way to / what makes X feel Y / any tips for" questions were routing to lookup and
+// spinning the operator/web-search for knowledge she already holds) ---
+ok(m.classifyClaimType('What is one small thing that makes a workspace feel calm?') === 'other', 'subjective-quality "makes X feel Y" → other');
+ok(m.classifyClaimType("What's a good way to ease into a morning?") === 'other', 'advice "good way to" → other');
+ok(m.classifyClaimType('What makes a cup of coffee taste good?') === 'other', 'subjective-quality "makes X taste …" → other');
+ok(m.classifyClaimType('Any tips for staying focused while working from home?') === 'other', 'advice "any tips for" → other');
+// controls — the SAFE direction: real factual questions STILL route factual (no under-routing regression)
+ok(m.classifyClaimType('What is the capital of France?') === 'factual', 'a real fact stays factual');
+ok(m.classifyClaimType("What are Bill Cassidy's two most recent bills?") === 'factual', 'external lookup stays factual');
+ok(m.classifyClaimType('what makes the stock market go up?') === 'factual', 'CAUSAL "what makes X happen" (no sensory word) stays factual — the net is tight');
+
 // --- assessGrounding: rich / thin / none ---
 ok(m.assessGrounding({ knowledgeRows: [{ source: 'verified_fact', content: 'x' }] }).level === 'rich', 'a verified_fact → rich');
 ok(m.assessGrounding({ knowledgeRows: [{ source: 'personal_fact', content: 'Alice' }] }).level === 'rich', 'a personal_fact → rich');
