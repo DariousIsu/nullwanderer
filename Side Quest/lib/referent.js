@@ -48,8 +48,11 @@ const META_WORDS = new Set([
   // quantity / degree
   'full', 'complete', 'whole', 'entire', 'all', 'more', 'less', 'short', 'shorter', 'long', 'longer',
   'deep', 'deeper', 'detailed', 'quick', 'brief', 'extra', 'further', 'additional', 'rest', 'everything',
-  // assent / direction without a subject
-  'yes', 'yeah', 'yep', 'yup', 'sure', 'ok', 'okay', 'fine', 'good', 'great', 'perfect', 'nice', 'cool',
+  // assent / direction without a subject ('yea'/'yah' added 2026-08-19: without them "yea more details"
+  // read "yea" as a SUBJECT word → non-elliptical → the referent anchor never fired and the reply
+  // tangented on "yea, the parliamentary yes" instead of elaborating on the topic in hand. brainstorm.js
+  // isAffirmation already knew 'yea'/'yah'; this list had simply drifted from that vocabulary.)
+  'yes', 'yea', 'yeah', 'yah', 'yep', 'yup', 'sure', 'ok', 'okay', 'fine', 'good', 'great', 'perfect', 'nice', 'cool',
   'please', 'thanks', 'thank', 'you', 'go', 'ahead', 'do', 'it', 'that', 'this', 'those', 'these', 'one',
   'them', 'they', 'same', 'again', 'also', 'too', 'as', 'well', 'now', 'next', 'then', 'still', 'keep',
   'going', 'continue', 'proceed', 'carry', 'on', 'sounds', 'lets', 'let', 'us', 'we', 'i', 'me', 'my',

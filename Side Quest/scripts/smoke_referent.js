@@ -20,6 +20,14 @@ for (const s of ['yes', 'yes please', 'go ahead', 'do that', 'the full version',
   ok(r.isElliptical(s) === true, `elliptical: "${s}"`);
 }
 
+// ── "YEA"/"YAH"-LED follow-ups (2026-08-19 fix) — the assent variants brainstorm.js already knew but
+// this META list had dropped. Without them "yea more details" read "yea" as a SUBJECT → non-elliptical
+// → the referent anchor never fired and the reply tangented on "yea, the parliamentary yes". The CLASS,
+// not the one triggering phrase ([[retest-kind-not-phrase]]).
+for (const s of ['yea', 'yah', 'yea more details', 'yah more', 'yea go on', 'yea the full version', 'yea, more please']) {
+  ok(r.isElliptical(s) === true, `elliptical (yea/yah-led): "${s}"`);
+}
+
 // ── CRITICAL NEGATIVES: one distinctive word is enough to carry a subject ──────────────────────
 for (const s of [
   "Full research brief on China's World AI announcements",
@@ -28,6 +36,7 @@ for (const s of [
   'more detail on Calcasieu',
   'yes, the Virginia one',
   'go ahead with the school boards',
+  'yea the arms race is wild',   // 'yea' + a REAL new topic — the assent variant must not swallow a genuine subject
 ]) {
   ok(r.isElliptical(s) === false, `CRITICAL: carries a subject, must NOT be elided: "${s}"`);
 }
@@ -59,6 +68,14 @@ ok(r.subjectWords('more on Calcasieu').includes('calcasieu'), 'a proper noun sur
   ]);
   const got2 = r.resolveReferent(chained);
   ok(got2 && /World AI/.test(got2.text), 'a chain of elliptical turns still resolves to the real subject');
+
+  // "yea more details" (2026-08-19) — a yea-led follow-up still lands on the real subject, not the shrug.
+  const yeaChain = turns.concat([
+    { speaker: 'ai_said', content: 'Here it is.' },
+    { speaker: 'user', content: 'yea more details' },
+  ]);
+  const got3 = r.resolveReferent(yeaChain);
+  ok(got3 && /World AI/.test(got3.text), 'a "yea more details" follow-up resolves to the real subject, not "yea"');
 
   ok(r.resolveReferent([]) === null, 'no turns → null, never throws');
   ok(r.resolveReferent([{ speaker: 'user', content: 'yes' }]) === null, 'only elliptical turns → null (nothing to inherit)');
