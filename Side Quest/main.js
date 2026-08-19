@@ -12642,7 +12642,25 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
         const _corr = _mc.artifactCorrection(_av.violations);
         if (_corr) { console.warn(`[antifab] followup claimed an artifact that didn't land → corrected: ${_av.violations.map((v) => v.kind + ':' + v.claim).join(', ').slice(0, 160)}`); sayOut += _corr; }
       }
+      // WORK-STATE CLAIMS on the followup path (run-2, 2026-08-19): the F2 false-verification
+      // ("Records indicate … still pending … by tomorrow morning") was a FOLLOWUP say — this is
+      // exactly the site that fabricated. Evidence = the tool result that prompted this followup.
+      const _wsLib = require('./lib/work_state');
+      const _wsv = _mc.verifyWorkStateClaims(sayOut, {
+        gatherRanThisTurn: () => { if (!_fuAnchor) return true; try { return require('./lib/echo_suit').lastGatherTs() >= _fuAnchor; } catch { return true; } },
+        pendingRecordFor: (anchors) => { try { return _wsLib.pendingRecordFor(anchors, _wsLib.snapshot()); } catch { return true; } },
+        evidence: String(resultText || ''),
+      });
+      if (!_wsv.ok) {
+        const _wcorr = _mc.workStateCorrection(_wsv.violations);
+        if (_wcorr) { console.warn(`[antifab] followup work-state claim unbacked → corrected: ${_wsv.violations.map((v) => v.kind + ':' + v.claim).join(', ').slice(0, 160)}`); sayOut += _wcorr; }
+      }
     } catch (e) { console.error('[antifab] followup verification failed:', e.message); }
+    // SPINE 3 PROMISE BINDING on the followup path (run-2, 2026-08-19): every dangling "pulling it
+    // now / I'll compose the sheet and land it" tonight was a FOLLOWUP say — _bookDeliveryPromises
+    // only guarded the main-reply site (11295), so followup promises died unbooked. Same booking,
+    // same kept-check semantics, anchored on the user turn. Fully fail-soft.
+    try { _bookDeliveryPromises(sayOut, { sessionId, turnStartTs: lastUserTurnStartTs || 0 }); } catch {}
     // Deliver her words (the visible step — "I'll run db_query…" or the final answer). May be
     // empty when she emitted only a tag — that's fine; the Echo chain below still runs.
     // SUBSTANCE, not truthiness. "…" is truthy, and that is exactly what Lucas got for a reply on
@@ -16779,6 +16797,24 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
       if (!pr.ok) {
         const pcorr = _mc.verificationCorrection(pr.violations);
         if (pcorr) { console.warn(`[antifab] asserted a future outcome as certain → corrected: ${pr.violations.map((v) => v.claim).join(' | ').slice(0, 160)}`); out += pcorr; }
+      }
+    } catch {}
+    // (6) WORK-STATE CLAIMS (run-2, 2026-08-19 — the say-do decoupling gate): a "records indicate…"
+    // attribution must be backed by what this turn's reads actually returned, and a "still pending /
+    // due by…" status about HER OWN deliverable must have a measured record (open promise / focus)
+    // behind it. The run-2 F2 case ("Records indicate the Applied Digital briefing is still pending
+    // and must be completed by tomorrow morning" — shipped 5 days earlier, tools returned nothing)
+    // is caught by BOTH kinds. Probes fail OPEN; a read hiccup never manufactures a false scold.
+    try {
+      const ws = require('./lib/work_state');
+      const wsv = _mc.verifyWorkStateClaims(out, {
+        gatherRanThisTurn: () => { if (!turnStartTs) return true; try { return require('./lib/echo_suit').lastGatherTs() >= turnStartTs; } catch { return true; } },
+        pendingRecordFor: (anchors) => { try { return ws.pendingRecordFor(anchors, ws.snapshot()); } catch { return true; } },
+        evidence,
+      });
+      if (!wsv.ok) {
+        const wcorr = _mc.workStateCorrection(wsv.violations);
+        if (wcorr) { console.warn(`[antifab] work-state claim unbacked → corrected: ${wsv.violations.map((v) => v.kind + ':' + v.claim).join(', ').slice(0, 180)}`); out += wcorr; }
       }
     } catch {}
     return out;

@@ -12,14 +12,19 @@
  * to?") and already-completed claims (the anti-fab gate's job) are excluded. Pure + injectable — no db, no
  * cloud. Run: node scripts/smoke_delivery.js */
 
-// She is COMMITTING to do it (not offering, not asking). Future intent, first person.
-const _PROMISE_LEAD = /\b(?:i'?ll|i will|i'?m going to|i'?m gonna|let me|going to|i'?ll go ahead and)\b/i;
+// She is COMMITTING to do it (not offering, not asking). Future intent, first person — PLUS the
+// present-progressive commitment ("I'm pulling it now", "I'm composing the sheet"), which run-2
+// (2026-08-19) showed dangling unbooked: it asserts work-in-motion and is exactly as much a debt as
+// "I'll pull it". Progressive form requires a work-verb so "I'm hoping/thinking" never leads.
+const _PROMISE_LEAD = /\b(?:i'?ll|i will|i'?m going to|i'?m gonna|let me|going to|i'?ll go ahead and|i'?m (?:now |currently )?(?:pull|grabb|fetch|compil|compos|build|check|gather|runn|quer|writ|draft|prepar)\w*ing)\b/i;
 // …but an OFFER or a question is not a debt — leave it open. "let me know" is HER asking THEM.
 const _OFFER_RE = /\b(?:want me to|would you like|do you want|should i\b|shall i\b|if you'?d like|let me know|happy to|i can (?:also )?(?:help|do that)\b)|\?\s*$/i;
-// the ACT of producing a deliverable
-const _DELIVER_VERB = /\b(?:pull(?:ing)?(?: together| up)?|put(?:ting)? together|compil\w+|assembl\w+|build\w*|draft\w*|writ\w*|prepar\w+|generat\w+|creat\w+|send\w*|export\w*|deliver\w*|gather\w+|collect\w+|get you|grab)\b/i;
-// …a THING to hand over. Artifact-shaped, or an explicit "that/it/them for you".
-const _DELIVERABLE_OBJ = /\b(?:roster|list|spreadsheet|report|file|document|dossier|brief(?:ing)?|summary|table|memo|deck|csv|xlsx?|docx?|pdf|the e-?mails?|the contacts?|the numbers?|the data|the breakdown|the write-?up)\b|\b(?:that|it|them|those|this) for you\b/i;
+// the ACT of producing a deliverable (compose/land added 2026-08-19 — "I'll compose the sheet and
+// land it at notes/…" dangled unbooked in run 2)
+const _DELIVER_VERB = /\b(?:pull(?:ing)?(?: together| up)?|put(?:ting)? together|compil\w+|compos\w+|assembl\w+|build\w*|draft\w*|writ\w*|prepar\w+|generat\w+|creat\w+|send\w*|export\w*|deliver\w*|land\w+|gather\w+|collect\w+|get you|grab)\b/i;
+// …a THING to hand over. Artifact-shaped, or an explicit "that/it/them for you". (bare "sheet" +
+// "filings"/"990s" + "agent output" added 2026-08-19 — run-2's sponsors-sheet promises missed the net)
+const _DELIVERABLE_OBJ = /\b(?:roster|list|spreadsheet|sheets?|report|file|filings?|document|dossier|brief(?:ing)?|summary|table|memo|deck|csv|xlsx?|docx?|pdf|990[\w-]*|agent (?:output|results?)|the e-?mails?|the contacts?|the numbers?|the data|the breakdown|the write-?up)\b|\b(?:that|it|them|those|this) for you\b/i;
 // already CLAIMED done (past/perfect) → the anti-fabrication gate owns this, not us.
 const _DONE_RE = /\b(?:i'?ve|i have|already|just)\b[^.!?\n]*\b(?:pulled|compiled|assembled|built|drafted|wrote|written|prepared|generated|created|sent|exported|put together)\b|\bis (?:saved|ready|done|attached|on your canvas)\b/i;
 

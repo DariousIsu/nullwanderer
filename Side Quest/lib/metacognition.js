@@ -324,6 +324,75 @@ function verifyArtifactClaims(say, { fileExists = null, canvasWroteThisTurn = nu
   return { ok: uniq.length === 0, violations: uniq };
 }
 
+// ── WORK-STATE CLAIMS (2026-08-19, live-test run 2 — the say-do decoupling gate) ─────────────────────────
+// Run-2 F1/F2: asked to verify "the Applied Digital briefing" against records, the reply asserted
+// "Records indicate the briefing is still pending and must be completed by tomorrow morning" — composed
+// BEFORE the tool chain ran, backed by a dead-end db_query and a schema map, about a deliverable that had
+// shipped five days earlier. Two falsifiable claim kinds, same discipline as verifyArtifactClaims
+// (regex finds the claim, an injected fail-OPEN probe decides):
+//   'records'          — a records-attribution ("my records show…") when NO read ran this turn at all.
+//   'records-mismatch' — a records-attribution whose subject anchors are absent from what this turn's
+//                        reads actually returned (the evidence string the reply writer was handed).
+//   'pending'          — "X is still pending / due by <time>" about HER OWN deliverable when no measured
+//                        record (open promise, focus) matches X — the invented-deadline shape.
+const _WS_RECORDS_RE = /\b(?:(?:my|our|the) (?:records?|database|files?|notes?|logs?|history)\s+(?:indicates?|shows?|says?|confirms?)|records? (?:indicates?|shows?|says?|confirms?)|according to (?:my|our|the) (?:records?|database|notes?|files?|logs?)|i (?:checked|verified|confirmed) (?:my|our|the) (?:records?|database|notes?|files?|logs?))\b/i;
+const _WS_PENDING_RE = /\b(?:is\s+)?still\s+(?:pending|open|outstanding|owed|unfinished|in\s+(?:the\s+)?queue)\b|\b(?:must|needs?\s+to|has\s+to)\s+be\s+(?:completed|finished|done|delivered)\s+by\b|\bdue\s+(?:by\s+)?(?:tomorrow|tonight|today|this\s+(?:morning|afternoon|evening|week)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+// …only about HER OWN deliverables (a bill "still pending in committee" is the world, not her ledger).
+const _WS_DELIVERABLE_RE = /\b(?:briefing|report|dossier|roster|spreadsheet|sheet|list|summary|memo|draft|write-?up|deliverable|document)\b/i;
+const _WS_EXTERNAL_RE = /\b(?:bill|committee|legislature|legislative|session|court|case|county|city|council|agency|federal|congress|senate|house|vote|election|approval|application|permit|lawsuit|ruling)\b/i;
+const _WS_ANCHOR_STOP = new Set([..._CLAIM_ANCHOR_STOP, 'records', 'record', 'database', 'notes', 'files', 'history', 'pending', 'completed', 'finished', 'delivered', 'tomorrow', 'tonight', 'today', 'morning', 'afternoon', 'evening', 'according', 'indicates', 'indicate', 'shows', 'show', 'confirms', 'confirm', 'says', 'still', 'must', 'needs', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']);
+function _wsAnchors(s) {
+  const out = [];
+  for (const m of String(s || '').match(/\b[A-Z][A-Za-z]{3,}\b/g) || []) {
+    const lw = m.toLowerCase();
+    if (_WS_ANCHOR_STOP.has(lw) || out.includes(lw)) continue;
+    out.push(lw);
+  }
+  return out.slice(0, 6);
+}
+
+/** Verify work-state claims in `say`. Probes are injected + fail OPEN (an error can never false-scold):
+ *  gatherRanThisTurn()->bool — did ANY tool read run this turn (echo_suit.lastGatherTs >= turnStart)?
+ *  pendingRecordFor(anchors)->bool — does any measured record (open promise / focus) match the anchors?
+ *  evidence — the text this turn's reads actually returned (same string stage-4 groundFacts sees). */
+function verifyWorkStateClaims(say, { gatherRanThisTurn = null, pendingRecordFor = null, evidence = '' } = {}) {
+  const violations = [];
+  const ev = String(evidence || '').toLowerCase();
+  const sentences = String(say || '').split(/(?<=[.!?])\s+|\n+/);
+  for (const sent of sentences) {
+    const s = sent.trim();
+    if (s.length < 12 || _ART_FUTURE_RE.test(s)) continue;   // intent/offers aren't state assertions
+    // RECORDS-ATTRIBUTION: "records indicate/show/say X".
+    if (!violations.some((v) => v.kind.startsWith('records')) && _WS_RECORDS_RE.test(s)) {
+      let looked = true; try { looked = typeof gatherRanThisTurn === 'function' ? !!gatherRanThisTurn() : true; } catch { looked = true; }   // fail OPEN
+      if (!looked) violations.push({ kind: 'records', claim: s.slice(0, 110) });
+      else if (ev.length >= 40) {
+        const anchors = _wsAnchors(s);
+        if (anchors.length && !anchors.some((a) => ev.includes(a))) violations.push({ kind: 'records-mismatch', claim: s.slice(0, 110), anchors });
+      }
+    }
+    // PENDING/DEADLINE about her own deliverable: needs a measured record behind it.
+    if (!violations.some((v) => v.kind === 'pending') && _WS_PENDING_RE.test(s) && _WS_DELIVERABLE_RE.test(s) && !_WS_EXTERNAL_RE.test(s)) {
+      const anchors = _wsAnchors(s);
+      if (anchors.length && typeof pendingRecordFor === 'function') {
+        let backed = true; try { backed = !!pendingRecordFor(anchors); } catch { backed = true; }   // fail OPEN
+        if (!backed) violations.push({ kind: 'pending', claim: s.slice(0, 110), anchors });
+      }
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+
+// The honest correction for a work-state claim that didn't check out.
+function workStateCorrection(violations = []) {
+  const parts = [];
+  if (violations.some((v) => v.kind === 'records')) parts.push(`I attributed that to my records, but I didn't actually read any record this turn`);
+  if (violations.some((v) => v.kind === 'records-mismatch')) parts.push(`I said my records show that, but what I actually retrieved this turn doesn't contain it — treat it as unverified`);
+  if (violations.some((v) => v.kind === 'pending')) parts.push(`I called that pending work with a deadline, but I hold no record of it as open work — don't trust that status until I've actually checked`);
+  if (!parts.length) return '';
+  return `\n\n[Correction — ${parts.join('; ')}.]`;
+}
+
 // EMAIL GROUNDING (2026-08-04). The free-form operator PATTERN-GUESSES addresses (first.last@domain) that it
 // never actually fetched — the audit's "pattern-derived emails I couldn't confirm". An email is a hard,
 // checkable fact: it is grounded ONLY if it appears verbatim in the turn's EVIDENCE (the retrieved/fetched
@@ -465,4 +534,4 @@ function artifactCorrection(violations = []) {
   return `\n\n[Correction — ${parts.join('; ')}. I mis-stated that as done; it isn't yet. I won't claim a file, canvas item, image, or database record exists unless it really does.]`;
 }
 
-module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, mentionsMeeting, claimsMeetingAction, meetingActionHonestyDirective, verifyArtifactClaims, artifactCorrection, groundEmails, groundAbsence, groundFacts, groundPrediction, verificationCorrection, DATETIME_SELF_RE, ELECTION_RECENCY_RE };
+module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, mentionsMeeting, claimsMeetingAction, meetingActionHonestyDirective, verifyArtifactClaims, artifactCorrection, groundEmails, groundAbsence, groundFacts, groundPrediction, verificationCorrection, verifyWorkStateClaims, workStateCorrection, DATETIME_SELF_RE, ELECTION_RECENCY_RE };
