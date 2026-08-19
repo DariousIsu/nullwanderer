@@ -48,11 +48,20 @@ the reply and the canvas landings. The response the harness reads:
 `DEFAULTS` (asserted on every case unless overridden): `settled, noError, noLoop, grounded`. A case
 adds only what's specific to it (route, tools, delivered/nonDelivery, says/notSays, canvas).
 
-## Case format
+## Case format — a KIND, not a phrase
+
+A case is a **kind** (a class of input) with a `variants` array of phrasings. The invariants must hold
+across **every** variant for the kind to be "held" — re-running the one exact string that triggered a
+bug proves only that you patched that string, not that the class is cured (**retest-kind-not-phrase**,
+Lucas 2026-08-18).
 
 ```js
-{ name, text, settleMs?, maxMs?, expect: { route, tools:[..], delivered, nonDelivery, says:[..], notSays:[..], canvas, complete } }
+{ name, kind, variants: ['phrasing A', 'phrasing B', ...], settleMs?, maxMs?,
+  expect: { route, tools:[..], delivered, nonDelivery, says:[..], notSays:[..], canvas, complete } }
 ```
+
+Keep variant counts lean (2–3) to respect "back off the cloud"; on a fix, re-run a **fresh** varied
+sample of the class, never the original phrasing alone.
 
 ## How it runs
 

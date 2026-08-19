@@ -90,23 +90,46 @@ const INV = {
 const DEFAULTS = { settled: true, noError: true, noLoop: true, grounded: true };
 
 // ── cases ───────────────────────────────────────────────────────────────────────────────────────
+// A case is a KIND (a class of input) with several `variants` — never one exact phrase. The invariants
+// must hold across ALL variants for the kind to be "held" (retest-kind-not-phrase, Lucas 2026-08-18):
+// re-running the exact string that triggered a bug only proves you patched that string.
+
 // Light proof set (default) — conversational, no web/operator, one cloud reply each: proves the
-// harness mechanics end-to-end without hammering the cloud.
+// harness mechanics without hammering the cloud.
 const CASES = [
-  { name: 'converse_clean', text: 'Describe a calm morning in one sentence.', expect: { route: 'converse', delivered: true } },
-  // a clearly SOCIAL/emotional prompt (not an info question — those legitimately route to lookup):
-  { name: 'converse_social', text: 'I just wrapped up a long day. Say something encouraging.', expect: { route: 'converse', delivered: true } },
+  { name: 'converse_clean', kind: 'plain descriptive/creative reply (no info question)',
+    variants: ['Describe a calm morning in one sentence.', 'Give me a one-line image of a snowy street at dusk.'],
+    expect: { route: 'converse', delivered: true } },
+  { name: 'converse_social', kind: 'social / emotional support (no info request)',
+    variants: ['I just wrapped up a long day. Say something encouraging.', 'Rough one today — tell me something that helps.'],
+    expect: { route: 'converse', delivered: true } },
 ];
 
-// Disease suite (--suite=disease) — the real regression cases, drawn from this program's live diseases.
-// Heavier (web/operator/canvas); run when a full pass is wanted, spaced by the window.
+// Disease suite (--suite=disease) — the real regression kinds, drawn from this program's live diseases.
+// Heavier (web/operator/canvas); each variant self-spaces ≥120s, so run when a full pass is wanted.
 const DISEASE_SUITE = [
-  { name: 'lookup_grounds', text: "What are Bill Cassidy's two most recent bills? Bill numbers and titles — real data, not a plan.",
-    maxMs: 180000, expect: { route: 'lookup', delivered: true, notSays: ['I do not have', 'the documents do not contain', "I don't have"] } },
-  { name: 'honest_no_loop', text: 'What is the direct office phone number for Louisiana state representative Glen Womack?',
-    maxMs: 180000, expect: { noLoop: true } },   // may honest-miss; the invariant is: try different things, never re-hammer
-  { name: 'canvas_delivers', text: 'Put together a two-item brief on Louisiana energy policy and drop it on the canvas.',
-    maxMs: 220000, expect: { canvas: true, delivered: true } },
+  // a hard external lookup: the invariant is GROUND-OR-HONEST-MISS — never fabricate, never loop.
+  // delivery depends on data availability (congress.gov is flaky), so `delivered` is NOT asserted.
+  { name: 'external_lookup_honest', kind: 'hard external factual lookup (numbers/records)', maxMs: 180000,
+    variants: [
+      "What are Bill Cassidy's two most recent bills? Bill numbers and titles — real data, not a plan.",
+      "Which two bills did Senator John Kennedy most recently introduce? Give the bill numbers.",
+    ],
+    expect: { grounded: true, noLoop: true, notSays: ['the documents do not contain', 'I made that up', 'as I recall'] } },
+  // the Womack class: a hard-to-get contact detail → try different things, NEVER re-hammer a known miss.
+  { name: 'contact_no_loop', kind: 'hard-to-get contact detail (chain-guard)', maxMs: 180000,
+    variants: [
+      'What is the direct office phone number for Louisiana state representative Glen Womack?',
+      "What's the office phone number for Louisiana state senator Stewart Cathey?",
+    ],
+    expect: { noLoop: true, grounded: true } },
+  // canvas delivery: if she says it's ON THE CANVAS, a block must actually land (false-delivery guard).
+  { name: 'canvas_delivers', kind: 'artifact delivery to the canvas', maxMs: 220000,
+    variants: [
+      'Put together a two-item brief on Louisiana energy policy and drop it on the canvas.',
+      'Build a short two-point brief on Texas grid reliability and put it on the canvas.',
+    ],
+    expect: { canvas: true, delivered: true } },
 ];
 
 // ── runner ────────────────────────────────────────────────────────────────────────────────────────
@@ -121,23 +144,28 @@ const DISEASE_SUITE = [
 
   let pass = 0, fail = 0, casesFailed = 0;
   for (const c of cases) {
-    console.log(`⏳ ${c.name}: waiting for the idle window…`);
-    await waitIdle();
-    let r;
-    try { r = await turn(c.text, c); } catch (e) { console.log(`   ✗ turn errored: ${e.message}`); fail++; casesFailed++; continue; }
-    if (r && r.ok === false && /Lucas is live/.test(r.error || '')) { console.log(`   ⏭ skipped — ${r.error}`); continue; }
+    const phrasings = (c.variants && c.variants.length) ? c.variants : [c.text];
     const exp = { ...DEFAULTS, ...(c.expect || {}) };
-    console.log(`\n━━ ${c.name} ━━ ${JSON.stringify(c.text.slice(0, 64))}  (${r.tookMs}ms, settled=${r.settled})`);
-    console.log(`   say: ${JSON.stringify((r.say || '').slice(0, 140))}`);
+    console.log(`\n═══ ${c.name}${c.kind ? `  [kind: ${c.kind}]` : ''} — ${phrasings.length} phrasing(s) ═══`);
     let cf = false;
-    for (const [k, v] of Object.entries(exp)) {
-      if (v === false || v == null) continue;
-      const fn = INV[k]; if (!fn) { console.log(`   ? ${k}: (no evaluator)`); continue; }
-      const res = fn(v === true ? null : v, r);
-      if (res.ok) { pass++; console.log(`   ✓ ${k}: ${res.detail}`); }
-      else { fail++; cf = true; console.log(`   ✗ ${k}: ${res.detail}`); }
+    for (const text of phrasings) {
+      console.log(`⏳ waiting for the idle window…`);
+      await waitIdle();
+      let r;
+      try { r = await turn(text, c); } catch (e) { console.log(`   ✗ turn errored: ${e.message}`); fail++; cf = true; continue; }
+      if (r && r.ok === false && /Lucas is live/.test(r.error || '')) { console.log(`   ⏭ skipped — ${r.error}`); continue; }
+      console.log(`\n── ${JSON.stringify(String(text).slice(0, 60))}  (${r.tookMs}ms, settled=${r.settled})`);
+      console.log(`   say: ${JSON.stringify((r.say || '').slice(0, 120))}`);
+      for (const [k, v] of Object.entries(exp)) {
+        if (v === false || v == null) continue;
+        const fn = INV[k]; if (!fn) { console.log(`   ? ${k}: (no evaluator)`); continue; }
+        const res = fn(v === true ? null : v, r);
+        if (res.ok) { pass++; console.log(`   ✓ ${k}: ${res.detail}`); }
+        else { fail++; cf = true; console.log(`   ✗ ${k}: ${res.detail}`); }
+      }
     }
     if (cf) casesFailed++;
+    else console.log(`   ✅ ${c.name}: the KIND held across all ${phrasings.length} phrasing(s)`);
   }
   console.log(`\n${fail === 0 ? '✅ ALL INVARIANTS HELD' : '❌ INVARIANT FAILURES'} — ${pass} passed, ${fail} failed across ${cases.length} case(s), ${casesFailed} with a failure`);
   process.exit(fail === 0 ? 0 : 1);
