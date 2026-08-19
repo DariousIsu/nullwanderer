@@ -1185,11 +1185,17 @@ function insertTurn({ sessionId, speaker, content, model = null, truncated = 0, 
   return { id: info.lastInsertRowid, ts };
 }
 
-function getRecentTurns(n) {
-  // last N turns across history, oldest first
-  const rows = getDb()
-    .prepare('SELECT * FROM turns ORDER BY id DESC LIMIT ?')
-    .all(n);
+function getRecentTurns(n, sessionId = null) {
+  // Recent turns, oldest first. When sessionId is given, scope to THAT conversation.
+  // The reply-context MUST be session-scoped: interleaved sessions (autonomous musings,
+  // a parallel channel, another live conversation) otherwise bleed foreign turns into the
+  // window and the model answers the WRONG thread — the 2026-08-19 bleed where an s1188
+  // "Louisiana brief / unwinding" conversation contaminated an s1195 "summarize the book"
+  // reply (twice, verbatim, because the foreign turns stayed pinned at the top of the
+  // global window). Left global (sessionId=null) for the cross-session lanes that want it.
+  const rows = sessionId == null
+    ? getDb().prepare('SELECT * FROM turns ORDER BY id DESC LIMIT ?').all(n)
+    : getDb().prepare('SELECT * FROM turns WHERE session_id = ? ORDER BY id DESC LIMIT ?').all(sessionId, n);
   return rows.reverse();
 }
 

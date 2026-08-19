@@ -7904,8 +7904,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   if (_attachedDocs.length) {
     try { db.setMeta('attach.last_doc', JSON.stringify({ ..._attachedDocs[_attachedDocs.length - 1], ts: Date.now() })); } catch {}
   }
-  // Pull recent turns BEFORE the just-inserted user turn; the new message is appended separately
-  const recentTurnsAll = db.getRecentTurns(RECENT_TURN_LIMIT + 1);
+  // Pull recent turns BEFORE the just-inserted user turn; the new message is appended separately.
+  // SESSION-SCOPED (2026-08-19 cross-session bleed fix): the reply context is THIS conversation
+  // only — a global window let interleaved sessions (autonomous musings / a parallel channel /
+  // another live thread) pollute the reply, so the model answered the wrong conversation. Cross-
+  // session RELEVANCE still arrives via the semantic recall path (retrieveTurns), not this window.
+  const recentTurnsAll = db.getRecentTurns(RECENT_TURN_LIMIT + 1, currentSessionId);
   const recentTurns = recentTurnsAll.slice(0, -1); // drop the freshly-inserted user turn
   // ANTI-REPETITION (conversation harness): she has no view of her own recent phrasing and
   // settles into a stock template (reflect-back + "it's fascinating how…" + a question). Nudge
