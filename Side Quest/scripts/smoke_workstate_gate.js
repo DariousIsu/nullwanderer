@@ -92,6 +92,22 @@ ok(mc.verifyWorkStateClaims('Records show nothing new since then.', { gatherRanT
   ok(snap && Array.isArray(snap.promises) && Array.isArray(snap.foci), 'snapshot(): returns the shape without throwing (fail-soft edges)');
 }
 
+// ── F29 (saturation run 3): the whole-plate work-status door ─────────────────────────────────────────────
+// Both live phrasings missed the poll-track door and composed ledgers from raw tool reads; this
+// probe is the general door, and the wiring grep pins the main.js lead + marker.
+ok(ws.isWorkStatusQuestion("Where do things stand on everything I've got you working on?"), 'F29 REGRESSION: "where do things stand on everything…" → work-status');
+ok(ws.isWorkStatusQuestion('Run me through your open items — honest ledger.'), 'F29 REGRESSION: "run me through your open items" → work-status');
+ok(ws.isWorkStatusQuestion("what's still open on your plate?"), '"what\'s still open on your plate" → work-status');
+ok(ws.isWorkStatusQuestion('what do you still owe me?'), '"what do you owe me" → work-status');
+ok(!ws.isWorkStatusQuestion("what's the status of the Womack phone lookup?"), 'a SPECIFIC-thing status ask keeps its own lane (no whole-plate cue)');
+ok(!ws.isWorkStatusQuestion('what are you working on right now?'), 'present-activity stays with the activity poll');
+ok(!ws.isWorkStatusQuestion('the ledger shows a $400 balance open'), 'ledger/open chatter about HIS books never fires');
+{
+  const mainSrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/isWorkStatusQuestion\(userMessage\) && !activityQ && !selfLearnQ && !selfActivityQ/.test(mainSrc), 'wiring: workStatusQ gated off the activity/learn/doing doors');
+  ok(/\[status\] status body led by the measured work-state vector/.test(mainSrc), 'wiring: the general door logs the measured-vector marker');
+}
+
 // ── widened delivery nets: run-2's dangling phrasings must now BOOK ──────────────────────────────────────
 const has = (say) => dl.detectPromise(say).length > 0;
 ok(has("I'm pulling it now from our workspace, then hitting ProPublica for the 990-PFs."), 'book: "I\'m pulling it now … the 990-PFs" (progressive commitment, run-2 dangle #1)');

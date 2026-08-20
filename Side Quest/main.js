@@ -8170,6 +8170,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let selfLearnQ = false;
   try { selfLearnQ = require('./lib/activity').isSelfLearnRecall(userMessage) && !activityQ; } catch (e) { console.error('[main] self-learn detect failed:', e.message); }
   if (selfLearnQ) selfActivityQ = false;   // the learn door owns the turn when both shapes match
+  // F29 (saturation run 3): a WHOLE-PLATE work-status question gets the measured vector as its lead,
+  // whatever route the turn takes — the poll-track door (ans.kind==='status') was the only site and
+  // fresh phrasings missed it, composing ledgers from raw tool reads instead. Activity/learn own theirs.
+  let workStatusQ = false;
+  try { workStatusQ = require('./lib/work_state').isWorkStatusQuestion(userMessage) && !activityQ && !selfLearnQ && !selfActivityQ; } catch (e) { console.error('[main] work-status detect failed:', e.message); }
 
   // SCHEDULE ("when is the BGov meeting", "my next meeting", "what's on my calendar") — answerable
   // from the events she ALREADY holds (HIS WEEK), not the records/web ladder. Detected here so the
@@ -8491,6 +8496,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block;
       console.log(`[main] self-learn recall → injected ${recent.length} banked learning(s)`);
     } catch (e) { console.error('[main] self-learn block failed:', e.message); }
+  }
+
+  // F29 — WHOLE-PLATE WORK STATUS leads from the MEASURED vector (rendered, never composed). The
+  // same contract as the poll-track site (main.js ~9849): his open orders outrank beat work; the
+  // ledger below is the truth, tool reads may ADD detail but never replace or contradict it.
+  if (workStatusQ) {
+    try {
+      const ws = require('./lib/work_state');
+      const wsr = ws.renderStatus(ws.snapshot());
+      if (wsr && wsr.trim()) {
+        const block = `YOUR MEASURED WORK-STATE — ${userName} asked where everything stands. LEAD with this ledger; it is rendered from your real stores, not composed. ${userName}'s own orders (the open delivery promises) outrank background beat work — name them FIRST, then the foci, then the stamps. Do not restate one item twice, do not pad with per-item filler lines, and do not claim anything this ledger doesn't show:\n${wsr.trim()}`;
+        retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block;
+        console.log('[status] status body led by the measured work-state vector');
+      }
+    } catch (e) { console.error('[status] work-state render failed (turn proceeds):', e.message); }
   }
 
   // SELF-STATE LEDGER — on a "what can you see / what's running / status" question, prepend her real

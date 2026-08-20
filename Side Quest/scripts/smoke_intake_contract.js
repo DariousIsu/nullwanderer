@@ -74,6 +74,20 @@ ok(!ic.detectEditIntent(''), 'empty → false');
 }
 ok(!!ic.detectDeliverableOrder('polish the summary in notes/x.md in place'), 'a polish-led order with a path books');
 ok(!ic.detectDeliverableOrder('the cleanup crew did a great job on the office'), 'noun "cleanup" chatter never books (no order lead)');
+// F28 (saturation run 3, live-missed ×2): placement-verb orders and approach-bridge orders must book.
+{
+  const r = ic.detectDeliverableOrder('Put a short two-point primer on Louisiana coastal insurance rates on the canvas.');
+  ok(r && r.target === 'canvas', 'F28 REGRESSION: "Put a … primer … on the canvas" books with target=canvas');
+}
+{
+  const r = ic.detectDeliverableOrder('Go into notes/anti_china_followups.md and smooth the rough sentences right in the file — numbers stay untouched.');
+  ok(r && r.target === 'notes/anti_china_followups.md', 'F28 REGRESSION: "Go into <path> and smooth …" books with the file target');
+  ok(ic.detectEditIntent('Go into notes/anti_china_followups.md and smooth the rough sentences right in the file'), '…and "right in the file" marks it edit-shaped (modify-the-target, never compose)');
+}
+ok(!!ic.detectDeliverableOrder('drop a two-line summary of the hearing on the canvas'), 'a drop-on-canvas order books');
+ok(!ic.detectDeliverableOrder('did you put the summary on the canvas?'), 'a question about placement never books (interrogative guard)');
+ok(!ic.detectDeliverableOrder('go into detail about the coastal program for me'), 'approach-verb chatter with no order verb and no deliverable never books');
+ok(!ic.detectDeliverableOrder('put simply, the coastal market is contracting fast'), '"put simply" chatter never books (no deliverable evidence)');
 
 // ── helpers ──────────────────────────────────────────────────────────────────────────────────────────────
 ok(ic.statesIn('Utah, Arizona and new mexico are in; Indianapolis is not a state').join(',') === 'arizona,new mexico,utah', 'statesIn: names matched, city-lookalikes not');

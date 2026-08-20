@@ -124,4 +124,15 @@ function renderStatus(snap, { now = Date.now() } = {}) {
   return lines.join('\n');
 }
 
-module.exports = { snapshot, pendingRecordFor, liveWorkNow, renderStatus, _tokens };
+// F29 (saturation run 3, 2026-08-20): the measured-status lead only lived behind the POLL-TRACK door
+// (main.js `ans.kind === 'status'`), so fresh status phrasings ("Where do things stand on everything
+// I've got you working on?" / "Run me through your open items — honest ledger.") composed a ledger
+// from raw tool reads — template repeats, and one turn acked "pulling the honest ledger now" and
+// delivered nothing. This probe is the GENERAL door: a whole-plate work-status question, detected at
+// the same tier as the self-learn/self-activity doors. Precision notes: bare "status"/"working on"
+// stay out (the activity poll owns present-activity; specific-thing status asks keep their lanes) —
+// every alternation here carries a whole-plate cue (everything / open items / things stand / plate).
+const _WORK_STATUS_RE = /\bwhere (?:do|does) (?:things|we|everything|it all|stuff) stand\b|\bopen (?:items|orders|tasks|threads|work)\b|\bwhat(?:'s| is) (?:still )?(?:open|outstanding|on your plate)\b|\brun me through (?:your|the) (?:open|current|active|outstanding)\b|\beverything (?:i'?ve|we'?ve) got you (?:work|going|running)\w*\b|\bhonest ledger\b|\bwhat do you (?:still )?owe me\b|\bwhat(?:'s| is) (?:left|remaining) (?:on|in) (?:your|the) (?:queue|plate|list|ledger)\b/i;
+function isWorkStatusQuestion(text) { return _WORK_STATUS_RE.test(String(text || '')); }
+
+module.exports = { snapshot, pendingRecordFor, liveWorkNow, renderStatus, isWorkStatusQuestion, _tokens };

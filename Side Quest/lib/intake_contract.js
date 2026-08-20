@@ -29,8 +29,16 @@ const _QUESTION_RE = /\?\s*$|^(?:who|what|when|where|why|how|hows|how's|is|are|w
 // F27b (boot_p54 retest): "clean up the wording in notes/x.md — smooth the phrasing in place" booked
 // NOTHING — the edit verbs were missing from this vocabulary, so an edit-shaped order only booked when
 // it happened to open with a compose verb ("finish …"). The phrasing lottery, one vocabulary short.
-const _ORDER_VERB = /(?:finish|complete|update|build|make|compile|compose|create|assemble|land|write|draft|produce|generate|deliver|put together|pull together|knock out|redo|polish|tighten|revise|rework|reword|edit|refine|smooth|trim|clean\s*up|copy-?edit|proofread)/i;
-const _ORDER_LEAD_RE = new RegExp(`(?:^|[.!;\\n]\\s*)(?:(?:ok(?:ay)?|alright|now|next|also|then|please|zoe)[,\\s]+)*(?:let'?s\\s+|go ahead and\\s+)?${_ORDER_VERB.source}\\b`, 'i');
+// F28 (saturation run 3, 2026-08-20): TWO more lottery tickets, both live-missed on the same night —
+// "Put a short two-point primer … on the canvas." (placement verbs weren't order verbs; deliverable
+// evidence downstream keeps them precise) and "Go into notes/x.md and smooth the rough sentences
+// right in the file" (an approach-verb lead — go into/open/take — with the order verb after "and";
+// the file went untouched behind "Got it — smoothing now"). The bridge is bounded to one sentence.
+const _ORDER_VERB = /(?:finish|complete|update|build|make|compile|compose|create|assemble|land|write|draft|produce|generate|deliver|put together|pull together|knock out|redo|polish|tighten|revise|rework|reword|edit|refine|smooth|trim|clean\s*up|copy-?edit|proofread|put|drop|place|post)/i;
+// The bridge span stays inside one sentence but must cross FILENAME dots ("notes/x.md and smooth…"):
+// a dot followed by non-space is an extension dot, a dot followed by space/EOL ends the sentence.
+const _APPROACH_BRIDGE = `(?:(?:go\\s+(?:into|to|through|over)|open(?:\\s+up)?|take|grab|pull\\s+up)\\s+(?:[^.!?;\\n]|\\.(?=\\S)){0,80}?\\b(?:and|then)\\s+)?`;
+const _ORDER_LEAD_RE = new RegExp(`(?:^|[.!;\\n]\\s*)(?:(?:ok(?:ay)?|alright|now|next|also|then|please|zoe)[,\\s]+)*(?:let'?s\\s+|go ahead and\\s+)?${_APPROACH_BRIDGE}${_ORDER_VERB.source}\\b`, 'i');
 const _ORDER_WANT_RE = new RegExp(`\\bi\\s+(?:want|need)\\s+(?:you\\s+to\\s+)?(?:(?:a|an|the|this|that)\\s+)?(?:\\w+\\s+){0,3}?${_ORDER_VERB.source}?`, 'i');
 // Deliverable evidence: an explicit workspace path, the canvas, or an artifact noun.
 const _TARGET_PATH_RE = /((?:notes|docs|data)\/[\w./-]+\.[a-z]{2,4})/i;
@@ -62,7 +70,9 @@ function detectDeliverableOrder(text) {
 // went untouched, and the promise closed kept. An edit verb + an in-place/wording cue marks the
 // order as MODIFY-THE-TARGET — the pursuit must take the read→edit→write-target path, never compose.
 const _EDIT_VERB_RE = /\b(?:polish(?:ing)?|tighten(?:ing)?|revis(?:e|ing)|rework(?:ing)?|reword(?:ing)?|edit(?:ing)?|refin(?:e|ing)|smooth(?:ing)?|trim(?:ming)?|clean(?:ing)?\s*up|copy-?edit(?:ing)?|proofread(?:ing)?|update|updating)\b/i;
-const _IN_PLACE_RE = /\bin\s+place\b|\bthe\s+(?:wording|phrasing|prose|language|copy)\b|\bexisting\s+(?:file|draft|doc(?:ument)?)\b|\bcurrent\s+draft\b|\bsame\s+file\b|\bdon'?t\s+(?:make|create|start)\s+a\s+new\b/i;
+// F28: "…smooth the rough sentences right in the file" carried the in-place intent in a shape this
+// net didn't know — "(right) in the/that file" and the sentence-noun family both mark MODIFY-THE-TARGET.
+const _IN_PLACE_RE = /\bin\s+place\b|\bthe\s+(?:wording|phrasing|prose|language|copy|sentences?|paragraphs?)\b|\bexisting\s+(?:file|draft|doc(?:ument)?)\b|\bcurrent\s+draft\b|\bsame\s+file\b|\b(?:right\s+)?in\s+(?:the|that|this)\s+(?:file|doc(?:ument)?|draft|note)\b|\bdon'?t\s+(?:make|create|start)\s+a\s+new\b/i;
 function detectEditIntent(text) {
   const t = str(text);
   if (!t.trim()) return false;

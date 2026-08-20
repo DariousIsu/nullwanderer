@@ -35,6 +35,15 @@ ok(act.isSelfLearnRecall('what have you been learning'), 'F10: "what have you be
 ok(!act.isSelfLearnRecall('what did you work on today'), 'a DOING question stays with self-activity, not learn');
 ok(!act.isSelfLearnRecall('you learn something new every day, huh'), 'the idiom (not a question about her) does not fire');
 ok(!act.isSelfLearnRecall('teach me what I should learn about redistricting'), 'the USER\'s learning is not her learn-recall');
+// F30 (saturation run 3, live-missed ×2): the net covered a phrase FAMILY, not the KIND — the
+// inverted teach-shape and the lesson-from-mistake shape both fell through (the second landed in
+// entity land: her own "you" disambiguated against contact tags).
+ok(act.isSelfLearnRecall('What did the last few days teach you about your own work?'), 'F30 REGRESSION: the inverted teach-you shape → self-learn');
+ok(act.isSelfLearnRecall('Name one mistake you caught yourself making recently and what you changed.'), 'F30 REGRESSION: the lesson-from-mistake shape → self-learn');
+ok(act.isSelfLearnRecall('what has this week taught you?'), 'generic "what has X taught you" → self-learn');
+ok(act.isSelfLearnRecall('any lessons you picked up from the overnight runs?'), '"any lessons you picked up" → self-learn');
+ok(!act.isSelfLearnRecall('the mistake you made was in the query, not the data'), 'a declarative CORRECTION about her error never enters the learn door');
+ok(!act.isSelfLearnRecall("I'll teach you a new trick for parsing these files"), 'the user offering to teach is not her learn-recall');
 
 // --- a snapshot with all three lanes active ---
 const snap = {
