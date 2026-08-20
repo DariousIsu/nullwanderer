@@ -172,6 +172,13 @@ Cycle: live-guard green (inFlight=false, 7.9h idle) → tree-kill root 43928 (Ec
 - Pipeline probe (boot_p60): "how are you feeling?" → 12s, she answered FROM the changelog + state ("the new code settling in… the 0.1s warm hit… the difference between a manufactured tone and one that actually pulled from something I was sitting with"). Gate 559.
 - Queued, not built: rumination gradient + graded salience (standalones), Slice 3 calibration, and the **blind-week probe** (§5b's real gate — needs a normal working week with nothing announced).
 
+**Standalones + F25 build (2026-08-20, `18fd188`+`bcad9e6`, boot_p61/p62, gate 560):**
+- **Rumination gradient (IIT)** — the 0.80 instantaneous cliff (observed climbing 0.899→0.928 through three breakers) is now a TRAJECTORY decision (`gradientDecide`, series ring 12): rising/flat-high fires, RECOVERING through the old line does not (the smoothing), ≥0.88 fires alone. <3 readings → the old rule exactly. The live climb is the smoke's canonical fire.
+- **Graded salience (AST)** — membership cliffs (30m whole-frame death, recency eviction) → per-entry ACTIVATION (8m half-life × hit-weight × salient-boost, floor 0.12): a one-off stops binding at ~the old horizon, a 3-hit salient antecedent survives past it, eviction drops lowest-activation, only a 2h gap hard-clears. Below-floor still binds nothing.
+- **F25 procedural inoculation** (`lib/procedural_lessons.js`) — the chain loop banks failure→working-path pairs at the replan-SUCCESS moment (prompted chains, refused-repeats + empty/errored hops accumulate), CLASS-keyed on E1's vocabulary; lookup/explore turns get the class's lessons at tag-choice as ORDER-BIAS history ("history, not a fence"); 30d disuse decay. Live: capture and injection both ran correct NO-OPS (the probe chain landed clean, table lazily created, nothing injected) — the full induced-failure loop is run-3's `learned-path` drill by design.
+- **F18b (boot_p61's own catch)**: "a person entity CREATED TO back a contact row" — a descriptive relative clause — drew the nothing-actually-saved scold. A record-noun(+auxiliary) lookbehind exempts description shapes; first-person write claims still fire. Live scold = the regression case.
+- Salience probe note: "them" after the Brondyke turn bound to the set she'd just OFFERED ("orgs or contacts she's tied to") and delivered their real numbers — a defensible contextual deref, logged as observed-good.
+
 ## 10. Test infrastructure left behind
 
 - `zoe_drive.js` (scratchpad) — drives the real chat over CDP, waits for the reply in sq.db, tails the boot log for route/tool lines. Reusable for every future live run.
