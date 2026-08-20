@@ -37,9 +37,20 @@ const http = require('http');
 const ACTIVE_WINDOW_MS = 120000;   // a real user turn this recent → his session owns the pipeline
 const DEFAULT_SETTLE_MS = 8000;
 const DEFAULT_MAX_MS = 240000;     // canvas edit runs are minutes — a pathway test must outlast one
+// RUN-4 COLLISION (2026-08-20, turns 12874-12884): the guard counted the port's OWN injected turns
+// as "the user", so it could not tell Lucas from the harness — and an UNANSWERED real turn older
+// than ACTIVE_WINDOW_MS did not block at all. Lucas's live clarification (12878) sat unanswered at
+// 126s while the next test turn fired 3s before her reply landed; his conversation and the suite
+// cross-threaded in one session. Cure: the port remembers the ts-windows of turns IT injected;
+// a REAL (non-injected) user turn owns the pipeline for REAL_USER_WINDOW_MS, and an UNANSWERED
+// real turn blocks up to UNANSWERED_BLOCK_CAP_MS regardless of age.
+const REAL_USER_WINDOW_MS = 10 * 60 * 1000;
+const UNANSWERED_BLOCK_CAP_MS = 30 * 60 * 1000;
 
 let _server = null;
 let _inFlight = false;
+const _injectedWindows = [];   // ts ranges of port-injected user turns (ring 60; in-memory — post-reboot the guard errs toward blocking, never toward colliding)
+function _noteInjectionWindow(a, b) { _injectedWindows.push({ a: a - 1000, b: b + 1000 }); if (_injectedWindows.length > 60) _injectedWindows.shift(); }
 
 function _lastUserTurnAgoMs() {
   try {
@@ -47,6 +58,33 @@ function _lastUserTurnAgoMs() {
     const row = db.getDb().prepare(`SELECT MAX(ts) t FROM turns WHERE speaker = 'user'`).get();
     return row && row.t ? Date.now() - row.t : null;
   } catch { return null; }
+}
+
+// PURE: the newest user-turn row whose ts falls outside every injected window = the real user.
+function realTurnFrom(rows, windows) {
+  for (const r of rows || []) { if (!(windows || []).some((w) => r.ts >= w.a && r.ts <= w.b)) return r; }
+  return null;
+}
+// PURE: does a real-user state own the pipeline right now?
+function blockVerdict({ agoMs, unanswered }, now = Date.now()) {   // eslint-disable-line no-unused-vars
+  if (agoMs == null) return { block: false };
+  if (agoMs < REAL_USER_WINDOW_MS) return { block: true, why: `real user turn ${Math.round(agoMs / 1000)}s ago` };
+  if (unanswered && agoMs < UNANSWERED_BLOCK_CAP_MS) return { block: true, why: `real user turn ${Math.round(agoMs / 1000)}s ago is still UNANSWERED` };
+  return { block: false };
+}
+function _realUserState(now = Date.now()) {
+  try {
+    const db = require('./db');
+    const rows = db.getDb().prepare(`SELECT id, session_id, ts FROM turns WHERE speaker = 'user' ORDER BY ts DESC LIMIT 40`).all();
+    const r = realTurnFrom(rows, _injectedWindows);
+    if (!r) return { agoMs: null, unanswered: false };
+    let unanswered = false;
+    try {
+      const n = db.getDb().prepare(`SELECT COUNT(*) n FROM turns WHERE speaker = 'ai_said' AND session_id = ? AND ts > ?`).get(r.session_id, r.ts);
+      unanswered = !n || n.n === 0;
+    } catch {}
+    return { agoMs: now - r.ts, unanswered };
+  } catch { return { agoMs: null, unanswered: false }; }
 }
 
 // Canvas blocks touched since `sinceTs` — the doors' observable landings, read from the mirror.
@@ -118,7 +156,9 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
     try {
       if (req.method === 'GET' && req.url === '/status') {
-        return send(200, { ok: true, inFlight: _inFlight, lastUserTurnAgoMs: _lastUserTurnAgoMs(), port });
+        const real = _realUserState();
+        return send(200, { ok: true, inFlight: _inFlight, lastUserTurnAgoMs: _lastUserTurnAgoMs(),
+          lastRealUserTurnAgoMs: real.agoMs, realUnanswered: real.unanswered, port });
       }
       // DEBUG: run the REAL wired anti-fabrication / Spine-2 gate on a SUPPLIED reply — deterministic proof
       // that the gate transforms a bad reply in the live process (no model needed). {say, evidence, turnStartTs}.
@@ -229,13 +269,21 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
             if (ago != null && ago < ACTIVE_WINDOW_MS) {
               return send(409, { ok: false, error: `Lucas is live (user turn ${Math.round(ago / 1000)}s ago) — his session owns the pipeline; retry when idle` });
             }
+            // RUN-4 COLLISION guard: a REAL (non-injected) user turn owns the pipeline far longer
+            // than the self-pacing window, and an unanswered one blocks regardless of age (capped).
+            const real = _realUserState();
+            const rv = blockVerdict(real);
+            if (rv.block) {
+              return send(409, { ok: false, error: `Lucas is live (${rv.why}) — his conversation owns the pipeline; retry when idle` });
+            }
             _inFlight = true;
+            const _injectStart = Date.now();
             try {
               const out = await _runInjectedTurn(runChatTurn, {
                 text, settleMs: Math.max(1000, settleMs || DEFAULT_SETTLE_MS), maxMs: Math.max(10000, maxMs || DEFAULT_MAX_MS),
               });
               send(200, out);
-            } finally { _inFlight = false; }
+            } finally { _inFlight = false; _noteInjectionWindow(_injectStart, Date.now()); }
           } catch (e) { _inFlight = false; send(500, { ok: false, error: e.message }); }
         });
         return;
@@ -250,4 +298,4 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
 
 function stop() { try { if (_server) _server.close(); } catch {} _server = null; }
 
-module.exports = { start, stop, _runInjectedTurn, ACTIVE_WINDOW_MS, DEFAULT_SETTLE_MS, DEFAULT_MAX_MS };
+module.exports = { start, stop, _runInjectedTurn, realTurnFrom, blockVerdict, ACTIVE_WINDOW_MS, DEFAULT_SETTLE_MS, DEFAULT_MAX_MS, REAL_USER_WINDOW_MS, UNANSWERED_BLOCK_CAP_MS };

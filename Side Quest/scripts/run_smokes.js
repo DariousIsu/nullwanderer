@@ -581,6 +581,9 @@ const smokes = [
   // Stall-disease naming instrument: the sync DB layer self-times; any statement ≥1s logs its own
   // SQL + caller stack into the stall timeline (the attributor's "active=idle" blind spot closed).
   'smoke_slow_sync_probe.js',
+  // Run-4 collision guard: the test port tells the REAL user from its own injected turns; a recent
+  // or unanswered real turn owns the pipeline (10min / 30min-capped) and the harness yields.
+  'smoke_test_port_guard.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks

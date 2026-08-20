@@ -36,13 +36,22 @@ function req(method, path, body) {
 }
 async function turn(text, { settleMs, maxMs } = {}) { return req('POST', '/turn', { text, settleMs: settleMs || 8000, maxMs: maxMs || 120000 }); }
 
-// wait until no test turn is in flight AND the 120s active-window from the prior turn has cleared
+// wait until no test turn is in flight AND the 120s active-window from the prior turn has cleared.
+// RUN-4 COLLISION fix: the port now reports the REAL user's state separately — when Lucas is in a
+// live exchange (recent or unanswered real turn), YIELD PATIENTLY (long cap) instead of timing out
+// or colliding; his conversation owns the pipeline (test_port REAL_USER_WINDOW_MS semantics).
 async function waitIdle(timeoutMs = 210000) {
-  const t0 = Date.now();
+  const t0 = Date.now(); let cap = timeoutMs, saidYield = false;
   for (;;) {
     let s = null; try { s = await req('GET', '/status'); } catch {}
-    if (s && s.ok && !s.inFlight && (s.lastUserTurnAgoMs == null || s.lastUserTurnAgoMs > 121000)) return s;
-    if (Date.now() - t0 > timeoutMs) throw new Error('waitIdle timeout — app busy or a real user turn is active');
+    const realAgo = s ? s.lastRealUserTurnAgoMs : null;
+    const realBlock = realAgo != null && (realAgo < 600000 || (s.realUnanswered && realAgo < 1800000));
+    if (realBlock) {
+      cap = Math.max(cap, 25 * 60000);
+      if (!saidYield) { saidYield = true; console.log('   ⏸ Lucas is in a live exchange — yielding until his conversation clears'); }
+    }
+    if (s && s.ok && !s.inFlight && !realBlock && (s.lastUserTurnAgoMs == null || s.lastUserTurnAgoMs > 121000)) return s;
+    if (Date.now() - t0 > cap) throw new Error('waitIdle timeout — app busy or a real user turn is active');
     await sleep(5000);
   }
 }

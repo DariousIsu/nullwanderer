@@ -83,6 +83,8 @@ ok(ac.store({ question: 'what did you do today?', answer: TRUMP_A }).stored === 
   ok(ac.isAffirmContinue('where were we?'), '"where were we" → affirm-continue');
   ok(ac.isAffirmContinue('yeah, keep going'), '"yeah keep going" → affirm-continue');
   ok(ac.isAffirmContinue('yea keep going with that'), 'RUN-3 REGRESSION: a deictic tail ("with that") is still a resume');
+  ok(ac.isAffirmContinue('yes — back to it.'), 'RUN-4 REGRESSION: an em-dash joiner after the affirmation is still a resume');
+  ok(ac.isAffirmContinue('ok: where were we?'), 'a colon joiner is still a resume');
   ok(ac.isAffirmContinue('alright, pick it back up from there.'), '"pick it back up from there" → affirm-continue');
   ok(!ac.isAffirmContinue('keep going with the Indiana sweep'), 'a tail naming a SUBJECT is a directive, not a resume');
   ok(!ac.isAffirmContinue('back to the op-ed: what was the AFIDA baseline?'), 'a substantive ask is NOT a bare affirm-continue');
