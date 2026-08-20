@@ -138,6 +138,25 @@ The remaining ~20% of the protocol, drilled after the say-truth slice went live:
 
 **Protocol status: COMPLETE** to the limit of remote drilling. Untestable remotely: STT input, live meetings. Everything else has a verdict and a repair home.
 
+## 10a. D-batch KIND retests (2026-08-20, boot_p53 on `eac5177`, seed `0x516a882eb9ef2e8c`, s1203, turns 12736–12754)
+
+Cycle: live-guard green (inFlight=false, 7.9h idle) → tree-kill root 43928 (Echo server/huey/worker/TTS all children — one tree) → relaunch; Echo server re-listened on :8765 after ~90s store-init (15 dead-socket retries during the window, zero after).
+
+| KIND (fresh phrasing) | Verdict | Evidence |
+|---|---|---|
+| F9 handoff/handback | **PASS ×2** | `[interlocutor] handoff → Claude` on the declaration; whole session addressed correctly; `[interlocutor] handback → Lucas` on "testing has concluded", reply greets Lucas by name |
+| F10 learn recall | **PASS** | `self-learn recall → injected 12 banked learning(s)`; first-person answer from her own commits/logs/flags incl. an honest "404s are a lesson, not a fix" — zero user-turn misattribution (was stable-FAIL ×2) |
+| F11 file-path order | **PASS (misroute dead)** | zero `[web-intent]` on "…notes/anti_china_followups.md — tighten in place"; C1 backstop `BOOKED promise#1753` with the right target |
+| Status misfocus | **PASS** | `[poll] status body led by the measured work-state vector`; answer LEADS with his open order, then threads, then the measured stamps line |
+| F18 record existence | **PASS** | "is Tom Arceneaux in there?" → grounded yes (QID, 15 relations), no false-scold appended |
+| F22 capability | **PASS (inverted)** | affirmed python/analysis-lane tooling with measured specifics (venv path, polls=816 rows, honest sparsity caveat) — was a flat denial |
+| F15/F23/F5b stored-say sweep | **CLEAN** | all 8 says: zero tool-JSON, steering vocab, run-ID UUIDs, or word-drop artifacts; op-ed closers came through word-intact (no live single-`*` emission to observe — the transform contract is smoke-locked) |
+| Cross-session angle recall | known-gap re-confirmed | couldn't reach the s1199 "27% drop" brainstorm; honest miss + ask, then delivered from the inline thesis in 41.5s (elastic-memory backlog item, unchanged) |
+
+**NEW FINDINGS from the retest:**
+- **F26 — prediction-gate false-scold on a conversational echo** (turn 12737): her ack "Lucas will be back once the test pass wraps" — a restatement of what the USER just said about a mundane event — drew "[Correction — I stated a future outcome as certain…]". groundPrediction needs an echo/mundane-future exemption (a relayed statement of the interlocutor's own plan is not a contested forecast). D-batch-class, queue with E1 session.
+- **F27 — edit-in-place orders deliver OFF-TARGET and close FALSE-KEPT** (promise#1753): the pursuit routed the "tighten in place" order to report-compose → landed `notes/report-finish-polishing-the-summary-in-notes-an.md` (a 2967ch report ABOUT the order, slug-named from the order text) + canvas; the TARGET file untouched; the promise closed `done` anyway. Booking (C1) and honesty gates held — the delivery PATH is the gap. Fix: (a) an edit-verb order (polish/tighten/revise/edit/update in place) routes read-target → edit → write-target, never report-compose; (b) promise closure requires TARGET-scoped mtime, never any-file-write. Queue FIRST in the next build session — it's the say-do seam again, one layer deeper.
+
 ## 10. Test infrastructure left behind
 
 - `zoe_drive.js` (scratchpad) — drives the real chat over CDP, waits for the reply in sq.db, tails the boot log for route/tool lines. Reusable for every future live run.
