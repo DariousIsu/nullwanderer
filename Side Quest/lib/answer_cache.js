@@ -78,11 +78,12 @@ function classifyKind(q) {
   // raw-text shape gate — no "?" and a greeting lead — so the warm variant never reached lookup).
   const n = normalize(s);
   if (!n || _EXCLUDE_RE.test(s) || !_QUESTION_SHAPE_RE.test(n)) return null;
-  if (/\b(?:latest|today|tonight|right now|breaking|this (?:week|morning|evening)|news)\b/i.test(s)) return 'news';
-  if (/\bhow many contacts?\b|\bcontacts? (?:with|in)\b/i.test(s)) return 'contact-count';
-  if (/\b(?:roster|members? of|who (?:sits|serves|is) on|leadership of)\b/i.test(s)) return 'roster';
-  if (/\b(?:bill|sb ?\d+|hb ?\d+|h\.? ?r\.? ?\d+|s\.? ?\d{2,})\b/i.test(s)) return 'bill';
-  if (/^\s*who (?:is|was)\b/i.test(s)) return 'person';
+  // kind nets run on the NORMALIZED form too — "hey, who's X again" must classify like "who is X"
+  if (/\b(?:latest|today|tonight|right now|breaking|this (?:week|morning|evening)|news)\b/i.test(n)) return 'news';
+  if (/\bhow many contacts?\b|\bcontacts? (?:with|in)\b/i.test(n)) return 'contact-count';
+  if (/\b(?:roster|members? of|who (?:sits|serves|is) on|leadership of)\b/i.test(n)) return 'roster';
+  if (/\b(?:bill|sb ?\d+|hb ?\d+|hr ?\d+|s ?\d{2,})\b/i.test(n)) return 'bill';
+  if (/^\s*who (?:is|was)\b/i.test(n)) return 'person';
   return 'general';
 }
 
