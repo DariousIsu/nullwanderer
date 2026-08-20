@@ -5175,6 +5175,16 @@ try {
     }
   }, 1000).unref?.();
 } catch {}
+// SLOW-SYNC PROBE (2026-08-20, the stall disease's naming instrument): the attributor above can only
+// name lanes that MARK themselves — the day's ≥10s giants all logged active="idle". This patches the
+// synchronous DB layer so any statement ≥1s logs its OWN SQL + caller stack into the same timeline.
+// Kill switch: ZOE_SLOW_SYNC_PROBE=0.
+try {
+  if (String(process.env.ZOE_SLOW_SYNC_PROBE || '1').trim() !== '0') {
+    const r = require('./lib/slow_sync_probe').arm();
+    console.log(`[slow-sync] probe ${r.armed ? 'armed (statements ≥1s name themselves)' : `NOT armed: ${r.why}`}`);
+  }
+} catch (e) { console.error('[slow-sync] arm failed:', e.message); }
 
 // MAIN-THREAD LOAD GOVERNOR (Lucas 2026-07-24 — "the freezes are getting to where its hard to type in
 // the chat ... we need to better balance the load"). The cloud-slot board (lib/board) reserves a CLOUD

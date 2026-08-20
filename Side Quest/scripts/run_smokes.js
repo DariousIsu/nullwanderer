@@ -578,6 +578,9 @@ const smokes = [
   // F19 slice 2: Echo/Skuld cloud spend (agent_trajectory token rows) folds into usage_meter by
   // id-watermark on the 60s tick — ring-window skip, no double-count, fail-soft on a missing DB.
   'smoke_echo_spend_bridge.js',
+  // Stall-disease naming instrument: the sync DB layer self-times; any statement ≥1s logs its own
+  // SQL + caller stack into the stall timeline (the attributor's "active=idle" blind spot closed).
+  'smoke_slow_sync_probe.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks
