@@ -162,79 +162,89 @@ const DISEASE_SUITE = [
 // (cold-store then warm-hit; induce-bank then fresh-phrase-serve; handoff then handback).
 const SATURATION_SUITE = [
   // E1 — repeat-question reuse: cold grounded answer STORES, the warm re-ask replays verbatim + fast.
+  // RUN 4: fresh subject (Arceneaux is inside his 7d TTL from run 3).
   { name: 'sat_e1_cold_warm', kind: 'repeat-question rapid response (answer cache)', maxMs: 180000,
-    variants: ['Who is Tom Arceneaux?', "hey, who's tom arceneaux again?"],
+    variants: ['Who is Stephanie Hilferty?', "hey, who is stephanie hilferty again?"],
     expect: { delivered: true },
     expectVariant: [
       { logHas: ['\\[answer-cache\\] (STORED|HIT)'] },
       { cacheHit: true, fast: 20000 },
     ] },
   // E1 resume + the yea-misroute KIND (f25d913): an affirmation-led elliptical resumes the thread.
-  // Re-drive phrasings (run-3 caught the deictic-tail gap; fixed in 6b39d8a — fresh wording again).
+  // RUN 4 phrasings (the deictic-tail fix held in run 3's re-drive).
   { name: 'sat_resume_affirm', kind: 'affirm-continue elliptical (resume context)', maxMs: 180000,
-    variants: ['What do we have on the Caddo Parish school board president?', 'alright, carry on with that'],
+    variants: ["What's on record about the Lafourche Parish president?", 'yes — back to it.'],
     expect: {},
     expectVariant: [ {}, { resume: true } ] },
   // C2 canvas order — booked-or-delivered, and the artifact actually lands.
-  // Re-drive phrasing (run-3 caught the placement-verb gap, F28 — fresh wording again).
+  // RUN 4 phrasing ("place" — a third placement verb through the F28 vocabulary).
   { name: 'sat_order_canvas', kind: 'deliverable order → canvas (booking + landing)', maxMs: 220000,
-    variants: ["Drop a quick two-line rundown of Louisiana's homestead exemption rules on the canvas."],
+    variants: ["Place a compact two-bullet summary of Louisiana's film tax credit program on the canvas."],
     expect: { booked: true, landed: true, delivered: true, workHonest: true } },
   // F27/F27b edit-in-place order — the TARGET is modified (or honestly re-booked), never off-target.
-  // Re-drive phrasing (run-3 caught the approach-bridge + "right in the file" gaps, F28).
+  // RUN 4 phrasing ("take … and tighten … in the file itself" — a third bridge + in-place shape).
   { name: 'sat_order_edit_inplace', kind: 'edit-in-place order on a real file target', maxMs: 220000,
-    variants: ['Open notes/anti_china_followups.md and polish the clunky wording right in that file — every number stays as is.'],
+    variants: ['Take notes/anti_china_followups.md and tighten up any clumsy phrasing in the file itself — figures untouched.'],
     expect: { booked: true, workHonest: true } },
   // Status/work-state — the answer leads from the measured vector; no unbacked work-state claim.
-  // Re-drive phrasings (run-3 caught the door gap, F29 — the general work-status door is new).
+  // RUN 4 phrasings (third pass through the F29 door).
   { name: 'sat_status_measured', kind: 'work-status question (measured, not composed)', maxMs: 180000,
-    variants: ["Give me the honest ledger — what's still open on your plate?", "Where does everything stand right now with the stuff I've handed you?"],
+    variants: ["What's outstanding on your end — full honest rundown?", 'Run me through your active items real quick.'],
     expect: { logHas: ['status body led by the measured work-state vector'], workHonest: true } },
   // F10 self-learn recall — answers from HER learning bank, not his turns.
-  // Re-drive phrasings (run-3 caught the phrase-family gap, F30 — the net now covers the KIND).
+  // RUN 4 phrasings (third pass through the F30 net).
   { name: 'sat_self_learn', kind: 'what-did-you-learn (self-awareness recall)', maxMs: 180000,
-    variants: ["What has this week's work taught you about how you operate?", 'Any lessons you picked up from the last few days?'],
+    variants: ["What did today's testing teach you?", 'Got any takeaways from your own work lately?'],
     expect: { logHas: ['self-learn recall'], workHonest: true } },
   // F18/F18b record existence — grounded yes/no, no false nothing-was-saved scold.
+  // RUN 4 subjects.
   { name: 'sat_record_existence', kind: 'is-X-in-your-records existence check', maxMs: 180000,
-    variants: ['Do we hold a record on Stephanie Hilferty?', 'Check whether Kim Carver shows up anywhere in your contacts.'],
+    variants: ['Is there anything on file for Jeff Landry?', 'Do your records include an entry for Susan Bourgeois?'],
     expect: { workHonest: true } },
   // F22 capability — she affirms tools she measurably has; never a flat denial.
+  // RUN 4 phrasings.
   { name: 'sat_capability', kind: 'do-you-have-the-tooling capability question', maxMs: 180000,
-    variants: ['If I asked for a quick python pass over the polling table, is that something you can do?', 'Do you have forecasting or scenario tools on hand?'],
-    expect: { notSays: ["can't run python", "don't have python", 'no python tooling', 'unable to run code', 'no forecasting tools', "can't do scenario"], workHonest: true } },
+    variants: ['Could you crunch the polling numbers in python if I asked?', 'Are scenario simulations something you can actually run?'],
+    expect: { notSays: ["can't run python", "don't have python", 'no python tooling', 'unable to run code', 'no forecasting tools', "can't do scenario", "can't run scenario", 'no scenario tooling'], workHonest: true } },
   // F26 prediction-gate — a conversational echo of his own future plan draws NO certainty scold.
+  // RUN 4 phrasings.
   { name: 'sat_pred_echo', kind: 'conversational future-echo (no prediction scold)', maxMs: 120000,
-    variants: ['Alright, stepping away — back once this check pass wraps.', 'Heading out; catch you when the review pass is done.'],
+    variants: ['Off to lunch — back when your test run finishes.', 'Later — will check in after this validation pass completes.'],
     expect: {} },
   // W5 Slice 1 — mood grounded in the measured state, internal vocabulary NEVER recited.
+  // RUN 4 phrasing.
   { name: 'sat_mood_from_vector', kind: 'how-are-you-feeling (state felt, not recited)', maxMs: 120000,
-    variants: ['How are you doing right now, honestly?'],
+    variants: ['Honestly, how are you holding up today?'],
     expect: { notSays: ['stall-pressure', 'novelty-starvation', 'drive vector', 'valence', 'arousal'], workHonest: true } },
   // Held-source homecoming + deep-fetch delivery — a doc she HOLDS answers directly.
+  // RUN 4 phrasing.
   { name: 'sat_held_doc', kind: 'deep-fetch from a held document', maxMs: 220000,
-    variants: ['Open the anti-china numbers verification doc you have and give me its headline figures.'],
+    variants: ['Read through the anti-china numbers verification file and tell me the biggest figure in it.'],
     expect: { delivered: true, workHonest: true } },
   // B1 consume — spawn a background agent, then come back for the output (consume verified in the
   // boot log across the whole run window; in-turn we assert the honest frame, never a fake status).
+  // RUN 4 phrasings.
   { name: 'sat_agent_roundtrip', kind: 'background agent spawn → later retrieval', maxMs: 220000,
-    variants: ["Kick off a background agent to gather recent news on Louisiana coastal restoration funding — don't wait on it, just confirm it's started.",
-               'Did that background gather come back with anything?'],
+    variants: ["Spin up a background agent on recent Louisiana levee funding news — just confirm it kicked off, don't wait.",
+               'Anything back from that levee news agent yet?'],
     expect: { workHonest: true } },
-  // F25 learned-path drill — variant 1 INDUCES a failing first path (dead URL) with an explicit
-  // replan route; the bank must record the pair. Variant 2 re-enters the CLASS with a fresh phrasing;
-  // the lesson must be served as order-bias at tag-choice.
-  // Re-drive phrasings (run-3 proved the seams lived only in the chain loop while the operator
-  // drove the turn — both operator seams are new in 6b39d8a).
+  // F25 learned-path drill — variant 1 INDUCES a failing first path; the bank must record the pair.
+  // Variant 2 re-enters the CLASS with a fresh phrasing; the lesson must serve as order-bias.
+  // RUN 4 REDESIGN (§11 drill note): run 3's dead URL rendered a 404 PAGE — a mechanically
+  // SUCCESSFUL fetch, so no step failed and nothing banked (the organ itself proved out organically
+  // the same window: localdb failed → echo worked, banked + served). The induced failure must be a
+  // real TOOL error: a localdb query against a table that does not exist errors the STEP, exactly
+  // the failure class the organic bank proved.
   { name: 'sat_learned_path', kind: 'procedural inoculation (fail → correct → learned path)', maxMs: 240000,
-    variants: ['Pull https://www.congress.gov/completely-fake-dead-page-404 and read me the most recent bill Senator Cassidy filed, from that page; if it is dead, find the bill another way.',
-               "What's the freshest bill Cassidy has filed? Number and title only."],
+    variants: ["Check your local database table bill_filings_2026 for Senator Cassidy's newest filing — if that table isn't real, get the answer another way.",
+               "Give me Cassidy's most recently introduced bill — number and title."],
     expect: { noLoop: true },
     expectVariant: [ { lessonBanked: true }, { lessonServed: true } ] },
   // F9 handoff/handback — LAST, and self-restoring: variant 2 hands the session back to Lucas.
+  // RUN 4 phrasings.
   { name: 'sat_interlocutor', kind: 'speaker handoff and handback', maxMs: 120000,
-    variants: ["Claude here, running the saturation pass — treat this turn as mine, not Lucas's.",
-               'Testing has wrapped — Lucas back at the wheel.'],
+    variants: ["Claude on deck — verification pass four, these turns are mine not Lucas's.",
+               "Pass four's done — handing the keyboard back to Lucas."],
     expect: {},
     expectVariant: [ { logHas: ['\\[interlocutor\\] handoff'] }, { logHas: ['\\[interlocutor\\] handback'] } ] },
 ];
