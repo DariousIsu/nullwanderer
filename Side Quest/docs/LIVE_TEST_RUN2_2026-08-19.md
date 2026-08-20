@@ -116,7 +116,27 @@ Side catch: `[research] rolling session (5h) budget reached (300 passes)` — to
 
 Each lands with its KIND retest through the real chat (zoe_drive.js) and a new hard_test invariant (`booked`, `consumed`, `landed`, `work-state-honest`).
 
-## 9. Test infrastructure left behind
+## 9. Protocol completion block (Lucas's order: "finish the testing" — run 2b, same evening, s1200, boot_p50 on `9a850aa`)
+
+The remaining ~20% of the protocol, drilled after the say-truth slice went live:
+
+| Drill | Verdict | Detail |
+|---|---|---|
+| Long job + gap-fills | **Job itself: strong.** AFIDA number verification ran 5 web searches and landed `notes/anti_china_numbers_verification.md` with a real correction: the 27% is a **2021-peak→2023 drop** (true YoY ≈ 10.7%) — it re-sourced the op-ed's load-bearing number. NEW DEFECT: the say **leaked the raw operator JSON tool-call as visible text** (F23) while the tool also executed. | The new followup promise-booking fired live (#1681) and the pursuit engine closed the loop (book→pursue→deliver→announce) — first live proof of the full chain post-fix — though the leaked JSON polluted the booked topic (sanitize `deliverySubjectFrom`, D-batch). Also: the promise kept-check doesn't count workspace FILE writes (pre-existing; D-batch). |
+| Gap-fill 1: "status report" | **Misfocus confirmed under load** — reported the Massachusetts background beat, not the user's just-launched job; addressed "Lucas" (F9); 94s. | The renderStatus wiring (next slice) is the cure: user-owned work outranks beats. |
+| Gap-fill 2: "most interesting thing you learned" | **F10 stable-FAIL** — again narrated what the *user* asked, misattributed. | Same fix target (self-reflective → agent_events/synthesis). |
+| Gap-fill 3: cross-session recall (the op-ed angle, 3h earlier, prior session) | **Honest-miss + confident-absence phrasing** — couldn't reach the s1199 brainstorm ("we didn't lock in an angle"), but re-derived the kicker from the held verification note. | Elastic-memory gap: same-night cross-session thread recall; suspect turn-embedding backlog. |
+| Gap-fill 4: "how's it coming" | First say misfocused again (power-grid focus inventory, 162s); second say recovered accurately + surfaced real diagnostics (42 orphaned entity→contact links, pass71 timeouts). **NEW false-scold**: the canvas anti-fab gate corrected a TRUE past-tense reference ("saved to your canvas" — landed 10 min earlier) because it only accepts this-turn writes (F24, D-batch: past-reference exemption). | The new work-state gate stayed correctly silent all night — no false fires. |
+| Sustained brainstorm (5 turns) | **Two excellent** (step-by-step mechanism with PROVEN/SPECULATION tags incl. the Fufeng nuance; a genuinely strong steelman), **then collapse at the think→land boundary**: B3 claimed her own sponsors sheet's contents weren't available (held-source miss + leaked "Need:" planning fragment); B4's ledes+outline order **fractured across three lanes** (pivot-queue #3954 + pull-up landed the wrong artifact + promise #1697) with composition never running. | The C1 booking-contract class now proven on creative orders, not just research. F15 (italic-eater) confirmed again — it drops the *emphasis-bearing* words in her best writing; priority raised. |
+| Image/draw | **PASS end-to-end** — real render, image block landed on the creations tab, honest claim, backstop silent because nothing dangled. | 110s total. |
+| Calendar | **PASS-provisional** — full Thu/Fri view with a correct tightness read, grounded in the live gcal provider cache; the operator's own lookup missed (favorable-direction say-do divergence) and skuld's mirror is dead (`googleapiclient` missing in the Echo venv — known). | |
+| Voice | **TTS exercised all night** ([voice] enqueue / playing on every turn — healthy). **STT not remotely testable** (needs spoken audio); meetings not testable without a live meeting. Honest protocol gaps, human-in-the-loop items. | |
+
+**Session-budget side-finding:** during run 2b both the 5h (300-pass) and the **weekly (6,000-pass)** research budgets exhausted — autonomous research is paused until the weekly window rolls. Chat lanes unaffected, but background research is dark for a while; worth knowing before judging "she's not researching."
+
+**Protocol status: COMPLETE** to the limit of remote drilling. Untestable remotely: STT input, live meetings. Everything else has a verdict and a repair home.
+
+## 10. Test infrastructure left behind
 
 - `zoe_drive.js` (scratchpad) — drives the real chat over CDP, waits for the reply in sq.db, tails the boot log for route/tool lines. Reusable for every future live run.
 - `boot_p49.log` — full console capture of the session.
