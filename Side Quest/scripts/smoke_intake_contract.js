@@ -66,6 +66,14 @@ ok(!ic.detectEditIntent('write a report on the Louisiana parishes'), 'a compose 
 ok(!ic.detectEditIntent('update the roster with the new members'), 'a bare "update" without an in-place cue stays compose (additive updates rebuild)');
 ok(!ic.detectEditIntent('the editor cleaned up the piece nicely'), 'chatter about editing never fires');
 ok(!ic.detectEditIntent(''), 'empty → false');
+// F27b (boot_p54 live): edit-verb orders must BOOK — this exact phrasing produced zero booking.
+{
+  const r = ic.detectDeliverableOrder('clean up the wording in notes/anti_china_numbers_verification.md — smooth the phrasing in place, keep every number exactly as it is.');
+  ok(r && r.target === 'notes/anti_china_numbers_verification.md', 'F27b REGRESSION: the unbooked live edit order now books with the right target');
+  ok(r && ic.detectEditIntent('clean up the wording in notes/anti_china_numbers_verification.md — smooth the phrasing in place'), '…and it is edit-shaped');
+}
+ok(!!ic.detectDeliverableOrder('polish the summary in notes/x.md in place'), 'a polish-led order with a path books');
+ok(!ic.detectDeliverableOrder('the cleanup crew did a great job on the office'), 'noun "cleanup" chatter never books (no order lead)');
 
 // ── helpers ──────────────────────────────────────────────────────────────────────────────────────────────
 ok(ic.statesIn('Utah, Arizona and new mexico are in; Indianapolis is not a state').join(',') === 'arizona,new mexico,utah', 'statesIn: names matched, city-lookalikes not');

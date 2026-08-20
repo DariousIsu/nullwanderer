@@ -26,7 +26,10 @@ const str = (v) => (v == null ? '' : String(v));
 // Interrogatives are asks, not orders (the lookup/status lanes own them).
 const _QUESTION_RE = /\?\s*$|^(?:who|what|when|where|why|how|hows|how's|is|are|was|were|do|does|did|can|could|would|should|any)\b/i;
 // The order lead: an imperative deliver-verb opening a sentence, or an explicit commitment ask.
-const _ORDER_VERB = /(?:finish|complete|update|build|make|compile|compose|create|assemble|land|write|draft|produce|generate|deliver|put together|pull together|knock out|redo)/i;
+// F27b (boot_p54 retest): "clean up the wording in notes/x.md — smooth the phrasing in place" booked
+// NOTHING — the edit verbs were missing from this vocabulary, so an edit-shaped order only booked when
+// it happened to open with a compose verb ("finish …"). The phrasing lottery, one vocabulary short.
+const _ORDER_VERB = /(?:finish|complete|update|build|make|compile|compose|create|assemble|land|write|draft|produce|generate|deliver|put together|pull together|knock out|redo|polish|tighten|revise|rework|reword|edit|refine|smooth|trim|clean\s*up|copy-?edit|proofread)/i;
 const _ORDER_LEAD_RE = new RegExp(`(?:^|[.!;\\n]\\s*)(?:(?:ok(?:ay)?|alright|now|next|also|then|please|zoe)[,\\s]+)*(?:let'?s\\s+|go ahead and\\s+)?${_ORDER_VERB.source}\\b`, 'i');
 const _ORDER_WANT_RE = new RegExp(`\\bi\\s+(?:want|need)\\s+(?:you\\s+to\\s+)?(?:(?:a|an|the|this|that)\\s+)?(?:\\w+\\s+){0,3}?${_ORDER_VERB.source}?`, 'i');
 // Deliverable evidence: an explicit workspace path, the canvas, or an artifact noun.
