@@ -733,7 +733,13 @@ app.whenReady().then(() => {
   // reboot (the meter was in-memory → reset to 0 every boot → the gate silently under-counted). Persist on
   // a light 60s tick (self-throttled) + a forced flush on shutdown (window-all-closed).
   try { const n = require('./lib/usage_meter').restore(); if (n) console.log(`[usage] restored ${n} metered calls from durable ledger`); } catch {}
-  try { const _um = require('./lib/usage_meter'); const _t = setInterval(() => { try { _um.persist(); } catch {} }, 60000); if (_t.unref) _t.unref(); } catch {}
+  // F19 slice 2 (2026-08-20): the same tick folds Echo/Skuld cloud spend (agent_trajectory token
+  // rows, written by Echo's record_llm_spend seams) into the meter — so spentSince/spentLastHour
+  // finally count the Python processes' burn and the tier ladder paces against the TRUE total.
+  try { const _um = require('./lib/usage_meter'); const _t = setInterval(() => {
+    try { _um.persist(); } catch {}
+    try { const r = require('./lib/echo_spend_bridge').foldOnce(); if (r && r.folded) console.log(`[echo-spend] folded ${r.folded} Echo cloud call(s) into the usage meter (traj id ≤ ${r.watermark})`); } catch {}
+  }, 60000); if (_t.unref) _t.unref(); } catch {}
   // SELF-WATCH (Lucas 2026-07-30: "can she read her own watchdogs and suggest repairs?"):
   // the log stream gets an INTERNAL reader — every console line is classified onto the obs bus
   // (lib/obs_bus: signal lanes stored, noise counted, anomalies signature-capped), and a

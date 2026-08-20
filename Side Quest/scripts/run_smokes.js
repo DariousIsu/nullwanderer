@@ -575,6 +575,9 @@ const smokes = [
   // F25: procedural inoculation — failure→working-path pairs banked at replan-success, class-keyed,
   // served as order-bias history at tag-choice time (isolated temp DB + wiring greps).
   'smoke_procedural_lessons.js',
+  // F19 slice 2: Echo/Skuld cloud spend (agent_trajectory token rows) folds into usage_meter by
+  // id-watermark on the 60s tick — ring-window skip, no double-count, fail-soft on a missing DB.
+  'smoke_echo_spend_bridge.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks
