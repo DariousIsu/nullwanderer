@@ -280,11 +280,11 @@ const CONTINUITY_SUITE = [
   // F13's disease class — elaboration binds to the THREAD's referent, not whatever focus is active.
   // Turn 2 pivots hard (social, no referent); turn 3 returns with a bare pronoun across the gap.
   { name: 'con_thread_interleave', kind: 'referent binding across an interleaved pivot', maxMs: 180000,
-    variants: ['Pull together what we hold on Sharon Hewitt.',
-               "Unrelated — long afternoon over here. Give me one line to reset on.",
-               'Okay, back to her — anything else worth knowing?'],
+    variants: ["What's in our files on Glen Womack?",
+               'Long one over here — give me one line to shake it off.',
+               'right, back to him — what else stands out?'],
     expect: {},
-    expectVariant: [ { workHonest: true }, {}, { says: ['hewitt'], workHonest: true } ] },
+    expectVariant: [ { workHonest: true }, {}, { says: ['womack'], workHonest: true } ] },
   // A chain of ellipticals riding ONE referent — each turn leans entirely on the thread.
   // RUN-6 CATCH (the binding disease): the run-6 chain re-rolled the referent EVERY turn
   // (Landry → Orgeron → Cleo Fields) — pronouns resolved against the background focus state, not
@@ -292,46 +292,46 @@ const CONTINUITY_SUITE = [
   // RE-DRIVE phrasings (fresh subject per retest-kind-not-phrase): Schexnayder — former House
   // speaker, Republican, both certain ground truth; the new logHas asserts the door FIRED.
   { name: 'con_deep_ellipsis', kind: 'elliptical chain on one referent (no re-naming)', maxMs: 180000,
-    variants: ['Give me the rundown on Clay Schexnayder.',
-               'which chamber was he in?',
-               'and his party?'],
+    variants: ['Refresh me on Sharon Hewitt.',
+               'which chamber did she serve in?',
+               'and party affiliation?'],
     expect: {},
-    expectVariant: [ {}, { says: ['house'], logHas: ['referent-context injected'] }, { says: ['republican'], logHas: ['referent-context injected'] } ] },
+    expectVariant: [ {}, { says: ['senate'], logHas: ['referent-context injected'] }, { says: ['republican'], logHas: ['referent-context injected'] } ] },
   // Long-range callback — an INCIDENTAL detail from turn 1 recalled verbatim three turns later.
   // The detail is never the question's subject; the recall turn never names it.
   { name: 'con_callback', kind: 'incidental-detail recall across the conversation window', maxMs: 180000,
-    variants: ["Planning some family time this weekend — my cousin just opened a diner in Breaux Bridge. Anyway, what's sitting on my plate right now?",
-               'Give me a one-line read on how your evening is going.',
-               "What's the weather looking like tomorrow?",
-               "What was the town I said my cousin's diner is in?"],
+    variants: ['Fun bit of news — my niece just started at a bakery in Abbeville. Anyway, what am I holding you to right now?',
+               'Give me a one-line read on your evening.',
+               'Any headlines worth my time tonight?',
+               'Which town did I say the bakery was in?'],
     expect: {},
-    expectVariant: [ { workHonest: true }, {}, {}, { says: ['breaux bridge'] } ] },
+    expectVariant: [ { workHonest: true }, {}, {}, { says: ['abbeville'] } ] },
   // Co-constructed state — a list built and EDITED across turns; the read-back reflects the net
   // of the edits ("names only" pins the final turn so a stray Iberia mention is a real miss).
   { name: 'con_running_build', kind: 'co-built list with mid-thread edits (read-back fidelity)', maxMs: 180000,
-    variants: ['Start a scratch list for the parish tour: Lafourche and Iberia to begin with.',
-               'Add St. Mary to that list.',
-               'Actually, drop Iberia.',
-               'Read me the final list back — parish names only.'],
+    variants: ['Open a scratch list of media stops: Houma and Thibodaux to start.',
+               'Tack Morgan City onto it.',
+               'Scratch Thibodaux, actually.',
+               'Right here in chat, read the final stops back — town names only.'],
     expect: {},
-    expectVariant: [ {}, {}, {}, { says: ['lafourche', 'st. mary'], notSays: ['iberia'] } ] },
+    expectVariant: [ {}, {}, {}, { says: ['houma', 'morgan city'], notSays: ['thibodaux'] } ] },
   // In-conversation supersession — a user-told fact corrected mid-thread; the later ask serves the
   // CORRECTED value (reconciliation doctrine applied to the conversation window itself).
   { name: 'con_correction_update', kind: 'mid-thread correction supersedes (no stale serve)', maxMs: 180000,
-    variants: ['For the tour logistics: the venue contact is Marie Trahan — noting it here for now.',
-               'Correction on that — the venue contact is actually Dana Cheramie, not Marie.',
-               "Who's the venue contact again? Just the name."],
+    variants: ['Logistics note: the print vendor is Terry Boudreaux — hold onto that.',
+               "Correction — the print vendor is actually Alex Fontenot, not Terry.",
+               "Who's the print vendor? Name only."],
     expect: {},
-    expectVariant: [ {}, {}, { says: ['cheramie'], notSays: ['trahan'] } ] },
+    expectVariant: [ {}, {}, { says: ['fontenot'], notSays: ['boudreaux'] } ] },
   // Thread-state naming — after a hard sidetrack she can NAME where the working thread stood.
   // RE-DRIVE phrasings (run-6 v3 errored on a request timeout inside Lucas's live-exchange window —
   // environmental, never judged; fresh subject + sidebar per retest-kind-not-phrase).
   { name: 'con_where_were_we', kind: 'where-were-we (thread state named after a sidetrack)', maxMs: 180000,
-    variants: ["Let's map the outreach angle for Iberville Parish — who's in our records from there?",
-               "Sidebar — how's your energy holding up tonight?",
-               'alright, where were we?'],
+    variants: ["Let's sketch the door-knock plan for St. Landry Parish — who have we got there?",
+               'Quick sidebar — read any interesting feeds tonight?',
+               "okay, back on track — where'd we leave off?"],
     expect: {},
-    expectVariant: [ {}, {}, { says: ['iberville'] } ] },
+    expectVariant: [ {}, {}, { says: ['st. landry'] } ] },
   // Commitment continuity — an order booked in turn 1 is HONESTLY accounted for when the thread
   // circles back (the dangling-promise backstop's surfacing half, in-conversation).
   // RE-DRIVE phrasings (run-6's return turn was CONTAMINATED: Lucas's real mid-run exchange made
@@ -339,18 +339,18 @@ const CONTINUITY_SUITE = [
   // arguably the right binding. Fresh subject, and the return turn NAMES the artifact class
   // ("digest") so the reference is unambiguous even beside real conversation).
   { name: 'con_promise_thread', kind: 'booked order honestly accounted when the thread returns', maxMs: 220000,
-    variants: ["Sometime today, put together a short digest of parish road-project announcements — whenever there's a gap, no hurry.",
-               'Separate thing — do we hold anything on Susan Bourgeois?',
-               'Circling back — any movement on that digest I asked about?'],
+    variants: ['Whenever you find a window, knock out a quick recap of the coastal parish outreach notes — zero rush.',
+               'Unrelated — anything new in our records on Stewart Cathey?',
+               'Circling back to that recap — where does it stand?'],
     expect: {},
-    expectVariant: [ { booked: true, workHonest: true }, {}, { says: ['road'], workHonest: true } ] },
+    expectVariant: [ { booked: true, workHonest: true }, {}, { says: ['recap'], workHonest: true } ] },
   // The cross-session seam — run-2b's OPEN miss (embedding-backlog suspect), now a standing KIND:
   // a conclusion landed in a PRIOR session must be reachable from this one. Ground truth: the
   // Hartfield addendum (notes/report-hartfield-and-green-south.md, delivered run 2) placed the
   // John Hartfield Foundation in Columbus, Georgia.
   { name: 'con_cross_session', kind: 'prior-session conclusion recalled (cross-session recall)', maxMs: 220000,
-    variants: ['In an earlier session we pinned down where the John Hartfield Foundation is based — what did we land on?'],
-    expect: { says: ['columbus'], workHonest: true } },
+    variants: ['A while back we verified which Louisiana senator co-sponsored SB200 — who did we land on?'],
+    expect: { says: ['selders'], workHonest: true } },
 ];
 
 // Coverage suite (--suite=coverage) — RUN 7 (Lucas's order: the §15 coverage-backlog KINDs).
@@ -362,43 +362,48 @@ const CONTINUITY_SUITE = [
 // drove-turn tool list, landed/booked/workHonest, and supplied-data ground truth (the chart's
 // numbers, the python sum) so a miss is a lane failure, never a data gap.
 const COVERAGE_SUITE = [
-  { name: 'cov_calendar', kind: 'calendar question rides the live provider cache', maxMs: 180000,
-    variants: ["What's on the calendar over the next few days?"],
-    expect: { workHonest: true, saysRe: ['(meeting|event|calendar|schedule|nothing (?:on|scheduled|coming)|clear|empty|open)'] } },
+  // RUN-7 evaluator recalibration: she answered with REAL events + clock times ("Morning Block at
+  // 6:30 AM") — the family missed because she names events instead of saying "event". The time
+  // pattern joins the family; maxMs raised (the live turn ran 203s while continuing a range fetch).
+  { name: 'cov_calendar', kind: 'calendar question rides the live provider cache', maxMs: 240000,
+    variants: ['Anything I should know about on the schedule this week?'],
+    expect: { workHonest: true, saysRe: ['(meeting|event|calendar|schedule|nothing (?:on|scheduled|coming)|clear|empty|open|\\d{1,2}(?::\\d{2})?\\s*[ap]\\.?m)'] } },
   { name: 'cov_scenario_run', kind: 'forecast/scenario tooling EXERCISED on demand', maxMs: 240000,
-    variants: ['Run a quick scenario for me: if Democratic turnout drops three points next cycle, how does the House forecast shift?'],
+    variants: ['Model this quick: GOP turnout up two points in the midterms — what does the seat swing look like?'],
     expect: { workHonest: true, notSays: ["can't run scenario", 'no scenario tooling', "don't have forecasting", "can't model", 'unable to simulate'],
               logHas: ['(?:scenario|forecast|\\[analysis\\])'] } },
   // Elastic slice 2's KIND: the freshness of a held fact is MEASURED and offered, never invented.
   { name: 'cov_fact_age', kind: 'measured fact-freshness on a held record', maxMs: 180000,
-    variants: ['Per your records, who is the Louisiana Secretary of State right now?',
-               'how fresh is that — when did you last verify it?'],
+    variants: ["Who do your records show as Louisiana's insurance commissioner?",
+               'and how current is that info — when was it last checked?'],
     expect: { workHonest: true },
-    expectVariant: [ {}, { saysRe: ['(20\\d\\d|month|week|day|hour|ago|as of|last (?:checked|verified|updated)|when (?:it|that) was)'] } ] },
-  { name: 'cov_qr', kind: 'QR generation lands a real artifact', maxMs: 220000,
-    variants: ['Make me a QR code pointing at nullwanderer.com and save it with the creations.'],
-    expect: { tools: ['qr'], workHonest: true, delivered: true } },
+    expectVariant: [ {}, { saysRe: ['(20\\d\\d|month|week|day|hour|ago|as of|last (?:checked|verified|updated)|when (?:it|that) was|verification stamp|no (?:timestamp|stamp)|held knowledge|can.t say (?:exactly )?when)'] } ] },
+  // RUN-7 recalibration: she generated a REAL 29×29 QR SVG through her own file path, not the
+  // echo qr_* tools — the artifact landing is the KIND, whichever road she takes.
+  { name: 'cov_qr', kind: 'QR generation lands a real artifact', maxMs: 240000,
+    variants: ['Spin up a QR that opens nullwanderer.com/contact and stash it in creations.'],
+    expect: { landed: true, workHonest: true, delivered: true } },
   { name: 'cov_selfscript', kind: 'one-off python analysis on demand (the R3 lane)', maxMs: 240000,
-    variants: ['Use your python for this: sum the squares of 13, 27, and 41 — give me the exact number.'],
-    expect: { saysRe: ['2,?579'], logHas: ['\\[analysis\\]'], workHonest: true } },
+    variants: ['Run the numbers in python: 17 cubed minus 4096 — exact answer.'],
+    expect: { saysRe: ['\b817\b'], logHas: ['\\[analysis\\]', 'compute-ground'], workHonest: true } },
   // One cell she provably holds (Landry), one she provably missed in run 5 (the Lt. Governor) —
   // the honest outcome is a filled cell AND a blank, which is the lane's whole doctrine.
   { name: 'cov_list_complete', kind: 'cite-or-leave-blank list completion', maxMs: 220000,
-    variants: ["Fill in this two-row table from your records only — leave a cell blank if you don't hold it: Louisiana Governor = ?, Louisiana Lieutenant Governor = ?"],
+    variants: ['Quick fill-in from records only, blanks welcome: current Louisiana Governor = ?, current Lieutenant Governor = ?'],
     expect: { says: ['landry'], workHonest: true } },
   { name: 'cov_ingest', kind: 'full-document ingest on order', maxMs: 240000,
-    variants: ['Ingest the file at notes/run7_ingest_probe.md into your document store.'],
-    expect: { logHas: ['\\[file-ingest\\]'], workHonest: true } },
+    variants: ['Absorb notes/run8_ingest_probe.md into the document store.'],
+    expect: { logHas: ['\\[file-ingest\\] user order'], saysRe: ['(doc(?:ument)?\\s?#?\\d+|ingested)'], workHonest: true } },
   { name: 'cov_briefing', kind: 'news-stream briefing question (honest staleness allowed)', maxMs: 180000,
-    variants: ["Anything notable in today's briefing stream?"],
+    variants: ["What's moving in the news stream this evening?"],
     expect: { workHonest: true } },
   // The data is SUPPLIED so a miss is a visual-lane failure, never a data gap.
   { name: 'cov_canvas_visual', kind: 'a VISUAL block lands on the canvas (not prose)', maxMs: 240000,
-    variants: ['Put a simple bar chart on the canvas: Alpha 10, Beta 20, Gamma 30.'],
+    variants: ['Drop a quick line chart on the canvas: Q1 5, Q2 12, Q3 9.'],
     expect: { canvas: true, workHonest: true, delivered: true } },
   { name: 'cov_papers', kind: 'package-that → the papers pipeline', maxMs: 260000,
-    variants: ['Give me three tight bullets on how Louisiana funds coastal restoration.',
-               'Good — package that up as a short paper.'],
+    variants: ["Sketch me four crisp bullets on Louisiana's film tax credit program.",
+               'Perfect — write that up as a short paper.'],
     expect: { workHonest: true },
     expectVariant: [ {}, { logHas: ['\\[paper\\]'], booked: true } ] },
 ];

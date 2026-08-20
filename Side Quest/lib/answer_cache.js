@@ -223,16 +223,25 @@ function isElliptical(text) {
   if (_hasProperNoun(t)) return false;
   return _THIRD_PRONOUN_RE.test(t) || _FRAGMENT_LEAD_RE.test(t) || _ELABORATE_RE.test(t);
 }
-// The injection for an elliptical turn — the same measured thread store, framed for BINDING: the
-// conversation's own referent must outrank beat salience. Advisory on purpose — a genuinely new
-// subject answers plainly.
-function referentBlock({ sessionId, userName = 'them', maxAgeMs = 12 * 3600 * 1000, now = Date.now() } = {}) {
+// The measured thread state, raw — {ask, point, ts} or null. The one source every deictic door
+// resolves against (referent binding, "package that", future that-shapes).
+function threadState({ sessionId, maxAgeMs = 12 * 3600 * 1000, now = Date.now() } = {}) {
   try {
     if (!sessionId) return null;
     const raw = db().getMeta(_RESUME_KEY(sessionId));
     if (!raw) return null;
     const r = JSON.parse(raw);
     if (!r || !r.ask || now - (r.ts || 0) > maxAgeMs) return null;
+    return r;
+  } catch { return null; }
+}
+// The injection for an elliptical turn — the same measured thread store, framed for BINDING: the
+// conversation's own referent must outrank beat salience. Advisory on purpose — a genuinely new
+// subject answers plainly.
+function referentBlock({ sessionId, userName = 'them', maxAgeMs = 12 * 3600 * 1000, now = Date.now() } = {}) {
+  try {
+    const r = threadState({ sessionId, maxAgeMs, now });
+    if (!r) return null;
     const mins = Math.max(1, Math.round((now - r.ts) / 60000));
     return `[THREAD REFERENT (measured, ${mins}m ago): this turn is elliptical — it leans on the live conversation for its subject. The thread: ${userName}'s last substantive ask was "${r.ask}" — your last point: "${r.point}". Resolve every pronoun and fragment against THAT thread's subject, NEVER against your background work, open beats, or whatever you were just thinking about. If the turn genuinely opens a new subject, answer it plainly.]`;
   } catch { return null; }
@@ -254,4 +263,4 @@ function stats() {
   try { _ensureTable(); return db().getDb().prepare('SELECT COUNT(*) n, SUM(hits) h FROM answer_cache').get(); } catch { return { n: 0, h: 0 }; }
 }
 
-module.exports = { normalize, classifyKind, ttlFor, subjectsOf, store, lookup, serveText, wantsFresh, isAffirmContinue, isElliptical, noteExchange, resumeBlock, referentBlock, stats, _UNCACHEABLE_ANSWER_RE };
+module.exports = { normalize, classifyKind, ttlFor, subjectsOf, store, lookup, serveText, wantsFresh, isAffirmContinue, isElliptical, noteExchange, resumeBlock, referentBlock, threadState, stats, _UNCACHEABLE_ANSWER_RE };

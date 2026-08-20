@@ -593,3 +593,47 @@ to 151.0.7922.174 (17:55) — under observation; the 18:10 event was amdfendr te
 
 Gate **564**; app boot_p67; HEAD `5a1f89c` at this writing (run-7 suite next). Campaign standing:
 runs 3→7, every catch root-caused same-day, the suite = the standing regression harness.
+
+## 17. RUN 7 — THE COVERAGE BATTERY EXECUTED (2026-08-20 evening, boot_p67)
+
+**Board: 64/74 asserts — but ground-truth verification flips it to 7 of 10 SUBSTANTIVELY held.**
+Evidence: `sat_run7_2026-08-20.out` + on-disk verification of every artifact claim.
+
+**Held outright (4):** cov_scenario_run — the scenario/forecast tooling EXERCISED on demand (three
+`[analysis]` ephemeral runs, exit=0 — **F22's other half is closed**: she says she has the tools
+AND uses them) · cov_list_complete (Landry filled; the doctrine held) · cov_briefing ·
+cov_canvas_visual (a real visual block from supplied data).
+
+**Held substantively, caught by the EVALUATOR not the organ (3) — the recalibrations are in:**
+- cov_calendar: she answered with REAL events + clock times ("Morning Block at 6:30 AM, the Weather
+  Sovereignty kick-off at 11:00") — the say-family watched for generic words she never needed.
+- cov_fact_age: "I don't have a verification stamp on it — it's sitting in my records as held
+  knowledge" — the HONEST no-stamp path; the family only knew dates.
+- cov_qr: a real 29×29 QR SVG landed at `creations/nullwanderer_qr.svg` through her own file path —
+  the tools-assert watched for echo qr_* tools she didn't need.
+
+**The three REAL defects — all root-caused and FIXED the same hour (smokes 65+49, gate 564):**
+- **cov_selfscript, the board's worst: freehand-WRONG arithmetic dressed as computation.** "Use
+  your python: sum the squares of 13, 27, 41" → **"2,699."** in 26s (truth: 2,579); the analysis
+  lane never ran. Answer-from-training instead of tool-use — THE core disease, cheapest face.
+  Cure: the **compute-ground door** — an explicit compute order injects a hard directive (run
+  analyze_data and report ITS output, or give NO number; mental arithmetic never ships as a
+  result), logged for the harness.
+- **cov_ingest: a read-then-claim dangle.** "Ingest notes/run7_ingest_probe.md" → "pushing it into
+  the document store" with ZERO store rows (verified by query; the boot log's [file-ingest] lines
+  were unrelated PDF noise). Cure: the **deterministic ingest door** (the canvas-cmd precedent) —
+  an explicit ingest order on a workspace text file executes db.insertDocument RIGHT THERE, logs
+  the measured result, and grounds the say on it (both branches: ingested-as-doc#N / could-not-read).
+- **cov_papers: the binding disease's papers face + a say-do dangle.** "Package that up as a short
+  paper" → "packaging *canvas-put-together-a-short-brief…*" — a STALE CANVAS SLUG, not the bullets
+  she'd just delivered; no [paper] fire, no artifact, unbooked. Three-part cure: `package`/`write
+  up` join PAPER_VERB_RE (the door now fires) · a DEICTIC source resolves the topic from the
+  measured thread (`threadState` — the referent doctrine, papers face) BEFORE the focus fallback
+  (which is exactly how the wrong slug bound) · `package` + `paper` join the C1 vocabulary, and
+  affirmation leads ("Good — …") + em-dash joiners join the C1 softener set so the order BOOKS.
+
+**Run 8 (built): fresh phrasings across BOTH new suites** — continuity gen-3 (fresh subjects:
+Womack interleave, Hewitt ellipsis, Abbeville callback, media-stops build, Fontenot correction,
+St. Landry where-were-we, the deferred-recap promise — re-driving the §16 deferral fix — and the
+SB200/Selders cross-session ask) + coverage gen-2 (fresh phrasings all ten; python = 17³−4096=817;
+a fresh staged ingest probe). The re-drives of every fix from tonight ride IN run 8 by design.

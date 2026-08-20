@@ -99,6 +99,8 @@ ok(!ic.detectDeliverableOrder('put simply, the coastal market is contracting fas
   ok(d3 && d3.deliverable === 'memo', 'a no-rush-but lead still books');
   ok(d1 && /^put together/i.test(d1.topic), 'the topic strips the deferral prefix (pursuit sees the order, not the scheduling)');
   ok(!ic.detectDeliverableOrder('Sometime today the House schedule should firm up.'), 'a deferral with NO order verb never books');
+  const d4 = ic.detectDeliverableOrder('Good — package that up as a short paper.');
+  ok(d4 && d4.deliverable === 'paper', 'RUN-7 REGRESSION: an affirmation-led package order books (good-dash lead + paper noun)');
   ok(!ic.detectDeliverableOrder('No rush on my end — just thinking out loud about the digest idea.'), 'deferral chatter without an order lead never books');
 }
 

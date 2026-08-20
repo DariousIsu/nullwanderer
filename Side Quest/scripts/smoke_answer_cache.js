@@ -127,5 +127,20 @@ ok(ac.store({ question: 'what did you do today?', answer: TRUMP_A }).stored === 
   ok(/referent-context injected \(elliptical turn\)/.test(mainSrc), 'wiring: the injection logs (observable, never silent)');
 }
 
+// ── the run-7 say-truth doors (threadState + the three main.js seams) ───────────────────────────
+{
+  const sid3 = db.startSession();
+  ac.noteExchange({ sessionId: sid3, userText: 'Give me three tight bullets on coastal restoration funding', sayText: 'One: the trust fund. Two: RESTORE Act flows. Three: the surplus dedications that ride the budget bill.' });
+  const ts = ac.threadState({ sessionId: sid3 });
+  ok(ts && /coastal restoration/.test(ts.ask) && /RESTORE Act/.test(ts.point), 'threadState returns the raw measured pair (the one source every deictic door resolves against)');
+  ok(ac.threadState({ sessionId: 999997 }) === null, 'no thread → null (fail-absent)');
+  const fs3 = require('fs'), path3 = require('path');
+  const mainSrc3 = fs3.readFileSync(path3.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/compute-ground\] explicit compute order/.test(mainSrc3), 'wiring: the compute-ground door logs (freehand arithmetic never ships silently)');
+  ok(/\[file-ingest\] user order →/.test(mainSrc3), 'wiring: the deterministic ingest door logs the measured store write');
+  ok(/INGEST GROUND TRUTH \(measured\)/.test(mainSrc3), 'wiring: the ingest say is grounded on the measured result (both branches)');
+  ok(/deictic source → the measured thread ask is the topic/.test(mainSrc3), 'wiring: "package that" resolves its topic from the measured thread, never the focus');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -25,7 +25,9 @@ const path = require('path');
 // The chat-door FINALIZE verb (owned here so main.js and intake typing share ONE definition):
 // "finish/finalize/complete/produce … paper/report/briefing/document" is a CONTROL order for the
 // conductor, never a new work thread. PAPER_TOPIC_RE pulls the topic ("paper on applied digital").
-const PAPER_VERB_RE = /\b(?:finish|finalize|complete|produce)\b[^.?!]{0,50}\b(?:paper|report|briefing|document)\b/i;
+// Run-7 cov_papers catch (2026-08-20): "package that up as a short paper" never reached this door
+// ("package" wasn't a verb) — a freelance path acked, bound a stale canvas slug, landed nothing.
+const PAPER_VERB_RE = /\b(?:finish|finalize|complete|produce|package|write\s+up)\b[^.?!]{0,50}\b(?:paper|report|briefing|document)\b/i;
 const PAPER_TOPIC_RE = /\b(?:paper|report|briefing|document)\s+(?:on|about|for)\s+([a-z0-9][a-z0-9 .&'-]{2,60})/i;
 
 const NOTES_DIR = path.join(__dirname, '..', 'data', 'zoe_workspace', 'notes');

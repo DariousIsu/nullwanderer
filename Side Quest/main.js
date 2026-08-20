@@ -8118,6 +8118,36 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       console.log('[capability-ground] image-gen-shaped turn → ground-truth directive injected');
     }
   } catch {}
+  // RUN-7 cov_selfscript catch: "use your python: sum the squares of 13, 27, 41" drew a freehand
+  // WRONG "2,699." in 26s — the analysis lane never ran. Answer-from-training instead of tool-use
+  // is THE core disease; arithmetic is its cheapest face. An explicit compute order gets a hard
+  // directive: computed-by-the-lane or NO number, never mental arithmetic dressed as a result.
+  try {
+    if (/\b(?:use\s+(?:your\s+)?python|run\s+(?:the\s+)?(?:numbers?|python|code|a\s+script)|compute|calculate|crunch)\b[^.?!]{0,80}?\d/i.test(userMessage)) {
+      composedUserMessage = `${composedUserMessage}\n\n[COMPUTE GROUND TRUTH: this turn orders an EXACT computation. A freehand number is a guess and has been wrong before — run it through your analyze_data python tooling and report THAT output, or say plainly you could not run it and give NO number. Never present mental arithmetic as a computed result.]`;
+      console.log('[compute-ground] explicit compute order → analysis-lane directive injected');
+    }
+  } catch {}
+  // RUN-7 cov_ingest catch: "ingest notes/x.md into your document store" drew "pushing it into the
+  // document store" with ZERO store rows — a read-then-claim dangle. An explicit ingest order on a
+  // workspace text file executes DETERMINISTICALLY here (the canvas-cmd precedent), and the say is
+  // grounded on the measured result either way.
+  try {
+    const _im = userMessage.match(/\b(?:ingest|import|absorb)\b[^.?!]{0,60}?((?:notes|docs|creations)\/[\w./-]+\.(?:md|txt))\b/i);
+    if (_im) {
+      const _ipath = require('path').join(__dirname, 'data', 'zoe_workspace', _im[1]);
+      let _ibody = null; try { _ibody = require('fs').readFileSync(_ipath, 'utf8'); } catch {}
+      if (_ibody && _ibody.trim()) {
+        const _ititle = (_ibody.match(/^#\s+(.{3,80})/m) || [])[1] || require('path').basename(_im[1]);
+        const _idoc = db.insertDocument({ title: _ititle.trim(), body: _ibody, source: _im[1], origin: 'user-ingest' });
+        console.log(`[file-ingest] user order → ${_im[1]} ingested as doc#${_idoc && _idoc.id} (${_ibody.length}ch)`);
+        composedUserMessage = `${composedUserMessage}\n\n[INGEST GROUND TRUTH (measured): ${_im[1]} was JUST ingested into the document store as document #${_idoc && _idoc.id} ("${_ititle.trim()}", ${_ibody.length} chars). Confirm exactly that — never claim more or less.]`;
+      } else {
+        console.log(`[file-ingest] user order → ${_im[1]} NOT readable — honest-miss ground injected`);
+        composedUserMessage = `${composedUserMessage}\n\n[INGEST GROUND TRUTH (measured): the file ${_im[1]} could NOT be read from the workspace — say so plainly and do NOT claim any store write.]`;
+      }
+    }
+  } catch (e) { console.error('[file-ingest] user-order door failed:', e.message); }
   // E1 RESUME CONTEXT (the 171s affirm-continue pathology): "ok back to it" / "where were we"
   // re-enters the MEASURED thread — his last substantive ask + her last point, snapshotted after
   // every substantive exchange — instead of re-deriving the whole context from scratch.
@@ -9330,7 +9360,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       if (PAPER_VERB_RE.test(userMessage)) {
         directedStopHandled = true;
         const _pm = userMessage.match(PAPER_TOPIC_RE);
+        // Run-7 cov_papers catch: "package THAT up as a short paper" — a deictic source binds to
+        // the MEASURED THREAD (the last substantive exchange), never the current focus/beat: the
+        // focus fallback is exactly how a stale canvas slug got packaged instead of the bullets
+        // she'd just delivered. The referent doctrine, papers-lane face.
+        const _deicticPaper = /\b(?:package|write)\b[^.?!]{0,24}\b(?:that|this|it)\b/i.test(userMessage);
         const _topic = (_pm && _pm[1].trim())
+          || (_deicticPaper ? (() => { try {
+               const ts = require('./lib/answer_cache').threadState({ sessionId });
+               if (ts && ts.ask) { console.log('[paper] deictic source → the measured thread ask is the topic'); return String(ts.ask).replace(/^\W*(?:give me|get me|pull(?: up)?|show me|put together)\s*/i, '').slice(0, 60); }
+             } catch {} return ''; })() : '')
           || (() => { try { const f = require('./lib/focus').getCurrent(); return f ? String(f.content).replace(/^\W*(?:complete|finish|finalize|the)\s*/i, '').slice(0, 60) : ''; } catch { return ''; } })()
           || 'applied digital';
         console.log(`[paper] finalize verb → conductor on "${_topic}" (redirect lane bypassed)`);
