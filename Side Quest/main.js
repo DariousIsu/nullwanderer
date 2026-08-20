@@ -11367,7 +11367,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // every substantive exchange so an affirm-continue re-enters instantly.
   try {
     const _ac = require('./lib/answer_cache');
-    if (turnRoute && turnRoute.route === 'lookup' && finalSaid !== '…') {
+    // 'explore' included (boot_p56 retest miss): "who is Cleo Fields?" routed lookup, then intake
+    // re-stamped it explore ("topic discussed, not commanded") BEFORE this point — still grounded
+    // Q&A; store()'s own guards do the truth filtering.
+    if (turnRoute && ['lookup', 'explore'].includes(turnRoute.route) && finalSaid !== '…') {
       const st = _ac.store({ question: userMessage, answer: finalSaid });
       if (st.stored) console.log(`[answer-cache] STORED (${st.kind}) ← "${String(userMessage).replace(/\s+/g, ' ').slice(0, 60)}"`);
     }
