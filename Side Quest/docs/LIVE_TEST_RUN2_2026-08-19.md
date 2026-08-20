@@ -371,6 +371,18 @@ one environmental `settled` mark only.
 `89845d9` (bridge fast-forward) · `b088102` (slow-sync probe) · `72289ff` (affirm dash joiner + the
 port collision guard + harness yield).
 
+**RUN 5 (same evening, boot_p65, fifth-generation phrasings, `50520ef`): 129/132 — 12 of 14 KINDs
+held outright, ZERO new defects — the campaign's first catch-free run.** F9b's widened interlocutor
+nets held LIVE both ways ("Claude checking in —" / "Lucas has the keyboard again"); E1 held outright
+with the calibrated ceiling; every F28/F29/F30 net held a FOURTH phrasing family. **The learned-path
+drill is PROVEN in full**: the induced localdb failure recovered through echo and the pair banked —
+`[procedural] LESSON banked (general): localdb failed → echo worked (operator seam)` — landing just
+past the port's 240s capture window (the harness ✗ is a window artifact, boot-log-verified), and the
+serve half passed IN-harness (v2: lessons injected at tag-choice + a correct grounded Brondyke
+answer). The remaining marks are two environmental `settled`s. **The campaign curve: run 3 = 8/14 →
+run 4 = 10/14 → run 5 = 12/14 + drill — convergence.** The saturation suite now stands as the
+repeatable regression harness for the whole KIND matrix.
+
 ## 13. Open repair queue (post-run-4)
 
 - **F31 — Meet auto-join opens in the WEB BROWSER instead of the dedicated canvas pane** (Lucas,
