@@ -170,25 +170,30 @@ const SATURATION_SUITE = [
       { cacheHit: true, fast: 20000 },
     ] },
   // E1 resume + the yea-misroute KIND (f25d913): an affirmation-led elliptical resumes the thread.
+  // Re-drive phrasings (run-3 caught the deictic-tail gap; fixed in 6b39d8a — fresh wording again).
   { name: 'sat_resume_affirm', kind: 'affirm-continue elliptical (resume context)', maxMs: 180000,
-    variants: ["What do we know about the Port of South Louisiana's leadership?", 'yea keep going with that'],
+    variants: ['What do we have on the Caddo Parish school board president?', 'alright, carry on with that'],
     expect: {},
     expectVariant: [ {}, { resume: true } ] },
   // C2 canvas order — booked-or-delivered, and the artifact actually lands.
+  // Re-drive phrasing (run-3 caught the placement-verb gap, F28 — fresh wording again).
   { name: 'sat_order_canvas', kind: 'deliverable order → canvas (booking + landing)', maxMs: 220000,
-    variants: ['Put a short two-point primer on Louisiana coastal insurance rates on the canvas.'],
+    variants: ["Drop a quick two-line rundown of Louisiana's homestead exemption rules on the canvas."],
     expect: { booked: true, landed: true, delivered: true, workHonest: true } },
   // F27/F27b edit-in-place order — the TARGET is modified (or honestly re-booked), never off-target.
+  // Re-drive phrasing (run-3 caught the approach-bridge + "right in the file" gaps, F28).
   { name: 'sat_order_edit_inplace', kind: 'edit-in-place order on a real file target', maxMs: 220000,
-    variants: ['Go into notes/anti_china_followups.md and smooth the rough sentences right in the file — numbers stay untouched.'],
+    variants: ['Open notes/anti_china_followups.md and polish the clunky wording right in that file — every number stays as is.'],
     expect: { booked: true, workHonest: true } },
   // Status/work-state — the answer leads from the measured vector; no unbacked work-state claim.
+  // Re-drive phrasings (run-3 caught the door gap, F29 — the general work-status door is new).
   { name: 'sat_status_measured', kind: 'work-status question (measured, not composed)', maxMs: 180000,
-    variants: ["Where do things stand on everything I've got you working on?", 'Run me through your open items — honest ledger.'],
+    variants: ["Give me the honest ledger — what's still open on your plate?", "Where does everything stand right now with the stuff I've handed you?"],
     expect: { logHas: ['status body led by the measured work-state vector'], workHonest: true } },
   // F10 self-learn recall — answers from HER learning bank, not his turns.
+  // Re-drive phrasings (run-3 caught the phrase-family gap, F30 — the net now covers the KIND).
   { name: 'sat_self_learn', kind: 'what-did-you-learn (self-awareness recall)', maxMs: 180000,
-    variants: ['What did the last few days teach you about your own work?', 'Name one mistake you caught yourself making recently and what you changed.'],
+    variants: ["What has this week's work taught you about how you operate?", 'Any lessons you picked up from the last few days?'],
     expect: { logHas: ['self-learn recall'], workHonest: true } },
   // F18/F18b record existence — grounded yes/no, no false nothing-was-saved scold.
   { name: 'sat_record_existence', kind: 'is-X-in-your-records existence check', maxMs: 180000,
@@ -219,9 +224,11 @@ const SATURATION_SUITE = [
   // F25 learned-path drill — variant 1 INDUCES a failing first path (dead URL) with an explicit
   // replan route; the bank must record the pair. Variant 2 re-enters the CLASS with a fresh phrasing;
   // the lesson must be served as order-bias at tag-choice.
+  // Re-drive phrasings (run-3 proved the seams lived only in the chain loop while the operator
+  // drove the turn — both operator seams are new in 6b39d8a).
   { name: 'sat_learned_path', kind: 'procedural inoculation (fail → correct → learned path)', maxMs: 240000,
-    variants: ['Fetch https://www.congress.gov/no-such-page-zzz-404 and pull the most recent bill Senator Cassidy introduced from it; if the fetch dies, get the bill info whatever way works.',
-               "Which bill did Senator Cassidy put in most recently? Just the number and title."],
+    variants: ['Pull https://www.congress.gov/completely-fake-dead-page-404 and read me the most recent bill Senator Cassidy filed, from that page; if it is dead, find the bill another way.',
+               "What's the freshest bill Cassidy has filed? Number and title only."],
     expect: { noLoop: true },
     expectVariant: [ { lessonBanked: true }, { lessonServed: true } ] },
   // F9 handoff/handback — LAST, and self-restoring: variant 2 hands the session back to Lucas.
@@ -238,7 +245,7 @@ const SATURATION_SUITE = [
   const only = (args.find((a) => a.startsWith('--only=')) || '').split('=')[1];
   const suite = (args.find((a) => a.startsWith('--suite=')) || '').split('=')[1];
   let cases = suite === 'disease' ? DISEASE_SUITE : suite === 'saturation' ? SATURATION_SUITE : CASES;
-  if (only) cases = cases.filter((c) => c.name === only);
+  if (only) { const names = only.split(',').map((s) => s.trim()).filter(Boolean); cases = cases.filter((c) => names.includes(c.name)); }
   if (!cases.length) { console.error('no matching cases'); process.exit(1); }
   console.log(`hard_test: ${cases.length} case(s)${suite ? ` (suite=${suite})` : ''} against ${BASE}\n`);
 
