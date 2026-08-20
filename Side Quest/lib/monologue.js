@@ -99,6 +99,8 @@ let captionTimer = null;  // separate, faster heartbeat for caption-following (p
 let opts = { getWindow: () => null };
 let paused = false;
 let inFlight = false;
+let _iswLastLogKey = '';    // W5 Slice 2 log throttle — weights apply every tick, the line does not
+let _iswLastLogAt = 0;
 let currentController = null;  // AbortController for the in-flight generation (snap-back)
 let lastUserActivityTs = Date.now();
 let mediaFollowInFlight = false;  // guards the CONCURRENT caption-follow so ticks can't race its stage state
@@ -1149,7 +1151,14 @@ async function _runOneTick() {
     // FAIL-ABSENT: vector missing/stale → neutral weights → these lines are byte-identical to
     // before the slice. Reachability, guards, and the tier leash are untouched at every knob.
     const _isw = (() => { try { const is = require('./internal_state'); return is.tickWeights(is.current()); } catch { return { neutral: true, exploreGateMult: 1, graphMovesDelta: 0 }; } })();
-    if (!_isw.neutral) console.log(`[internal-state] tick weights: explore-gate ×${_isw.exploreGateMult}, graph moves ${_isw.graphMovesDelta >= 0 ? '+' : ''}${_isw.graphMovesDelta} — ${_isw.note}`);
+    // log on CHANGE or per 5 min — the weights apply every tick, the line must not (10s cadence).
+    if (!_isw.neutral) {
+      const _k = `${_isw.exploreGateMult}|${_isw.graphMovesDelta}|${_isw.note}`;
+      if (_k !== _iswLastLogKey || Date.now() - _iswLastLogAt > 5 * 60e3) {
+        _iswLastLogKey = _k; _iswLastLogAt = Date.now();
+        console.log(`[internal-state] tick weights: explore-gate ×${_isw.exploreGateMult}, graph moves ${_isw.graphMovesDelta >= 0 ? '+' : ''}${_isw.graphMovesDelta} — ${_isw.note}`);
+      }
+    }
     try {
       const _lastSpawn = parseInt(db.getMeta('interests.last_spawn_attempt_at') || '0', 10) || 0;
       if (Date.now() - _lastSpawn > 45 * 60 * 1000 * _isw.exploreGateMult) {
