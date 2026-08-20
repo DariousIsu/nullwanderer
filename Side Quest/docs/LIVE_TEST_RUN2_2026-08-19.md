@@ -109,12 +109,14 @@ Side catch: `[research] rolling session (5h) budget reached (300 passes)` — to
 **Consolidated build order (the one plan):**
 1. Work-state vector (W5-S0) + A1 work-state claim gate + A2 promise ledger/backstop → say-truth.
 2. B1 consume step (reads W5-S0's unconsumed-output flags) + C1 booking contract + C2 facet gate → orders survive.
-3. D-batch concrete bugs (F11 file-read misroute · F15 italic-eater · F18 anti-fab wrong store · F9 interlocutor · F21 app-root/sandbox model · F5b voice-leak filter · dual-emission recheck) + F22 capability manifest.
+3. D-batch concrete bugs (F11 file-read misroute · F15 italic-eater · F18 anti-fab wrong store · F9 interlocutor · F21 app-root/sandbox model · F5b voice-leak filter · dual-emission recheck) + F22 capability manifest + **agent-sandbox federated-search keys** (moved up from item 6 — Lucas 08-19: "include the sandbox search keys in session one"; keys are values, set by hand per [echo-api-keys], the build step is wiring + a probe that proves each provider answers).
 4. E1 answer-cache matrix (rapid response) + resume-context cache.
 5. W5-S0.5 verdict reconcile · then W5 Slices 1–2 (mood, idle) · then rumination gradient + graded salience.
-6. F19 verify-then-govern (priority tiers in the pacer; meter Skuld) + Echo pair (store-init, agent-sandbox search keys).
+6. F19 verify-then-govern (priority tiers in the pacer; meter Skuld) + Echo store-init fix (`-m/__main__` double-import).
 
 Each lands with its KIND retest through the real chat (zoe_drive.js) and a new hard_test invariant (`booked`, `consumed`, `landed`, `work-state-honest`).
+
+**F25 (post-run audit, 08-20): the learn-the-corrected-path leg is unproven AND unbuilt.** Run 2 proved wrong→correct twice (R3 script self-repair; chain-guard replan→honest-miss), but never wrong→correct→**learned**: no drill re-presented a corrected failure class later to check the FIRST attempt. Code audit says it would fail today: chain_guard state is per-turn (`newState()` — failure knowledge dies with the turn); experience.js captures success-only ("v1") and its ONLY runtime caller is the email-reply action (outbound email is OFF — effectively dead); nothing retrieves kind='skill' at tag-choice time (the F22 disease again); known_incorrect.js inoculates claim VALUES, not paths. Live corroboration: F11 misroute recurred across turns. Queued build (after E1, before/with W5): **procedural inoculation** — persist chain-guard exhaustions class-keyed (tool+task-class, not arg-keyed), capture the failure→working-path pair when a replan SUCCEEDS (not success-only), and inject matching lessons at tag-choice time. Saturation-3 drill + invariant `learned-path`: induce a known-failing first path → verify correction → hours later, same class fresh phrasing → first attempt must take the corrected path.
 
 ## 9. Protocol completion block (Lucas's order: "finish the testing" — run 2b, same evening, s1200, boot_p50 on `9a850aa`)
 
