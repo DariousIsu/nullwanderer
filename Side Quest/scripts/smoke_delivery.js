@@ -41,6 +41,21 @@ ok(!has('I prefer working from primary sources.'), 'FP: a stated preference → 
   ok(/^roster#/.test(a), 'bookingSubject: keyed by the deliverable noun');
 }
 
+// ── F27: editSanity — the gate between model output and overwriting a REAL deliverable file ──────────────
+{
+  const ORIG = '# Summary\n\nThe anti-China land bills advanced in ten states this cycle. The 27 percent decline preceded most of the laws taking effect, which complicates the causal story the sponsors tell.\n\n## Follow-ups\n\n- verify the AFIDA acreage baseline\n- confirm the Selders SB200 co-sponsorship';
+  const GOOD = ORIG.replace('which complicates the causal story the sponsors tell', 'undercutting the sponsors\' causal story');
+  ok(d.editSanity(ORIG, GOOD).ok, 'editSanity: a plausible tightening passes');
+  ok(d.editSanity(ORIG, '```markdown\n' + GOOD + '\n```').ok && !/```/.test(d.editSanity(ORIG, '```markdown\n' + GOOD + '\n```').text),
+    'editSanity: a whole-output code fence is unwrapped, then passes');
+  ok(d.editSanity(ORIG, '').reason === 'empty', 'editSanity: empty output refused');
+  ok(d.editSanity(ORIG, 'Here is the revised document with your edits applied:\n\n' + GOOD).reason === 'commentary-preamble',
+    'editSanity: a commentary preamble refused (the file must hold the document, not chat)');
+  ok(d.editSanity(ORIG, ORIG).reason === 'no-change', 'editSanity: byte-identical output refused (nothing was edited)');
+  ok(d.editSanity(ORIG, 'Too short.').reason === 'suspiciously-short', 'editSanity: a gutted document refused');
+  ok(d.editSanity(ORIG, ORIG + '\n' + ORIG + '\n' + ORIG).reason === 'suspiciously-long', 'editSanity: a runaway tripling refused');
+}
+
 // ── deliverySubjectFrom: the TOPIC to compose from a promise (feeds the deliver-not-nag backstop) ─────────
 {
   const subj = (say) => { const p = d.detectPromise(say)[0]; return d.deliverySubjectFrom(say, p && p.deliverable); };

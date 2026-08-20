@@ -56,6 +56,17 @@ ok(!ic.foreignSubject('skip the leadership section for now', INDIANA_RUN).foreig
 }
 ok(ic.foreignSubject('anything', {}).foreign === false, 'C2: no run scope → never foreign (fail open)');
 
+// ── F27: the edit-shaped order (boot_p53 retest, promise#1753 pursued as report-compose) ────────────────
+ok(ic.detectEditIntent('finish polishing the summary in notes/anti_china_followups.md — read it and tighten the wording in place.'),
+  'F27 REGRESSION: the verbatim live order is edit-shaped');
+ok(ic.detectEditIntent('update the sponsors table in place with the corrected dates'), '"update … in place" is edit-shaped');
+ok(ic.detectEditIntent('revise the phrasing in the current draft'), '"revise the phrasing … current draft" is edit-shaped');
+ok(ic.detectEditIntent('tighten the prose in the existing file, keep the structure'), 'edit verb + existing-file cue');
+ok(!ic.detectEditIntent('write a report on the Louisiana parishes'), 'a compose order is NOT edit-shaped');
+ok(!ic.detectEditIntent('update the roster with the new members'), 'a bare "update" without an in-place cue stays compose (additive updates rebuild)');
+ok(!ic.detectEditIntent('the editor cleaned up the piece nicely'), 'chatter about editing never fires');
+ok(!ic.detectEditIntent(''), 'empty → false');
+
 // ── helpers ──────────────────────────────────────────────────────────────────────────────────────────────
 ok(ic.statesIn('Utah, Arizona and new mexico are in; Indianapolis is not a state').join(',') === 'arizona,new mexico,utah', 'statesIn: names matched, city-lookalikes not');
 

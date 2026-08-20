@@ -53,6 +53,19 @@ function detectDeliverableOrder(text) {
   return { deliverable, target, topic };
 }
 
+// ── F27: the EDIT-shaped order (boot_p53 retest, promise#1753) ──────────────────────────────────────────
+// "finish polishing the summary in notes/x.md — tighten the wording in place" was pursued as
+// report-COMPOSE: a fresh report ABOUT the order text landed at a slug-named path, the target file
+// went untouched, and the promise closed kept. An edit verb + an in-place/wording cue marks the
+// order as MODIFY-THE-TARGET — the pursuit must take the read→edit→write-target path, never compose.
+const _EDIT_VERB_RE = /\b(?:polish(?:ing)?|tighten(?:ing)?|revis(?:e|ing)|rework(?:ing)?|reword(?:ing)?|edit(?:ing)?|refin(?:e|ing)|smooth(?:ing)?|trim(?:ming)?|clean(?:ing)?\s*up|copy-?edit(?:ing)?|proofread(?:ing)?|update|updating)\b/i;
+const _IN_PLACE_RE = /\bin\s+place\b|\bthe\s+(?:wording|phrasing|prose|language|copy)\b|\bexisting\s+(?:file|draft|doc(?:ument)?)\b|\bcurrent\s+draft\b|\bsame\s+file\b|\bdon'?t\s+(?:make|create|start)\s+a\s+new\b/i;
+function detectEditIntent(text) {
+  const t = str(text);
+  if (!t.trim()) return false;
+  return _EDIT_VERB_RE.test(t) && _IN_PLACE_RE.test(t);
+}
+
 // ── C2: the foreign-subject gate ─────────────────────────────────────────────────────────────────────────
 const STATE_NAMES = ['alabama','alaska','arizona','arkansas','california','colorado','connecticut','delaware','florida','georgia','hawaii','idaho','illinois','indiana','iowa','kansas','kentucky','louisiana','maine','maryland','massachusetts','michigan','minnesota','mississippi','missouri','montana','nebraska','nevada','new hampshire','new jersey','new mexico','new york','north carolina','north dakota','ohio','oklahoma','oregon','pennsylvania','rhode island','south carolina','south dakota','tennessee','texas','utah','vermont','virginia','washington','west virginia','wisconsin','wyoming'];
 function statesIn(text) {
@@ -97,4 +110,4 @@ function foreignSubject(userText, { goal = '', facet = '', orgs = [] } = {}) {
   return { foreign: false, why: 'shares subject anchors with the run' };
 }
 
-module.exports = { detectDeliverableOrder, foreignSubject, statesIn, _properPhrases, _ORDER_LEAD_RE, _TARGET_PATH_RE };
+module.exports = { detectDeliverableOrder, detectEditIntent, foreignSubject, statesIn, _properPhrases, _ORDER_LEAD_RE, _TARGET_PATH_RE };

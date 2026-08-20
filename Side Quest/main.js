@@ -17134,6 +17134,38 @@ async function _announceOffTurn(sid, voicePrompt, fallback, model = 'delivery') 
   } catch (e) { console.error('[delivery] announce failed:', e.message); return false; }
 }
 
+// F27 (boot_p53 retest, promise#1753): the in-place EDIT builder. An edit-shaped order ("tighten
+// the wording in notes/x.md in place") is delivered by READING the target, applying the edit via
+// the cloud writer, and WRITING the target back — never by composing a fresh report about the
+// order text (the live failure landed an off-target report-<slug>.md and left the target
+// untouched). delivery.editSanity gates the output before anything overwrites a real file; on any
+// failure the caller gets an honest miss, never a wrong artifact.
+async function _editTargetInPlace({ target, order } = {}) {
+  try {
+    if (!target || target === 'canvas') return { delivered: false, miss: 'no-file-target' };
+    let original = '';
+    try { const r = filesLib.fileReadFull(target); original = (r && r.text) || ''; } catch {}
+    if (!original.trim()) return { delivered: false, miss: 'target-empty-or-unreadable' };
+    if (original.length > 60000) return { delivered: false, miss: 'target-too-large-for-inplace-edit' };
+    const messages = [
+      { role: 'system', content: 'You are a careful copy editor. Apply the requested edit to the document and return the COMPLETE revised document as raw markdown. Output the document text ONLY — no commentary, no preamble, no code fences, no notes. Preserve the structure, data, numbers, names, and citations exactly; change only what the edit asks for.' },
+      { role: 'user', content: `THE EDIT ORDER:\n${String(order || '').slice(0, 500)}\n\nTHE DOCUMENT (${target}):\n${original}` },
+    ];
+    let edited = '';
+    try {
+      const res = await require('./lib/cloud_logic').streamCloud(messages, { inactivityMs: 180000, think: false, temperature: 0.3 });
+      edited = ((res && res.text) || '').trim();
+    } catch (e) { console.error('[delivery] in-place edit cloud call failed:', e.message); }
+    if (!edited) { try { edited = String((await condenseComplete(messages, { numPredict: 6000 })) || '').trim(); } catch {} }
+    const sane = require('./lib/delivery').editSanity(original, edited);
+    if (!sane.ok) { console.log(`[delivery] in-place edit REFUSED to write ${target} — ${sane.reason}`); return { delivered: false, miss: `edit-${sane.reason}` }; }
+    const w = await filesLib.dispatch({ tag: 'file-write', attrs: { path: target }, body: sane.text });
+    if (!w || !w.ok) return { delivered: false, miss: `write-failed:${(w && w.reason) || 'unknown'}` };
+    console.log(`[delivery] in-place edit LANDED → ${target} (${original.length} → ${sane.text.length} chars)`);
+    return { delivered: true, rel: target, edited: true, canvas: false };
+  } catch (e) { console.error('[delivery] _editTargetInPlace failed:', e.message); return { delivered: false, miss: e.message }; }
+}
+
 async function _surfaceOpenPromise() {
   try {
     const sid = currentSessionId;
@@ -17171,21 +17203,49 @@ async function _surfaceOpenPromise() {
     const ia = require('./lib/internal_action');
     const outward = ia._OUTWARD_RE.test(say);
     rq.complete(it.id, { outcome: 'pursuing-delivery' });
+    // F27: an EDIT-shaped order with a real file target modifies THE TARGET — never report-compose
+    // (live: the compose path landed an off-target report-<slug>.md and the promise closed kept
+    // while the ordered file sat untouched). Edit failures are honest misses with ONE re-book;
+    // they never fall through to compose, because a wrong artifact is worse than a miss.
+    const _isEditOrder = !!(d.target && d.target !== 'canvas'
+      && (() => { try { return require('./lib/intake_contract').detectEditIntent(say || topic); } catch { return false; } })());
     let outcome = null;
     try {
-      if (/roster/i.test(what) || /roster/i.test(topic)) {
+      if (_isEditOrder) {
+        outcome = await _editTargetInPlace({ target: d.target, order: say || t });
+      } else if (/roster/i.test(what) || /roster/i.test(topic)) {
         outcome = await buildLocalRosterDeliverable({ io: null, channel: 'chat', sessionId: sid, userName: uname, subject: t });
       } else {
         outcome = await buildReportFromHeld({ io: null, channel: 'chat', sessionId: sid, userName: uname, topic: t });
       }
     } catch (e) { console.error('[delivery] pursue-delivery build threw:', e.message); }
+    // F27: a failed TARGETED edit re-books ONCE (chain-guard principle: one more try, never a
+    // hammer), so the debt survives the failed attempt instead of dying inside a closed row.
+    if (_isEditOrder && (!outcome || !outcome.delivered)) {
+      const attempt = Number(d.attempt || 1);
+      if (attempt < 2) {
+        try {
+          rq.enqueue({ kind: 'promise', subject: String(it.subject || t).slice(0, 200), detail: { ...d, attempt: attempt + 1 }, priority: 7, bornFrom: 'edit-rebook' });
+          console.log(`[delivery] in-place edit missed (${(outcome && outcome.miss) || 'no-outcome'}) → re-booked promise (attempt ${attempt + 1})`);
+        } catch (e) { console.error('[delivery] edit re-book failed:', e.message); }
+      } else {
+        console.log(`[delivery] in-place edit missed twice — honest miss, no further re-book`);
+      }
+    }
+    // F27 honesty: a delivered outcome whose artifact is NOT the ordered target must never read as
+    // "your file is updated" — name where it actually landed and that the target went unmodified.
+    const _offTarget = !!(d.target && d.target !== 'canvas' && outcome && outcome.delivered && outcome.rel && outcome.rel !== d.target);
+    if (_offTarget) console.log(`[delivery] OFF-TARGET delivery: ordered ${d.target}, landed ${outcome.rel} — announce will say so`);
 
     // (3) ANNOUNCE the real outcome in her voice — delivered (done + where) or an honest miss. NEVER a nag,
     // never a claim of delivery on a miss.
     if (outcome && outcome.delivered) {
       const rel = outcome.rel || null;
       // say "on your canvas" ONLY when the canvas tab actually landed (adversarial fabrication fix); else the file
-      const loc = outcome.canvas ? `on your canvas${rel ? ` and saved at ${rel}` : ''}` : (rel ? `saved at ${rel}` : 'ready for you');
+      // F27: an in-place edit says so; an off-target landing NAMES both paths instead of implying the target changed.
+      const loc = outcome.edited ? `updated in place at ${rel}`
+        : _offTarget ? `saved at ${rel} — note: the ordered file ${d.target} itself was NOT modified`
+        : outcome.canvas ? `on your canvas${rel ? ` and saved at ${rel}` : ''}` : (rel ? `saved at ${rel}` : 'ready for you');
       const cov = outcome.filled != null ? ` (${outcome.filled} of ${outcome.denominator} verified, the rest researching)` : '';
       await _announceOffTurn(sid,
         outward

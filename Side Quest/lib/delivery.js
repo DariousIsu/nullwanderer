@@ -89,6 +89,29 @@ function deliverySubjectFrom(say, deliverable) {
   return subj.slice(0, 120);
 }
 
+// ── F27: edit-output sanity (pure) ───────────────────────────────────────────────────────────────────
+// The in-place edit path (main._editTargetInPlace) writes MODEL OUTPUT over a real deliverable file —
+// the one seam where a bad generation destroys work. This gate decides whether the edited text is a
+// plausible revision of the original: fences stripped, non-empty, no commentary preamble, and sized
+// like a revision (a "tighten" shortens, but half the document gone is a failed generation, and
+// double is a runaway). Returns { ok, text, reason }. NEVER writes — the caller does, only on ok.
+const _FENCE_RE = /^\s*```[a-z]*\s*\n([\s\S]*?)\n\s*```\s*$/;
+const _EDIT_PREAMBLE_RE = /^\s*(?:here(?:'s| is)\b|sure\b|certainly\b|i(?:'ve| have)\b|below is\b|the (?:revised|edited|updated) (?:document|version|draft) (?:is|follows)\b)/i;
+function editSanity(original, edited) {
+  const orig = String(original || '');
+  let text = String(edited || '').trim();
+  if (!text) return { ok: false, reason: 'empty', text: '' };
+  const fence = text.match(_FENCE_RE);
+  if (fence) text = fence[1].trim();                       // unwrap a whole-output code fence
+  if (!text) return { ok: false, reason: 'empty-after-unfence', text: '' };
+  if (_EDIT_PREAMBLE_RE.test(text)) return { ok: false, reason: 'commentary-preamble', text };
+  if (text === orig.trim()) return { ok: false, reason: 'no-change', text };
+  const ratio = orig.length ? text.length / orig.length : 1;
+  if (ratio < 0.45) return { ok: false, reason: 'suspiciously-short', text };
+  if (ratio > 2.2) return { ok: false, reason: 'suspiciously-long', text };
+  return { ok: true, reason: '', text };
+}
+
 // GROUND THE DELIVERY CLAIM IN THE ARTIFACT (2026-08-18 live probe). Three artifact-delivery say sites
 // (buildCanvasFromOrder, the canvas edit door, the report-cmd) tell the reply-writer to describe "what it
 // holds" / "the ONE most substantive finding in it" but hand it only the TITLE + line count — never the
@@ -232,4 +255,4 @@ function resultBearingDeliveries(turns, max = 3) {
   return out;
 }
 
-module.exports = { detectPromise, bookingSubject, deliverySubjectFrom, holdsDigest, isAckOrphan, claimsNonDelivery, isOwedClaim, resultBearingDeliveries, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD, _EXPLORE_LEAD, _PLAN_CHAIN, _RESULT_STRONG, _NONDELIVERY_RE, _OWED_RE };
+module.exports = { detectPromise, bookingSubject, deliverySubjectFrom, editSanity, holdsDigest, isAckOrphan, claimsNonDelivery, isOwedClaim, resultBearingDeliveries, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD, _EXPLORE_LEAD, _PLAN_CHAIN, _RESULT_STRONG, _NONDELIVERY_RE, _OWED_RE };

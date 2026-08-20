@@ -289,6 +289,16 @@ ok(m.groundPrediction('The meeting will start at 3pm and I will send you the not
   'prediction FP: ordinary "will" (no contest-outcome verb) → not a prediction claim');
 ok(m.groundPrediction('The bill passed the House on Tuesday.').ok,
   'prediction FP: a PAST event ("passed"), not a future claim → no violation');
+// F26 (boot_p53 retest, turn 12737): the NOUN "pass" (test pass, review pass) matched the outcome-VERB net —
+// a conversational echo of the user's own plan drew "[Correction — I stated a future outcome as certain…]".
+ok(m.groundPrediction("Got it — you're talking with Claude now, and Lucas will be back once the test pass wraps. Sounds good, I'm here.").ok,
+  'F26 REGRESSION: the verbatim live scold — "the test pass wraps" is a noun, not a prediction');
+ok(m.groundPrediction('The review pass will take an hour and the smoke pass will follow.').ok,
+  'F26: "review pass"/"smoke pass" compounds never trip the net');
+ok(m.groundPrediction('The bill will pass the Senate.').violations.some(v => v.kind === 'prediction'),
+  'F26 guard: the VERB "will pass" (a real contest outcome) still fires');
+ok(m.groundPrediction('SB200 is going to pass.').violations.some(v => v.kind === 'prediction'),
+  'F26 guard: "going to pass" still fires');
 ok(/expectation|certainty|probabilit/i.test(m.verificationCorrection([{ kind: 'prediction', claim: 'x' }])), 'verificationCorrection: prediction → reframes as expectation/probability, not certainty');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

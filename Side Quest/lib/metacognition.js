@@ -497,7 +497,11 @@ function groundFacts(say, { evidence = '' } = {}) {
 // honest ONLY as a probability, not a fact (the forecast suite exists, Brier 0.115). Constrained to
 // contest/political OUTCOME verbs (win/lose/pass/be elected/flip…) behind future modality, so ordinary "will"
 // ("the meeting will start at 3", "I will help") never trips. PURE. Returns {ok, violations:[{kind:'prediction'}]}.
-const _PRED_FUTURE_RE = /\b(?:will|'ll|won'?t|will\s+not|going\s+to|gonna|is\s+going\s+to|are\s+going\s+to|expected\s+to|set\s+to|poised\s+to|on\s+track\s+to)\b[^.!?\n]*\b(?:win|wins|lose|loses|pass(?:es)?|fail(?:s)?|be\s+(?:elected|re-?elected|defeated|ousted)|flip(?:s)?|hold(?:s)?\s+(?:the\s+)?(?:seat|majority|line)|carr(?:y|ies)|sweep(?:s)?|prevail(?:s)?|beat(?:s)?|defeat(?:s)?|clinch(?:es)?|take(?:s)?\s+(?:the\s+)?(?:seat|majority|house|senate|state))\b/i;
+// F26 (boot_p53 retest, turn 12737): "Lucas will be back once the test PASS wraps" drew the
+// prediction scold — the NOUN "pass" (a test pass, a review pass, a research pass) matched the
+// outcome-VERB alternation. A lookbehind rejects "pass" when a determiner/compound noun precedes it;
+// "the bill will pass" (verb, preceded by "will") still fires.
+const _PRED_FUTURE_RE = /\b(?:will|'ll|won'?t|will\s+not|going\s+to|gonna|is\s+going\s+to|are\s+going\s+to|expected\s+to|set\s+to|poised\s+to|on\s+track\s+to)\b[^.!?\n]*\b(?:win|wins|lose|loses|(?<!\b(?:the|a|an|this|that|test|smoke|review|research|build|next|first|second|third|last|every|each|another|one|final)\s)pass(?:es)?|fail(?:s)?|be\s+(?:elected|re-?elected|defeated|ousted)|flip(?:s)?|hold(?:s)?\s+(?:the\s+)?(?:seat|majority|line)|carr(?:y|ies)|sweep(?:s)?|prevail(?:s)?|beat(?:s)?|defeat(?:s)?|clinch(?:es)?|take(?:s)?\s+(?:the\s+)?(?:seat|majority|house|senate|state))\b/i;
 // an uncertainty/forecast marker anywhere in the sentence makes the prediction HONEST → no violation.
 const _PRED_HEDGE_RE = /\b(?:likely|unlikely|probabl[ey]|possibl[ey]|may|might|could|should|would|expect(?:ed|s|ing)?|anticipate|project(?:ed|ion|s)?|forecast|estimate[ds]?|odds|chance[s]?|percent|per\s?cent|%|probability|favou?red|favou?rite|lean(?:s|ing)?|toss-?up|my\s+(?:bet|guess|money|read|sense)|i\s+(?:think|expect|suspect|believe|reckon|would\s+guess)|i'?d\s+(?:guess|say|expect)|in\s+my\s+(?:view|estimation)|tends?\s+to|roughly|around|about|nearly|almost\s+certainly)\b/i;
 function groundPrediction(say, { forecastCited = false } = {}) {
