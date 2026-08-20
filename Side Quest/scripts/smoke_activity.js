@@ -26,6 +26,16 @@ ok(!act.isSelfActivityRecall('what can you do?'), 'a capability question is NOT 
 ok(!act.isSelfActivityRecall('what did you say about the schema'), 'a recall-of-statement is NOT self-activity (isRecallQuery owns it)');
 ok(!act.isSelfActivityRecall('who is Bill Cassidy'), 'an entity lookup is NOT self-activity recall');
 
+// --- F10 (run-2, stable-FAIL twice): "what did you LEARN" routes to the LEARN door, never user-recall ---
+ok(act.isSelfLearnRecall('what did you learn today?'), 'F10: "what did you learn today" → self-learn recall');
+ok(act.isSelfLearnRecall("what's the most interesting thing you learned today"), 'F10: the live gap-fill-2 phrasing → self-learn recall');
+ok(act.isSelfLearnRecall('most interesting thing you\'ve learned this week?'), 'F10: bare "most interesting thing you\'ve learned" → self-learn');
+ok(act.isSelfLearnRecall('did you learn anything new tonight'), 'F10: "did you learn anything" → self-learn');
+ok(act.isSelfLearnRecall('what have you been learning'), 'F10: "what have you been learning" → self-learn');
+ok(!act.isSelfLearnRecall('what did you work on today'), 'a DOING question stays with self-activity, not learn');
+ok(!act.isSelfLearnRecall('you learn something new every day, huh'), 'the idiom (not a question about her) does not fire');
+ok(!act.isSelfLearnRecall('teach me what I should learn about redistricting'), 'the USER\'s learning is not her learn-recall');
+
 // --- a snapshot with all three lanes active ---
 const snap = {
   research: { goal: 'study every right-of-center think tank', covered: ['Heritage', 'Cato', 'AEI'], target: { name: 'Hoover' } },

@@ -35,6 +35,13 @@ function isActivityQuestion(text) { return ACTIVITY_RE.test(String(text || ''));
 const SELF_ACTIVITY_RECALL_RE = /\bwhat (?:did|were|have) you\s+(?:(?:actually|really|even|mostly|mainly|just|end up|wind up|get to|manage to|been|be)\s+){0,2}(?:do(?:ing|ne)?|work(?:ing|ed)?\s+on|get(?:ting)?\s+done|accomplish\w*|look(?:ing|ed)?\s+(?:at|into)|read(?:ing)?|research\w*|up\s+to|busy\s+with|spend\w*|been\s+(?:doing|working|up\s+to))\b|\bwalk me through (?:your day|what you (?:did|worked on|got done|found|looked at|were up to|been up to))\b|\bhow (?:was|did) your (?:day|morning|afternoon|week)\b/i;
 function isSelfActivityRecall(text) { return SELF_ACTIVITY_RECALL_RE.test(String(text || '')); }
 
+// SELF-LEARN recall (run-2 F10, stable-FAIL twice) — "what did you LEARN today", "most interesting
+// thing you've learned". Distinct from isSelfActivityRecall ("do/work on" — the E2 slice covers DOING,
+// not LEARNING): both live failures narrated what the USER asked and misattributed his turns to her.
+// The answer source is her LEARNING bank (knowledge: learning/verified_fact/self_dev), never user turns.
+const SELF_LEARN_RECALL_RE = /\bwhat (?:did|have|'?ve) you\s+(?:(?:actually|really|even|just|been)\s+){0,2}learn\w*\b|\bmost interesting thing you(?:'ve| have)? learn\w*\b|\bwhat(?:'s| is| was) the most interesting thing you(?:'ve| have)? (?:learned|read|found|discovered)\b|\b(?:did|have) you learn\w*\s+anything\b|\banything (?:new|interesting|cool) (?:that )?you(?:'ve| have)? learn\w*\b|\blearn anything (?:new|interesting|cool|good|today|tonight)\b|\bwhat have you been learning\b|\bnew things? you(?:'ve| have)? learned\b|\bwhat did you (?:find|discover) (?:out )?(?:today|tonight|this week|that was interesting)\b/i;
+function isSelfLearnRecall(text) { return SELF_LEARN_RECALL_RE.test(String(text || '')); }
+
 function _short(s, n = 80) { return String(s || '').replace(/\s+/g, ' ').trim().slice(0, n); }
 
 // One pointer line per active lane: "Now: <activity> "<title>" → <ref>". The ref is a handle the
@@ -90,4 +97,4 @@ function summarize(snapshot = {}) {
   return { active, block, pointers: pointers(snapshot) };
 }
 
-module.exports = { isActivityQuestion, isSelfActivityRecall, summarize, pointers, ACTIVITY_RE, SELF_ACTIVITY_RECALL_RE };
+module.exports = { isActivityQuestion, isSelfActivityRecall, isSelfLearnRecall, summarize, pointers, ACTIVITY_RE, SELF_ACTIVITY_RECALL_RE, SELF_LEARN_RECALL_RE };

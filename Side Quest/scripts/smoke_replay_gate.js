@@ -30,12 +30,20 @@ ok('empty/null → false, no throw', !sc.isReplay('', [CLEAN_SLATE]) && !sc.isRe
 ok("speaks('replay') === false (the voice never re-speaks a replay)", sc.speaks('replay') === false);
 
 // ── insertTurn stamping (the choke point, prompted AND unprompted) ───────────────────────────────
+// NOTE (2026-08-20, dual-emission backstop): a VERBATIM ai_said in the SAME session within 30s is
+// now a machine stutter — insertTurn skips it entirely (smoke_dual_emission.js owns that contract).
+// The replay GATE is speaker-global across sessions/24h, so these repeats land in a SECOND session:
+// stored (not stutter) and stamped 'replay' (a model re-speak) — exactly the division of labor.
 const sid = db.startSession();
+const sid2 = db.startSession();
 const REPLY = 'I re-read the document I am continuing and judged it against the finished-research bar: it is a comprehensive draft with many sections but lacks primary source verification.';
 db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: REPLY, model: 'test' });
-const second = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: REPLY, model: 'test' });
+const second = db.insertTurn({ sessionId: sid2, speaker: 'ai_said', content: REPLY, model: 'test' });
 const row2 = db.getDb().prepare('SELECT speech_class FROM turns WHERE id = ?').get(second.id);
 ok("a PROMPTED verbatim repeat is stamped 'replay'", row2.speech_class === 'replay');
+// …and the SAME-session verbatim copy seconds later is a STUTTER: never stored at all.
+const stutter = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: REPLY, model: 'test' });
+ok('a same-session verbatim copy within 30s is deduped, not stamped (dual-emission backstop)', stutter.deduped === true);
 
 const fresh = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: 'Here is something entirely new about the weather patterns over Louisiana this month and why they matter for the parish visits.', model: 'test' });
 ok('a fresh prompted reply stays null (the conversation always carries the voice)',
@@ -46,7 +54,7 @@ const IDENT = "I've been thinking about something I said a while back regarding 
 const u1 = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: IDENT, model: 'test', unprompted: 1 });
 ok('first unprompted identity musing → identity (SPEAK)',
   db.getDb().prepare('SELECT speech_class FROM turns WHERE id = ?').get(u1.id).speech_class === 'identity');
-const u2 = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: IDENT, model: 'test', unprompted: 1 });
+const u2 = db.insertTurn({ sessionId: sid2, speaker: 'ai_said', content: IDENT, model: 'test', unprompted: 1 });
 ok("the SAME musing again → 'replay' overrides the SPEAK class",
   db.getDb().prepare('SELECT speech_class FROM turns WHERE id = ?').get(u2.id).speech_class === 'replay');
 

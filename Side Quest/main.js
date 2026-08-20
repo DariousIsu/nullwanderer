@@ -7342,7 +7342,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     const recCmd = detectRecordCommand(userMessage, webLib.isRecording());
     if (recCmd) {
-      const recUserName = db.getMeta('user_name') || 'Lucas';
+      const recUserName = require('./lib/interlocutor').liveName('Lucas');
       let resultText;
       if (recCmd.action === 'start') {
         const r = await webLib.startRecording({ task: recCmd.task, url: recCmd.url, site: recCmd.site });
@@ -7374,7 +7374,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     const hasImageAtt = Array.isArray(attachments) && attachments.some(a => a && (a.image || /^image\//.test(a.mime || '')));
     if (!hasImageAtt && screenLib.detectScreenSightRequest && screenLib.detectScreenSightRequest(userMessage)) {
-      const siUser = db.getMeta('user_name') || 'Lucas';
+      const siUser = require('./lib/interlocutor').liveName('Lucas');
       db.setMeta('last_ai_utterance_at', String(Date.now()));
       resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
       const cap = await screenLib.capture();
@@ -7422,7 +7422,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let mediaWatchNote = null;   // set when a watch actually starts → she acknowledges accurately (vs the honesty guard)
   try {
     const mediaCcLib = require('./lib/media_cc');
-    const uName = db.getMeta('user_name') || 'Lucas';
+    const uName = require('./lib/interlocutor').liveName('Lucas');
     if (!mediaCcLib.active() && !require('./lib/gmeet').active()) {
       // (a) direct link + watch verb → watch it
       if (/\b(watch|play|put on|stream)\b/i.test(userMessage)) {
@@ -7457,7 +7457,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let listenNote = null;
   try {
     const listenLib = require('./lib/listen');
-    const uName = db.getMeta('user_name') || 'Lucas';
+    const uName = require('./lib/interlocutor').liveName('Lucas');
     const echoDispatch = (t) => echoSuit.dispatch(t);
     if (listenLib.active() && listenLib.detectStop(userMessage)) {
       const r = await listenLib.stop({ deps: { dispatch: echoDispatch } });
@@ -7498,7 +7498,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // single most-load-bearing piece of memory continuity in the system.
   const triggerMatch = protocolsLib.checkTriggerMatch(userMessage);
   if (triggerMatch && triggerMatch.action && triggerMatch.action !== 'none') {
-    const interceptUserName = db.getMeta('user_name') || 'Lucas';
+    const interceptUserName = require('./lib/interlocutor').liveName('Lucas');
     const result = protocolsLib.executeAction({
       protocol: triggerMatch.protocol,
       action: triggerMatch.action,
@@ -7554,7 +7554,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   }
   // === END INTERCEPTOR ===
 
-  const userName = db.getMeta('user_name') || 'them';
+  // === INTERLOCUTOR (run-2 F9) === who is at the keyboard right now. An explicit handoff
+  // declaration ("you'll be engaging with Claude…") stamps it; a handback ("it's Lucas again",
+  // "testing has concluded") clears it. Every ADDRESSING site below speaks to the LIVE name;
+  // the owner (user_name) keeps persona/memory/identity. Fail-safe: no declaration → owner.
+  try {
+    const _iloc = require('./lib/interlocutor');
+    const _own = db.getMeta('user_name') || 'Lucas';
+    const _d = _iloc.detect(userMessage, { ownerName: _own });
+    if (_d && _d.handoff) { _iloc.set(_d.handoff); console.log(`[interlocutor] handoff → ${_d.handoff} (declared in-turn)`); }
+    else if (_d && _d.handback && _iloc.current().active) { _iloc.clear(); console.log(`[interlocutor] handback → ${_own}`); }
+  } catch (e) { console.error('[interlocutor] detect failed:', e.message); }
+  const userName = require('./lib/interlocutor').liveName('them');
 
   // === WEB-INTENT INTERCEPTOR ===
   // The 24B reflexively refuses "open a browser / look it up" even though its
@@ -8114,6 +8125,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // you SAY"). It suppresses the ambiguous-entity ASK ("four people named You") and injects her real log.
   let selfActivityQ = false;
   try { selfActivityQ = require('./lib/activity').isSelfActivityRecall(userMessage) && !isRecallQuery(userMessage) && !activityQ; } catch (e) { console.error('[main] self-activity detect failed:', e.message); }
+  // F10 (run-2, stable-FAIL twice): "what did you LEARN" is neither doing-recall (E2) nor user-recall —
+  // both live failures narrated what the USER asked, misattributed to her. Answered from her LEARNING
+  // bank (knowledge: learning/verified_fact/self_dev), never from user turns.
+  let selfLearnQ = false;
+  try { selfLearnQ = require('./lib/activity').isSelfLearnRecall(userMessage) && !activityQ; } catch (e) { console.error('[main] self-learn detect failed:', e.message); }
+  if (selfLearnQ) selfActivityQ = false;   // the learn door owns the turn when both shapes match
 
   // SCHEDULE ("when is the BGov meeting", "my next meeting", "what's on my calendar") — answerable
   // from the events she ALREADY holds (HIS WEEK), not the records/web ladder. Detected here so the
@@ -8405,6 +8422,36 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         console.log(`[main] self-activity recall → injected ${recent.length} agent-event(s)`);
       }
     } catch (e) { console.error('[main] self-activity block failed:', e.message); }
+  }
+
+  // SELF-LEARN RECALL (run-2 F10) — "what did you learn / most interesting thing you learned" is
+  // answered from HER LEARNING BANK (facts she extracted from her own reading: learning.js Accrete
+  // rows + dated verified_facts + her dev changelog), newest LAST. Both live failures recounted the
+  // USER's questions as "learning" — that path is forbidden by construction here, and an EMPTY bank
+  // produces an honest "nothing new stood out", never an invented discovery.
+  if (selfLearnQ) {
+    try {
+      const since = Date.now() - 36 * 60 * 60 * 1000;   // "today" with an evening-to-evening cushion
+      const rows = [];
+      for (const src of ['learning', 'verified_fact', 'self_dev']) {
+        try { for (const r of (db.getKnowledgeBySourceSince(src, since) || [])) rows.push(r); } catch {}
+      }
+      rows.sort((a, b) => (a.created_ts || 0) - (b.created_ts || 0));
+      const recent = rows.slice(-12);
+      let block;
+      if (recent.length) {
+        const fmtK = (r) => {
+          const t = r.created_ts ? new Date(r.created_ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+          const safe = String(r.content || '').replace(/\s+/g, ' ').replace(/[[\]]/g, '').slice(0, 170);
+          return `  • (${t}) [${r.source}] ${safe}`;
+        };
+        block = `WHAT YOU (ZOE) LEARNED — ${userName} is asking what YOU learned, not what ${userName} said or asked. These are facts YOU banked from your own reading and research (newest LAST). Pick what genuinely interests you and answer in the FIRST PERSON. Do NOT recount ${userName}'s questions or messages as "learning" — that is not learning. If nothing below feels significant, say plainly that nothing new stood out.\n${recent.map(fmtK).join('\n')}`;
+      } else {
+        block = `WHAT YOU (ZOE) LEARNED — ${userName} is asking what YOU learned. Your learning bank holds NOTHING new from the last day and a half. Say that plainly — nothing new got banked today. Do NOT recount ${userName}'s questions or messages as "learning", and do NOT invent a discovery.`;
+      }
+      retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block;
+      console.log(`[main] self-learn recall → injected ${recent.length} banked learning(s)`);
+    } catch (e) { console.error('[main] self-learn block failed:', e.message); }
   }
 
   // SELF-STATE LEDGER — on a "what can you see / what's running / status" question, prepend her real
@@ -9738,6 +9785,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             if (ans.kind === 'status' && track.kind === 'active') {
               const f = (() => { try { return require('./lib/focus').getCurrent(); } catch { return null; } })();
               if (f) { const report = await statusReport(f); if (report && report.trim()) body = `${ans.block}\n\n${report.trim()}`; }
+            }
+            // MISFOCUS CURE (run-2b gap-fill 1): "status report" answered from the ACTIVE BEAT
+            // (Massachusetts) while the user's just-launched job went unmentioned. The MEASURED
+            // work-state vector (open promises = user-owned orders, then foci, then live stamps)
+            // leads the status body — rendered, never composed, and his work outranks beat work.
+            if (ans.kind === 'status') {
+              try {
+                const ws = require('./lib/work_state');
+                const wsr = ws.renderStatus(ws.snapshot());
+                if (wsr && wsr.trim()) {
+                  body = `YOUR MEASURED WORK-STATE — lead with this. ${userName}'s own orders (the open delivery promises below) outrank background beat work; name them FIRST, then the beats:\n${wsr.trim()}\n\n${body}`;
+                  console.log('[poll] status body led by the measured work-state vector');
+                }
+              } catch (e) { console.error('[poll] work-state render failed (status proceeds):', e.message); }
             }
             const ptr = (ans.kind === 'count' || ans.kind === 'find') ? ` You may also add, briefly, that the full breakdown is in your notes and on his Canvas (tab "${tabTitle}") if he wants it.` : '';
             const where = track.kind === 'active' ? 'your IN-PROGRESS research' : 'your research';
@@ -12580,7 +12641,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
   const _topHop = echoHop === 0;
   if (_topHop) { try { pauseMonologue(); pauseHeartbeat(); pauseContinuity(); pauseReflection(); selfDialogue.pause(); } catch {} }
   try {
-    const userName = db.getMeta('user_name') || 'them';
+    const userName = require('./lib/interlocutor').liveName('them');
     const recentTurns = db.getRecentTurns(8, sessionId);
     let awareness = buildAwarenessBlock({
       chosenName: db.getMeta('chosen_name'),
@@ -13683,7 +13744,7 @@ async function _agentConsumeTick() {
     if (!output || output.length < 40) { console.log(`[agent-consume] run ${e.runId} succeeded but returned no readable output — inbox path will surface the summary`); continue; }
     const sid = currentSessionId;
     if (!sid) continue;   // no session yet — the entry is consumed to done; dedupe still serves it
-    const uname = (() => { try { return db.getMeta('user_name') || 'Lucas'; } catch { return 'Lucas'; } })();
+    const uname = (() => { try { return require('./lib/interlocutor').liveName('Lucas'); } catch { return 'Lucas'; } })();
     try {
       await fireToolFollowup({ io: null, channel: 'chat', sessionId: sid, resultText: ac.consumePrompt({ tool: e.tool, runId: e.runId, output: output.slice(0, 12000), userName: uname }) });
       console.log(`[agent-consume] run ${e.runId} (${e.tool}) consumed → output delivered through the followup path`);
@@ -17101,7 +17162,7 @@ async function _surfaceOpenPromise() {
     const topic = String(d.topic || '').trim();
     const say = String(d.say || '');
     const t = topic || what;
-    const uname = (() => { try { return db.getMeta('user_name') || 'Lucas'; } catch { return 'Lucas'; } })();
+    const uname = (() => { try { return require('./lib/interlocutor').liveName('Lucas'); } catch { return 'Lucas'; } })();
 
     // COMPOSE the deliverable (self-work) via the SAME builders a live "build the report/roster" order uses.
     // Claim the row FIRST (before the async compose) so a racing tick can't double-dispatch. She never
@@ -17431,7 +17492,7 @@ async function announceResearchComplete(focus, done) {
     if (!title) title = 'the directed research';
     const n = done.count || 0;
     const parts = `${n} ${n === 1 ? 'section' : 'sections'}`;
-    const uname = (() => { try { return db.getMeta('user_name') || 'them'; } catch { return 'them'; } })();
+    const uname = (() => { try { return require('./lib/interlocutor').liveName('them'); } catch { return 'them'; } })();
 
     // BASE notice — accurate for a full OR stalled run, and the guaranteed fallback.
     let msg = `I've wrapped up the research you had me on: ${title}. I pulled together what I found into a `
@@ -17534,7 +17595,7 @@ async function announceDigReturn(row, env, { closedStatus = null } = {}) {
     const sid = currentSessionId;
     if (!sid || !row) return false;
     const digLib = require('./lib/dig');
-    const uname = (() => { try { return db.getMeta('user_name') || 'Lucas'; } catch { return 'Lucas'; } })();
+    const uname = (() => { try { return require('./lib/interlocutor').liveName('Lucas'); } catch { return 'Lucas'; } })();
     let msg = digLib.returnFallback({ question: row.question, env, closedStatus });
     try {
       let persona = ''; try { persona = String(require('./lib/context').BASE_PERSONA || '').replaceAll('[user]', uname); } catch {}
@@ -19044,7 +19105,7 @@ async function runActionStep(io, depth = 0) {
   if (!actionLoop.isActive()) return;
   if (depth > 8) { actionLoop.abort(); console.log('[action] depth cap — aborted'); return; }
   const channel = (io && io.channel) || 'desktop';
-  const userName = db.getMeta('user_name') || 'them';
+  const userName = require('./lib/interlocutor').liveName('them');
   try {
     // Deterministic step (start-draft / send): the loop runs it directly — no model
     // turn. Only generative steps (writing the reply body) go to the 24B.

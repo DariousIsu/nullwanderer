@@ -64,8 +64,19 @@ function dbWhitelist() {
 // access is zoe_data.query(db, sql, params), read-only by construction.
 function _helperSource(whitelist) {
   const json = JSON.stringify(whitelist).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  // F21 (run-2 capability probe): the script's cwd is a THROWAWAY sandbox dir, and without the real
+  // roots her scripts assumed cwd == app root — a repo file that exists came back "does NOT exist on
+  // this machine". Bake the REAL roots in as constants (JSON.stringify → valid python string
+  // literals), so a path check starts from truth. Read-only knowledge; file browsing is already hers.
+  const _roots = [
+    `APP_ROOT = ${JSON.stringify(APP_ROOT)}`,
+    `DATA_DIR = ${JSON.stringify(DATA_DIR)}`,
+    `WORKSPACE = ${JSON.stringify(path.join(DATA_DIR, 'zoe_workspace'))}`,
+    `HOME = ${JSON.stringify(process.env.USERPROFILE || process.env.HOME || '')}`,
+  ];
   return [
     'import json, sqlite3',
+    ..._roots,
     `_DBS = json.loads('${json}')`,
     'def _open(p):',
     "    try: return sqlite3.connect('file:' + p + '?mode=ro', uri=True)",
@@ -151,9 +162,12 @@ function run({ code, timeoutMs = null, workbench = null } = {}) {
       // 2026-08-03 (build plan M1.6): a run left NO trace, so no audit could tell if the lane ever
       // fired. One line per run makes a fire one grep away.
       try { console.log(`[analysis] run ${id} ${persistent ? 'workbench=' + id : 'ephemeral'} exit=${err ? (err.killed ? 'timeout' : (err.code != null ? err.code : 'err')) : 0} out=${out.length}b`); } catch {}
+      // F21: the run's cwd is a sandbox, and a bounded look must never become a machine-wide
+      // absence claim ("does NOT exist on this machine" about a repo file that exists — live).
+      const rootNote = `[sandbox note: this ran in ${persistent ? `the workbench dir data/workbench/${id}` : `an ephemeral dir data/analysis/${id}`}, NOT the app root. Real roots are constants inside the script: zoe_data.APP_ROOT, DATA_DIR, WORKSPACE, HOME. A path not found here says NOTHING about the app root or the machine — scope any "doesn't exist" claim to the exact directories the script actually checked.]`;
       if (err && err.killed) return resolve(`[analysis timed out after ${Math.round(ms / 1000)}s]\n${tail}`);
       if (err) return resolve(`[analysis exited non-zero — a bug in the script or the query]\n${tail || '(no output)'}`);
-      return resolve(tail || '(the analysis produced no output — did it print its result?)');
+      return resolve(`${tail || '(the analysis produced no output — did it print its result?)'}\n${rootNote}`);
     });
   });
 }

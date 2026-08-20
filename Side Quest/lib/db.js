@@ -1173,6 +1173,22 @@ function insertTurn({ sessionId, speaker, content, model = null, truncated = 0, 
       }
     } catch {}
   }
+  // DUAL-EMISSION BACKSTOP (run-2b, resurfaced): a VERBATIM say landed twice 5 seconds apart. The
+  // replay-gate above only STAMPS near-verbatim repeats for the voice rail — the transcript still
+  // took both copies. An IDENTICAL substantive ai_said in the SAME session within 30s is one
+  // utterance emitted twice by racing paths, never a real second reply: keep the first, skip the
+  // copy, and return the original row so caller refs stay valid. Short says (<40ch, "Done.") pass.
+  if (speaker === 'ai_said' && String(content || '').trim().length >= 40) {
+    try {
+      const dup = getDb()
+        .prepare("SELECT id, ts FROM turns WHERE speaker = 'ai_said' AND session_id IS ? AND ts > ? AND content = ? ORDER BY id DESC LIMIT 1")
+        .get(sessionId, ts - 30000, content);
+      if (dup) {
+        console.log(`[turns] dual-emission dedupe — identical say within 30s; kept #${dup.id}, skipped the copy`);
+        return { id: dup.id, ts: dup.ts, deduped: true };
+      }
+    } catch { /* the guard never blocks a real insert */ }
+  }
   const info = getDb()
     .prepare('INSERT INTO turns (session_id, ts, speaker, content, model, truncated, unprompted, speech_class) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(sessionId, ts, speaker, content, model, truncated, unprompted ? 1 : 0, speechClass);

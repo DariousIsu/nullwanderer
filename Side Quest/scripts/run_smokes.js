@@ -562,6 +562,10 @@ const smokes = [
   // directions still go), F5b steering vocab stripped, F23 tool-call JSON stripped + the booked-topic
   // sanitize seam. smoke_stage_direction.js (already registered above) carries the F15 spec.
   'smoke_say_filter.js',
+  // F9: who is at the keyboard is measured (declared handoff/handback), never assumed to be the owner.
+  'smoke_interlocutor.js',
+  // Dual-emission backstop: an identical substantive say within 30s stores ONCE (isolated temp DB).
+  'smoke_dual_emission.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks
