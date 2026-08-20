@@ -29,6 +29,7 @@ ok(ac.normalize('what is AFIDA?') === ac.normalize("whats AFIDA"), '"what is/wha
 
 // ── kind classification + TTLs ──────────────────────────────────────────────────────────────────
 ok(ac.classifyKind('who is donald trump?') === 'person', 'who-is → person (7d)');
+ok(ac.classifyKind("hey, who's cleo fields again") === 'person', 'REGRESSION (boot_p57): a greeting-led, question-mark-less variant still classifies (shape tests the NORMALIZED form)');
 ok(ac.classifyKind('how many contacts with a phone number in Louisiana?') === 'contact-count', 'contact count → 7d kind');
 ok(ac.classifyKind('what is the status of SB200?') === null || ac.classifyKind('what happened with SB200 this session?') === 'bill' || true, 'bill shapes classify without throwing');
 ok(ac.classifyKind("what's the latest on the LA-14 vacancy today?") === 'news', 'time-sensitive phrasing → news (6h)');

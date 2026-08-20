@@ -74,7 +74,10 @@ const _QUESTION_SHAPE_RE = /\?\s*$|^(?:who|what|when|where|which|how (?:many|muc
 
 function classifyKind(q) {
   const s = String(q || '');
-  if (!s.trim() || _EXCLUDE_RE.test(s) || !_QUESTION_SHAPE_RE.test(s.trim())) return null;
+  // Shape-test the NORMALIZED form (boot_p57 retest miss: "hey, who's cleo fields again" failed the
+  // raw-text shape gate — no "?" and a greeting lead — so the warm variant never reached lookup).
+  const n = normalize(s);
+  if (!n || _EXCLUDE_RE.test(s) || !_QUESTION_SHAPE_RE.test(n)) return null;
   if (/\b(?:latest|today|tonight|right now|breaking|this (?:week|morning|evening)|news)\b/i.test(s)) return 'news';
   if (/\bhow many contacts?\b|\bcontacts? (?:with|in)\b/i.test(s)) return 'contact-count';
   if (/\b(?:roster|members? of|who (?:sits|serves|is) on|leadership of)\b/i.test(s)) return 'roster';
