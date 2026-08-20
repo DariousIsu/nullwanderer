@@ -7800,6 +7800,29 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   } catch (err) { console.error('[pref-intent] interceptor failed:', err.message); }
   // === END PREFERENCE INTERCEPTOR ===
 
+  // === E1 ANSWER CACHE (run-2 ROOT E — the rapid-response matrix) ===
+  // A repeat of a question she already answered GROUNDED is served verbatim + freshness-stamped in
+  // fast-path (the identity interceptor's proven 0.1s pattern, generalized with TTL-by-kind and
+  // read-time invalidation). "who is donald trump" ran the full 4–5-tool chain on its 8th lifetime
+  // ask — that class ends here. A "recheck/fresh" rider bypasses; excluded shapes (self, status,
+  // orders, recall, personal) never reach the cache by construction (lib/answer_cache).
+  try {
+    const _ac = require('./lib/answer_cache');
+    if (!_ac.wantsFresh(userMessage)) {
+      const hit = _ac.lookup(userMessage);
+      if (hit) {
+        const say = _ac.serveText(hit);
+        const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: say, model: 'answer-cache' });
+        try { for (const ch of say) emit(ch); sendComplete({ saidId: saidRow.id, truncated: 0, answerCached: true }); } catch {}
+        db.setMeta('last_ai_utterance_at', String(Date.now()));
+        resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+        console.log(`[answer-cache] HIT (${hit.kind}, age ${Math.round(hit.ageMs / 60000)}m, serve#${hit.hits}) → fast-path`);
+        return { ok: true, answerCached: true, say };
+      }
+    }
+  } catch (err) { console.error('[answer-cache] serve failed:', err.message); }
+  // === END E1 ANSWER CACHE ===
+
   // === PERSONAL-MODE TOGGLE ===
   // "go play" / "off the clock" enters her personal/play life; "back to work" exits.
   // We flip the flag and FALL THROUGH (no canned reply) so she answers in her own
@@ -8061,6 +8084,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       console.log('[capability-ground] image-gen-shaped turn → ground-truth directive injected');
     }
   } catch {}
+  // E1 RESUME CONTEXT (the 171s affirm-continue pathology): "ok back to it" / "where were we"
+  // re-enters the MEASURED thread — his last substantive ask + her last point, snapshotted after
+  // every substantive exchange — instead of re-deriving the whole context from scratch.
+  try {
+    const _ac = require('./lib/answer_cache');
+    if (_ac.isAffirmContinue(userMessage)) {
+      const rb = _ac.resumeBlock({ sessionId, userName });
+      if (rb) { composedUserMessage = `${composedUserMessage}\n\n${rb}`; console.log('[answer-cache] resume-context injected (affirm-continue)'); }
+    }
+  } catch (e) { console.error('[answer-cache] resume inject failed:', e.message); }
   // RETRIEVE-OR-ADMIT (anti-confabulation) — a personal-fact question ("what's my daughter's
   // name?") must be answered from real memory or honestly declined, never guessed. She once
   // fabricated a child's name AND a fake "you just mentioned it" justification. The directive
@@ -11329,6 +11362,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   });
   // Embed her reply too (async) so it's recallable later via episodic retrieval.
   try { memoryLib.embed(finalSaid).then(v => { if (v && saidRow && saidRow.id) db.setTurnEmbedding(saidRow.id, JSON.stringify(v)); }).catch(() => {}); } catch {}
+  // E1 capture: a grounded lookup answer becomes the matrix's next fast serve (store() applies its
+  // own truth guards — no misses, no corrections, no excluded shapes); resume-context refreshes on
+  // every substantive exchange so an affirm-continue re-enters instantly.
+  try {
+    const _ac = require('./lib/answer_cache');
+    if (turnRoute && turnRoute.route === 'lookup' && finalSaid !== '…') {
+      const st = _ac.store({ question: userMessage, answer: finalSaid });
+      if (st.stored) console.log(`[answer-cache] STORED (${st.kind}) ← "${String(userMessage).replace(/\s+/g, ' ').slice(0, 60)}"`);
+    }
+    _ac.noteExchange({ sessionId, userText: userMessage, sayText: finalSaid });
+  } catch (e) { console.error('[answer-cache] capture failed:', e.message); }
   // CONTACTS→CANVAS RECOVERY (2026-08-17, disease A / #12335 — the twin of the image_intent backstop): she
   // CLAIMED contacts on the canvas but nothing landed (the anti-fab correction just fired above). Instead of
   // ONLY correcting, RECOVER — extract the FILTER she meant and actually place the held contacts, so her own
@@ -12792,6 +12836,21 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
         const _terminalHop = chainTags.length === 0;
         const saidRow = _terminalHop ? db.insertTurn({ sessionId, speaker: 'ai_said', content: sayOut, model: followupWriter, unprompted: prompted ? 0 : 1 }) : null;
         if (_terminalHop) db.setMeta('last_ai_utterance_at', String(Date.now()));
+        // E1 capture on the chain's TERMINAL say — most operator-grounded lookups land here, not on
+        // the main reply path. Question = this session's last user turn; `prompted` gates out the
+        // background announces (an unprompted say must never bind to an unrelated user turn).
+        // store() applies its own truth guards (question shape, no misses, no corrections).
+        if (_terminalHop && prompted && sayOut && sayOut !== '…') {
+          try {
+            const _ac = require('./lib/answer_cache');
+            const _lastU = db.getDb().prepare("SELECT content FROM turns WHERE session_id = ? AND speaker = 'user' ORDER BY id DESC LIMIT 1").get(sessionId);
+            if (_lastU && _lastU.content) {
+              const st = _ac.store({ question: _lastU.content, answer: sayOut });
+              if (st.stored) console.log(`[answer-cache] STORED (${st.kind}) ← followup: "${String(_lastU.content).replace(/\s+/g, ' ').slice(0, 60)}"`);
+              _ac.noteExchange({ sessionId, userText: _lastU.content, sayText: sayOut });
+            }
+          } catch (e) { console.error('[answer-cache] followup capture failed:', e.message); }
+        }
         if (channel === 'discord') {
           try { await discordLib.sendDM(sayOut); } catch (e) { console.error('[main] followup discord DM failed:', e.message); }
         } else {

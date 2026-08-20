@@ -566,6 +566,9 @@ const smokes = [
   'smoke_interlocutor.js',
   // Dual-emission backstop: an identical substantive say within 30s stores ONCE (isolated temp DB).
   'smoke_dual_emission.js',
+  // E1: the rapid-response matrix — grounded answers replay verbatim+stamped, TTL by kind, read-time
+  // invalidation; misses/corrections/excluded shapes refused; resume-context for affirm-continue.
+  'smoke_answer_cache.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks
