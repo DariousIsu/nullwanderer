@@ -87,17 +87,49 @@ const S = () => new Map();
   ok(frame.length === 2, 'a re-mention does not duplicate the coordinate');
 }
 
-// ── idle expiry: a stale frame binds nothing (yesterday's "him" must not resolve today) ─────────────
+// ── GRADED ATTENTION (AST, W5 standalone 2026-08-20): activation, not membership ────────────────────
+// The old law was two cliffs (30m whole-frame death; recency-only eviction). Now: a one-off mention
+// stops binding at roughly the old horizon; a heavily-discussed antecedent SURVIVES past it; the
+// whole frame clears only after a 2h discourse reset. Yesterday's "him" still never resolves today.
 {
   const store = S();
   const t0 = 1_000_000;
   sal.fold('sess', [{ coord: 'person:civic/1', type: 'person', status: 'held', surface: 'A' }], { turn: 1, now: t0, store });
-  const later = t0 + sal.MAX_IDLE_MS + 1;
-  ok(sal.dereference('sess', { type: 'person', now: later, store }) === null, 'a frame idle past MAX_IDLE_MS binds nothing');
-  // and a fold after the gap starts fresh (does not resurrect the stale entity)
-  sal.fold('sess', [{ coord: 'person:civic/2', type: 'person', status: 'held', surface: 'B' }], { turn: 2, now: later, store });
-  const frame = sal.peek('sess', { store });
-  ok(frame.length === 1 && frame[0].coord === 'person:civic/2', 'a fold after the idle gap clears the stale frame first');
+  const at30m = t0 + sal.MAX_IDLE_MS + 1;
+  ok(sal.dereference('sess', { type: 'person', now: at30m, store }) === null, 'a ONE-OFF mention stops binding by ~30m (activation < floor — the old horizon holds for trivia)');
+  ok(sal.dereference('sess', { type: 'person', now: t0 + 20 * 60e3, store }) !== null, '…but still binds at 20m (no cliff at the old wall)');
+
+  // a heavily-hit antecedent SURVIVES past the old 30m death line
+  const store2 = S();
+  for (let i = 0; i < 3; i++) sal.fold('s2', [{ coord: 'person:civic/9', type: 'person', status: 'held', surface: 'Arceneaux', salient: true }], { turn: i, now: t0 + i * 60e3, store: store2 });
+  const hot = sal.dereference('s2', { type: 'person', now: t0 + 2 * 60e3 + sal.MAX_IDLE_MS + 5 * 60e3, store: store2 });
+  ok(hot && hot.coord === 'person:civic/9', 'a 3-hit salient antecedent STILL binds past the old 30m cliff (graded survival)');
+
+  // the 2h discourse reset is the only whole-frame death now
+  const store3 = S();
+  sal.fold('s3', [{ coord: 'person:civic/5', type: 'person', status: 'held', surface: 'C' }], { turn: 1, now: t0, store: store3 });
+  const afterReset = t0 + sal.HARD_RESET_MS + 1;
+  ok(sal.dereference('s3', { type: 'person', now: afterReset, store: store3 }) === null, 'past the 2h discourse reset nothing binds');
+  sal.fold('s3', [{ coord: 'person:civic/6', type: 'person', status: 'held', surface: 'D' }], { turn: 2, now: afterReset, store: store3 });
+  const frame3 = sal.peek('s3', { store: store3 });
+  ok(frame3.length === 1 && frame3[0].coord === 'person:civic/6', 'a fold after the discourse reset clears the stale frame first');
+
+  // eviction beyond the cap drops the LOWEST activation, not the merely-oldest
+  const store4 = S();
+  for (let i = 0; i < 4; i++) sal.fold('s4', [{ coord: 'person:civic/hot', type: 'person', status: 'held', surface: 'Hot', salient: true }], { turn: i, now: t0 + i * 1000, store: store4 });
+  for (let i = 0; i < sal.CAP; i++) sal.fold('s4', [{ coord: `thing:one-off/${i}`, type: 'thing', status: 'held', surface: `T${i}` }], { turn: 10 + i, now: t0 + 60e3 + i * 1000, store: store4 });
+  const frame4 = sal.peek('s4', { store: store4 });
+  ok(frame4.some((e) => e.coord === 'person:civic/hot'), 'a 4-hit salient antecedent SURVIVES a burst of one-off mentions (activation eviction, not recency)');
+  ok(frame4.length === sal.CAP, '…and the cap still holds');
+
+  // activation() itself is monotone in what matters
+  const now = t0;
+  const fresh1 = { lastTouch: now, hits: 1 };
+  const old1 = { lastTouch: now - 25 * 60e3, hits: 1 };
+  const old3 = { lastTouch: now - 25 * 60e3, hits: 3 };
+  ok(sal.activation(fresh1, now) > sal.activation(old1, now), 'activation: fresher beats staler at equal hits');
+  ok(sal.activation(old3, now) > sal.activation(old1, now), 'activation: more hits beat fewer at equal age');
+  ok(sal.activation(old1, now) < sal.ACT_FLOOR, 'a 25m-old one-off sits below the binding floor (stale-trivial drops sooner)');
 }
 
 // ── session isolation: one session's antecedents never leak into another ────────────────────────────

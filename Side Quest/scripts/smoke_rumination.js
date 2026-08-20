@@ -106,6 +106,20 @@ async function run() {
   ok('S3: an intent-duplicate theme does NOT re-mint (dedup NOOP → null)', q2 === null && nThreads === 1);
   process.env.ZOE_AUTONOMIC = '0';   // leave the suite's legacy pin as it found it
 
+  // ── THE GRADIENT (IIT differentiation-trend, W5 standalone 2026-08-20) ────────────────────────
+  // The decision runs on the TRAJECTORY, not one hot reading — the observed 0.899→0.928 climb is
+  // the canonical fire; a spike amid recovery no longer false-trips.
+  console.log('gradient:');
+  const gd = (avgs, opts) => rumination.gradientDecide(avgs.map((avg) => ({ avg })), opts);
+  ok('the LIVE pathology (0.899→0.912→0.928, climbing) → CIRCLING', gd([0.899, 0.912, 0.928]).ruminating === true);
+  ok('flat-high (0.82, 0.82, 0.82) → CIRCLING (pinned similarity is collapse held in place)', gd([0.82, 0.82, 0.82]).ruminating === true);
+  ok('RECOVERING through the old cliff (0.9→0.84→0.81) → NOT circling (the smoothing: no false trip amid recovery)', gd([0.9, 0.84, 0.81]).ruminating === false);
+  ok('extreme lock-in fires regardless of trend; sub-extreme recovery does not (0.7→0.95→0.85 no, 0.7→0.85→0.95 yes)', gd([0.7, 0.95, 0.85]).ruminating === false && gd([0.7, 0.85, 0.95]).ruminating === true);
+  ok('rising but still low (0.5→0.6→0.7) → NOT circling (below the floor)', gd([0.5, 0.6, 0.7]).ruminating === false);
+  ok('a tiny dip within ε still counts as non-decreasing (0.80→0.795→0.82) → CIRCLING', gd([0.80, 0.795, 0.82]).ruminating === true);
+  ok('fewer than 3 readings → the OLD instantaneous rule (0.85 fires)', gd([0.85]).ruminating === true && gd([0.7]).ruminating === false);
+  ok('empty series → not circling, no throw', gd([]).ruminating === false);
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { db.getDb().close(); } catch {}
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmp + ext); } catch {} }

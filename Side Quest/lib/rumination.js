@@ -24,7 +24,41 @@ const config = require('./config');
 
 const MODEL = config.extractionModel();
 const K = 4;            // how many recent free-association thoughts to consider
-const THRESHOLD = 0.80; // avg pairwise cosine that counts as circling one theme
+const THRESHOLD = 0.80; // avg pairwise cosine that counts as circling one theme (fallback rule only)
+
+// ── THE GRADIENT (IIT differentiation-trend, W5 standalone, 2026-08-20) ─────────────────────────
+// The old rule was an instantaneous cliff: one reading ≥0.80 → escalate — patched by three breakers
+// and still observed CLIMBING 0.899→0.928. The IIT reframe: integration is fine; the pathology is
+// COLLAPSING DIFFERENTIATION — a similarity TRAJECTORY that keeps rising (or sits pinned high),
+// not one hot reading. So the decision runs on a persisted series of readings:
+//   • RISING/FLAT-HIGH (last 3 readings non-decreasing within ε, latest ≥ FLOOR) → circling: the
+//     theme is tightening its grip — escalate.
+//   • EXTREME (latest ≥ EXTREME) → circling regardless of trend (a sudden lock-in never waits).
+//   • FALLING (differentiation recovering) → NOT circling, even above the old 0.80 line — a spike
+//     amid recovery no longer trips a false escalation. This is the smoothing.
+// Fail-safe: fewer than 3 comparable readings → the OLD instantaneous rule (fail-absent — the
+// gradient degrades to today's exact behavior, never to never-fires). Series in meta (ring 12).
+const SERIES_KEY = 'rumination_series';
+const SERIES_CAP = 12;
+const GRAD_FLOOR = 0.75;    // a rising trend only matters once similarity is already substantial
+const GRAD_EXTREME = 0.88;  // pinned-high lock-in: fire on the reading alone
+const GRAD_EPS = 0.01;      // tolerated dip that still counts as "non-decreasing"
+
+/** Pure: decide from the reading series (oldest→newest, each {avg}). Returns {ruminating, why}. */
+function gradientDecide(series, { floor = GRAD_FLOOR, extreme = GRAD_EXTREME, eps = GRAD_EPS, threshold = THRESHOLD } = {}) {
+  const s = (Array.isArray(series) ? series : []).map((r) => Number(r && r.avg)).filter((x) => Number.isFinite(x));
+  if (s.length < 3) {
+    const latest = s.length ? s[s.length - 1] : 0;
+    return { ruminating: latest >= threshold, why: `fallback-instantaneous (${s.length} reading${s.length === 1 ? '' : 's'})` };
+  }
+  const latest = s[s.length - 1];
+  if (latest >= extreme) return { ruminating: true, why: `extreme lock-in (${latest.toFixed(3)} ≥ ${extreme})` };
+  const [a, b, c] = s.slice(-3);
+  const nonDecreasing = b >= a - eps && c >= b - eps;
+  if (nonDecreasing && latest >= floor) return { ruminating: true, why: `differentiation collapsing (${a.toFixed(3)}→${b.toFixed(3)}→${c.toFixed(3)}, non-decreasing)` };
+  if (!nonDecreasing) return { ruminating: false, why: `recovering (${a.toFixed(3)}→${b.toFixed(3)}→${c.toFixed(3)})` };
+  return { ruminating: false, why: `below floor (${latest.toFixed(3)} < ${floor})` };
+}
 
 // CIRCUIT BREAKER: escalation assumes naming the theme as a focus RESOLVES it. But
 // a sticky meta-preoccupation (e.g. "stop overanalyzing his typo") resolves in one
@@ -70,7 +104,17 @@ async function detect({ k = K, threshold = THRESHOLD, embedFn = memory.embed } =
     sum += memory.cosine(vecs[i], vecs[j]); n++;
   }
   const avg = n ? sum / n : 0;
-  return { ruminating: avg >= threshold, avg, thoughts };
+  // THE GRADIENT: persist this reading, then decide on the TRAJECTORY, not the instant. Only a
+  // reading over a NEW thought-window joins the series (the stale-window guard above ensures that),
+  // so the trend compares genuinely different moments of her thinking.
+  let series = [];
+  try { series = JSON.parse(db.getMeta(SERIES_KEY) || '[]') || []; } catch {}
+  series.push({ ts: Date.now(), avg: Math.round(avg * 1000) / 1000, maxId });
+  series = series.slice(-SERIES_CAP);
+  try { db.setMeta(SERIES_KEY, JSON.stringify(series)); } catch {}
+  const g = gradientDecide(series, { threshold });
+  if (g.ruminating || avg >= threshold) console.log(`[rumination] gradient: ${g.why} → ${g.ruminating ? 'CIRCLING' : 'not circling'}`);
+  return { ruminating: g.ruminating, avg, why: g.why, thoughts };
 }
 
 // Name the recurring preoccupation as one actionable goal (the focus content).
@@ -202,4 +246,4 @@ function isMemoryGapFixation(thoughts) {
   return (thoughts || []).some(t => MEMORY_GAP.test(t.content || ''));
 }
 
-module.exports = { detect, escalate, nameTheme, recentFreeThoughts, isCapabilityDoubt, resolveCapabilityDoubt, isComfortFixation, resolveComfortFixation, isMemoryGapFixation, COMFORT_FIXATION, MEMORY_GAP, K, THRESHOLD };
+module.exports = { detect, escalate, nameTheme, recentFreeThoughts, gradientDecide, isCapabilityDoubt, resolveCapabilityDoubt, isComfortFixation, resolveComfortFixation, isMemoryGapFixation, COMFORT_FIXATION, MEMORY_GAP, K, THRESHOLD, SERIES_KEY, SERIES_CAP, GRAD_FLOOR, GRAD_EXTREME, GRAD_EPS };

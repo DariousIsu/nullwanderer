@@ -8682,6 +8682,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const routeAllows = (r) => !routerOn || turnRoute.route === r;
   const routeAllowsAny = (...rs) => !routerOn || rs.includes(turnRoute.route);
 
+  // F25 PROCEDURAL LESSONS at TAG-CHOICE TIME — the other half of the inoculation: a lookup-shaped
+  // turn whose CLASS has a banked failed→worked pair starts on the path that worked, instead of
+  // re-deriving the dead end from zero. Measured history, order-bias only (the block says so —
+  // never a fence); no lessons for the class → nothing injected (fail-absent).
+  if (routeAllowsAny('lookup', 'explore')) {
+    try {
+      const _pl = require('./lib/procedural_lessons');
+      const _plb = _pl.injectionBlock(_pl.taskClassOf(userMessage));
+      if (_plb) { composedUserMessage = `${composedUserMessage}\n\n${_plb}`; console.log('[procedural] lessons injected at tag-choice'); }
+    } catch (e) { console.error('[procedural] lesson injection failed:', e.message); }
+  }
+
   // IMAGE-GENERATION INTERCEPT (2026-08-04) — "draw / make a picture of X" must GENERATE locally, not fall
   // to a web-search for stock photos (live: she googled Getty/iStock instead of drawing, because image-gen
   // was only PROSE in the manifest while web_search is a first-class tool she reaches for). This is a
@@ -12898,6 +12910,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
         if (_isRet && _sig && _cs.seen.has(_sig)) {
           const _ev = _cg.evaluateHop(_cs, { signature: _sig, label: _label, emptyThisHop: true, retrieval: true }, MAX_ECHO_HOPS);
           _needsReplan = true; if (_ev.exhausted) _exhausted = true;
+          if (_label) (_cs.f25Failed || (_cs.f25Failed = new Set())).add(_label);   // F25: a refused repeat is a failed path
           hopParts.push(`[Refused: you already ran "${_label}" this turn with the same input — it will not return anything new.]`);
           console.log(`[chain-guard] repeat refused (hop ${echoHop + 1}): ${_sig}`);
           continue;
@@ -12921,6 +12934,24 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
           const _ev = _cg.evaluateHop(_cs, { signature: _sig, label: _label, emptyThisHop: _hopEmpty, retrieval: _isRet }, MAX_ECHO_HOPS);
           if (_ev.needsReplan) _needsReplan = true;
           if (_ev.exhausted) _exhausted = true;
+          // F25 PROCEDURAL INOCULATION — capture at the exact moment a replan SUCCEEDS: this
+          // retrieval hop returned real data after earlier hops failed. The failed→working pairs
+          // persist CLASS-keyed (never arg-keyed), so the NEXT same-class ask starts on the path
+          // that worked. Prompted chains only (her first attempt on HIS asks is the disease).
+          if (_isRet && _label) {
+            if (_hopEmpty || r.isError) { (_cs.f25Failed || (_cs.f25Failed = new Set())).add(_label); }
+            else if (_cs.f25Failed && _cs.f25Failed.size && !_cs.f25Done && prompted) {
+              _cs.f25Done = true;   // one lesson-set per chain — the first landing is the lesson
+              try {
+                const _pl = require('./lib/procedural_lessons');
+                const _lu = db.getDb().prepare("SELECT content FROM turns WHERE session_id = ? AND speaker = 'user' ORDER BY id DESC LIMIT 1").get(sessionId);
+                const _tc = _pl.taskClassOf((_lu && _lu.content) || '');
+                let _n = 0;
+                for (const _f of Array.from(_cs.f25Failed).slice(0, 3)) { if (_pl.record({ taskClass: _tc, failed: _f, worked: _label }).ok) _n++; }
+                if (_n) console.log(`[procedural] LESSON banked (${_tc}): ${Array.from(_cs.f25Failed).slice(0, 3).join('+')} failed → ${_label} worked (${_n} pair${_n === 1 ? '' : 's'})`);
+              } catch (e) { console.error('[procedural] lesson capture failed:', e.message); }
+            }
+          }
           hopParts.push(content
             + (r.isError ? '\n[That call errored — fix the args or pick another tool with <echo-find>.]' : '')
             + (_hopEmpty ? '\n[Empty result — it did not answer the need. Adjust the args, try another tool, or say plainly it was not found.]' : ''));

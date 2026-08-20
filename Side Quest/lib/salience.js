@@ -23,8 +23,33 @@ const _store = new Map();                                   // sessionId -> { en
 // Arceneaux") to bind — a person named in her reply but not yet in the graph is still a valid antecedent.
 // Never self (Zoe is not a "his"/"that") and never ambiguous (no clean referent).
 const ANTECEDENT_STATUS = new Set(['held', 'owner', 'minted-new']);
-const CAP = 8;                                              // most-recent N coordinates on the table
-const MAX_IDLE_MS = 30 * 60 * 1000;                         // a long gap means the discourse moved on — expire
+const CAP = 8;                                              // N coordinates on the table (evicted by ACTIVATION now, not raw recency)
+const MAX_IDLE_MS = 30 * 60 * 1000;                         // legacy export (callers/smokes) — binding now runs on activation, below
+
+// ── GRADED ATTENTION (AST, W5 standalone, 2026-08-20) ───────────────────────────────────────────
+// The old frame was binary membership with two cliffs: antecedent #9 fell off the cap by pure
+// recency, and minute 31 expired the WHOLE frame — a heavily-discussed person and a one-off
+// mention died at the same instant. The AST reframe: attention is an ACTIVATION, not a membership.
+//   activation(e) = recency-decay × hit-weight × salient-boost
+// Binding consults the weight: a high-activation antecedent survives past the old 30m cliff
+// (~50m+ at 3 hits), a stale one-off drops SOONER (~24m), and eviction beyond the cap removes the
+// LOWEST activation, not the merely-oldest. The hard discourse reset only fires after a very long
+// gap (2h — the conversation truly moved on). Smoothing dynamics, never source: grading weights a
+// REAL resolved antecedent; nothing here mints one, and a below-floor frame still binds NOTHING
+// (the caller's honest gap+clarify stands).
+const HALF_LIFE_MS = 8 * 60 * 1000;   // recency half-life — calibrated so 1 hit ≈ the old 30m life
+const ACT_FLOOR = 0.12;               // below this an entry cannot bind (≈24m at 1 hit, ≈49m at 3)
+const HARD_RESET_MS = 2 * 60 * 60 * 1000;   // a 2h+ gap = the discourse moved on; the frame clears
+
+/** Pure: one entry's activation at `now`. */
+function activation(e, now = Date.now()) {
+  if (!e) return 0;
+  const age = Math.max(0, now - (e.lastTouch || 0));
+  const recency = Math.pow(0.5, age / HALF_LIFE_MS);
+  const hitWeight = 1 + Math.log2(1 + Math.max(0, (e.hits || 1) - 1));
+  const boost = e.salient ? 1.25 : 1;
+  return recency * hitWeight * boost;
+}
 
 function _frame(store, sessionId) {
   let f = store.get(sessionId);
@@ -40,7 +65,9 @@ function _frame(store, sessionId) {
  */
 function fold(sessionId, objects, { turn = null, now = Date.now(), cap = CAP, store = _store } = {}) {
   const f = _frame(store, sessionId);
-  if (f.lastTouch && (now - f.lastTouch) > MAX_IDLE_MS) f.entries = [];
+  // AST: only a VERY long gap hard-clears (the discourse truly moved on); inside it, per-entry
+  // activation decides what can still bind — no more whole-frame death at minute 31.
+  if (f.lastTouch && (now - f.lastTouch) > HARD_RESET_MS) f.entries = [];
   f.lastTouch = now;
   for (const o of (Array.isArray(objects) ? objects : [])) {
     // a REFERENCE's own (mis)resolution is never an antecedent — else a ref-miss "his" (minted
@@ -61,7 +88,16 @@ function fold(sessionId, objects, { turn = null, now = Date.now(), cap = CAP, st
       salient: !!o.salient,
     });
   }
-  if (f.entries.length > cap) f.entries.length = cap;       // evict oldest beyond the cap
+  // AST eviction: beyond the cap, drop the LOWEST-ACTIVATION entries — a heavily-hit salient
+  // antecedent survives a burst of one-off mentions (the old rule evicted by raw recency alone).
+  if (f.entries.length > cap) {
+    const ranked = f.entries.map((e, i) => ({ e, i, act: activation(e, now) }))
+      .sort((x, y) => y.act - x.act || x.i - y.i)             // activation desc; original order breaks ties
+      .slice(0, cap)
+      .sort((x, y) => x.i - y.i)                              // restore most-recent-first ordering
+      .map((x) => x.e);
+    f.entries = ranked;
+  }
   return f.entries;
 }
 
@@ -75,11 +111,15 @@ function fold(sessionId, objects, { turn = null, now = Date.now(), cap = CAP, st
 function dereference(sessionId, { type = null, now = Date.now(), store = _store } = {}) {
   const f = store.get(sessionId);
   if (!f || !f.entries.length) return null;
-  if (f.lastTouch && (now - f.lastTouch) > MAX_IDLE_MS) return null;
+  if (f.lastTouch && (now - f.lastTouch) > HARD_RESET_MS) return null;   // the discourse moved on
   const want = type ? String(type).toLowerCase() : null;
-  for (const e of f.entries) {                              // most-recent-first
+  // AST binding: an entry binds only while its ACTIVATION clears the floor — a high-salience
+  // antecedent survives past the old 30m cliff; a stale one-off stops binding sooner. Scan stays
+  // most-recent-first; a below-floor entry is skipped (not the whole frame nulled).
+  for (const e of f.entries) {
+    if (activation(e, now) < ACT_FLOOR) continue;
     if (want) { if (e.type === want) return e; }
-    else return e;                                          // untyped: the most-recent thing on the table
+    else return e;
   }
   return null;
 }
@@ -110,4 +150,4 @@ function shouldFoldReply(sessionId, key, { store = _store } = {}) {
   return true;
 }
 
-module.exports = { fold, dereference, topOfType, peek, clear, shouldFoldReply, _store, CAP, MAX_IDLE_MS, ANTECEDENT_STATUS };
+module.exports = { fold, dereference, topOfType, peek, clear, shouldFoldReply, activation, _store, CAP, MAX_IDLE_MS, HALF_LIFE_MS, ACT_FLOOR, HARD_RESET_MS, ANTECEDENT_STATUS };
