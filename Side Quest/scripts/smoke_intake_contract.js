@@ -89,6 +89,19 @@ ok(!ic.detectDeliverableOrder('did you put the summary on the canvas?'), 'a ques
 ok(!ic.detectDeliverableOrder('go into detail about the coastal program for me'), 'approach-verb chatter with no order verb and no deliverable never books');
 ok(!ic.detectDeliverableOrder('put simply, the coastal market is contracting fast'), '"put simply" chatter never books (no deliverable evidence)');
 
+// ── run-6 re-drive catch: DEFERRED orders still book ─────────────────────────────────────────────────────
+{
+  const d1 = ic.detectDeliverableOrder("Sometime today, put together a short digest of parish road-project announcements — whenever there's a gap, no hurry.");
+  ok(d1 && d1.deliverable === 'digest', 'RUN-6 REGRESSION: the verbatim deferred order books (deferral prefix + digest noun)');
+  const d2 = ic.detectDeliverableOrder('When you get a chance, pull together a rundown of parish-level insurance complaint trends — no rush on it.');
+  ok(d2 && d2.deliverable === 'rundown', 'the run-6 main-run phrasing (timeout-unjudged) books: when-you-get-a-chance + rundown');
+  const d3 = ic.detectDeliverableOrder('No rush, but draft a memo on the levee vote.');
+  ok(d3 && d3.deliverable === 'memo', 'a no-rush-but lead still books');
+  ok(d1 && /^put together/i.test(d1.topic), 'the topic strips the deferral prefix (pursuit sees the order, not the scheduling)');
+  ok(!ic.detectDeliverableOrder('Sometime today the House schedule should firm up.'), 'a deferral with NO order verb never books');
+  ok(!ic.detectDeliverableOrder('No rush on my end — just thinking out loud about the digest idea.'), 'deferral chatter without an order lead never books');
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────────────────────────────────
 ok(ic.statesIn('Utah, Arizona and new mexico are in; Indianapolis is not a state').join(',') === 'arizona,new mexico,utah', 'statesIn: names matched, city-lookalikes not');
 

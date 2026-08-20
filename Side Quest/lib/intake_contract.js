@@ -24,7 +24,9 @@ const str = (v) => (v == null ? '' : String(v));
 
 // ── C1: the deliverable-order net ────────────────────────────────────────────────────────────────────────
 // Interrogatives are asks, not orders (the lookup/status lanes own them).
-const _QUESTION_RE = /\?\s*$|^(?:who|what|when|where|why|how|hows|how's|is|are|was|were|do|does|did|can|could|would|should|any)\b/i;
+// "when(ever)" opens QUESTIONS ("when did the vote happen") but also DEFERRAL leads ("when you get
+// a chance, pull together…") — the run-6 catch. The lookahead carves the deferral shapes out.
+const _QUESTION_RE = /\?\s*$|^(?:who|what|where|why|how|hows|how's|is|are|was|were|do|does|did|can|could|would|should|any)\b|^when(?:ever)?\b(?!\s+(?:you\s+(?:get|have|find)|there'?s\s+a|things\s+(?:quiet|slow))\b)/i;
 // The order lead: an imperative deliver-verb opening a sentence, or an explicit commitment ask.
 // F27b (boot_p54 retest): "clean up the wording in notes/x.md — smooth the phrasing in place" booked
 // NOTHING — the edit verbs were missing from this vocabulary, so an edit-shaped order only booked when
@@ -38,12 +40,17 @@ const _ORDER_VERB = /(?:finish|complete|update|build|make|compile|compose|create
 // The bridge span stays inside one sentence but must cross FILENAME dots ("notes/x.md and smooth…"):
 // a dot followed by non-space is an extension dot, a dot followed by space/EOL ends the sentence.
 const _APPROACH_BRIDGE = `(?:(?:go\\s+(?:into|to|through|over)|open(?:\\s+up)?|take|grab|pull\\s+up)\\s+(?:[^.!?;\\n]|\\.(?=\\S)){0,80}?\\b(?:and|then)\\s+)?`;
-const _ORDER_LEAD_RE = new RegExp(`(?:^|[.!;\\n]\\s*)(?:(?:ok(?:ay)?|alright|now|next|also|then|please|zoe)[,\\s]+)*(?:let'?s\\s+|go ahead and\\s+)?${_APPROACH_BRIDGE}${_ORDER_VERB.source}\\b`, 'i');
+// Run-6 re-drive catch (2026-08-20): "Sometime today, put together a short digest … — no hurry"
+// died behind the ack UNBOOKED — a temporal DEFERRAL prefix pushed the order verb off the
+// recognized lead. A deferred order is STILL an order: it books now and pursues later; the
+// deferral is scheduling advice, never a decline of the commitment.
+const _DEFERRAL = `(?:sometime\\s+(?:today|tonight|soon|this\\s+\\w+)|at\\s+some\\s+point(?:\\s+(?:today|tonight))?|later\\s+(?:today|tonight|on)|when(?:ever)?\\s+you\\s+(?:get|have|find)\\s+(?:a\\s+)?(?:chance|moment|minute|sec(?:ond)?|gap|window|breather)|whenever\\s+there'?s\\s+a\\s+(?:gap|lull|window)|when\\s+things\\s+(?:quiet|slow)\\s+down|if\\s+you\\s+get\\s+a\\s+(?:chance|minute|moment)|no\\s+(?:rush|hurry)(?:\\s+on\\s+(?:it|this))?)`;
+const _ORDER_LEAD_RE = new RegExp(`(?:^|[.!;\\n]\\s*)(?:(?:ok(?:ay)?|alright|now|next|also|then|please|zoe)[,\\s]+)*(?:${_DEFERRAL}[,\\s—–-]+(?:but\\s+)?)?(?:let'?s\\s+|go ahead and\\s+)?${_APPROACH_BRIDGE}${_ORDER_VERB.source}\\b`, 'i');
 const _ORDER_WANT_RE = new RegExp(`\\bi\\s+(?:want|need)\\s+(?:you\\s+to\\s+)?(?:(?:a|an|the|this|that)\\s+)?(?:\\w+\\s+){0,3}?${_ORDER_VERB.source}?`, 'i');
 // Deliverable evidence: an explicit workspace path, the canvas, or an artifact noun.
 const _TARGET_PATH_RE = /((?:notes|docs|data)\/[\w./-]+\.[a-z]{2,4})/i;
 const _CANVAS_RE = /\bcanvas\b/i;
-const _ARTIFACT_NOUN_RE = /\b(?:report|briefing|brief|dossier|roster|spreadsheet|sheet|list|summary|memo|write-?up|table|deck|doc(?:ument)?|note|csv|xlsx?|docx?|pdf|outline)\b/i;
+const _ARTIFACT_NOUN_RE = /\b(?:report|briefing|brief|dossier|roster|spreadsheet|sheet|list|summary|memo|write-?up|table|deck|doc(?:ument)?|note|csv|xlsx?|docx?|pdf|outline|digest|rundown|primer|recap)\b/i;
 
 /** detectDeliverableOrder(text) → { deliverable, target, topic } | null. Precision over recall:
  *  questions, status checks, and chatter never match; an order needs a lead AND evidence. */
@@ -60,7 +67,8 @@ function detectDeliverableOrder(text) {
   const target = pathM ? pathM[1] : (canvas ? 'canvas' : null);
   // topic: the first order-bearing sentence, stripped of pleasantries — enough for the pursuit builder.
   const sent = (s.split(/(?<=[.!?])\s+|\n+/).find((x) => _ORDER_LEAD_RE.test(x) || _ORDER_WANT_RE.test(x)) || s);
-  const topic = sent.replace(/^(?:ok(?:ay)?|alright|now|next|also|then|please|zoe)[,\s]+/i, '').trim().slice(0, 140);
+  const topic = sent.replace(/^(?:ok(?:ay)?|alright|now|next|also|then|please|zoe)[,\s]+/i, '')
+    .replace(new RegExp(`^${_DEFERRAL}[,\\s—–-]+(?:but\\s+)?`, 'i'), '').trim().slice(0, 140);
   return { deliverable, target, topic };
 }
 
