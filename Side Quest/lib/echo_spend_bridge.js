@@ -39,12 +39,23 @@ function foldOnce({ now = Date.now(), dbPath = SAGA_DB, meter, getMeta, setMeta 
     const gm = getMeta || ((k) => require('./db').getMeta(k));
     const sm = setMeta || ((k, v) => require('./db').setMeta(k, v));
     if (!require('fs').existsSync(dbPath)) return { folded: 0, why: 'saga.db not found' };
-    const wm = parseInt(gm(META_KEY) || '0', 10) || 0;
+    let wm = parseInt(gm(META_KEY) || '0', 10) || 0;
     const Database = require('better-sqlite3');
     let conn, rows = [];
     try {
       conn = new Database(dbPath, { readonly: true });
       conn.pragma('busy_timeout = 3000');
+      // FAST-FORWARD (2026-08-20, measured live): agent_trajectory holds 3.06M rows, and OLD callers
+      // DID populate token columns on a historical slice — so a low watermark crawls months-stale
+      // rows at BATCH/tick (~39h of ticks), folding none of them (all outside the 26h ring). Anything
+      // >100k rows behind the tip is pre-seam history by construction (Echo's writers are app
+      // children — no rows accrue while the app is down), so jump to the tip and fold only the fresh.
+      const tip = conn.prepare('SELECT MAX(id) m FROM agent_trajectory').get();
+      if (tip && tip.m && tip.m - wm > 100000) {
+        console.log(`[echo-spend] watermark ${wm} is ${tip.m - wm} rows behind the tip — fast-forwarding past pre-seam history`);
+        wm = tip.m; sm(META_KEY, String(wm));
+        return { folded: 0, watermark: wm, why: 'fast-forwarded' };
+      }
       rows = conn.prepare(
         `SELECT id, asserted_at,
                 COALESCE(llm_model_name, 'unknown') AS model,

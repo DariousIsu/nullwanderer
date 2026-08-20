@@ -69,6 +69,20 @@ ok(r3.folded === 1 && recorded[2].model === 'deepseek-v4-flash' && recorded[2].t
 const r4 = bridge.foldOnce({ ...deps, dbPath: path.join(dir, 'nope.db') });
 ok(r4.folded === 0 && /not found/.test(r4.why || ''), 'missing saga.db → quiet no-op with a reason');
 
+// ── fast-forward (2026-08-20): a watermark far behind the tip is pre-seam history — jump, never
+// crawl (measured live: 3.06M rows, old token rows, ~39h of wasted 1000/tick crawling).
+conn.prepare(`INSERT INTO agent_trajectory (id, session_id, turn_idx, asserted_at, action_type, agent_kind, llm_model_name,
+  llm_token_count_prompt, llm_token_count_completion, llm_token_count_total)
+  VALUES (200010, 's', 2, ?, 'message', 'llm_spend', 'gemma4:31b', 10, 10, 20)`).run(secs(NOW - 5e3));
+const r5 = bridge.foldOnce(deps);
+ok(r5.folded === 0 && /fast-forwarded/.test(r5.why || '') && meta[bridge.META_KEY] === '200010',
+   `a watermark >100k behind the tip fast-forwards without folding (wm=${meta[bridge.META_KEY]})`);
+conn.prepare(`INSERT INTO agent_trajectory (id, session_id, turn_idx, asserted_at, action_type, agent_kind, llm_model_name,
+  llm_token_count_prompt, llm_token_count_completion, llm_token_count_total)
+  VALUES (200011, 's', 3, ?, 'message', 'llm_spend', 'kimi-k2.6', 50, 25, 75)`).run(secs(NOW - 2e3));
+const r6 = bridge.foldOnce(deps);
+ok(r6.folded === 1 && recorded[recorded.length - 1].tokens === 75, 'post-fast-forward fresh rows fold normally');
+
 // ── wiring grep: the live 60s tick actually calls the bridge ────────────────────────────────────
 const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/echo_spend_bridge'\)\.foldOnce\(\)/.test(mainSrc), 'main.js 60s meter tick calls foldOnce()');
