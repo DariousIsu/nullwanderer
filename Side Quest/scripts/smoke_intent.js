@@ -28,6 +28,20 @@ ok("'what do you think about that'", detectWebIntent('what do you think about th
 ok("'i read your last message'", detectWebIntent('i read your last message and agree') === null);
 ok('empty', detectWebIntent('') === null);
 
+console.log('\nDOES NOT FIRE — F11 (run-2, boot_p49:320/735/805): a FILENAME is not a domain:');
+// The live kill: this exact order opened https://report-hartfield-and-green-south.md/ (.md read as
+// Moldova's TLD), the interceptor OWNED the turn, and the deliverable order died — twice.
+ok('the live F11 order (a notes/ path with .md) never fires',
+  detectWebIntent('finish the report at notes/report-hartfield-and-green-south.md — read the current draft and update in place') === null);
+ok('the other live repeat (directed-3832-dossier.md)',
+  detectWebIntent('pull up directed-3832-dossier.md and check the summary section') === null);
+ok('a bare filename with a doc extension (xlsx)', detectWebIntent('open the Louisiana_Parish_Leadership.xlsx sheet') === null);
+ok('a csv reference', detectWebIntent('look at sponsors.csv and check the AZ row') === null);
+// …while REAL domains, including with view verbs, still fire:
+ok('a real bare domain still fires', fires('check example.com for the pricing', 'example.com'));
+ok('a schemeful URL ending .md STILL fires (scheme wins)', fires('look at https://raw.example.com/readme.md', 'readme.md'));
+ok('a .io domain still fires', fires('go to github.io and browse', 'github.io'));
+
 console.log('\n--- detectRecordCommand ---');
 console.log('START (begin a demonstration recording):');
 const start1 = detectRecordCommand('record a recipe for publishing on substack.com');

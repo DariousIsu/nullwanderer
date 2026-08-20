@@ -25,7 +25,11 @@ const kga = require('./kg_activity');   // kg:activity push bus — match.hit re
 // stayed NULL). Stamped centrally in dispatch() so it catches a write from ANY caller (operator tool loop
 // included). A tool that dispatches OK but returns its OWN {ok:false}/error does NOT stamp — that IS the miss.
 let _lastContactWriteTs = 0;
-const _CONTACT_WRITE_TOOLS = new Set(['create_contact', 'update_contact', 'upsert_account', 'update_account', 'create_account']);
+// F18 (run-2): the stamp covered only the contacts/accounts doors — a record landed via the ENTITY store
+// (propose_entity et al) left the stamp cold, so a true "saved it" claim about an entity write could be
+// false-scolded. The stamp now covers every record-store write door she'd claim in a say.
+const _CONTACT_WRITE_TOOLS = new Set(['create_contact', 'update_contact', 'upsert_account', 'update_account', 'create_account',
+  'propose_entity', 'promote_proposal', 'merge_entities', 'propose_relation', 'add_manual_relation']);
 function lastContactWriteTs() { return _lastContactWriteTs; }
 
 // GATHER STAMP (2026-08-10, Spine 2 step 1 — docs/BIDIRECTIONAL_VERIFICATION_GATE.md). The absence gate

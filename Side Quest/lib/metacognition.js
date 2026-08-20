@@ -217,10 +217,21 @@ const _ART_CANVAS_VERB_RE = /\b(put|placed|added|dropped|posted|loaded|saved|fil
 // DB-WRITE: a claim that a contact/record was SAVED to the contacts DB / CRM this turn, when no write actually
 // landed (live 2026-08-05: "Done — Tom Arceneaux is in the contacts database with mayor@…" — the row's email
 // stayed NULL; the write never persisted). Branch 1 = a save/add VERB into a store ("added it to the contacts
-// database", "saved to the CRM", "recorded in the database"). Branch 2 = a specific record asserted PRESENT
-// ("Tom is now in the contacts database", "he's in the CRM"). A COUNT/reference ("we have 1,065 in the
-// database") uses "have" and matches NEITHER branch → no false positive.
-const _ART_DB_DONE_RE = /\b(added|saved|stored|recorded|logged|created|inserted|put|entered)\b[^.!?\n]*\b(?:to|in|into|onto)\b[^.!?\n]*\b(?:contacts?(?:\s+(?:database|db|list|record))?|crm|database|records?)\b|\b(?:is|are|now|has been|have been|it'?s|he'?s|she'?s|they'?re)\b[^.!?\n]*\b(?:in|on)\b[^.!?\n]*\b(?:contacts?\s+(?:database|db|list)|crm|database)\b/i;
+// database", "saved to the CRM", "recorded in the database"). Branch 2 = a record asserted JUST-now present
+// ("Tom is now in the contacts database", "she's just been added to the CRM") — "now"/"just" makes it a
+// completed-write claim. A COUNT/reference ("we have 1,065 in the database") matches NEITHER → no false positive.
+//
+// F18 (run-2, 2026-08-19): a bare EXISTENCE reference ("Kim Brondyke is in my database / he's in the CRM") is
+// NOT a write claim — the old branch 2 matched it and probed lastContactWriteTs (a THIS-TURN write stamp),
+// scolding a TRUE statement about a record that has existed for months (entities #1605541). Existence claims
+// are exempt from the write probe entirely; a false existence claim is groundFacts/work-state territory.
+const _ART_DB_DONE_RE = /\b(added|saved|stored|recorded|logged|created|inserted|put|entered)\b[^.!?\n]*\b(?:to|in|into|onto)\b[^.!?\n]*\b(?:contacts?(?:\s+(?:database|db|list|record))?|crm|database|records?)\b|\b(?:is|are|has been|have been|it'?s|he'?s|she'?s|they'?re)\s+(?:now\b|just\b)[^.!?\n]*\b(?:in|on)\b[^.!?\n]*\b(?:contacts?\s+(?:database|db|list)|crm|database)\b/i;
+
+// F24 (run-2b gap-fill 4): a PAST-TIME reference marks the sentence as pointing at an EARLIER delivery,
+// not a this-turn completion — the canvas gate corrected a TRUE "saved to your canvas" that landed 10
+// minutes before, because its probe only accepts this-turn writes. A past-referenced sentence skips every
+// THIS-TURN probe (canvas/db/image); the file-existence check still applies (existence is timeless).
+const _ART_PAST_REF_RE = /\b(?:earlier|already|previously|yesterday|last\s+(?:night|week|turn|time|session)|this\s+morning|the\s+other\s+day|(?:a|an|\d+|few|couple(?:\s+of)?|several|some|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|fifty|half\s+an?)\s+(?:minutes?|mins?|moments?|hours?|hrs?|days?|turns?)\s+(?:ago|back|earlier))\b/i;
 
 // ── SPINE 2: BIDIRECTIONAL VERIFICATION (2026-08-10, docs/BIDIRECTIONAL_VERIFICATION_GATE.md) ──────────────
 // The artifact gate above checks claims that leave a trace in Zoe's OWN runtime. Spine 2 checks claims about
@@ -270,6 +281,9 @@ function verifyArtifactClaims(say, { fileExists = null, canvasWroteThisTurn = nu
   for (const sent of sentences) {
     const s = sent.trim();
     if (s.length < 6 || _ART_FUTURE_RE.test(s)) continue;   // skip intent/offers — only completed claims are falsifiable
+    // F24: a past-referenced sentence ("saved to your canvas 10 minutes ago / earlier") is about a PRIOR
+    // delivery — this-turn probes (canvas/db/image) must not judge it. File existence still applies below.
+    const pastRef = _ART_PAST_REF_RE.test(s);
     // FILE: a save/at assertion naming a path that does not exist.
     if (typeof fileExists === 'function' && _ART_FILE_DONE_RE.test(s)) {
       let m; _ART_PATH_RE.lastIndex = 0;
@@ -281,7 +295,7 @@ function verifyArtifactClaims(say, { fileExists = null, canvasWroteThisTurn = nu
       }
     }
     // CANVAS: an assertion that something is/was placed on the canvas with NO canvas write this turn.
-    if (typeof canvasWroteThisTurn === 'function' && _ART_CANVAS_DONE_RE.test(s) && _ART_CANVAS_VERB_RE.test(s)) {
+    if (typeof canvasWroteThisTurn === 'function' && !pastRef && _ART_CANVAS_DONE_RE.test(s) && _ART_CANVAS_VERB_RE.test(s)) {
       let wrote = true; try { wrote = !!canvasWroteThisTurn(); } catch { wrote = true; }   // fail OPEN
       if (!wrote) violations.push({ kind: 'canvas', claim: s.slice(0, 90) });
       // CONTENT-AWARE (2026-08-17, the #12338 wrong-doc): a write DID land — but does it MATCH the claim, or was
@@ -306,7 +320,7 @@ function verifyArtifactClaims(say, { fileExists = null, canvasWroteThisTurn = nu
     // IMAGE: an image-creation/delivery claim with NO generation this turn. Tier 1 (create-verb + image-noun)
     // fires anywhere; Tier 2 (bare progress/delivery) only inside image context, so "generating the report
     // now" can't trip it. One violation per turn is enough — the correction speaks to the whole reply.
-    if (typeof imageGenThisTurn === 'function' && !violations.some((v) => v.kind === 'image')) {
+    if (typeof imageGenThisTurn === 'function' && !pastRef && !violations.some((v) => v.kind === 'image')) {
       if (_ART_IMG_MAKE_RE.test(s) || (_imgCtx && _ART_IMG_PROGRESS_RE.test(s))) {
         let made = true; try { made = !!imageGenThisTurn(); } catch { made = true; }   // fail OPEN
         if (!made) violations.push({ kind: 'image', claim: s.slice(0, 90) });
@@ -314,7 +328,7 @@ function verifyArtifactClaims(say, { fileExists = null, canvasWroteThisTurn = nu
     }
     // DB-WRITE: a "saved/added to the contacts database / CRM" claim with NO contact write that landed this
     // turn. One violation per turn is enough. Fails OPEN (probe error → assume it wrote, never a false scold).
-    if (typeof dbWroteThisTurn === 'function' && !violations.some((v) => v.kind === 'db') && _ART_DB_DONE_RE.test(s)) {
+    if (typeof dbWroteThisTurn === 'function' && !pastRef && !violations.some((v) => v.kind === 'db') && _ART_DB_DONE_RE.test(s)) {
       let wrote = true; try { wrote = !!dbWroteThisTurn(); } catch { wrote = true; }   // fail OPEN
       if (!wrote) violations.push({ kind: 'db', claim: s.slice(0, 90) });
     }

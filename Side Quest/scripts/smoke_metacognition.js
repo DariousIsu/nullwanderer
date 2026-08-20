@@ -180,6 +180,31 @@ ok(m.verifyArtifactClaims("I drew the Gonzalez portrait — it's on your canvas.
 ok(m.verifyArtifactClaims('I put the Louisiana contacts on your canvas', { canvasWroteThisTurn: CW_YES, imageGenThisTurn: () => false, canvasLandedText: () => 'Inquiry — dispatch-timeout failure analysis' }).violations.some(v => v.kind === 'canvas'),
   'canvas content: no image + wrong doc (no "Louisiana") still caught (#12338)');
 
+// --- F24 (run-2b gap-fill 4): a PAST-TIME reference is about a PRIOR delivery — never a this-turn scold ---
+ok(m.verifyArtifactClaims('I saved the diagnostics to your canvas about ten minutes ago.', { canvasWroteThisTurn: CW_NO }).ok,
+  'F24: "saved to your canvas … minutes ago" + no write THIS turn → ok (the live false-scold)');
+ok(m.verifyArtifactClaims('The brief landed on your canvas earlier tonight.', { canvasWroteThisTurn: CW_NO }).ok,
+  'F24: "on your canvas earlier" → past reference, no violation');
+ok(m.verifyArtifactClaims('It\'s already on your canvas from last session.', { canvasWroteThisTurn: CW_NO }).ok,
+  'F24: "already … last session" → past reference, no violation');
+ok(m.verifyArtifactClaims('I put the table on your canvas just now.', { canvasWroteThisTurn: CW_NO }).violations.some(v => v.kind === 'canvas'),
+  'F24 guard: a THIS-turn claim ("just now") with no write still violates — the exemption is not a hole');
+
+// --- F18 (run-2): a bare DB EXISTENCE reference is NOT a write claim — the write probe must not judge it ---
+const DBW_NO = () => false, DBW_YES = () => true;
+ok(m.verifyArtifactClaims('Kim Brondyke is in my database — I have her on file.', { dbWroteThisTurn: DBW_NO }).ok,
+  'F18: "X is in my database" (existence) + no write this turn → ok (the live false-scold on entities #1605541)');
+ok(m.verifyArtifactClaims("He's in the CRM with a Baton Rouge address.", { dbWroteThisTurn: DBW_NO }).ok,
+  'F18: "he\'s in the CRM" (existence) → no violation');
+ok(m.verifyArtifactClaims('Tom is now in the contacts database.', { dbWroteThisTurn: DBW_NO }).violations.some(v => v.kind === 'db'),
+  'F18 guard: "is NOW in the contacts database" is a completed-write claim → still violates with no write');
+ok(m.verifyArtifactClaims('I added Tom Arceneaux to the contacts database.', { dbWroteThisTurn: DBW_NO }).violations.some(v => v.kind === 'db'),
+  'F18 guard: a write-verb claim ("added to the contacts database") still violates with no write');
+ok(m.verifyArtifactClaims('I added Tom Arceneaux to the contacts database.', { dbWroteThisTurn: DBW_YES }).ok,
+  'F18 guard: same write claim WITH a landed write → ok');
+ok(m.verifyArtifactClaims('I added her to the CRM a couple of hours ago.', { dbWroteThisTurn: DBW_NO }).ok,
+  'F18+F24: a PAST-referenced write ("a couple of hours ago") → prior turn\'s work, no this-turn scold');
+
 // --- IMAGE anti-fab (the #10872 "…Generating now." confab; no generation ran) ---
 const SOCCER = "Got it — more realistic. I'll push the soccer image toward photorealism. Generating now.";
 ok(m.verifyArtifactClaims(SOCCER, { imageGenThisTurn: IG_NO }).violations.some(v => v.kind === 'image'),

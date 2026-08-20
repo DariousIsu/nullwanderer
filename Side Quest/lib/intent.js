@@ -10,6 +10,28 @@
 // lane's engine (DDG was dropped — it null-routed this IP; see docs/BROWSER_AND_RECIPES.md §1a).
 const SEARCH_HOME = 'https://www.google.com';
 
+// F11 (run-2, boot_p49:320/735/805): a FILENAME is not a domain. "finish the report at
+// notes/report-hartfield-and-green-south.md" matched the bare-domain regex (.md reads as Moldova's
+// TLD), the interceptor opened https://report-hartfield-and-green-south.md/ (ERR_NAME_NOT_RESOLVED),
+// OWNED the turn, and the deliverable order died behind a confident ack — twice. A bare token whose
+// "TLD" is a workspace file extension, or that sits inside a path (notes/x.md), is a FILE reference;
+// only a schemeful URL (https://…) may still carry these endings.
+const _FILE_EXT_RE = /\.(?:md|txt|csv|tsv|json|docx?|xlsx?|pdf|log|db|sqlite|py|ipynb|jsx?|tsx?|html?|png|jpe?g|gif|svg|webp|yml|yaml|toml|ini|psd|pptx?|xml|sql|zip|gz|7z|exe|dll|bat|ps1)$/i;
+function _bareUrlMatch(t) {
+  const scheme = /https?:\/\/\S+/i.exec(t);
+  if (scheme) return scheme;
+  const re = /\b[a-z0-9-]+\.[a-z]{2,}(?:\/\S*)?\b/gi;
+  let m;
+  while ((m = re.exec(t)) !== null) {
+    const prev = m.index > 0 ? t[m.index - 1] : '';
+    if (prev === '/' || prev === '\\') continue;              // a path segment (notes/x.md), not a host
+    const host = m[0].split(/[\/\\]/)[0];
+    if (_FILE_EXT_RE.test(host)) continue;                    // a filename wearing a TLD costume
+    return m;
+  }
+  return null;
+}
+
 function detectWebIntent(text) {
   if (!text) return null;
   const t = String(text).trim();
@@ -17,7 +39,7 @@ function detectWebIntent(text) {
   const tag = t.match(/<web-open>\s*([\s\S]*?)\s*<\/web-open>/i);
   if (tag) return { target: (tag[1] || '').trim() || SEARCH_HOME };
 
-  const url = t.match(/https?:\/\/\S+/i) || t.match(/\b[a-z0-9-]+\.[a-z]{2,}(?:\/\S*)?\b/i);
+  const url = _bareUrlMatch(t);
   const search = t.match(/\b(?:search(?:\s+for)?|look\s*up|google|find)\b\s+(?:the\s+|for\s+)?(.{2,90})/i);
   const verb = /(open|opening|launch|fire up|pull up|go to|browse|web-open|\buse\b)/i.test(t);
   // A TRUE "open a browser fresh" verb — distinct from the loose `verb` (which includes "use",

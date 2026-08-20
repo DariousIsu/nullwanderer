@@ -558,6 +558,10 @@ const smokes = [
   'smoke_workstate_gate.js',
   'smoke_agent_consume.js',
   'smoke_intake_contract.js',
+  // ── run-2 D-batch (2026-08-20): the one-voice say filter — F15 emphasis words KEPT (stage
+  // directions still go), F5b steering vocab stripped, F23 tool-call JSON stripped + the booked-topic
+  // sanitize seam. smoke_stage_direction.js (already registered above) carries the F15 spec.
+  'smoke_say_filter.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks

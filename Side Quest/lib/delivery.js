@@ -65,7 +65,9 @@ function bookingSubject({ deliverable, sentence }) {
 // deliver-verb / deliverable-noun / articles / filler, and prefer an explicit "on|about|of|for X" clause.
 // A weak/empty result is fine and SAFE — the builder honest-misses on an unknown topic (never fabricates).
 function deliverySubjectFrom(say, deliverable) {
-  let s = String(say || '').trim();
+  // F23 sanitize (run-2b): a leaked operator tool-call JSON in the say polluted the BOOKED topic —
+  // the promise pursued a subject made of JSON keys. Strip machine text before extracting the topic.
+  let s = require('./say_filter').stripToolJson(String(say || '')).trim();
   if (!s) return '';
   // keep only the promise clause — drop a "… and park/save/send it" tail (that's the destination, not the topic)
   s = s.split(/\b(?:and (?:then )?(?:park|save|drop|put|stick|store|send|email|share|file)\b)|,\s*then\b|;\s/i)[0].trim();

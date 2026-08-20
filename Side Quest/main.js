@@ -7564,12 +7564,25 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Mirrors the protocol interceptor + the email reply-intent trigger.
   try {
     const webIntent = detectWebIntent(userMessage);
+    // F11 part 2 (run-2): the SAME failing target re-fired on the next order (boot_p49:735→805 — an
+    // action-tag repeat the per-turn chain-guard can't see). A target that just failed to navigate is
+    // skipped for 10 minutes: the turn falls through and routes normally instead of dying here again.
+    let _wiRepeatFail = null;
+    if (webIntent && !webIntent.bare) {
+      try {
+        const lf = JSON.parse(db.getMeta('webintent.last_fail') || 'null');
+        if (lf && lf.target === webIntent.target && Date.now() - (lf.ts || 0) < 10 * 60 * 1000) _wiRepeatFail = lf;
+      } catch {}
+    }
     // Don't WIPE an already-open browser on a bare "open a browser" with no destination — a mention
     // shouldn't reset her page to the DDG home. Only act on a bare-open when nothing's open yet.
-    if (webIntent && webIntent.bare && webLib.isConnected()) {
+    if (webIntent && _wiRepeatFail) {
+      console.log(`[web-intent] skipped — "${webIntent.target}" failed ${Math.round((Date.now() - _wiRepeatFail.ts) / 1000)}s ago (${_wiRepeatFail.reason || 'nav fail'}); routing the turn normally`);
+    } else if (webIntent && webIntent.bare && webLib.isConnected()) {
       console.log('[web-intent] bare open ignored — browser already open, not resetting to search home');
     } else if (webIntent) {
       const o = await webLib.open(webIntent.target);
+      if (!o.ok) { try { db.setMeta('webintent.last_fail', JSON.stringify({ target: webIntent.target, ts: Date.now(), reason: String(o.reason || '').slice(0, 120) })); } catch {} }
       let resultText;
       if (o.ok) {
         const r = await webLib.read();
@@ -11167,10 +11180,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     .replace(/<wonder>[\s\S]*?<\/wonder>/gi, '')
     .replace(/<\|[a-z_]+\|>/gi, '')
     .replace(/<\|[a-z_]+/gi, '')
-    .replace(/(?<![*\w])\*(?!\*)[^*\n]{1,200}\*(?!\*)/g, '')   // single-* stage direction only; **bold** survives
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+  // ONE-VOICE FILTER (run-2 D-batch): stage directions go but emphasis WORDS stay (F15 — the old
+  // stripper here ate "*plummeting*" with its word), leaked tool-call JSON goes (F23), and internal
+  // steering vocabulary goes (F5b: "facet corrected to…", run-id UUIDs, "Need:" fragments).
+  sayStripped = require('./lib/say_filter').filterSay(sayStripped);
   // Strip any open-thread status tags that leaked into say (defense in depth)
   sayStripped = openThreadsLib.stripStatusTags(sayStripped);
   // Strip any browser tags that leaked into say
@@ -12629,11 +12645,10 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       ...echoSuitLib.parseEchoTags(followupThinking || '', { deliberative: true })
     ] : [];
     // Strip ALL tags from the follow-up output for DISPLAY — tags don't render.
-    let sayOut = (say || '')
+    let sayOut = require('./lib/say_filter').filterSay((say || '')
       .replace(/<\/?(think|say)>/gi, '')
-      .replace(/(?<![*\w])\*(?!\*)[^*\n]{1,200}\*(?!\*)/g, '')   // single-* stage direction only; **bold** survives
       .replace(/[ \t]+/g, ' ')
-      .trim();
+      .trim());
     sayOut = screenLib.stripTags(filesLib.stripTags(browserLib.stripTags(sayOut)));
     sayOut = echoSuitLib.stripEchoTags(sayOut);
     sayOut = sayOut.replace(/<[^>]+>/g, '').trim();

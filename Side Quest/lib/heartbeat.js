@@ -458,15 +458,14 @@ async function maybeHeartbeat() {
     }
 
     // Treat literal placeholder text as silence, not as utterance
-    const stripLeakedTags = (s) => autoTools.stripAll(screenLib.stripTags(browserLib.stripTags(filesLib.stripTags((s || '')
+    const stripLeakedTags = (s) => autoTools.stripAll(screenLib.stripTags(browserLib.stripTags(filesLib.stripTags(require('./say_filter').filterSay((s || '')
       .replace(/<\/?think>/gi, '')
       .replace(/<\/?say>/gi, '')
       .replace(/<navigate>[^<]*<\/navigate>/gi, '')
       .replace(/<wonder>[\s\S]*?<\/wonder>/gi, '')
-      .replace(/(?<![*\w])\*(?!\*)[^*\n]{1,200}\*(?!\*)/g, '')   // single-* stage direction only; **bold** survives
       .replace(/[ \t]+/g, ' ')
       .replace(/\n{3,}/g, '\n\n')
-      .trim()))));
+      .trim())))));
     let trimmedSay = stripLeakedTags(say);
     // VOICE GUARD: de-disclaim an unprompted utterance before it surfaces. It streamed
     // live, so the corrected text rides the complete payload and the renderer swaps it.
