@@ -108,6 +108,13 @@ function _appendRevision(canonAbs, requestedAbs, data) {
   return total;
 }
 
+// C1 (2026-08-19): the delivery kept-checks (promise booking, order backstop) were blind to FILE
+// writes — a report landing at notes/*.md still read as "nothing delivered this turn" and booked a
+// spurious promise (run-2b, recheck#1681). Stamp every successful workspace write; lastWriteTs()
+// is the probe, same shape as canvas_docs.lastWriteTs.
+let _lastWriteTs = 0;
+function lastWriteTs() { return _lastWriteTs; }
+
 function fileWrite(p, content) {
   const abs = resolvePath(p);
   if (!abs) return { ok: false, reason: 'no path given' };
@@ -119,11 +126,13 @@ function fileWrite(p, content) {
     const canon = findCanonicalSibling(abs);
     if (canon) {
       const total = _appendRevision(canon, abs, data);
+      _lastWriteTs = Date.now();
       console.log(`[files] one-canonical: "${path.basename(abs)}" folded into existing "${path.basename(canon)}"`);
       return { ok: true, path: canon, redirected: true, requested: abs, total, note: `a note on this subject already exists — your content was added to ${path.basename(canon)} as a dated revision instead of creating a sibling file` };
     }
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, data, 'utf8');
+    _lastWriteTs = Date.now();
     return { ok: true, path: abs, bytes: Buffer.byteLength(data, 'utf8') };
   } catch (err) {
     return { ok: false, reason: err.message, path: abs };
@@ -138,11 +147,13 @@ function fileAppend(p, content) {
     const canon = findCanonicalSibling(abs);   // only fires when abs itself doesn't exist
     if (canon) {
       const total = _appendRevision(canon, abs, data);
+      _lastWriteTs = Date.now();
       console.log(`[files] one-canonical: append "${path.basename(abs)}" folded into existing "${path.basename(canon)}"`);
       return { ok: true, path: canon, redirected: true, requested: abs, appended: Buffer.byteLength(data, 'utf8'), total };
     }
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.appendFileSync(abs, data, 'utf8');
+    _lastWriteTs = Date.now();
     let total = 0;
     try { total = fs.statSync(abs).size; } catch {}
     return { ok: true, path: abs, appended: Buffer.byteLength(data, 'utf8'), total };
@@ -353,7 +364,7 @@ module.exports = {
   WORKSPACE,
   ensureWorkspace, resolvePath,
   fileWrite, fileAppend, fileRead, fileReadFull, fileList, fileMove, fileCopy, fileSearch,
-  findCanonicalSibling,
+  findCanonicalSibling, lastWriteTs,
   parseTags, stripTags, dispatch,
   buildPromptBlock
 };

@@ -1,0 +1,100 @@
+'use strict';
+/*
+ * lib/intake_contract.js — C1 + C2 (live-test run 2, 2026-08-19: the booking lottery).
+ *
+ * C1 (the booking contract): a user IMPERATIVE with a deliverable target — a file path, the canvas,
+ * a sheet/report — must produce a booking or an explicit refusal, never a bare ack. Run-2's two
+ * "finish the report at notes/…" orders produced NO intake extraction, no focus, no promise; the
+ * chain died at a failed file-read behind a confident "let me pull that up". detectDeliverableOrder
+ * is the deterministic net main.js's backstop books from (recheck_queue kind='promise', the same
+ * ledger SPINE 3 pursues) when the turn itself delivered nothing.
+ *
+ * C2 (the facet gate): the mid-run correction net classified ANY user turn against the ACTIVE
+ * directed focus — so "more details on the Senate District 14 vacancy" became the INDIANA
+ * legislature run's enrich_facet, and a 7-state sponsors order attached to the ILLINOIS run.
+ * foreignSubject is the deterministic pre-gate: a turn carrying its own DISTINCT subject (a state
+ * the run doesn't cover, or proper-noun anchors none of which appear in the run's scope) is NOT a
+ * correction to that run — the correction net stands down and the turn routes as its own ask.
+ * Pure scope-talk ("just the top 5", "make it deep") carries no such anchors and passes through.
+ *
+ * Pure + injectable, no db. Run: scripts/smoke_intake_contract.js
+ */
+
+const str = (v) => (v == null ? '' : String(v));
+
+// ── C1: the deliverable-order net ────────────────────────────────────────────────────────────────────────
+// Interrogatives are asks, not orders (the lookup/status lanes own them).
+const _QUESTION_RE = /\?\s*$|^(?:who|what|when|where|why|how|hows|how's|is|are|was|were|do|does|did|can|could|would|should|any)\b/i;
+// The order lead: an imperative deliver-verb opening a sentence, or an explicit commitment ask.
+const _ORDER_VERB = /(?:finish|complete|update|build|make|compile|compose|create|assemble|land|write|draft|produce|generate|deliver|put together|pull together|knock out|redo)/i;
+const _ORDER_LEAD_RE = new RegExp(`(?:^|[.!;\\n]\\s*)(?:(?:ok(?:ay)?|alright|now|next|also|then|please|zoe)[,\\s]+)*(?:let'?s\\s+|go ahead and\\s+)?${_ORDER_VERB.source}\\b`, 'i');
+const _ORDER_WANT_RE = new RegExp(`\\bi\\s+(?:want|need)\\s+(?:you\\s+to\\s+)?(?:(?:a|an|the|this|that)\\s+)?(?:\\w+\\s+){0,3}?${_ORDER_VERB.source}?`, 'i');
+// Deliverable evidence: an explicit workspace path, the canvas, or an artifact noun.
+const _TARGET_PATH_RE = /((?:notes|docs|data)\/[\w./-]+\.[a-z]{2,4})/i;
+const _CANVAS_RE = /\bcanvas\b/i;
+const _ARTIFACT_NOUN_RE = /\b(?:report|briefing|brief|dossier|roster|spreadsheet|sheet|list|summary|memo|write-?up|table|deck|doc(?:ument)?|note|csv|xlsx?|docx?|pdf|outline)\b/i;
+
+/** detectDeliverableOrder(text) → { deliverable, target, topic } | null. Precision over recall:
+ *  questions, status checks, and chatter never match; an order needs a lead AND evidence. */
+function detectDeliverableOrder(text) {
+  const s = str(text).trim();
+  if (s.length < 12 || _QUESTION_RE.test(s)) return null;
+  const hasLead = _ORDER_LEAD_RE.test(s) || _ORDER_WANT_RE.test(s);
+  if (!hasLead) return null;
+  const pathM = s.match(_TARGET_PATH_RE);
+  const nounM = s.match(_ARTIFACT_NOUN_RE);
+  const canvas = _CANVAS_RE.test(s);
+  if (!pathM && !nounM && !canvas) return null;   // an imperative with no deliverable is not this net's business
+  const deliverable = (nounM && nounM[0].toLowerCase()) || (pathM ? 'file' : 'canvas doc');
+  const target = pathM ? pathM[1] : (canvas ? 'canvas' : null);
+  // topic: the first order-bearing sentence, stripped of pleasantries — enough for the pursuit builder.
+  const sent = (s.split(/(?<=[.!?])\s+|\n+/).find((x) => _ORDER_LEAD_RE.test(x) || _ORDER_WANT_RE.test(x)) || s);
+  const topic = sent.replace(/^(?:ok(?:ay)?|alright|now|next|also|then|please|zoe)[,\s]+/i, '').trim().slice(0, 140);
+  return { deliverable, target, topic };
+}
+
+// ── C2: the foreign-subject gate ─────────────────────────────────────────────────────────────────────────
+const STATE_NAMES = ['alabama','alaska','arizona','arkansas','california','colorado','connecticut','delaware','florida','georgia','hawaii','idaho','illinois','indiana','iowa','kansas','kentucky','louisiana','maine','maryland','massachusetts','michigan','minnesota','mississippi','missouri','montana','nebraska','nevada','new hampshire','new jersey','new mexico','new york','north carolina','north dakota','ohio','oklahoma','oregon','pennsylvania','rhode island','south carolina','south dakota','tennessee','texas','utah','vermont','virginia','washington','west virginia','wisconsin','wyoming'];
+function statesIn(text) {
+  // normalize punctuation to spaces and demand BOTH boundaries — "Indianapolis" must not match "indiana"
+  const low = ' ' + str(text).toLowerCase().replace(/[^a-z]+/g, ' ').replace(/\s+/g, ' ').trim() + ' ';
+  return STATE_NAMES.filter((n) => low.includes(' ' + n + ' '));
+}
+// Proper-noun phrases: 2+ capitalized/numeric tokens in sequence ("Senate District 14",
+// "Green South Foundation"). Sentence-initial single words never qualify on their own.
+function _properPhrases(text) {
+  const out = [];
+  for (const m of str(text).matchAll(/\b[A-Z][\w'&.-]*(?:\s+(?:[A-Z][\w'&.-]*|\d+[\w-]*)){1,5}\b/g)) {
+    const p = m[0].trim();
+    if (p.split(/\s+/).length >= 2 && !out.includes(p)) out.push(p);
+  }
+  return out.slice(0, 8);
+}
+const _PHRASE_TOKEN_STOP = new Set(['the', 'a', 'an', 'of', 'for', 'and']);
+
+/** foreignSubject(userText, {goal, facet, orgs}) → { foreign, why } . Foreign when the turn names a
+ *  STATE outside the run's scope, or when EVERY proper-noun anchor in the turn is absent from the
+ *  run (phrase substring OR all-tokens fallback, so "Indiana Senate" matches a run on the "Indiana
+ *  State Senate"). No anchors at all → not foreign (scope-talk like "just the top 5" passes). */
+function foreignSubject(userText, { goal = '', facet = '', orgs = [] } = {}) {
+  const runText = `${str(goal)} ${str(facet)} ${(Array.isArray(orgs) ? orgs : []).map(str).join(' ')}`.toLowerCase();
+  if (!runText.trim()) return { foreign: false, why: 'no run scope to compare' };
+  const ts = statesIn(userText);
+  const missingStates = ts.filter((n) => !runText.includes(n));
+  if (missingStates.length) return { foreign: true, why: `names ${missingStates.length > 1 ? 'states' : 'a state'} outside the run's scope (${missingStates.slice(0, 3).join(', ')})` };
+  const phrases = _properPhrases(userText);
+  if (!phrases.length) return { foreign: false, why: 'no distinct subject anchors (scope-talk)' };
+  const matches = (p) => {
+    const low = p.toLowerCase();
+    if (runText.includes(low)) return true;
+    const toks = low.split(/\s+/).filter((t) => !_PHRASE_TOKEN_STOP.has(t));
+    return toks.length > 0 && toks.every((t) => runText.includes(t));
+  };
+  const foreignPhrases = phrases.filter((p) => !matches(p));
+  if (foreignPhrases.length === phrases.length) {
+    return { foreign: true, why: `its subject (${foreignPhrases.slice(0, 2).map((p) => `"${p}"`).join(', ')}) appears nowhere in the run's scope` };
+  }
+  return { foreign: false, why: 'shares subject anchors with the run' };
+}
+
+module.exports = { detectDeliverableOrder, foreignSubject, statesIn, _properPhrases, _ORDER_LEAD_RE, _TARGET_PATH_RE };

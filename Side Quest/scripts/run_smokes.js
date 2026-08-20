@@ -557,6 +557,7 @@ const smokes = [
   'smoke_recent_turns_session_scope.js',
   'smoke_workstate_gate.js',
   'smoke_agent_consume.js',
+  'smoke_intake_contract.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks

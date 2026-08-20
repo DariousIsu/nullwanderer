@@ -9440,8 +9440,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           }
         }
       } catch (e) { console.error('[correction] retrieval guard failed (net proceeds):', e.message); }
+      // C2 FACET GATE (run-2, 2026-08-19): the correction net mis-attached cross-subject turns to the
+      // ACTIVE run — "more details on the Senate District 14 vacancy" became the INDIANA legislature
+      // run's enrich_facet (#3949), a 7-state sponsors order attached to the ILLINOIS run (#3945).
+      // Deterministic pre-gate: a turn naming a state outside the run's scope, or whose proper-noun
+      // anchors ALL miss the run, is NOT a correction — it routes as its own ask (intake/operator own
+      // it; the C1 backstop books it if it's an order). Pure scope-talk still reaches the classifier.
+      let _foreignAsk = null;
+      try { _foreignAsk = require('./lib/intake_contract').foreignSubject(userMessage, activeRun); } catch { _foreignAsk = null; }
+      if (_foreignAsk && _foreignAsk.foreign) console.log(`[facet-gate] correction net stood down — ${_foreignAsk.why}; the turn routes as its own ask, not a mutation of run #${fid}`);
       const corr = require('./lib/correction');
-      const decision = _heldProductAsk ? null : await corr.classify(userMessage, { activeRun });
+      const decision = (_heldProductAsk || (_foreignAsk && _foreignAsk.foreign)) ? null : await corr.classify(userMessage, { activeRun });
       const plan = decision ? corr.applyPlan(decision, activeRun) : { changed: false };
       if (plan.changed) {
         try {
@@ -11300,6 +11309,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try { _verifyAbsenceFollowup(finalSaid, { sessionId, turnStartTs: (userTurnRow && userTurnRow.ts) || 0, evidence: _replyEvidence, userName }).catch(() => {}); } catch {}
   // SPINE 3: book any unkept delivery-promise so it's carried forward, not silently dropped.
   try { _bookDeliveryPromises(finalSaid, { sessionId, turnStartTs: (userTurnRow && userTurnRow.ts) || 0 }); } catch {}
+  // C1 BOOKING CONTRACT (run-2, 2026-08-19): the backstop keys on HIS order, not her say — a
+  // deliverable-target imperative that produced no artifact and no booking this turn gets booked
+  // on the promise ledger (the same SPINE 3 pursuit that already delivers or honest-misses), so an
+  // order can no longer die behind a confident ack. Logs "[intake] BOOKED" for the live harness.
+  try { _bookUserOrderBackstop(userMessage, { sessionId, turnStartTs: (userTurnRow && userTurnRow.ts) || 0 }); } catch {}
 
   try {
     // Include the corrected say ONLY when we rewrote it, so the renderer replaces the
@@ -16957,6 +16971,9 @@ function _bookDeliveryPromises(say, { sessionId, turnStartTs = 0 } = {}) {
     const kept = (() => {
       try { if (require('./lib/canvas_docs').lastWriteTs() >= (turnStartTs || 0)) return true; } catch {}
       try { if (require('./lib/echo_suit').lastContactWriteTs() >= (turnStartTs || 0)) return true; } catch {}
+      // C1 (run-2b): FILE writes were the kept-check's blind spot — a report landing at notes/*.md
+      // still booked a spurious promise (recheck#1681's garbage-topic pursuit). files.lastWriteTs closes it.
+      try { if (require('./lib/files').lastWriteTs() >= (turnStartTs || 0)) return true; } catch {}
       if ((lastImageGenTs || 0) >= (turnStartTs || 0)) return true;
       return false;
     })();
@@ -16970,6 +16987,41 @@ function _bookDeliveryPromises(say, { sessionId, turnStartTs = 0 } = {}) {
       if (r && r.ok && !r.existing) console.log(`[delivery] booked unkept promise → recheck#${r.id}: ${p.deliverable}`);
     }
   } catch (e) { console.error('[delivery] promise-booking failed:', e.message); }
+}
+
+// C1 — THE USER-ORDER BACKSTOP (run-2, 2026-08-19). _bookDeliveryPromises above books HER promises;
+// this books HIS order when the turn ends with neither an artifact nor a booking — the run-2 shape
+// where "finish the report at notes/…" died behind a confident ack with no intake extraction, no
+// focus, no promise. Kept = any artifact landed this turn (canvas / contact / image / FILE — files
+// were the kept-check's blind spot, lib/files.lastWriteTs closes it); covered = a promise already
+// booked this turn (her say-side booking). Fail-soft; dedup via the same (kind,subject) coalescing.
+function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
+  try {
+    const ic = require('./lib/intake_contract');
+    const order = ic.detectDeliverableOrder(userText);
+    if (!order) return;
+    const kept = (() => {
+      try { if (require('./lib/canvas_docs').lastWriteTs() >= (turnStartTs || 0)) return true; } catch {}
+      try { if (require('./lib/echo_suit').lastContactWriteTs() >= (turnStartTs || 0)) return true; } catch {}
+      try { if (require('./lib/files').lastWriteTs() >= (turnStartTs || 0)) return true; } catch {}
+      if ((lastImageGenTs || 0) >= (turnStartTs || 0)) return true;
+      return false;
+    })();
+    if (kept) { console.log(`[intake] deliverable order delivered in-turn — no backstop booking (${order.deliverable})`); return; }
+    // her say already booked a promise this turn → the ledger is carrying it; don't double-book.
+    try {
+      const row = db.getDb().prepare(`SELECT COUNT(*) n FROM recheck_queue WHERE kind = 'promise' AND status = 'open' AND created_ts >= ?`).get(turnStartTs || 0);
+      if (row && row.n > 0) { console.log(`[intake] order already covered by a promise booked this turn (${order.deliverable})`); return; }
+    } catch {}
+    const dlv = require('./lib/delivery');
+    const subject = dlv.bookingSubject({ deliverable: order.deliverable, sentence: String(userText).slice(0, 160) });
+    const r = require('./lib/recheck_queue').enqueue({
+      kind: 'promise', subject,
+      detail: { say: String(userText).slice(0, 300), deliverable: order.deliverable, topic: order.topic, target: order.target || null, sessionId },
+      priority: 7, dueTs: Date.now() + PROMISE_GRACE_MS, bornFrom: 'intake-backstop',
+    });
+    if (r && r.ok) console.log(`[intake] BOOKED promise#${r.id}${r.existing ? ' (existing)' : ''} — deliverable-order backstop: ${order.deliverable}${order.target ? ` → ${order.target}` : ''}`);
+  } catch (e) { console.error('[intake] order backstop failed:', e.message); }
 }
 
 // SPINE 3 A2.2 → SELF-SUFFICIENCY (2026-08-17): an open, past-grace delivery-promise is HER OWN unfinished
@@ -17016,6 +17068,20 @@ async function _surfaceOpenPromise() {
     if (!items.length) return;
     const it = items[0];
     const d = it.detail || {};
+    // C1: a booked order whose TARGET file landed after booking is already delivered — close it
+    // honestly instead of composing a duplicate. Exact (target mtime >= booking ts), never a loose
+    // subject match, so an unrelated write can never false-close a real debt.
+    try {
+      if (d.target && d.target !== 'canvas') {
+        const _fs = require('fs');
+        const _abs = filesLib.resolvePath(d.target);
+        if (_abs && _fs.existsSync(_abs) && _fs.statSync(_abs).mtimeMs >= (it.created_ts || 0)) {
+          rq.complete(it.id, { outcome: 'delivered-after-booking' });
+          console.log(`[delivery] promise#${it.id} target ${d.target} landed after booking — closed as delivered`);
+          return;
+        }
+      }
+    } catch {}
     const what = String(d.deliverable || 'that').replace(/\s+/g, ' ').trim();
     const topic = String(d.topic || '').trim();
     const say = String(d.say || '');
