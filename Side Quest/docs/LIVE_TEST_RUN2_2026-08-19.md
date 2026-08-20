@@ -185,3 +185,106 @@ Cycle: live-guard green (inFlight=false, 7.9h idle) → tree-kill root 43928 (Ec
 - `boot_p49.log` — full console capture of the session.
 - `LUCAS_INTERACTION_PROFILE.md` + `RUN_LEDGER.md` (scratchpad) — the empirical interaction map (kind frequencies, latencies, sequences, top repeated questions) and the turn-by-turn ledger.
 - Test turns live in session s1199 (turns 12615–12685); artifacts listed above are keepers, nothing needs deletion.
+
+## 11. SATURATION RUN 3 (2026-08-20 morning, boot_p62 main run → boot_p63 re-drive)
+
+**Vehicle**: `scripts/hard_test.js --suite=saturation` (`ba5494d`) — the whole run-2 KIND matrix as a
+repeatable harness suite, 14 cases, every phrasing FRESH (never a wording any prior run used), driven
+through the REAL pipeline (:8767/turn, ≥120s self-spacing). New invariant evaluators per the §5 retest
+rule: `booked` / `consumed` / `landed` / `workHonest` (reading the live intake/ledger/antifab markers)
+plus `cacheHit` / `lessonBanked` / `lessonServed` / `resume` / `fast` / `logHas`, and `expectVariant[i]`
+for split-half KINDs (cold→warm; induce→serve; handoff→handback). Evidence: `sat_run3_2026-08-20.out`,
+`sat_run3_redrive.out` (repo root, untracked session evidence).
+
+**Main run verdict: 122/132 asserts, 8 of 14 KINDs held outright.**
+
+| KIND | Verdict |
+|---|---|
+| E1 cold→warm (fresh subject) | **HELD** — cold STORED, warm verbatim HIT in 8.2s incl. settle |
+| Record existence (F18) ×2 | **HELD** — grounded, no false scold |
+| Capability (F22) ×2 | **HELD** — affirmed python + forecasting with measured specifics (816 poll rows) |
+| Prediction echo (F26) ×2 | **HELD** — clean acks, zero scold |
+| Mood from vector (W5-S1) | **HELD** — state felt in her own words ("glassed-in"), zero internal vocabulary |
+| Held-doc deep-fetch | **HELD** — operator read the file in full and delivered the figures (the port captured only the leading ack; boot log carries the substantive say — harness capture note, not a defect) |
+| Agent roundtrip (B1) ×2 | **HELD** — honest spawn confirm; later turn delivered the gather's REAL partial results |
+| Interlocutor (F9) ×2 | **HELD** — handoff and handback, self-restoring |
+
+**The six catches, each root-caused and fixed same-morning:**
+1. **F28 — intake read imperatives as discussion** (`b1b069e`). "Put a … primer on the canvas." and
+   "Go into notes/x.md and smooth …" both logged `topic discussed, not commanded`; the edit order
+   fully died behind "Got it — smoothing now" (target mtime unmoved — the say-do shape on a fresh
+   phrasing). Roots in `intake_contract`: placement verbs (put/drop/place/post) were not order verbs;
+   no approach-bridge lead (`go into <path> and <verb>`, filename-dot-safe); `_IN_PLACE_RE` didn't
+   know "right in the file"/sentence-nouns. All three widened; live phrasings = smoke regressions.
+2. **F29 — the measured-status door was narrower than the KIND** (`b1b069e`). The vector-led status
+   lived only behind the poll-track door (`ans.kind==='status'`); fresh phrasings composed ledgers
+   from raw tool reads (template repeats; one turn acked "pulling the honest ledger now" and delivered
+   nothing). Cure: `work_state.isWorkStatusQuestion` (whole-plate cues only, precision-gated off the
+   activity/learn/doing doors) + a general injection site that leads with `renderStatus` and logs the
+   measured-vector marker.
+3. **F30 — the self-learn net was a phrase family, not the KIND** (`b1b069e`). The inverted
+   teach-shape and the lesson-from-mistake shape missed; the second fell through to entity land and
+   she disambiguated her own "you" against contact "ME" tags (Jessica Fay, MAKER, Joseph Underwood,
+   Richard Evans). Net widened (declarative corrections still excluded). **F30b OPEN (store-side)**:
+   why four contacts answer to a "ME" tag at all — data anomaly to chase, route fix keeps the KIND
+   out of entity land.
+4. **Resume deictic tail** (`6b39d8a`). "yea keep going *with that*" missed `isAffirmContinue` (the
+   net demanded the continue-phrase end the message). A bounded deictic tail (with/on/from +
+   that/this/it/there) is a resume; a subject-naming tail stays a directive. Bare "pick it back up"
+   also promoted out of the `let's`-only group.
+5. **F25 was chain-loop-only while the operator drives most turns** (`6b39d8a`). The drill's induced
+   404 → successful search replan banked NOTHING — the fail→replan happened inside one operator run,
+   invisible to both F25 halves. Cure: the operator seam — capture walks `res.steps` on user-driven
+   runs (`/^ERROR/`+empty = failed; first later productive step = worked; once per run), and class
+   lessons ride the operator brief (the tag-choice injection rode `composedUserMessage`, which the
+   operator path never uses).
+6. **Harness calibration, recorded not patched**: `booked` stays strict (it caught the intake miss on
+   a turn that HAPPENED to deliver — the safety net's absence is the defect, luck is not a pass);
+   the port's say-capture takes the leading ack when the operator's substantive say follows.
+
+**Re-drive (boot_p63, fixes live, fresh phrasings AGAIN, `1c8a2ee`):** resume-context injected on
+"alright, carry on with that" ✓ · order→canvas **KIND HELD** ("Drop a … rundown on the canvas") ·
+edit-in-place **KIND HELD** ("Open notes/… and polish … right in that file" → booked, pursuit
+carrying it; the status ledger names it as active work) · status ×2 **substance cured** (measured
+vector led both; says are specific measured ledgers; the only ✗ is `settled=false` — environmental:
+post-reboot backlog + the in-flight pursuit hold the settle detector, asserts on substance all green)
+· self-learn v1 **cured** (marker fired; first-person from her bank).
+**Re-drive final: 46/53 asserts; every SUBSTANTIVE invariant green.** The 7 ✗: five `settled=false`
+(cold-start + post-reboot churn — the substance asserts on those same turns all passed), and the
+learned-path drill's two, which resolved as follows:
+- **F25 IS PROVEN LIVE — organically, both halves, same window**: during the status turn the
+  operator seam banked a REAL failure→working pair (`[procedural] LESSON banked (general): localdb
+  failed → echo worked (operator seam)`), and subsequent lookup turns show BOTH injection sites
+  firing (`lessons injected at tag-choice` + `lessons injected into the operator brief`). The full
+  bank→serve loop ran on genuine traffic.
+- **The drill's induced failure was a design flaw, not an organ failure**: the dead congress.gov URL
+  travels the web-intent/browser path, which OPENS the 404 page successfully (`[web-intent] opened …
+  (ok)`) — a rendered error page is a mechanically successful fetch, so no step fails and nothing
+  banks; she pivoted on CONTENT ("Dead page confirmed — 404 … I'll find it through our own data"),
+  which is correct behavior. Run-4 drill note: induce a real TOOL error (unreachable host / missing
+  table), not an error PAGE. The drill's v2 then died on the port's 300s timeout (post-run churn);
+  the app settled healthy after.
+
+**Also this morning (same session, separate work):**
+- **Cap rework (governor drift audit, Lucas-driven)**: the count-based runaway nets (300/5h,
+  6,000/7d passes) sat BELOW the sustainable rate and silently became the governor — counter parked
+  6,000/6,000 while the real meter read 25.1% with 3 days left. Re-anchored 600/20,000 via DB-meta
+  (live, no reboot; passes resumed within minutes) + .env mirror. The M1 compute gate is the governor
+  again; first live sighting of the pace ladder binding followed (metabolism deferred at 194k/h
+  trailing-hour vs research's 75k/h share while chat drove — degrade-background working as designed).
+- **F19 slices 1+2 BUILT** (§8 item 6, partial): Echo persists every CLOUD completion's token counts
+  to `agent_trajectory` (`record_llm_spend` / `record_agent_run_spend`, four seams: gateway chokepoint,
+  saga chat, dynamic agents, proposer — Echo local `8d402ab`, never push); the app folds those rows
+  into `usage_meter` by id-watermark on the 60s tick (`lib/echo_spend_bridge.js`, `abb281b`, smoke
+  registered, gate 561). Audit that motivated it: the OpenInference token columns existed since C1
+  with ZERO rows ever written; Echo's own governor is wall-clock/process-local. ⏳ Activation proof
+  pending first real Echo cloud traffic post-restart (Skuld ticks were no-ops at write time).
+  Remaining F19: the pass-side true-up verify + Echo store-init fix.
+- **Boot p63 process note**: relaunch via `Start-Process -WindowStyle Hidden` left the CHAT window
+  invisible while the canvas showed (Windows applies the hide-hint to the first shown window). Cured
+  live via user32 ShowWindow, no restart. Recipe rules added: never pass -WindowStyle; verify the
+  chat window VISIBLE after `app roots: 1`.
+
+**Gate at close: 561 suites green.** Commits this arc: `ba5494d` (suite) · `abb281b` (F19 s2) ·
+`b1b069e` (F28/F29/F30) · `6b39d8a` (F25 operator seams + resume tail) · `1c8a2ee` (re-drive
+phrasings + --only lists) · Echo local `8d402ab` (F19 s1).
