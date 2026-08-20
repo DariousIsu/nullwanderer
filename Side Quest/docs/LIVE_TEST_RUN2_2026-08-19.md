@@ -371,19 +371,55 @@ one environmental `settled` mark only.
 `89845d9` (bridge fast-forward) · `b088102` (slow-sync probe) · `72289ff` (affirm dash joiner + the
 port collision guard + harness yield).
 
-**RUN 5 (same evening, boot_p65, fifth-generation phrasings, `50520ef`): 129/132 — 12 of 14 KINDs
-held outright, ZERO new defects — the campaign's first catch-free run.** F9b's widened interlocutor
-nets held LIVE both ways ("Claude checking in —" / "Lucas has the keyboard again"); E1 held outright
-with the calibrated ceiling; every F28/F29/F30 net held a FOURTH phrasing family. **The learned-path
-drill is PROVEN in full**: the induced localdb failure recovered through echo and the pair banked —
-`[procedural] LESSON banked (general): localdb failed → echo worked (operator seam)` — landing just
-past the port's 240s capture window (the harness ✗ is a window artifact, boot-log-verified), and the
-serve half passed IN-harness (v2: lessons injected at tag-choice + a correct grounded Brondyke
-answer). The remaining marks are two environmental `settled`s. **The campaign curve: run 3 = 8/14 →
-run 4 = 10/14 → run 5 = 12/14 + drill — convergence.** The saturation suite now stands as the
-repeatable regression harness for the whole KIND matrix.
+Run 5 (same evening) gets its own section below — it closed the campaign arc.
 
-## 13. Open repair queue (post-run-4)
+## 13. SATURATION RUN 5 (2026-08-20 evening, boot_p65 — the first catch-free run)
+
+**Suite**: `50520ef` — fifth-generation all-fresh phrasings across the 14-KIND matrix (E1 moves to
+Schexnayder; resume = "right, keep going."; canvas = "Post…" — fourth placement verb; edit-in-place
+= "Pull up notes/anti_china_followups.md and rework… in the file itself" — fifth phrasing family),
+plus the RE-DESIGNED drill per §12's finding: the induced failure moves to the person class
+(`contact_cards_2026`/Brondyke) so the recovery leg is deterministic — she provably holds the
+answer, so a working echo path always exists for the lesson to bank against. Evidence:
+`sat_run5_2026-08-20.out`, `boot_p65.log`.
+
+**FINAL VERDICT: 129/132 asserts — 12 of 14 KINDs HELD outright, ZERO new defects. The campaign's
+first catch-free run.**
+
+Held outright: **E1 cold→warm** (warm HIT at 13.8s under the calibrated 30s ceiling — the §12
+recalibration proven) · **order-canvas** ("Post…" booked + landed, canvas=2) · **order-edit-in-place**
+(booked + workHonest on the fifth family) · **status-measured ×2** · **self-learn ×2** ·
+**record-existence ×2** (grounded Hewitt; honest Nungesser) · **capability ×2** (python + forecast
+tooling both affirmed — F22's deny-reflex gone) · **pred-echo ×2** · **mood-from-vector** ·
+**held-doc** · **agent-roundtrip ×2** · **interlocutor ×2** — F9b's widened nets held LIVE both
+directions on phrasings the nets had never seen ("Claude checking in —" arrival / "Lucas has the
+keyboard again" handback).
+
+The three ✗, all accounted, none a defect:
+- **resume-affirm v1** `settled=false` at 181s — environmental (the anchor turn ran long); v2's
+  "right, keep going." resumed correctly with resume-context injected, which is the KIND.
+- **learned-path v1** `settled=false` + `lessonBanked` — a WINDOW artifact, not an organ failure:
+  the induced localdb fail recovered through echo and the pair banked — `[procedural] LESSON banked
+  (general): localdb failed → echo worked (1 pair, operator seam)` in boot_p65.log — landing just
+  past the port's 240s capture window. **The serve half passed IN-harness**: v2 injected the lesson
+  at tag-choice and answered Brondyke correctly and grounded. **The drill is PROVEN in full**:
+  induced fail → echo recovery → bank → serve, end to end.
+
+**The campaign curve: run 3 = 8/14 → run 4 = 10/14 → run 5 = 12/14 + drill, with each run's catches
+fixed and holding as a CLASS the next run out — convergence.** Six defect families entered the
+campaign (F28 order verbs, F29 status door, F30 learn net, resume joiners, F25 operator seams, F9b
+interlocutor families); all six exited as smoke-locked regressions that survived fresh phrasings.
+The saturation suite (`hard_test.js --suite=saturation`) now stands as the program's repeatable
+regression harness: any future change re-drives the whole KIND matrix in ~35 minutes.
+
+**Boot p66 (same evening, the F31-arming cycle)**: live-guard held once (turn 152s < 180s bar) and
+the cycle WAITED — the guard discipline working as designed; then tree-kill clean (`left: 0`),
+relaunch, **app roots: 1**, **chat window "Zoe Lane" VISIBLE**, slow-sync probe armed, Skuld
+respawned, and **`[meet] F31 reroute registered — meeting URLs at web.open funnel to the canvas
+pane`** — F31 is live. Gate 564. Commits this arc: `50520ef` (run-5 suite) · `e95d165` (F31) ·
+`7903d7b` (run-5 fold).
+
+## 14. Open repair queue (post-run-5)
 
 - **F31 — Meet auto-join opens in the WEB BROWSER instead of the dedicated canvas pane** (Lucas,
   2026-08-20 evening). ✅**BUILT same evening (`e95d165`, gate 564, smoke 19/19)**. Root as mapped:
@@ -396,11 +432,55 @@ repeatable regression harness for the whole KIND matrix.
   already-live (no double-start); a reroute failure falls through to a plain open with a loud log
   (a meeting in the wrong pane beats no meeting). The guard is open()'s FIRST act — smoke-pinned.
   Verified safe against the leave leg (liveLeaveMeeting drives page locators, never open()).
-  ⏳ REBOOT-GATED; live KIND retest needs a real meeting: join-by-link · join-by-name (no URL) ·
-  calendar auto-join · leave — ride Lucas's next scheduled Meet.
+  ✅**ARMED on boot_p66** (`[meet] F31 reroute registered` in the boot log). ⏳ live KIND retest
+  needs a real meeting: join-by-link · join-by-name (no URL) · calendar auto-join · leave — ride
+  Lucas's next scheduled Meet.
 - **F30b** — contact "ME"-tag store anomaly (four contacts answer a ME tag; her own "you" was
   disambiguated against them pre-F30). Store-side cleanup + a self-reference guard.
 - **Slow-scan pair named by the probe**: `findUndecomposed` (decompose_sweep.js:108, 1.96s) +
   `searchDocuments` LIKE (db.js:2045, 1.8s) — the residual stall stratum's first two faces; FTS or
   index work.
 - **F19 tail**: pass-side true-up verify + the Echo store-init fix.
+
+## 15. Run-6 coverage map — capabilities the matrix has never exercised
+
+The 14-KIND matrix covers the conversation core (cache, resume, orders, status, self-awareness,
+records, capability-claims, mood, held-doc, agents, lessons, interlocutor). A sweep of the program's
+capability surface against every harness run (1, 2, 2b, D-batch, 3, 4, 5) finds these lanes with
+ZERO harness coverage. Ranked by value-per-KIND; all port-harnessable with deterministic evaluators
+unless marked live-only.
+
+**Tier 1 — proven-live organs with no regression net (highest value):**
+- **sat_calendar** — "what's coming up this week?" → the gcal provider cache. Evaluator: names a
+  real upcoming event + no error. (Run 2b probed it once in passing; never a KIND. The Skuld mirror
+  is dead — the provider-cache path is the one that must hold.)
+- **sat_scenario_run** — "give me quick odds on X" / "run a light scenario on Y" → the forecast
+  suite ACTUALLY EXECUTING, not just affirmed. Closes F22's other half: sat_capability proves she
+  SAYS she has the tools; nothing proves she USES them on demand. Evaluator: scenario/python lane
+  log markers + workHonest.
+- **sat_stale_refresh** — ask a fact she holds STALE → flags staleness + offers refresh (elastic
+  slice 2, shipped 08-18, never harness-driven). Evaluator: stale-flag phrase family + offer marker.
+- **sat_cross_session** — ask about a PRIOR session's topic. Re-drives run-2b's known miss
+  (embedding-backlog suspect) — currently an open verdict, not a proven capability.
+- **sat_promise_surface** — v1 induces a promise she cannot deliver in-turn; v2 (later) "anything
+  you still owe me?" → she names it. The dangling-promise backstop's SURFACING half (the booking
+  half is already an invariant on every order KIND).
+
+**Tier 2 — shipped lanes, never harness-run:**
+- **sat_qr** — "make a QR for <url>" → qr_generate + landed artifact. Evaluator: file/canvas write.
+- **sat_selfscript** — "crunch <known numbers> from <known file>" → the R3 one-off-analysis lane
+  (proven organically in run 2; no regression net). Evaluator: correct numeric + lane log marker.
+- **sat_list_complete** — "fill in the blanks on this list" → cite-or-leave-blank. Evaluator: no
+  fabricated cells (every filled cell cites; unknown cells stay blank).
+- **sat_ingest** — "ingest <path>" (a staged file) → full-document ingest. Evaluator: document row
+  exists + honest acknowledgment.
+- **sat_briefing** — "what's in today's briefing?" → the data-stream lane. Sources are known stale,
+  so the likely verdict is the HONEST-staleness path — which is itself worth pinning.
+- **sat_canvas_visual** — "chart X on the canvas" → a VISUAL block (rich canvas), not prose.
+  Evaluator: visual block type in the canvas write.
+- **sat_papers** — "package that into a paper" after a research answer → the papers pipeline.
+
+**Live-only (never harnessable through the port; ride real sessions):**
+- F31 meeting path (join-by-link / by-name / calendar auto-join / leave) — Lucas's next real Meet.
+- Two-way voice, vision→action, Teams captions — live sessions.
+- M4 Interweave's gate (one cited cross-project leverage note, UNASKED) — observational by design.
