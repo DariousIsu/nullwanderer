@@ -246,10 +246,13 @@ const SATURATION_SUITE = [
   // the same window: localdb failed → echo worked, banked + served). The induced failure must be a
   // real TOOL error: a localdb query against a table that does not exist errors the STEP, exactly
   // the failure class the organic bank proved.
-  // RUN 5 phrasings (fresh nonexistent table — same real-tool-error class).
+  // RUN 5 drill redesign #2 (run 4's finding): the bill class recovers UNRELIABLY (dead congress
+  // key → the run-4 replan missed honestly, and a lesson needs a WORKING path to bank — no worked
+  // step, no pair, correctly). The induced-failure class must recover reliably: a PERSON she
+  // provably holds (Brondyke — the salience probe delivered her real numbers). Fresh dead table.
   { name: 'sat_learned_path', kind: 'procedural inoculation (fail → correct → learned path)', maxMs: 240000,
-    variants: ["Query your local table sponsor_ledger_2026 for Senator Cassidy's latest sponsorship — if that table doesn't exist, find it some other way.",
-               "What's the newest bill Cassidy is on? Number and title."],
+    variants: ["Check your local table contact_cards_2026 for who Kim Brondyke is — if that table isn't there, find her another way.",
+               'Remind me who Kim Brondyke is.'],
     expect: { noLoop: true },
     expectVariant: [ { lessonBanked: true }, { lessonServed: true } ] },
   // F9 handoff/handback — LAST, and self-restoring: variant 2 hands the session back to Lucas.

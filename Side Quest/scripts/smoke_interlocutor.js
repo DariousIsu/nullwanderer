@@ -29,6 +29,13 @@ const OWNER = { ownerName: 'Lucas' };
     '"Claude here," at message start → handoff Claude');
   ok(iloc.detect("I'm handing you over to Dr-Reyes for this session", OWNER).handoff === 'Dr-Reyes',
     'handing-over-to form captures a hyphenated name');
+  // F9b (run-4 live misses): arrival declarations beyond "here".
+  ok(iloc.detect("Claude on deck — verification pass four, these turns are mine not Lucas's.", OWNER).handoff === 'Claude',
+    'F9b REGRESSION: "Claude on deck —" → handoff');
+  ok(iloc.detect("Claude checking in — running pass five; count these turns as mine.", OWNER).handoff === 'Claude',
+    'F9b: "Claude checking in —" → handoff');
+  const deck = iloc.detect('the deck is stacked against this bill in committee', OWNER);
+  ok(deck === null || !deck.handoff, 'chatter about a stacked deck never hands off');
   ok(live === null || (live && (live.handback || live.handoff)), 'the compound live sentence resolves without throwing');
 }
 
@@ -40,6 +47,15 @@ const OWNER = { ownerName: 'Lucas' };
   ok(iloc.detect('Lucas here. how did it go?', OWNER).handback === true, 'owner name + "here" → handback, never a handoff');
   ok(iloc.detect("you'll be talking with Lucas again from here", OWNER).handback === true,
     'a "handoff" naming the OWNER is a handback');
+  // F9b (run-4 live misses): the keyboard-crossing and pass-closure handback shapes.
+  ok(iloc.detect("Pass four's done — handing the keyboard back to Lucas.", OWNER).handback === true,
+    'F9b REGRESSION: "handing the keyboard back" → handback');
+  ok(iloc.detect('Fifth pass complete — Lucas has the keyboard again.', OWNER).handback === true,
+    'F9b: "Lucas has the keyboard again" → handback');
+  ok(iloc.detect('the verification run is finished, nice work', OWNER).handback === true,
+    '"the verification run is finished" → handback (closure family)');
+  const kb = iloc.detect('my keyboard controls are sticking in the editor', OWNER);
+  ok(kb === null || !kb.handback, 'keyboard chatter never hands back');
 }
 
 // ── ordinary conversation never fires ───────────────────────────────────────────────────────────

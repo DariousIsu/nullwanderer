@@ -49,7 +49,9 @@ const _HANDOFF_RES = [
   /\b[Yy]ou(?:'re| are)\s+(?:now\s+)?(?:talking|speaking|chatting|working)\s+(?:to|with)\s+([A-Z][\w-]{1,30})\b(?:\s+now)?/,
   /\b[Tt]his is ([A-Z][\w-]{1,30})\b[^.!?\n]{0,40}\b(?:speaking|typing|here|taking over|running|conducting|driving|at the keyboard)\b/,
   /\b[Hh]and(?:ing)?\s+(?:you\s+)?(?:over|off)\s+to\s+([A-Z][\w-]{1,30})\b/,
-  /^([A-Z][\w-]{1,30})\s+here\b[,.!—:-]/,
+  // F9b (run 4, 2026-08-20): "Claude on deck — …" and "Claude checking in — …" are the same
+  // arrival declaration as "Claude here," — the net was one phrase family wide.
+  /^([A-Z][\w-]{1,30})\s+(?:here|on deck|checking in|at the keyboard|taking over)\b\s*[,.!—:;-]/,
   /\b[Ii](?: am|'?m)\s+([A-Z][\w-]{1,30})\s*[,.—-]\s*[^.!?\n]{0,60}\b(?:tak(?:ing|e)\s+over|driving|running|conducting|testing)\b/,
 ];
 
@@ -57,14 +59,17 @@ const _HANDOFF_RES = [
 function _handbackRes(ownerName) {
   const o = String(ownerName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const res = [
-    /\btesting (?:has |is )?(?:concluded|over|done|complete[d]?|finished|wrapped(?: up)?)\b/i,
-    /\bhand(?:ing)?\s+(?:it\s+|you\s+)?back\b/i,
+    // F9b (run 4): "the pass/run/cycle is done" is the same closure declaration as "testing is done",
+    // and "handing THE KEYBOARD back" is the same handback as "handing back" — both missed live.
+    /\b(?:testing|(?:the\s+)?(?:test|verification|saturation)?\s*(?:pass|run|cycle))\b[^.!?\n]{0,16}\b(?:concluded|over|done|complete[d]?|finished|wrapped(?: up)?)\b/i,
+    /\bhand(?:ing)?\s+(?:it\s+|you\s+|the\s+(?:keyboard|keys|wheel|controls)\s+)?back\b/i,
     /\bi'?m back\b/i,
   ];
   if (o) {
     res.push(new RegExp(`\\b(?:it'?s|this is)\\s+${o}\\s+(?:again|back|now)\\b`, 'i'));
     res.push(new RegExp(`^${o}\\s+(?:here|again|back)\\b`, 'i'));
     res.push(new RegExp(`\\bback to\\s+(?:me|${o})\\b`, 'i'));
+    res.push(new RegExp(`\\b${o}\\s+(?:has|takes|gets)\\s+the\\s+(?:keyboard|keys|wheel|controls)\\b`, 'i'));
   }
   return res;
 }

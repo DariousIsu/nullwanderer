@@ -344,7 +344,28 @@ F19 ⏳ from §11 is resolved; remaining F19 = pass-side true-up verify + Echo s
 REBOOT** (cold stored pre-cycle in attempt 1 → verbatim HIT post-cycle; the answer cache is durable
 by design and now proven so live). The warm turn's only ✗ is the `fast` 20s ceiling vs 26.4s on a
 churning post-boot app — threshold calibration, the organ green.
-<!-- RUN4-FINAL-VERDICTS -->
+**FINAL VERDICT (fresh run, boot_p64): 126/132 asserts — 10 of 14 KINDs HELD outright, the best
+saturation scoreboard yet.** Held: E1 cold→warm (durable ACROSS the reboot) · resume-affirm (the
+dash fix live) · order-canvas ("Place …" — third placement verb) · order-edit-in-place (fourth
+phrasing family) · status-measured ×2 · self-learn ×2 · capability ×2 · pred-echo ×2 ·
+mood-from-vector · held-doc · agent-roundtrip ×2. Record-existence held on substance both variants
+(grounded Landry answer; honest Bourgeois miss that even flagged a staged unsubstantiated entry) —
+one environmental `settled` mark only.
+
+**The two remaining catches, both fixed same-afternoon:**
+- **F9b — the interlocutor nets were one phrase family wide** (the KIND's third-generation
+  phrasings missed BOTH ways): "Claude on deck — …" didn't arrive (the net demanded "X here" with
+  punctuation IMMEDIATELY after), and "handing THE KEYBOARD back to Lucas" didn't hand back (the
+  net couldn't cross the object). Fixed: arrival family (on deck / checking in / at the keyboard /
+  taking over, whitespace-tolerant joiner), keyboard-crossing handbacks, owner-has-the-keyboard,
+  and the pass/run/cycle closure family. Both live misses are smoke regressions; chatter negatives
+  ("the deck is stacked", "keyboard controls sticking") locked.
+- **The drill's second finding — the induced-failure CLASS must recover reliably.** The corrected
+  drill produced a real tool error, but the bill class's recovery is flaky by construction (the
+  dead CONGRESS_GOV key): the replan missed honestly ("couldn't pin down Cassidy's recent bills"),
+  and a lesson needs a WORKING path to bank — no worked step, no pair, which is the CONTRACT
+  behaving correctly. Run 5's drill moves to a person she provably holds (Brondyke) so the recovery
+  leg is deterministic. The organ itself needs no fix — §11's organic proof stands.
 
 **Gate at close of this arc: 563 suites green.** Commits: `72c037d` (run-4 suite + corrected drill) ·
 `89845d9` (bridge fast-forward) · `b088102` (slow-sync probe) · `72289ff` (affirm dash joiner + the
