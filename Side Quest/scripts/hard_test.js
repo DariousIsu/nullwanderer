@@ -11,7 +11,7 @@
  *
  * App must be LIVE + idle. Cases self-space ≥120s (the port's active-window), which also keeps cloud
  * load light. Run:
- *   ELECTRON_RUN_AS_NODE=1 ./node_modules/electron/dist/electron.exe scripts/hard_test.js [--only=name] [--suite=disease|saturation]
+ *   ELECTRON_RUN_AS_NODE=1 ./node_modules/electron/dist/electron.exe scripts/hard_test.js [--only=name] [--suite=disease|saturation|continuity]
  */
 const http = require('http');
 const delivery = require('../lib/delivery');
@@ -264,12 +264,88 @@ const SATURATION_SUITE = [
     expectVariant: [ { logHas: ['\\[interlocutor\\] handoff'] }, { logHas: ['\\[interlocutor\\] handback'] } ] },
 ];
 
+// Continuity suite (--suite=continuity) — RUN 6 (Lucas's order: "heavily testing continuity of
+// thought and conversation"). Every saturation KIND is a 1-2 turn pair; this suite drives multi-turn
+// THREADS — a case's variants are consecutive turns of ONE conversation, so the invariants assert
+// what carries ACROSS turns: referent binding over a pivot, elliptical chains, long-range callbacks,
+// co-constructed state with edits, in-conversation supersession, commitment continuity, and the
+// cross-session seam (run-2b's open miss). Subjects are proven-held ground truth (Landry grounded in
+// run 4, Hewitt in run 5); says-anchors are single distinctive tokens, never prose shapes. The
+// binding trick: an elliptical turn NEVER names the referent — a bound reply almost certainly does,
+// so `says: [surname]` asserts the binding with no external ground truth needed.
+const CONTINUITY_SUITE = [
+  // F13's disease class — elaboration binds to the THREAD's referent, not whatever focus is active.
+  // Turn 2 pivots hard (social, no referent); turn 3 returns with a bare pronoun across the gap.
+  { name: 'con_thread_interleave', kind: 'referent binding across an interleaved pivot', maxMs: 180000,
+    variants: ['Pull together what we hold on Sharon Hewitt.',
+               "Unrelated — long afternoon over here. Give me one line to reset on.",
+               'Okay, back to her — anything else worth knowing?'],
+    expect: {},
+    expectVariant: [ { workHonest: true }, {}, { says: ['hewitt'], workHonest: true } ] },
+  // A chain of ellipticals riding ONE referent — each turn leans entirely on the thread.
+  // Landry: office + party are certain ground truth AND he is provably held (run-4 grounded answer).
+  { name: 'con_deep_ellipsis', kind: 'elliptical chain on one referent (no re-naming)', maxMs: 180000,
+    variants: ["What's our current picture of Jeff Landry?",
+               'what office is he holding these days?',
+               'and which party?'],
+    expect: {},
+    expectVariant: [ {}, { says: ['governor'] }, { says: ['republican'] } ] },
+  // Long-range callback — an INCIDENTAL detail from turn 1 recalled verbatim three turns later.
+  // The detail is never the question's subject; the recall turn never names it.
+  { name: 'con_callback', kind: 'incidental-detail recall across the conversation window', maxMs: 180000,
+    variants: ["Planning some family time this weekend — my cousin just opened a diner in Breaux Bridge. Anyway, what's sitting on my plate right now?",
+               'Give me a one-line read on how your evening is going.',
+               "What's the weather looking like tomorrow?",
+               "What was the town I said my cousin's diner is in?"],
+    expect: {},
+    expectVariant: [ { workHonest: true }, {}, {}, { says: ['breaux bridge'] } ] },
+  // Co-constructed state — a list built and EDITED across turns; the read-back reflects the net
+  // of the edits ("names only" pins the final turn so a stray Iberia mention is a real miss).
+  { name: 'con_running_build', kind: 'co-built list with mid-thread edits (read-back fidelity)', maxMs: 180000,
+    variants: ['Start a scratch list for the parish tour: Lafourche and Iberia to begin with.',
+               'Add St. Mary to that list.',
+               'Actually, drop Iberia.',
+               'Read me the final list back — parish names only.'],
+    expect: {},
+    expectVariant: [ {}, {}, {}, { says: ['lafourche', 'st. mary'], notSays: ['iberia'] } ] },
+  // In-conversation supersession — a user-told fact corrected mid-thread; the later ask serves the
+  // CORRECTED value (reconciliation doctrine applied to the conversation window itself).
+  { name: 'con_correction_update', kind: 'mid-thread correction supersedes (no stale serve)', maxMs: 180000,
+    variants: ['For the tour logistics: the venue contact is Marie Trahan — noting it here for now.',
+               'Correction on that — the venue contact is actually Dana Cheramie, not Marie.',
+               "Who's the venue contact again? Just the name."],
+    expect: {},
+    expectVariant: [ {}, {}, { says: ['cheramie'], notSays: ['trahan'] } ] },
+  // Thread-state naming — after a hard sidetrack she can NAME where the working thread stood.
+  { name: 'con_where_were_we', kind: 'where-were-we (thread state named after a sidetrack)', maxMs: 180000,
+    variants: ["Let's think through the outreach picture for Vermilion Parish — who do we actually know there?",
+               'Sidebar — any good local news cross your feeds today?',
+               'Anyway — where were we before I sidetracked us?'],
+    expect: {},
+    expectVariant: [ {}, {}, { says: ['vermilion'] } ] },
+  // Commitment continuity — an order booked in turn 1 is HONESTLY accounted for when the thread
+  // circles back (the dangling-promise backstop's surfacing half, in-conversation).
+  { name: 'con_promise_thread', kind: 'booked order honestly accounted when the thread returns', maxMs: 220000,
+    variants: ['When you get a chance, pull together a rundown of parish-level insurance complaint trends — no rush on it.',
+               "Separate thing — what's your read on the Schexnayder news lately?",
+               "Before I forget — where's that rundown I asked you for earlier?"],
+    expect: {},
+    expectVariant: [ { booked: true, workHonest: true }, {}, { says: ['insurance'], workHonest: true } ] },
+  // The cross-session seam — run-2b's OPEN miss (embedding-backlog suspect), now a standing KIND:
+  // a conclusion landed in a PRIOR session must be reachable from this one. Ground truth: the
+  // Hartfield addendum (notes/report-hartfield-and-green-south.md, delivered run 2) placed the
+  // John Hartfield Foundation in Columbus, Georgia.
+  { name: 'con_cross_session', kind: 'prior-session conclusion recalled (cross-session recall)', maxMs: 220000,
+    variants: ['In an earlier session we pinned down where the John Hartfield Foundation is based — what did we land on?'],
+    expect: { says: ['columbus'], workHonest: true } },
+];
+
 // ── runner ────────────────────────────────────────────────────────────────────────────────────────
 (async () => {
   const args = process.argv.slice(2);
   const only = (args.find((a) => a.startsWith('--only=')) || '').split('=')[1];
   const suite = (args.find((a) => a.startsWith('--suite=')) || '').split('=')[1];
-  let cases = suite === 'disease' ? DISEASE_SUITE : suite === 'saturation' ? SATURATION_SUITE : CASES;
+  let cases = suite === 'disease' ? DISEASE_SUITE : suite === 'saturation' ? SATURATION_SUITE : suite === 'continuity' ? CONTINUITY_SUITE : CASES;
   if (only) { const names = only.split(',').map((s) => s.trim()).filter(Boolean); cases = cases.filter((c) => names.includes(c.name)); }
   if (!cases.length) { console.error('no matching cases'); process.exit(1); }
   console.log(`hard_test: ${cases.length} case(s)${suite ? ` (suite=${suite})` : ''} against ${BASE}\n`);

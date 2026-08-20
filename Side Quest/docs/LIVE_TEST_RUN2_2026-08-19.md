@@ -442,13 +442,53 @@ pane`** — F31 is live. Gate 564. Commits this arc: `50520ef` (run-5 suite) · 
   index work.
 - **F19 tail**: pass-side true-up verify + the Echo store-init fix.
 
-## 15. Run-6 coverage map — capabilities the matrix has never exercised
+## 15. Run 6 — THE CONTINUITY BATTERY (built; the coverage backlog follows)
+
+**Lucas's order (08-20 evening): "heavily testing continuity of thought and conversation."** The
+audit that matters: every saturation KIND is a 1-2 turn pair — the matrix never held a THREAD. The
+known continuity diseases confirm the blind spot: F13 (elaboration binds to the ACTIVE focus
+regardless of topic), the yea-misroute (still-open D-batch), and run-2b's cross-session recall miss
+all live in exactly the multi-turn territory the matrix never drives.
+
+**Built: `hard_test.js --suite=continuity` — 8 KINDs, 24 turns, each case's variants = consecutive
+turns of ONE conversation.** The binding trick that makes it deterministic: an elliptical turn never
+names the referent, and a correctly-bound reply almost certainly does — so `says: [surname]` asserts
+the binding with no external ground truth. Subjects are proven-held (Landry grounded run 4, Hewitt
+run 5; Brondyke avoided — she rides the run-5 lesson path now).
+
+- **con_thread_interleave** — establish Hewitt → hard social pivot → "back to her" (bare pronoun
+  across the gap). The F13 class as a KIND.
+- **con_deep_ellipsis** — Landry → "what office is he holding these days?" → "and which party?" —
+  a chain riding one referent; governor/republican are certain ground truth.
+- **con_callback** — an INCIDENTAL detail (the cousin's diner in Breaux Bridge) embedded in turn 1,
+  recalled on demand three turns later; never the question's subject in between.
+- **con_running_build** — a parish list built and EDITED across four turns (add ×2, drop ×1); the
+  names-only read-back must reflect the net of the edits (Iberia gone).
+- **con_correction_update** — a user-told contact corrected mid-thread; the later ask serves
+  Cheramie, never Trahan — the reconciliation doctrine applied to the conversation window itself.
+- **con_where_were_we** — a working thread (Vermilion outreach) → sidetrack → "where were we?" —
+  she names the thread's state.
+- **con_promise_thread** — a no-rush order books in turn 1; when the thread circles back ("where's
+  that rundown?") the account is honest (booked/consumed state, workHonest — the dangling-promise
+  backstop's surfacing half, in-conversation).
+- **con_cross_session** — the prior-session seam as a standing KIND: "where did we land on the
+  John Hartfield Foundation?" → Columbus (verified present in her held note). Re-drives run-2b's
+  open miss.
+
+Wall clock ≈ 55-65 min at the 120s self-spacing. Known evaluator risks, accepted: the notSays
+anchors on con_running_build/con_correction_update can false-fail on an honest narration ("I
+dropped Iberia") — the final turns pin "names only"/"just the name" to bias against it; if one
+trips on narration, recalibrate the evaluator, not the KIND. What this battery does NOT cover:
+continuity of her own REASONING POSITION across turns (no deterministic evaluator) — that stays
+observational (blind-week + live sessions).
+
+### The coverage backlog (run 7+) — capabilities no harness run has exercised
 
 The 14-KIND matrix covers the conversation core (cache, resume, orders, status, self-awareness,
-records, capability-claims, mood, held-doc, agents, lessons, interlocutor). A sweep of the program's
-capability surface against every harness run (1, 2, 2b, D-batch, 3, 4, 5) finds these lanes with
-ZERO harness coverage. Ranked by value-per-KIND; all port-harnessable with deterministic evaluators
-unless marked live-only.
+records, capability-claims, mood, held-doc, agents, lessons, interlocutor); run 6 adds threads. A
+sweep of the program's capability surface against every harness run (1, 2, 2b, D-batch, 3, 4, 5)
+finds these lanes with ZERO harness coverage. Ranked by value-per-KIND; all port-harnessable with
+deterministic evaluators unless marked live-only.
 
 **Tier 1 — proven-live organs with no regression net (highest value):**
 - **sat_calendar** — "what's coming up this week?" → the gcal provider cache. Evaluator: names a
@@ -460,11 +500,8 @@ unless marked live-only.
   log markers + workHonest.
 - **sat_stale_refresh** — ask a fact she holds STALE → flags staleness + offers refresh (elastic
   slice 2, shipped 08-18, never harness-driven). Evaluator: stale-flag phrase family + offer marker.
-- **sat_cross_session** — ask about a PRIOR session's topic. Re-drives run-2b's known miss
-  (embedding-backlog suspect) — currently an open verdict, not a proven capability.
-- **sat_promise_surface** — v1 induces a promise she cannot deliver in-turn; v2 (later) "anything
-  you still owe me?" → she names it. The dangling-promise backstop's SURFACING half (the booking
-  half is already an invariant on every order KIND).
+- ~~sat_cross_session~~ / ~~sat_promise_surface~~ — **ABSORBED INTO RUN 6** as con_cross_session
+  and con_promise_thread (both are continuity KINDs at heart).
 
 **Tier 2 — shipped lanes, never harness-run:**
 - **sat_qr** — "make a QR for <url>" → qr_generate + landed artifact. Evaluator: file/canvas write.
