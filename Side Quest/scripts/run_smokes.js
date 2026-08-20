@@ -569,6 +569,9 @@ const smokes = [
   // E1: the rapid-response matrix — grounded answers replay verbatim+stamped, TTL by kind, read-time
   // invalidation; misses/corrections/excluded shapes refused; resume-context for affirm-continue.
   'smoke_answer_cache.js',
+  // W5-S0.5 (F4): a temporal refutation must survive the WALL clock before it sticks; the synthesis
+  // prompt leads with the real date; + the Slice 1/2 consumer wiring greps (budget/cadence only).
+  'smoke_verdict_reconcile.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks

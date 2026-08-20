@@ -1143,9 +1143,16 @@ async function _runOneTick() {
     // predominantly graph-builder — the 07-01 noise-audit ruling stands: a spawned interest focus
     // is served by the FOCUS machinery (strikes, caps, novelty gates), never an unbounded idle loop,
     // and maybeSpawnFocus itself self-gates (no spawn while any focus is active, prob leaves room).
+    // W5 SLICE 2 (2026-08-20): the idle tick CONSULTS drive pressure — BUDGET AND CADENCE ONLY,
+    // idle_depth's exact boundary. Starved curiosity shortens the exploration-slot gates and adds a
+    // graph move; exhausted energy lengthens/trims; a stalled worklist adds knowledge motion.
+    // FAIL-ABSENT: vector missing/stale → neutral weights → these lines are byte-identical to
+    // before the slice. Reachability, guards, and the tier leash are untouched at every knob.
+    const _isw = (() => { try { const is = require('./internal_state'); return is.tickWeights(is.current()); } catch { return { neutral: true, exploreGateMult: 1, graphMovesDelta: 0 }; } })();
+    if (!_isw.neutral) console.log(`[internal-state] tick weights: explore-gate ×${_isw.exploreGateMult}, graph moves ${_isw.graphMovesDelta >= 0 ? '+' : ''}${_isw.graphMovesDelta} — ${_isw.note}`);
     try {
       const _lastSpawn = parseInt(db.getMeta('interests.last_spawn_attempt_at') || '0', 10) || 0;
-      if (Date.now() - _lastSpawn > 45 * 60 * 1000) {
+      if (Date.now() - _lastSpawn > 45 * 60 * 1000 * _isw.exploreGateMult) {
         db.setMeta('interests.last_spawn_attempt_at', String(Date.now()));
         const sp = await require('./interests').maybeSpawnFocus();
         if (sp) {
@@ -1161,7 +1168,7 @@ async function _runOneTick() {
     // personal-mode path still runs too, and both share the organ's own 20min inner cadence.
     try {
       const _sxAt = parseInt(db.getMeta('self_explore.idle_at') || '0', 10) || 0;
-      if (Date.now() - _sxAt > 2 * 3600e3) {
+      if (Date.now() - _sxAt > 2 * 3600e3 * _isw.exploreGateMult) {
         db.setMeta('self_explore.idle_at', String(Date.now()));
         const sx = require('./self_explore');
         const r = await sx.run();
@@ -1179,7 +1186,7 @@ async function _runOneTick() {
     const _cfg = require('./config');
     const graphLane = (async () => {
       const first = await runGraphWalkMove(recentTurns);
-      if (first) { const n = _cfg.subcMovesPerTick(); for (let i = 1; i < n; i++) { const more = await runGraphWalkMove(recentTurns, { force: true }); if (!more) break; } }
+      if (first) { const n = Math.max(1, _cfg.subcMovesPerTick() + _isw.graphMovesDelta); for (let i = 1; i < n; i++) { const more = await runGraphWalkMove(recentTurns, { force: true }); if (!more) break; } }
     })();
     // SYNTHESIS lane (restored 2026-07-15): the cross-thought cloud pass (maybeSynthesize, defined below) was
     // orphaned by the 2026-07-01 graph-builder refactor's early return. It self-gates (interval ~10min +

@@ -41,6 +41,14 @@ function record({ objectKey, claimClass, claimKey = null, claimValue, reason, re
   // A refutation without a reason is just an opinion, and it would be indistinguishable from a value
   // that merely went stale. Refused rather than stored with a placeholder.
   if (!reason || !String(reason).trim()) return null;
+  // W5-S0.5 (run-2 F4): a TEMPORAL charge must survive the WALL CLOCK before it sticks. The live
+  // failure branded the TRUE "Selders died July 7, 2026" a "temporally impossible future date" —
+  // the model's trained clock believed 2026 was future. The gate blocks ONLY a charge it can
+  // positively disprove (every asserted date already past); everything else records unchanged.
+  try {
+    const vr = require('./verdict_reconcile').gate({ claimValue, reason });
+    if (!vr.stick) { console.log(`[known-incorrect] verdict REFUSED for ${String(objectKey).slice(0, 60)} — ${vr.why}`); return null; }
+  } catch { /* the gate never blocks by accident */ }
   try {
     const info = db().getDb().prepare(
       `INSERT INTO known_incorrect (object_key, claim_class, claim_key, claim_value, reason, refuted_by, refuted_at)

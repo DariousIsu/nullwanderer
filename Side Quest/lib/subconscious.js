@@ -130,7 +130,11 @@ function buildSynthesisPrompt({ recentThoughts = [], threads = [], focus = null,
   const th = threads.slice(0, 5).map(x => '• ' + String((x && x.content) || x || '').replace(/\s+/g, ' ').slice(0, 120)).join('\n');
   const grounding = buildGroundingBlock(sources);
   const ex = (Array.isArray(explored) ? explored : []).slice(-6).map((x) => '• ' + String(x).replace(/\s+/g, ' ').slice(0, 140)).join('\n');
-  return 'These are your recent between-turn thoughts:\n' + (t || '(none)')
+  // W5-S0.5 (run-2 F4): the synthesis pass minted "died in 2026 = temporally impossible future
+  // date" from the model's TRAINED clock — this prompt carried no date. The wall clock leads now.
+  let _clock = '';
+  try { _clock = require('./verdict_reconcile').clockLine() + '\n\n'; } catch {}
+  return _clock + 'These are your recent between-turn thoughts:\n' + (t || '(none)')
     + (th ? '\n\nOpen threads:\n' + th : '')
     + (focus ? '\n\nActive focus: ' + String((focus && focus.content) || focus).slice(0, 160) : '')
     + (grounding ? '\n\n' + grounding : '')

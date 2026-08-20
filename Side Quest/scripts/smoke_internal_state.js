@@ -81,5 +81,29 @@ ok(JSON.parse(C.st[is.JOURNAL_KEY]).length === is.JOURNAL_CAP, `journal capped a
 // THE DARKNESS CONTRACT: slice 0 must not light the status-vector seam
 ok(A.st['drive_gauge'] === undefined && C.st['drive_gauge'] === undefined, 'DARK: meta drive_gauge is never written (zero consumers until the 48h proof)');
 
+// ── W5 SLICES 1–2 CONSUMER CONTRACTS (2026-08-20 — the instrument goes live, FAIL-ABSENT) ───────
+{
+  const mkDb = (st) => ({ db: { getMeta: (k) => st[k] } });
+  const T2 = Date.UTC(2026, 7, 20, 12);
+  const fresh = { at: T2 - 5 * 60e3, mv: is.MODEL_VERSION, drives: { curiosity: 0.82, social: 0.3, energy: 0.2, progress: 0.8 }, vad: { v: 0.5, a: 0.58, d: 0.5 }, prov: { vad: 'impulses: need:self_watch' } };
+  const st1 = { [is.STATE_KEY]: JSON.stringify(fresh) };
+  ok(is.current({ deps: mkDb(st1), nowMs: T2 }) !== null, 'current(): a fresh vector reads');
+  ok(is.current({ deps: mkDb({ [is.STATE_KEY]: JSON.stringify({ ...fresh, at: T2 - 3 * 3600e3 }) }), nowMs: T2 }) === null, 'current(): a STALE vector is null (fail-absent)');
+  ok(is.current({ deps: mkDb({ [is.STATE_KEY]: JSON.stringify({ ...fresh, mv: is.MODEL_VERSION - 1 }) }), nowMs: T2 }) === null, 'current(): a version-mismatched vector is null (another instrument)');
+  ok(is.current({ deps: mkDb({}), nowMs: T2 }) === null, 'current(): absent → null');
+
+  const line = is.readingsLine({ deps: mkDb(st1), nowMs: T2 });
+  ok(!!line && /novelty-starvation high \(0\.82\)/.test(line), 'Slice 1: readingsLine renders drives with values (measurement, not vibes)');
+  ok(/measured 5m ago/.test(line), '…and carries its age (a reading, with provenance)');
+  ok(is.readingsLine({ deps: mkDb({}), nowMs: T2 }) === null, 'Slice 1: absent vector → null line (the mood prompt is byte-identical)');
+
+  const w = is.tickWeights(fresh);
+  ok(!w.neutral && w.exploreGateMult === 0.5 && w.graphMovesDelta === 2, 'Slice 2: starved curiosity + stalled progress → explore sooner, +2 graph moves');
+  const tired = is.tickWeights({ drives: { curiosity: 0.2, energy: 0.9, progress: 0.1 } });
+  ok(!tired.neutral && tired.exploreGateMult === 1.75 && tired.graphMovesDelta === -1, 'Slice 2: exhausted energy → longer gates, −1 move');
+  ok(is.tickWeights(null).neutral && is.tickWeights(null).exploreGateMult === 1 && is.tickWeights(null).graphMovesDelta === 0, 'Slice 2: no vector → NEUTRAL (byte-identical tick)');
+  ok(is.tickWeights({ drives: { curiosity: 0.5, energy: 0.5, progress: 0.5 } }).neutral, 'Slice 2: unpressured drives → neutral (weights fire on pressure, not presence)');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

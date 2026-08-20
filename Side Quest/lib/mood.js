@@ -146,8 +146,14 @@ function buildBlock(mood, userName = 'Lucas') {
 // Cultivate a fresh mood from her recent lived experience + the mood she was already in (slow drift).
 // genFn (CLOUD reasoner) / recentRows / prevMood / setFn / nowTs injectable so this runs with no model
 // or db in tests. Grounded: evolves only from real experience, never invents events.
-async function compose({ genFn = null, recentRows = null, prevMood = null, setFn = null, getFn = null, nowTs = null, userName = 'Lucas', name = 'Zoe' } = {}) {
+async function compose({ genFn = null, recentRows = null, prevMood = null, setFn = null, getFn = null, nowTs = null, userName = 'Lucas', name = 'Zoe', stateLine = undefined } = {}) {
   const prev = prevMood || current({ getFn }) || null;
+  // W5 SLICE 1 (2026-08-20): the mood RENDERS FROM the measured internal-state vector. One compact
+  // readings line (drives + affect, with provenance) grounds the cloud's warm prose in instruments
+  // instead of free composition. FAIL-ABSENT: vector missing/stale → line null → this prompt is
+  // byte-identical to before the slice. Injectable for smoke.
+  const _stateLine = stateLine !== undefined ? stateLine
+    : (() => { try { return require('./internal_state').readingsLine({ nowMs: nowTs || Date.now() }); } catch { return null; } })();
   const experience = (recentRows || []).map(r => {
     const who = r.speaker === 'user' ? userName : (r.speaker && r.speaker.startsWith('ai') ? name : (r.type || 'note'));
     return `- (${who}) ${_clean(r.content).slice(0, 200)}`;
@@ -158,7 +164,10 @@ async function compose({ genFn = null, recentRows = null, prevMood = null, setFn
 
 HOW ${name.toUpperCase()} FELT BEFORE:
 ${prevLine}
-
+${_stateLine ? `
+HER MEASURED STATE RIGHT NOW (readings from her real instruments — GROUND the mood in these; they are measurements to be felt in her own words, never numbers to recite or orders to perform):
+${_stateLine}
+` : ''}
 RECENT LIVED EXPERIENCE (real — conversations and her own thoughts):
 ${experience}
 

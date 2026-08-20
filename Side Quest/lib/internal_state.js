@@ -172,8 +172,74 @@ function journal({ deps = {} } = {}) {
   try { return JSON.parse(_db(deps).getMeta(JOURNAL_KEY) || '[]') || []; } catch { return []; }
 }
 
+// ── CONSUMER CONTRACTS (W5 Slices 1–2, 2026-08-20 — the instrument goes LIVE) ──────────────────
+// The dark phase is over: 5 days of journaled trajectories (built 08-15) stand behind these. Every
+// consumer is FAIL-ABSENT: a missing/stale/version-mismatched vector returns null/neutral and the
+// consumer behaves byte-identically to before this slice. The invariants hold at every line below:
+// budget/priority only, never reachability; never identity; never a guard.
+
+const STALE_MS = 30 * 60e3;   // a reading older than ~3 tick-intervals is not "current state"
+
+/** The current vector, or null when absent/stale/from another model version (fail-absent). */
+function current({ deps = {}, nowMs = Date.now(), staleMs = STALE_MS } = {}) {
+  try {
+    const cur = JSON.parse(_db(deps).getMeta(STATE_KEY) || 'null');
+    if (!cur || cur.mv !== MODEL_VERSION || !cur.at) return null;
+    if (nowMs - cur.at > staleMs) return null;
+    return cur;
+  } catch { return null; }
+}
+
+// ── Slice 1: mood renders FROM the vector ───────────────────────────────────────────────────────
+// One compact line of MEASURED readings (with provenance) for mood.compose's prompt — the mood is
+// grounded in instruments, not free-composed. null when the vector is absent (prompt unchanged).
+function _driveWord(name, v) {
+  if (v == null) return null;
+  const band = v >= 0.7 ? 'high' : v >= 0.4 ? 'moderate' : 'low';
+  const gloss = { curiosity: 'novelty-starvation', social: 'time-alone', energy: 'spend/exhaustion', progress: 'stall-pressure' }[name] || name;
+  return `${gloss} ${band} (${v})`;
+}
+function readingsLine({ deps = {}, nowMs = Date.now() } = {}) {
+  const cur = current({ deps, nowMs });
+  if (!cur) return null;
+  const parts = [];
+  for (const k of ['curiosity', 'social', 'energy', 'progress']) {
+    const w = _driveWord(k, cur.drives ? cur.drives[k] : null);
+    if (w) parts.push(w);
+  }
+  if (cur.vad) {
+    const v = cur.vad.v, a = cur.vad.a;
+    const tone = v >= 0.62 ? 'bright' : v <= 0.48 ? 'dimmed' : 'even';
+    const energy = a >= 0.55 ? 'keyed-up' : a <= 0.35 ? 'settled' : 'steady';
+    parts.push(`affect ${tone}/${energy} (v${v} a${a}${cur.prov && cur.prov.vad ? ` — ${cur.prov.vad}` : ''})`);
+  }
+  if (!parts.length) return null;
+  const ageMin = Math.round((nowMs - cur.at) / 60000);
+  return `${parts.join('; ')} — measured ${ageMin}m ago`;
+}
+
+// ── Slice 2: the idle tick consults drive pressure — BUDGET AND CADENCE ONLY ────────────────────
+// tickWeights(state) → { neutral, exploreGateMult, graphMovesDelta, note }. PURE. The monologue
+// tick multiplies its exploration-slot gates (interest-spawn, self-explore) and adjusts the
+// graph-walk burst by these. Reachability, guards, and the tier leash are untouched: a starving
+// drive can spend the tick differently, never open a door.
+function tickWeights(state) {
+  const neutral = { neutral: true, exploreGateMult: 1, graphMovesDelta: 0, note: '' };
+  if (!state || !state.drives) return neutral;
+  const d = state.drives;
+  let mult = 1, delta = 0;
+  const why = [];
+  if (d.curiosity != null && d.curiosity >= 0.7) { mult *= 0.5; delta += 1; why.push(`curiosity ${d.curiosity} starved → explore sooner, walk further`); }
+  if (d.energy != null && d.energy >= 0.8) { mult *= 1.75; delta -= 1; why.push(`energy ${d.energy} exhausted → cheaper ticks`); }
+  if (d.progress != null && d.progress >= 0.75) { delta += 1; why.push(`progress ${d.progress} stalled → knowledge motion`); }
+  mult = Math.max(0.5, Math.min(2, mult));
+  delta = Math.max(-1, Math.min(2, delta));
+  if (mult === 1 && delta === 0) return neutral;
+  return { neutral: false, exploreGateMult: mult, graphMovesDelta: delta, note: why.join('; ') };
+}
+
 module.exports = {
-  tick, journal, curiosityReading, socialReading, energyReading, progressReading,
-  decayVad, appraiseEvents, STATE_KEY, JOURNAL_KEY, JOURNAL_CAP, VAD_BASELINE, VAD_HALF_LIFE_MS,
-  VAD_MAX_DEV, MODEL_VERSION,
+  tick, journal, current, readingsLine, tickWeights, curiosityReading, socialReading, energyReading,
+  progressReading, decayVad, appraiseEvents, STATE_KEY, JOURNAL_KEY, JOURNAL_CAP, VAD_BASELINE,
+  VAD_HALF_LIFE_MS, VAD_MAX_DEV, MODEL_VERSION, STALE_MS,
 };

@@ -172,6 +172,21 @@ const recentRows = [
     ok(attempts === 2, 'past the floor the retry runs again');
   }
 
+  // ── W5 SLICE 1 (2026-08-20): the mood composes FROM the measured vector, fail-absent ──────────
+  {
+    let seenPrompt = '';
+    const capture = async (p) => { seenPrompt = p; return '{"feeling":"quietly restless","day":"a long stretch alone","onMind":"the stalled threads","withUser":"waiting for him"}'; };
+    const st = {};
+    const setFn = (k, v) => { st[k] = v; };
+    const LINE = 'novelty-starvation high (0.82); time-alone high (0.75) — measured 5m ago';
+    await mood.compose({ genFn: capture, recentRows: [], setFn, getFn: () => null, stateLine: LINE });
+    ok(seenPrompt.includes(LINE), 'Slice 1: the measured readings line rides the compose prompt');
+    ok(/measurements to be felt/.test(seenPrompt), '…framed as readings to feel, never numbers to recite or orders to perform');
+    seenPrompt = '';
+    await mood.compose({ genFn: capture, recentRows: [], setFn, getFn: () => null, stateLine: null });
+    ok(!/MEASURED STATE/.test(seenPrompt), 'Slice 1 FAIL-ABSENT: no vector → the prompt carries no state section (byte-identical to pre-slice)');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
