@@ -438,9 +438,44 @@ function _ingestReading(rawUrl, title, pageText, now = Date.now()) {
   sl.record(rawUrl, { kind: 'page', chars: body.length, docId });
 }
 
+// ── F31 (2026-08-20): ALL ROADS → CANVAS, by construction ───────────────────────────────────────
+// Meeting URLs must never open in her dedicated browser — the canvas pane owns meetings
+// (startCanvasMeeting mounts the pane, ports her cookies, runs the stage machine). The link-in-chat
+// interceptor already funneled, but every URL-LESS road leaked here: "join my next meeting" → the
+// operator resolves the link from the calendar → web.open → her browser (the live complaint). This
+// is the ONE browser-open chokepoint (operator tools, web-intent, excavate, byline, media all pass
+// through), so the guard lives here: main.js registers the reroute at boot; a meeting URL about to
+// open reroutes to the canvas funnel instead. No handler registered (tests, headless) or a reroute
+// FAILURE falls through to the plain open — a meeting joined in the wrong pane beats no meeting.
+let _meetingReroute = null;
+function setMeetingReroute(fn) { _meetingReroute = typeof fn === 'function' ? fn : null; }
+function meetingUrlKind(rawUrl) {
+  try {
+    const u = new URL(String(rawUrl));
+    const h = u.hostname.replace(/^www\./, '').toLowerCase();
+    if (h === 'meet.google.com') {
+      if (/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i.test(u.pathname) || /^\/(?:lookup|s)\//i.test(u.pathname)) return 'meet';
+      return null;   // meet.google.com landing/settings pages are ordinary browsing
+    }
+    if ((h === 'teams.microsoft.com' || h === 'teams.live.com') && /meetup-join|\/meet(?:$|[/?#])/i.test(u.pathname + u.search)) return 'teams';
+    return null;
+  } catch { return null; }
+}
+
 async function open(target, { autonomous = false, source = null } = {}) {
   const url = toUrl(target);
   if (!url) return { ok: false, reason: 'empty target' };
+  const _mk = meetingUrlKind(url);
+  if (_mk && _meetingReroute) {
+    try {
+      const r = await _meetingReroute(url, _mk);
+      if (r && r.ok) {
+        console.log(`[web] F31 reroute — ${_mk} URL → the canvas meeting pane (her browser stays free)${r.already ? ' [meeting already live — no double-start]' : ''}`);
+        return { ok: true, url, rerouted: 'canvas-meeting', title: _mk === 'teams' ? 'Microsoft Teams' : 'Google Meet', why: 'meeting URLs live in the canvas pane, not the browser' };
+      }
+      console.error(`[web] F31 reroute REFUSED (${(r && r.reason) || 'no result'}) — falling through to a plain browser open`);
+    } catch (e) { console.error('[web] F31 reroute failed — falling through to a plain browser open:', e.message); }
+  }
   // RE-SPIN BRAKE: an autonomous re-open of a page read within the window is served from cache with
   // no goto. Returns the reading so the caller uses o.reading instead of a second web-read.
   const _hit = respinHit(url, { autonomous });
@@ -1457,6 +1492,7 @@ module.exports = {
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,
   DOWNLOADS_DIR, downloadDest,
   respinHit, _cacheReading, _recentReads, RESPIN_WINDOW_MS,
+  setMeetingReroute, meetingUrlKind,
   // the one-living-doc-per-URL ingest — exported so the FETCH lane (web_search.fetchPage) lands
   // its reads through the same contract (2026-08-08: that lane counted 139 visits on one URL
   // with doc_id NULL — visits without content are blind skips)

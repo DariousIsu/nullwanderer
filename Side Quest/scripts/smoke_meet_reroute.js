@@ -1,0 +1,54 @@
+/* smoke_meet_reroute.js — F31: meeting URLs never open in her dedicated browser (built 2026-08-20).
+ *
+ * The proven gap (Lucas, live): URL-less joins ("join my next meeting") resolved a calendar link and
+ * opened it through web.open → her browser — bypassing the canvas funnel the link-in-chat road uses.
+ * The guard lives at the ONE browser-open chokepoint: lib/web.open reroutes any meet/teams meeting
+ * URL to the registered canvas funnel. The reroute path returns BEFORE any browser machinery, so
+ * this smoke never launches chrome; the fall-through path (reroute refused → plain open) needs a
+ * live browser and is covered by the wiring's fail-open design + the live KIND retest.
+ */
+'use strict';
+const web = require('../lib/web');
+
+let pass = 0, fail = 0;
+const ok = (cond, name) => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name}`); } };
+
+// ── the meeting-URL net (pure) ──────────────────────────────────────────────────────────────────
+ok(web.meetingUrlKind('https://meet.google.com/abc-defg-hij') === 'meet', 'a standard meet code → meet');
+ok(web.meetingUrlKind('https://meet.google.com/abc-defg-hij?authuser=0') === 'meet', 'query params do not hide the code');
+ok(web.meetingUrlKind('https://meet.google.com/lookup/team-standup') === 'meet', 'the /lookup/ form → meet');
+ok(web.meetingUrlKind('https://www.meet.google.com/abc-defg-hij') === 'meet', 'www prefix normalized');
+ok(web.meetingUrlKind('https://meet.google.com/') === null, 'the Meet LANDING page is ordinary browsing (never rerouted)');
+ok(web.meetingUrlKind('https://meet.google.com/about') === null, 'a non-code Meet path stays ordinary');
+ok(web.meetingUrlKind('https://teams.microsoft.com/l/meetup-join/19%3ameeting_xyz/0') === 'teams', 'a Teams meetup-join → teams');
+ok(web.meetingUrlKind('https://teams.live.com/meet/9531778870') === 'teams', 'teams.live.com/meet → teams');
+ok(web.meetingUrlKind('https://teams.microsoft.com/l/channel/19%3aabc/General') === null, 'a Teams CHANNEL link is not a meeting');
+ok(web.meetingUrlKind('https://www.google.com/search?q=meet.google.com/abc-defg-hij') === null, 'a meeting code in a SEARCH query never reroutes');
+ok(web.meetingUrlKind('not a url') === null && web.meetingUrlKind('') === null, 'garbage → null, never a throw');
+
+// ── the reroute short-circuit in open() ─────────────────────────────────────────────────────────
+(async () => {
+  const calls = [];
+  web.setMeetingReroute(async (url, kind) => { calls.push({ url, kind }); return { ok: true }; });
+  const r1 = await web.open('https://meet.google.com/abc-defg-hij');
+  ok(r1.ok === true && r1.rerouted === 'canvas-meeting', 'open(meet URL) reroutes to the canvas funnel (no browser)');
+  ok(calls.length === 1 && calls[0].kind === 'meet' && /abc-defg-hij/.test(calls[0].url), 'the handler received the url and kind');
+  const r2 = await web.open('meet.google.com/zzz-aaaa-bbb');
+  ok(r2.rerouted === 'canvas-meeting' && calls.length === 2, 'a bare scheme-less meet link (toUrl-normalized) also reroutes');
+  web.setMeetingReroute(async () => ({ ok: true, already: true }));
+  const r3 = await web.open('https://teams.live.com/meet/12345');
+  ok(r3.ok === true && r3.rerouted === 'canvas-meeting', 'an already-live meeting answers ok without double-starting');
+  web.setMeetingReroute(null);
+
+  // ── wiring greps ──────────────────────────────────────────────────────────────────────────────
+  const fs = require('fs'), path = require('path');
+  const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/setMeetingReroute\(async \(url, kind\)/.test(mainSrc), 'wiring: main.js registers the reroute at boot');
+  ok(/startCanvasMeeting\(url, kind === 'teams'/.test(mainSrc), 'wiring: the reroute calls the ONE canvas funnel');
+  ok(/F31 reroute registered/.test(mainSrc), 'wiring: registration logs (observable, never silent)');
+  const webSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'web.js'), 'utf8');
+  ok(/if \(!url\) return \{ ok: false, reason: 'empty target' \};\s*\n\s*const _mk = meetingUrlKind\(url\);/.test(webSrc), 'wiring: the guard is open()\'s FIRST act after url validation (before the re-spin brake and every browser touch)');
+
+  console.log(`\nsmoke_meet_reroute: ${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();

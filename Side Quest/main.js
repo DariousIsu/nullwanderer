@@ -3600,6 +3600,24 @@ async function startCanvasMeeting(url, title, opts = {}) {
   return true;
 }
 
+// F31 (2026-08-20): register the meeting reroute at the browser-open chokepoint — lib/web.open
+// hands any meet/teams meeting URL BACK to the canvas funnel instead of her dedicated browser.
+// The link-in-chat interceptor already funneled; this closes every URL-LESS road (the operator
+// resolving a calendar link, web-intent, autonomous opens) at one seam. One meeting at a time:
+// an active machine answers already:true so a repeat open can't double-start.
+try {
+  require('./lib/web').setMeetingReroute(async (url, kind) => {
+    try {
+      if (require('./lib/gmeet').active() || (() => { try { return require('./lib/teams').active(); } catch { return false; } })()) {
+        return { ok: true, already: true };
+      }
+      const ok = await startCanvasMeeting(url, kind === 'teams' ? 'Microsoft Teams' : 'Google Meet', kind === 'teams' ? { platform: 'teams' } : {});
+      return { ok: !!ok, reason: ok ? null : 'startCanvasMeeting refused the url' };
+    } catch (e) { return { ok: false, reason: e.message }; }
+  });
+  console.log('[meet] F31 reroute registered — meeting URLs at web.open funnel to the canvas pane');
+} catch (e) { console.error('[meet] F31 reroute wiring failed:', e.message); }
+
 // Meet-in-canvas (Slice 6): route a Meet URL into Zoe's Canvas pane (she joins as herself in the
 // persist:zoe-google partition), freeing her dedicated CDP browser. Runs the full meeting flow.
 ipcMain.handle('meet:join', async (_e, { url, title } = {}) => {
