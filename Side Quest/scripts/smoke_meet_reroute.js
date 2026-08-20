@@ -49,6 +49,16 @@ ok(web.meetingUrlKind('not a url') === null && web.meetingUrlKind('') === null, 
   const webSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'web.js'), 'utf8');
   ok(/if \(!url\) return \{ ok: false, reason: 'empty target' \};\s*\n\s*const _mk = meetingUrlKind\(url\);/.test(webSrc), 'wiring: the guard is open()\'s FIRST act after url validation (before the re-spin brake and every browser touch)');
 
+  // ── the T-5 auto-join organ (Lucas 2026-08-20: she presses her own join button) ───────────────
+  ok(web.meetingUrlFromEvent({ hangoutLink: 'https://meet.google.com/abc-defg-hij' }) === 'https://meet.google.com/abc-defg-hij', 'event extraction: hangoutLink wins');
+  ok(web.meetingUrlFromEvent({ conferenceData: { entryPoints: [{ entryPointType: 'phone', uri: 'tel:+1' }, { entryPointType: 'video', uri: 'https://meet.google.com/zzz-aaaa-bbb' }] } }) === 'https://meet.google.com/zzz-aaaa-bbb', 'event extraction: the conferenceData VIDEO entry point');
+  ok(web.meetingUrlFromEvent({ description: 'Join here: https://teams.live.com/meet/9531778870, dial-in below' }) === 'https://teams.live.com/meet/9531778870', 'event extraction: a bare URL in the description (trailing punctuation stripped)');
+  ok(web.meetingUrlFromEvent({ summary: 'Lunch', location: 'Coffee shop' }) === null && web.meetingUrlFromEvent(null) === null, 'a meeting-less event → null, never a throw');
+  ok(/T-5 auto-join → /.test(mainSrc), 'wiring: the auto-join tick logs (observable, never silent)');
+  ok(/meet\.autojoined\.' \+ String\(ev\.id \|\| url\)/.test(mainSrc), 'wiring: one attempt per event id (the ledger stamps BEFORE the join — no retry storm)');
+  ok(/now < s - 5 \* 60e3 \|\| now > s \+ 10 \* 60e3/.test(mainSrc), 'wiring: the [T-5, T+10] window (a stale entry never joins hours late)');
+  ok(/_CAL_STALE_MS\)\) return;\s*\n\s*const now = Date\.now\(\)/.test(mainSrc), 'wiring: the staleness rule guards the tick (a dead refresh never fakes a schedule)');
+
   console.log(`\nsmoke_meet_reroute: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

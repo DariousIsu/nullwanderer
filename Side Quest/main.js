@@ -4953,7 +4953,37 @@ try {
     _calProvRefresh();
   }, 5 * 60 * 1000);
   if (_calT.unref) _calT.unref();
-  console.log('[calendar] meeting-aware ETA provider WIRED (5min refresh, 30min disconnected backoff)');
+  // T-5 AUTONOMOUS MEETING JOIN (Lucas 2026-08-20: the calendar section's join buttons need HER
+  // pressing them — she joins her Meets herself, five minutes before start). Reads the SAME
+  // provider cache the buttons render from; the join is the ONE canvas funnel (startCanvasMeeting,
+  // F31's all-roads guarantee, idempotent against an already-live meeting). Guards: the provider
+  // staleness rule (a dead refresh never fakes a schedule) · one attempt per event id, stamped
+  // BEFORE the join so a refusal never retry-storms (the button remains the manual road, loudly) ·
+  // the [T-5, T+10] window so a stale entry hours past start never joins · one join per tick.
+  const _joinT = setInterval(async () => {
+    try {
+      if (!(_calProv.at && (Date.now() - _calProv.at) < _CAL_STALE_MS)) return;
+      const now = Date.now();
+      for (const ev of _calProv.events) {
+        const s = Date.parse((ev.start && ev.start.dateTime) || '');
+        if (!s || now < s - 5 * 60e3 || now > s + 10 * 60e3) continue;
+        const web = require('./lib/web');
+        const url = web.meetingUrlFromEvent(ev);
+        const kind = url && web.meetingUrlKind(url);
+        if (!kind) continue;
+        const led = 'meet.autojoined.' + String(ev.id || url).slice(0, 60);
+        if (db.getMeta(led)) continue;
+        db.setMeta(led, String(now));
+        const mins = Math.max(0, Math.round((s - now) / 60e3));
+        console.log(`[meet] T-5 auto-join → "${String(ev.summary || '(untitled)').slice(0, 60)}" starts in ${mins}m — joining through the canvas funnel`);
+        const ok = await startCanvasMeeting(url, kind === 'teams' ? 'Microsoft Teams' : 'Google Meet', kind === 'teams' ? { platform: 'teams' } : {});
+        if (!ok) console.error('[meet] T-5 auto-join REFUSED by the funnel — the calendar join button remains the manual road');
+        break;
+      }
+    } catch (e) { console.error('[meet] auto-join tick failed:', e.message); }
+  }, 60 * 1000);
+  if (_joinT.unref) _joinT.unref();
+  console.log('[calendar] meeting-aware ETA provider WIRED (5min refresh, 30min disconnected backoff) + T-5 auto-join armed');
 } catch (e) { console.error('[calendar] provider wire failed:', e.message); }
 
 // ── THE STATUS VECTOR + INTEROCEPTION LOOPS (2026-08-15 deterministic-loops A/C/D) ───────────────

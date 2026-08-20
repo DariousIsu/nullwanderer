@@ -449,6 +449,20 @@ function _ingestReading(rawUrl, title, pageText, now = Date.now()) {
 // FAILURE falls through to the plain open — a meeting joined in the wrong pane beats no meeting.
 let _meetingReroute = null;
 function setMeetingReroute(fn) { _meetingReroute = typeof fn === 'function' ? fn : null; }
+// The meeting URL carried by a CALENDAR EVENT (gcal shape): hangoutLink first, then the
+// conferenceData video entry point, then a bare meet/teams URL in location/description. Pure —
+// the T-5 auto-join organ and any awareness surface read the SAME extraction.
+function meetingUrlFromEvent(ev) {
+  try {
+    if (!ev) return null;
+    if (ev.hangoutLink) return String(ev.hangoutLink);
+    const eps = (ev.conferenceData && ev.conferenceData.entryPoints) || [];
+    const v = eps.find((p) => p && p.entryPointType === 'video' && p.uri);
+    if (v) return String(v.uri);
+    const m = `${ev.location || ''} ${ev.description || ''}`.match(/https?:\/\/(?:meet\.google\.com|teams\.microsoft\.com|teams\.live\.com)\/\S+/i);
+    return m ? m[0].replace(/[).,;>\]]+$/, '') : null;
+  } catch { return null; }
+}
 function meetingUrlKind(rawUrl) {
   try {
     const u = new URL(String(rawUrl));
@@ -1492,7 +1506,7 @@ module.exports = {
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,
   DOWNLOADS_DIR, downloadDest,
   respinHit, _cacheReading, _recentReads, RESPIN_WINDOW_MS,
-  setMeetingReroute, meetingUrlKind,
+  setMeetingReroute, meetingUrlKind, meetingUrlFromEvent,
   // the one-living-doc-per-URL ingest — exported so the FETCH lane (web_search.fetchPage) lands
   // its reads through the same contract (2026-08-08: that lane counted 139 visits on one URL
   // with doc_id NULL — visits without content are blind skips)
