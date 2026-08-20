@@ -374,19 +374,18 @@ port collision guard + harness yield).
 ## 13. Open repair queue (post-run-4)
 
 - **F31 — Meet auto-join opens in the WEB BROWSER instead of the dedicated canvas pane** (Lucas,
-  2026-08-20 evening: "she keeps trying to open from the web browser instead of the dedicated
-  canvas"). Mapped so far (read-only): `startCanvasMeeting` (main.js:3576) is the declared funnel
-  ("the one path all join routes funnel through" — mounts the Meet pane, ports her Google cookies
-  into `persist:zoe-google`, kicks gmeet's stage machine); the LINK-IN-CHAT road does funnel (the
-  interceptor at main.js:7413 catches a meet URL in the user message and calls it, ahead of the
-  web-intent door); `gmeet_host` meta reads `canvas`. **Suspected broken roads — the URL-LESS
-  joins**: an order like "join my next meeting" (no URL in the turn → `detectMeetUrl` misses → the
-  operator resolves the link from the calendar and opens it with her WEB tools → her dedicated
-  browser), and possibly the calendar "Zoe: Join" T-15 automation. **Cure shape**: a meet/teams-URL
-  guard at the browser-open chokepoints (lib/web open + the web-intent door + the operator's
-  browser tools): any meet.google.com / teams meeting URL about to open in her dedicated browser
-  REROUTES to `startCanvasMeeting` — making "all roads → canvas" true by construction instead of
-  per-road. KIND retest: join-by-link · join-by-meeting-name (no URL) · calendar auto-join.
+  2026-08-20 evening). ✅**BUILT same evening (`e95d165`, gate 564, smoke 19/19)**. Root as mapped:
+  `startCanvasMeeting` (main.js:3576) is the declared funnel and the LINK-IN-CHAT road used it, but
+  every URL-LESS road leaked — "join my next meeting" → the operator resolves the calendar link →
+  `web.open` → her dedicated browser. Cure as recorded, built at the ONE chokepoint: `web.open`
+  (which operator tools, web-intent, excavate, byline, media all pass through) now recognizes
+  meet/teams MEETING URLs (`meetingUrlKind` — codes, /lookup/, meetup-join; landing/channel pages
+  stay ordinary browsing) and hands them to the registered canvas funnel; an active meeting answers
+  already-live (no double-start); a reroute failure falls through to a plain open with a loud log
+  (a meeting in the wrong pane beats no meeting). The guard is open()'s FIRST act — smoke-pinned.
+  Verified safe against the leave leg (liveLeaveMeeting drives page locators, never open()).
+  ⏳ REBOOT-GATED; live KIND retest needs a real meeting: join-by-link · join-by-name (no URL) ·
+  calendar auto-join · leave — ride Lucas's next scheduled Meet.
 - **F30b** — contact "ME"-tag store anomaly (four contacts answer a ME tag; her own "you" was
   disambiguated against them pre-F30). Store-side cleanup + a self-reference guard.
 - **Slow-scan pair named by the probe**: `findUndecomposed` (decompose_sweep.js:108, 1.96s) +
