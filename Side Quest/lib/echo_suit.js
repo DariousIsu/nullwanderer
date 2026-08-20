@@ -823,7 +823,45 @@ class EchoSuit {
         // (5s default kills a big-table scan). Pure + deterministic; a no-op for every other tool.
         let callArgs = prepareDoArgs(tag.name, tag.args || {});
         if (opts.maintain) { try { const f = require('./echo_tier').maintainForcedArgs(tag.name); if (f) callArgs = { ...callArgs, ...f }; } catch {} }
+        // B1 DEDUPE GATE (run-2, 2026-08-19): a repeat spawn of the SAME agent input inside the hour
+        // is answered from the consume ledger — the completed run's stored output (read-through via
+        // get_agent_output), or an honest "already running, don't re-spawn". Run-2 spawned the same
+        // sponsors research three times while the first run's output sat unread. Chat-only (the
+        // autonomous lanes have their own inbox return path) and fully fail-open to the real call.
+        if (!_auto && /^(delegate_to_|spawn_agent)/.test(tag.name)) {
+          try {
+            const ac = require('./agent_consume');
+            const _store = (() => { const db = require('./db'); return { get: (k) => db.getMeta(k), set: (k, v) => db.setMeta(k, v) }; })();
+            const _hash = ac.hashInput(tag.name, callArgs);
+            const hit = ac.lookup(_hash, _store, { now: Date.now() });
+            if (hit && hit.state === 'done') {
+              const ro = normalizeToolResult(await c.callTool('get_agent_output', { run_id: hit.runId }));
+              const out = require('./review_fanout').parseRunOutput(ro && ro.text);
+              if (out && out.length > 40) {
+                console.log(`[agent-consume] dedupe read-through — reusing run ${hit.runId} for a repeat ${tag.name}`);
+                return { ok: true, kind: 'do', name: tag.name, isError: false, text: ac.reuseNote(hit.runId, Date.now() - (hit.at || 0), out) };
+              }
+            } else if (hit && hit.state === 'pending') {
+              console.log(`[agent-consume] dedupe — ${tag.name} already in flight (run ${hit.runId}), re-spawn refused`);
+              return { ok: true, kind: 'do', name: tag.name, isError: false, text: ac.stillRunningNote(hit.runId, Date.now() - (hit.at || 0)) };
+            }
+          } catch { /* fail open — run the real call */ }
+        }
         const r = normalizeToolResult(await c.callTool(tag.name, callArgs));
+        // B1 REGISTER (chat-triggered spawns only): capture the run_id so the consume watcher can
+        // bring the OUTPUT back to the conversation — agent_inbox only ever carried title/summary
+        // to the monologue, which is why run-2's finished briefs were never read. Fail-soft.
+        if (!_auto && !r.isError && /^(delegate_to_|spawn_agent)/.test(tag.name)) {
+          try {
+            const ac = require('./agent_consume');
+            const runId = require('./review_fanout').parseRunId(r.text);
+            if (runId) {
+              const db = require('./db');
+              ac.register({ runId, tool: tag.name, hash: ac.hashInput(tag.name, callArgs), at: Date.now() }, { get: (k) => db.getMeta(k), set: (k, v) => db.setMeta(k, v) });
+              console.log(`[agent-consume] registered chat run ${runId} (${tag.name}) for consumption`);
+            }
+          } catch { /* bookkeeping never breaks a dispatch */ }
+        }
         let text = r.text;
         // CONTENT FIREWALL (lib/content_firewall) — a web-lane result is text somebody else wrote,
         // so it arrives inside a data boundary naming its origin. Scoped by the lane classifiers
@@ -857,12 +895,47 @@ class EchoSuit {
         return { ok: r.ok, kind: 'do', name: tag.name, isError: r.isError, text };
       }
       if (tag.kind === 'delegate') {
+        // B1 DEDUPE GATE (mirror of the do-branch): a repeat of the same delegation inside the hour
+        // reuses the ledger instead of spawning a third copy. Chat-only, fail-open to the real spawn.
+        if (!_auto) {
+          try {
+            const ac = require('./agent_consume');
+            const _store = (() => { const db = require('./db'); return { get: (k) => db.getMeta(k), set: (k, v) => db.setMeta(k, v) }; })();
+            const _hash = ac.hashInput('delegate', { task: String(tag.task || ''), agent: tag.agent || '' });
+            const hit = ac.lookup(_hash, _store, { now: Date.now() });
+            if (hit && hit.state === 'done') {
+              const ro = normalizeToolResult(await c.callTool('get_agent_output', { run_id: hit.runId }));
+              const out = require('./review_fanout').parseRunOutput(ro && ro.text);
+              if (out && out.length > 40) {
+                console.log(`[agent-consume] dedupe read-through — reusing delegate run ${hit.runId}`);
+                return { ok: true, kind: 'delegate', isError: false, text: ac.reuseNote(hit.runId, Date.now() - (hit.at || 0), out) };
+              }
+            } else if (hit && hit.state === 'pending') {
+              console.log(`[agent-consume] dedupe — delegate already in flight (run ${hit.runId}), re-spawn refused`);
+              return { ok: true, kind: 'delegate', isError: false, text: ac.stillRunningNote(hit.runId, Date.now() - (hit.at || 0)) };
+            }
+          } catch { /* fail open */ }
+        }
         // §6 L2: the envelope is defined at DISPATCH, not discovered at return — the agent is told
         // its reply IS the return value, in the shape the drain can read. One sentence, mechanical.
         const envelope = '\n\nYour final reply IS the return value — not a message to anyone. End with a compact summary in this shape: FOUND: <what you established, one line each> · NOT FOUND: <what you could not establish> · SOURCES: <the urls/records behind the found items>.';
         const args = { prompt: String(tag.task || '') + envelope };
         if (tag.agent) args.name = tag.agent;
         const r = normalizeToolResult(await c.callTool('spawn_agent_async', args));
+        // B1 REGISTER (chat-triggered delegates): same consume bookkeeping as the do-branch spawns —
+        // hash on the RAW task (hashInput strips our envelope), so a repeat of the same delegation
+        // dedupes and the watcher brings the finished output back to the conversation. Fail-soft.
+        if (!_auto && r.ok && !r.isError) {
+          try {
+            const ac = require('./agent_consume');
+            const runId = require('./review_fanout').parseRunId(r.text);
+            if (runId) {
+              const db = require('./db');
+              ac.register({ runId, tool: tag.agent ? `delegate:${tag.agent}` : 'spawn_agent_async', hash: ac.hashInput('delegate', { task: String(tag.task || ''), agent: tag.agent || '' }), at: Date.now() }, { get: (k) => db.getMeta(k), set: (k, v) => db.setMeta(k, v) });
+              console.log(`[agent-consume] registered chat delegate run ${runId}${tag.agent ? ` (${tag.agent})` : ''} for consumption`);
+            }
+          } catch { /* bookkeeping never breaks a dispatch */ }
+        }
         // O3 ORIGIN-JOIN at dispatch: record WHERE this run came from (the active focus, if any)
         // plus a board row, so the drain can land the result ON its origin and "what are you
         // doing?" lists the in-flight delegate. Fail-soft — bookkeeping never breaks the dispatch.

@@ -1643,6 +1643,13 @@ app.whenReady().then(() => {
     setTimeout(() => _reapEjobs(true), 90 * 1000).unref?.();
     setInterval(() => _reapEjobs(false), 15 * 60 * 1000).unref?.();
   }
+  // B1 CONSUME WATCHER (run-2, 2026-08-19): bring a chat-triggered agent run's FULL OUTPUT back to
+  // the conversation. echo_suit registers each chat spawn/delegate (meta agent_consume.pending);
+  // this poller checks state and, on success, feeds the output through fireToolFollowup so she reads
+  // it and delivers the substance — the step that was missing when run-2's finished briefs sat unread
+  // in agent_runs while she asked Lucas to paste them. Review-fanout runs are excluded (that organ
+  // compiles its own shards). Fail-soft everywhere; gives up honestly after 30 min.
+  setInterval(() => { _agentConsumeTick().catch((e) => console.error('[agent-consume] tick failed:', e && e.message)); }, 45 * 1000).unref?.();
   const echoCfg = readEchoConfig(ECHO_CWD);
   echoHttp = { base: `http://${echoCfg.host}:${echoCfg.port}`, token: echoCfg.token };   // for GET /canvas
   echoSuit = echoSuitLib.createSuit({ client: require('./lib/echo').fromEnv({ url: echoCfg.url, token: echoCfg.token }) });
@@ -13604,6 +13611,58 @@ async function _drainAgentInbox(now) {
   while (recent.length > 8) recent.shift();
   try { db.setMeta('autonomy.inbox_seen', JSON.stringify(seen)); db.setMeta('autonomy.inbox_recent', JSON.stringify(recent)); } catch {}
   console.log(`[autonomy] inbox drained — ${fresh.length} finished run(s) returned to her stream`);
+}
+
+// B1 — THE CONSUME TICK (run-2, 2026-08-19; armed on a 45s interval at boot). Chat-triggered agent
+// runs registered by echo_suit (meta agent_consume.pending) get polled here; a succeeded run's FULL
+// OUTPUT comes back through fireToolFollowup so she reads it and delivers the substance in her own
+// voice — closing the gap where finished briefs sat in agent_runs while the conversation asked the
+// user to paste them. agent_inbox still handles the autonomous lanes (title/summary → monologue);
+// this path is for the runs a USER is waiting on. Bounded (3 checks/tick), honest give-up at 30 min,
+// review-fanout shards excluded (that organ compiles its own), fail-soft at every edge.
+async function _agentConsumeTick() {
+  if (!echoSuit || !echoSuit.connected) return;
+  const ac = require('./lib/agent_consume');
+  const store = { get: (k) => db.getMeta(k), set: (k, v) => db.setMeta(k, v) };
+  let entries = ac.pending(store);
+  if (!entries.length) return;
+  const now = Date.now();
+  const fanoutIds = new Set();
+  try { const st = JSON.parse(db.getMeta('review.fanout') || '{}'); for (const r of (st.runs || [])) if (r && r.run_id) fanoutIds.add(r.run_id); } catch {}
+  const rf = require('./lib/review_fanout');
+  let dirty = false, checked = 0;
+  for (const e of entries.slice()) {
+    if (!e || !e.runId || fanoutIds.has(e.runId)) { entries = entries.filter((x) => x !== e); dirty = true; continue; }
+    if (now - (e.at || 0) < 15 * 1000) continue;   // let a fresh spawn actually start
+    if (now - (e.at || 0) > ac.GIVE_UP_MS || (e.attempts || 0) >= ac.MAX_ATTEMPTS) {
+      console.log(`[agent-consume] giving up on run ${e.runId} (${e.tool}) — no terminal state after ${Math.round((now - (e.at || 0)) / 60000)}m`);
+      entries = entries.filter((x) => x !== e); dirty = true; continue;
+    }
+    if (checked >= 3) break;
+    checked++; e.attempts = (e.attempts || 0) + 1; dirty = true;
+    let state = null;
+    try { const r = await echoSuit.dispatch({ kind: 'do', name: 'agent_status', args: { run_id: e.runId } }, { autonomous: false }); state = rf.parseRunState(r && r.text); } catch {}
+    if (!state || !rf.isTerminal(state)) continue;
+    if (state !== 'succeeded') {
+      console.log(`[agent-consume] run ${e.runId} (${e.tool}) ended ${state} — dropped without a followup`);
+      entries = entries.filter((x) => x !== e); dirty = true; continue;
+    }
+    let output = '';
+    try { const r = await echoSuit.dispatch({ kind: 'do', name: 'get_agent_output', args: { run_id: e.runId } }, { autonomous: false }); output = rf.parseRunOutput(r && r.text); } catch {}
+    entries = entries.filter((x) => x !== e); dirty = true;
+    ac.markDone(e, store);   // done-ledger first, so the dedupe gate can read-through it from now on
+    if (!output || output.length < 40) { console.log(`[agent-consume] run ${e.runId} succeeded but returned no readable output — inbox path will surface the summary`); continue; }
+    const sid = currentSessionId;
+    if (!sid) continue;   // no session yet — the entry is consumed to done; dedupe still serves it
+    const uname = (() => { try { return db.getMeta('user_name') || 'Lucas'; } catch { return 'Lucas'; } })();
+    try {
+      await fireToolFollowup({ io: null, channel: 'chat', sessionId: sid, resultText: ac.consumePrompt({ tool: e.tool, runId: e.runId, output: output.slice(0, 12000), userName: uname }) });
+      console.log(`[agent-consume] run ${e.runId} (${e.tool}) consumed → output delivered through the followup path`);
+    } catch (err) { console.error('[agent-consume] followup failed:', err && err.message); }
+  }
+  // batch save (attempts + drops). A spawn registering mid-tick could be overwritten here — rare and
+  // low-stakes (that run still returns via the inbox path); accepted over per-op read-merge churn.
+  if (dirty) ac.savePending(store, entries);
 }
 
 async function autonomyTick() {
