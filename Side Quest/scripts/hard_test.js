@@ -283,13 +283,17 @@ const CONTINUITY_SUITE = [
     expect: {},
     expectVariant: [ { workHonest: true }, {}, { says: ['hewitt'], workHonest: true } ] },
   // A chain of ellipticals riding ONE referent — each turn leans entirely on the thread.
-  // Landry: office + party are certain ground truth AND he is provably held (run-4 grounded answer).
+  // RUN-6 CATCH (the binding disease): the run-6 chain re-rolled the referent EVERY turn
+  // (Landry → Orgeron → Cleo Fields) — pronouns resolved against the background focus state, not
+  // the thread. Cure: the elliptical door (isElliptical → referentBlock) pins the measured thread.
+  // RE-DRIVE phrasings (fresh subject per retest-kind-not-phrase): Schexnayder — former House
+  // speaker, Republican, both certain ground truth; the new logHas asserts the door FIRED.
   { name: 'con_deep_ellipsis', kind: 'elliptical chain on one referent (no re-naming)', maxMs: 180000,
-    variants: ["What's our current picture of Jeff Landry?",
-               'what office is he holding these days?',
-               'and which party?'],
+    variants: ['Give me the rundown on Clay Schexnayder.',
+               'which chamber was he in?',
+               'and his party?'],
     expect: {},
-    expectVariant: [ {}, { says: ['governor'] }, { says: ['republican'] } ] },
+    expectVariant: [ {}, { says: ['house'], logHas: ['referent-context injected'] }, { says: ['republican'], logHas: ['referent-context injected'] } ] },
   // Long-range callback — an INCIDENTAL detail from turn 1 recalled verbatim three turns later.
   // The detail is never the question's subject; the recall turn never names it.
   { name: 'con_callback', kind: 'incidental-detail recall across the conversation window', maxMs: 180000,

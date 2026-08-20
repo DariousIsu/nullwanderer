@@ -8126,6 +8126,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (_ac.isAffirmContinue(userMessage)) {
       const rb = _ac.resumeBlock({ sessionId, userName });
       if (rb) { composedUserMessage = `${composedUserMessage}\n\n${rb}`; console.log('[answer-cache] resume-context injected (affirm-continue)'); }
+    } else if (_ac.isElliptical(userMessage)) {
+      // The run-6 binding disease: an elliptical turn's pronoun resolved against the background
+      // focus state (Landry → Orgeron → Cleo Fields across one thread). Pin the measured thread
+      // so the conversation's own referent outranks beat salience.
+      const rb = _ac.referentBlock({ sessionId, userName });
+      if (rb) { composedUserMessage = `${composedUserMessage}\n\n${rb}`; console.log('[answer-cache] referent-context injected (elliptical turn)'); }
     }
   } catch (e) { console.error('[answer-cache] resume inject failed:', e.message); }
   // RETRIEVE-OR-ADMIT (anti-confabulation) — a personal-fact question ("what's my daughter's

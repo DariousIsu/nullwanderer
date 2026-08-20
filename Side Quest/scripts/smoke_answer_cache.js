@@ -99,5 +99,33 @@ ok(ac.store({ question: 'what did you do today?', answer: TRUMP_A }).stored === 
   ok(ac.resumeBlock({ sessionId: 999999 }) === null, 'no snapshot → null (fail-absent, no fabricated thread)');
 }
 
+// ── thread referent (the run-6 binding disease: elliptical turns) ───────────────────────────────
+{
+  ok(ac.isElliptical('what office is he holding these days?'), 'RUN-6 REGRESSION: the pronoun turn that bound to Orgeron');
+  ok(ac.isElliptical('and which party?'), 'RUN-6 REGRESSION: the conjunction fragment that bound to Cleo Fields');
+  ok(ac.isElliptical('so what district is she in?'), 'a she-pronoun fragment leans on the thread');
+  ok(ac.isElliptical('what about them?'), 'a what-about fragment leans on the thread');
+  ok(ac.isElliptical('yea more details'), 'the yea-misroute misbind half: a bare elaboration ask');
+  ok(ac.isElliptical('tell me more'), '"tell me more" is an elaboration ask');
+  ok(!ac.isElliptical("What's the weather looking like tomorrow?"), 'IN-RUN PROOF: a bare wh-question is a NEW subject (the callback weather turn)');
+  ok(!ac.isElliptical('Who is Clay Schexnayder?'), 'a proper-noun anchor means the turn brought its own referent');
+  ok(!ac.isElliptical('and add St. Mary too'), 'a fragment WITH an entity is a directive, not an elliptical');
+  ok(!ac.isElliptical("how's it going?"), 'bare-"it" smalltalk stays out of the pronoun family');
+  ok(!ac.isElliptical('ok back to it'), 'the affirm-continue door owns the resume shape');
+  ok(!ac.isElliptical('give me more details on how the sponsors sheet methodology handled the co-sponsor edge cases there'), 'length bound: a long analytical ask is self-sufficient');
+  const sid2 = db.startSession();
+  ac.noteExchange({ sessionId: sid2, userText: "what's our current picture of Jeff Landry?", sayText: 'Jeff Landry is the Governor of Louisiana — currently in a budget dispute over the Ellis Marsalis Center.' });
+  const fb = ac.referentBlock({ sessionId: sid2, userName: 'Lucas' });
+  ok(fb && /Jeff Landry/.test(fb) && /NEVER against your background work/.test(fb), 'referentBlock pins the thread subject over beat salience');
+  ac.noteExchange({ sessionId: sid2, userText: 'what office is he holding these days?', sayText: 'A long enough reply about the office he holds to clear the noteExchange floor.' });
+  const fb2 = ac.referentBlock({ sessionId: sid2, userName: 'Lucas' });
+  ok(fb2 && /Jeff Landry/.test(fb2), 'an elliptical turn never OVERWRITES the thread anchor (the last self-sufficient ask holds)');
+  ok(ac.referentBlock({ sessionId: 999998 }) === null, 'no snapshot → null (fail-absent)');
+  const fs2 = require('fs'), path2 = require('path');
+  const mainSrc = fs2.readFileSync(path2.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/else if \(_ac\.isElliptical\(userMessage\)\)/.test(mainSrc), 'wiring: the elliptical door sits BEHIND the affirm-continue door (else-if)');
+  ok(/referent-context injected \(elliptical turn\)/.test(mainSrc), 'wiring: the injection logs (observable, never silent)');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

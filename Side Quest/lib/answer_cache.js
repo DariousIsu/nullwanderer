@@ -185,8 +185,57 @@ function noteExchange({ sessionId, userText, sayText, now = Date.now() } = {}) {
     const a = String(sayText || '').replace(/\s+/g, ' ').trim();
     if (u.length < 15 || a.length < 30 || a === '…') return;    // too thin to resume FROM
     if (isAffirmContinue(u)) return;                            // an affirm-continue is not a new thread
+    if (isElliptical(u)) return;                                // an elliptical rides the thread — the
+                                                                // anchor stays the last SELF-SUFFICIENT ask
     db().setMeta(_RESUME_KEY(sessionId), JSON.stringify({ ask: u.slice(0, 240), point: a.slice(0, 320), ts: now }));
   } catch {}
+}
+
+// ── THREAD REFERENT (the run-6 binding disease, 2026-08-20) ─────────────────────────────────────
+// con_deep_ellipsis caught it live: "what office is he holding these days?" bound "he" to a
+// background focus entity, not the thread — Landry → Orgeron → Cleo Fields across three
+// consecutive turns of ONE thread; the referent re-rolled every turn to whatever was hottest in
+// her beat state. The class: a SHORT turn with no proper-noun anchor of its own that leans on the
+// conversation for its subject — (a) a third-person PERSON pronoun, (b) a leading-conjunction
+// fragment ("and which party?"), or (c) a bare elaboration ask ("more details" — F13's original
+// live shape, the yea-misroute's misbind half). Bare "it" smalltalk ("how's it going?") stays out;
+// a bare wh-question with neither pronoun nor conjunction lead is a NEW subject (proven in-run:
+// the callback case's weather turn). A capitalized entity anywhere = the turn brought its own
+// referent and needs no pin.
+const _THIRD_PRONOUN_RE = /\b(?:he|she|they|him|her|them|his|hers|theirs?|that (?:one|person|place|group|outfit)|those (?:two|folks|people))\b/i;
+const _FRAGMENT_LEAD_RE = /^\s*(?:and|but|so|also|plus|then|what about|how about)\b/i;
+const _ELABORATE_RE = /\b(?:more|further|deeper|extra)\s+(?:details?|info(?:rmation)?|context|depth|color)\b|\b(?:elaborate|expand|unpack|go (?:deeper|further)|dig (?:deeper|in)|drill (?:down|in)|keep unpacking|tell me more)\b/i;
+function _hasProperNoun(t) {
+  const re = /\b[A-Z][a-z]{2,}\b/g; let m;
+  while ((m = re.exec(t))) {
+    if (m.index === 0) continue;                     // a sentence-opening capital is not an entity
+    const before = t.slice(0, m.index);
+    // a sentence break demotes the next capital — but an abbreviation's period (St. Mary) does not
+    if (/[.!?]\s*$/.test(before) && !/\b[A-Z][a-z]?\.\s*$/.test(before)) continue;
+    return true;
+  }
+  return false;
+}
+function isElliptical(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 90) return false;
+  if (isAffirmContinue(t)) return false;             // the resume door owns that shape
+  if (_hasProperNoun(t)) return false;
+  return _THIRD_PRONOUN_RE.test(t) || _FRAGMENT_LEAD_RE.test(t) || _ELABORATE_RE.test(t);
+}
+// The injection for an elliptical turn — the same measured thread store, framed for BINDING: the
+// conversation's own referent must outrank beat salience. Advisory on purpose — a genuinely new
+// subject answers plainly.
+function referentBlock({ sessionId, userName = 'them', maxAgeMs = 12 * 3600 * 1000, now = Date.now() } = {}) {
+  try {
+    if (!sessionId) return null;
+    const raw = db().getMeta(_RESUME_KEY(sessionId));
+    if (!raw) return null;
+    const r = JSON.parse(raw);
+    if (!r || !r.ask || now - (r.ts || 0) > maxAgeMs) return null;
+    const mins = Math.max(1, Math.round((now - r.ts) / 60000));
+    return `[THREAD REFERENT (measured, ${mins}m ago): this turn is elliptical — it leans on the live conversation for its subject. The thread: ${userName}'s last substantive ask was "${r.ask}" — your last point: "${r.point}". Resolve every pronoun and fragment against THAT thread's subject, NEVER against your background work, open beats, or whatever you were just thinking about. If the turn genuinely opens a new subject, answer it plainly.]`;
+  } catch { return null; }
 }
 // The injection block for an affirm-continue turn — measured thread state, rendered not composed.
 function resumeBlock({ sessionId, userName = 'them', maxAgeMs = 12 * 3600 * 1000, now = Date.now() } = {}) {
@@ -205,4 +254,4 @@ function stats() {
   try { _ensureTable(); return db().getDb().prepare('SELECT COUNT(*) n, SUM(hits) h FROM answer_cache').get(); } catch { return { n: 0, h: 0 }; }
 }
 
-module.exports = { normalize, classifyKind, ttlFor, subjectsOf, store, lookup, serveText, wantsFresh, isAffirmContinue, noteExchange, resumeBlock, stats, _UNCACHEABLE_ANSWER_RE };
+module.exports = { normalize, classifyKind, ttlFor, subjectsOf, store, lookup, serveText, wantsFresh, isAffirmContinue, isElliptical, noteExchange, resumeBlock, referentBlock, stats, _UNCACHEABLE_ANSWER_RE };
