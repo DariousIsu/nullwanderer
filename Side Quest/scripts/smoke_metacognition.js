@@ -204,6 +204,12 @@ ok(m.verifyArtifactClaims('I added Tom Arceneaux to the contacts database.', { d
   'F18 guard: same write claim WITH a landed write → ok');
 ok(m.verifyArtifactClaims('I added her to the CRM a couple of hours ago.', { dbWroteThisTurn: DBW_NO }).ok,
   'F18+F24: a PAST-referenced write ("a couple of hours ago") → prior turn\'s work, no this-turn scold');
+ok(m.verifyArtifactClaims('Kim Brondyke is listed in our records as a person entity created to back a contact row.', { dbWroteThisTurn: DBW_NO }).ok,
+  'F18b REGRESSION (boot_p61): "entity created to back a contact row" is a DESCRIPTION of the record, never a write claim');
+ok(m.verifyArtifactClaims('That row was inserted into the contacts database during the July import.', { dbWroteThisTurn: DBW_NO }).ok,
+  'F18b: "row … inserted into the contacts database" (record-noun lead) → description, no scold');
+ok(m.verifyArtifactClaims('I created a contact in the CRM for the new treasurer.', { dbWroteThisTurn: DBW_NO }).violations.some(v => v.kind === 'db'),
+  'F18b guard: a first-person "created a contact in the CRM" still fires with no landed write');
 
 // --- IMAGE anti-fab (the #10872 "…Generating now." confab; no generation ran) ---
 const SOCCER = "Got it — more realistic. I'll push the soccer image toward photorealism. Generating now.";

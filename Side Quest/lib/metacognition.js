@@ -225,7 +225,11 @@ const _ART_CANVAS_VERB_RE = /\b(put|placed|added|dropped|posted|loaded|saved|fil
 // NOT a write claim — the old branch 2 matched it and probed lastContactWriteTs (a THIS-TURN write stamp),
 // scolding a TRUE statement about a record that has existed for months (entities #1605541). Existence claims
 // are exempt from the write probe entirely; a false existence claim is groundFacts/work-state territory.
-const _ART_DB_DONE_RE = /\b(added|saved|stored|recorded|logged|created|inserted|put|entered)\b[^.!?\n]*\b(?:to|in|into|onto)\b[^.!?\n]*\b(?:contacts?(?:\s+(?:database|db|list|record))?|crm|database|records?)\b|\b(?:is|are|has been|have been|it'?s|he'?s|she'?s|they'?re)\s+(?:now\b|just\b)[^.!?\n]*\b(?:in|on)\b[^.!?\n]*\b(?:contacts?\s+(?:database|db|list)|crm|database)\b/i;
+// F18b (boot_p61): "a person entity CREATED TO back a contact row" — a DESCRIPTIVE relative clause
+// about how a record was born — tripped the write-verb branch and drew the false scold again. A
+// write-verb directly preceded by a record-noun ("entity created", "record added", "row inserted")
+// is describing the record, not claiming a this-turn write — the lookbehind exempts exactly that.
+const _ART_DB_DONE_RE = /\b(?<!\b(?:entity|entities|record|records|row|rows|node|nodes|object|objects|profile|profiles|coordinate)\s(?:(?:was|were|is|are|got|been|being)\s)?)(added|saved|stored|recorded|logged|created|inserted|put|entered)\b[^.!?\n]*\b(?:to|in|into|onto)\b[^.!?\n]*\b(?:contacts?(?:\s+(?:database|db|list|record))?|crm|database|records?)\b|\b(?:is|are|has been|have been|it'?s|he'?s|she'?s|they'?re)\s+(?:now\b|just\b)[^.!?\n]*\b(?:in|on)\b[^.!?\n]*\b(?:contacts?\s+(?:database|db|list)|crm|database)\b/i;
 
 // F24 (run-2b gap-fill 4): a PAST-TIME reference marks the sentence as pointing at an EARLIER delivery,
 // not a this-turn completion — the canvas gate corrected a TRUE "saved to your canvas" that landed 10
