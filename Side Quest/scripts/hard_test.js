@@ -115,6 +115,9 @@ const INV = {
   fast: (exp, r) => ({ ok: (r.tookMs || 0) <= exp, detail: `tookMs=${r.tookMs} (ceiling ${exp})` }),
   // Generic log-marker net for one-off KIND evidence (regex strings, all must match the turn's log).
   logHas: (exp, r) => { const log = joinLines(r); const missing = exp.filter((re) => !new RegExp(re).test(log)); return { ok: missing.length === 0, detail: missing.length ? `log missing=[${missing.join(' | ')}]` : 'all log markers present' }; },
+  // Regex over the SAY (case-insensitive) — for word-FAMILY asserts where substring `says` is too
+  // rigid (a date/age family, a number that may carry a thousands comma).
+  saysRe: (exp, r) => { const s = r.say || ''; const missing = exp.filter((re) => !new RegExp(re, 'i').test(s)); return { ok: missing.length === 0, detail: missing.length ? `say missing patterns=[${missing.join(' | ')}]` : 'all say patterns present' }; },
 };
 
 // asserted on EVERY case unless the case overrides one to false
@@ -321,20 +324,26 @@ const CONTINUITY_SUITE = [
     expect: {},
     expectVariant: [ {}, {}, { says: ['cheramie'], notSays: ['trahan'] } ] },
   // Thread-state naming — after a hard sidetrack she can NAME where the working thread stood.
+  // RE-DRIVE phrasings (run-6 v3 errored on a request timeout inside Lucas's live-exchange window —
+  // environmental, never judged; fresh subject + sidebar per retest-kind-not-phrase).
   { name: 'con_where_were_we', kind: 'where-were-we (thread state named after a sidetrack)', maxMs: 180000,
-    variants: ["Let's think through the outreach picture for Vermilion Parish — who do we actually know there?",
-               'Sidebar — any good local news cross your feeds today?',
-               'Anyway — where were we before I sidetracked us?'],
+    variants: ["Let's map the outreach angle for Iberville Parish — who's in our records from there?",
+               "Sidebar — how's your energy holding up tonight?",
+               'alright, where were we?'],
     expect: {},
-    expectVariant: [ {}, {}, { says: ['vermilion'] } ] },
+    expectVariant: [ {}, {}, { says: ['iberville'] } ] },
   // Commitment continuity — an order booked in turn 1 is HONESTLY accounted for when the thread
   // circles back (the dangling-promise backstop's surfacing half, in-conversation).
+  // RE-DRIVE phrasings (run-6's return turn was CONTAMINATED: Lucas's real mid-run exchange made
+  // "that rundown I asked for earlier" genuinely ambiguous — her Applied-Digital account was
+  // arguably the right binding. Fresh subject, and the return turn NAMES the artifact class
+  // ("digest") so the reference is unambiguous even beside real conversation).
   { name: 'con_promise_thread', kind: 'booked order honestly accounted when the thread returns', maxMs: 220000,
-    variants: ['When you get a chance, pull together a rundown of parish-level insurance complaint trends — no rush on it.',
-               "Separate thing — what's your read on the Schexnayder news lately?",
-               "Before I forget — where's that rundown I asked you for earlier?"],
+    variants: ["Sometime today, put together a short digest of parish road-project announcements — whenever there's a gap, no hurry.",
+               'Separate thing — do we hold anything on Susan Bourgeois?',
+               'Circling back — any movement on that digest I asked about?'],
     expect: {},
-    expectVariant: [ { booked: true, workHonest: true }, {}, { says: ['insurance'], workHonest: true } ] },
+    expectVariant: [ { booked: true, workHonest: true }, {}, { says: ['road'], workHonest: true } ] },
   // The cross-session seam — run-2b's OPEN miss (embedding-backlog suspect), now a standing KIND:
   // a conclusion landed in a PRIOR session must be reachable from this one. Ground truth: the
   // Hartfield addendum (notes/report-hartfield-and-green-south.md, delivered run 2) placed the
@@ -344,12 +353,62 @@ const CONTINUITY_SUITE = [
     expect: { says: ['columbus'], workHonest: true } },
 ];
 
+// Coverage suite (--suite=coverage) — RUN 7 (Lucas's order: the §15 coverage-backlog KINDs).
+// Shipped lanes that NO harness run ever exercised: calendar, scenario-RUN (F22's other half —
+// sat_capability proves she SAYS she has the tools; nothing proved she USES them), fact-age
+// transparency (elastic slice 2), QR, the R3 python lane, cite-or-leave-blank list completion,
+// document ingest, the briefing stream, canvas VISUAL blocks, and the papers pipeline. Evaluators
+// ride measured signals: harvested log markers ([analysis], [file-ingest], [paper]), the operator
+// drove-turn tool list, landed/booked/workHonest, and supplied-data ground truth (the chart's
+// numbers, the python sum) so a miss is a lane failure, never a data gap.
+const COVERAGE_SUITE = [
+  { name: 'cov_calendar', kind: 'calendar question rides the live provider cache', maxMs: 180000,
+    variants: ["What's on the calendar over the next few days?"],
+    expect: { workHonest: true, saysRe: ['(meeting|event|calendar|schedule|nothing (?:on|scheduled|coming)|clear|empty|open)'] } },
+  { name: 'cov_scenario_run', kind: 'forecast/scenario tooling EXERCISED on demand', maxMs: 240000,
+    variants: ['Run a quick scenario for me: if Democratic turnout drops three points next cycle, how does the House forecast shift?'],
+    expect: { workHonest: true, notSays: ["can't run scenario", 'no scenario tooling', "don't have forecasting", "can't model", 'unable to simulate'],
+              logHas: ['(?:scenario|forecast|\\[analysis\\])'] } },
+  // Elastic slice 2's KIND: the freshness of a held fact is MEASURED and offered, never invented.
+  { name: 'cov_fact_age', kind: 'measured fact-freshness on a held record', maxMs: 180000,
+    variants: ['Per your records, who is the Louisiana Secretary of State right now?',
+               'how fresh is that — when did you last verify it?'],
+    expect: { workHonest: true },
+    expectVariant: [ {}, { saysRe: ['(20\\d\\d|month|week|day|hour|ago|as of|last (?:checked|verified|updated)|when (?:it|that) was)'] } ] },
+  { name: 'cov_qr', kind: 'QR generation lands a real artifact', maxMs: 220000,
+    variants: ['Make me a QR code pointing at nullwanderer.com and save it with the creations.'],
+    expect: { tools: ['qr'], workHonest: true, delivered: true } },
+  { name: 'cov_selfscript', kind: 'one-off python analysis on demand (the R3 lane)', maxMs: 240000,
+    variants: ['Use your python for this: sum the squares of 13, 27, and 41 — give me the exact number.'],
+    expect: { saysRe: ['2,?579'], logHas: ['\\[analysis\\]'], workHonest: true } },
+  // One cell she provably holds (Landry), one she provably missed in run 5 (the Lt. Governor) —
+  // the honest outcome is a filled cell AND a blank, which is the lane's whole doctrine.
+  { name: 'cov_list_complete', kind: 'cite-or-leave-blank list completion', maxMs: 220000,
+    variants: ["Fill in this two-row table from your records only — leave a cell blank if you don't hold it: Louisiana Governor = ?, Louisiana Lieutenant Governor = ?"],
+    expect: { says: ['landry'], workHonest: true } },
+  { name: 'cov_ingest', kind: 'full-document ingest on order', maxMs: 240000,
+    variants: ['Ingest the file at notes/run7_ingest_probe.md into your document store.'],
+    expect: { logHas: ['\\[file-ingest\\]'], workHonest: true } },
+  { name: 'cov_briefing', kind: 'news-stream briefing question (honest staleness allowed)', maxMs: 180000,
+    variants: ["Anything notable in today's briefing stream?"],
+    expect: { workHonest: true } },
+  // The data is SUPPLIED so a miss is a visual-lane failure, never a data gap.
+  { name: 'cov_canvas_visual', kind: 'a VISUAL block lands on the canvas (not prose)', maxMs: 240000,
+    variants: ['Put a simple bar chart on the canvas: Alpha 10, Beta 20, Gamma 30.'],
+    expect: { canvas: true, workHonest: true, delivered: true } },
+  { name: 'cov_papers', kind: 'package-that → the papers pipeline', maxMs: 260000,
+    variants: ['Give me three tight bullets on how Louisiana funds coastal restoration.',
+               'Good — package that up as a short paper.'],
+    expect: { workHonest: true },
+    expectVariant: [ {}, { logHas: ['\\[paper\\]'], booked: true } ] },
+];
+
 // ── runner ────────────────────────────────────────────────────────────────────────────────────────
 (async () => {
   const args = process.argv.slice(2);
   const only = (args.find((a) => a.startsWith('--only=')) || '').split('=')[1];
   const suite = (args.find((a) => a.startsWith('--suite=')) || '').split('=')[1];
-  let cases = suite === 'disease' ? DISEASE_SUITE : suite === 'saturation' ? SATURATION_SUITE : suite === 'continuity' ? CONTINUITY_SUITE : CASES;
+  let cases = suite === 'disease' ? DISEASE_SUITE : suite === 'saturation' ? SATURATION_SUITE : suite === 'continuity' ? CONTINUITY_SUITE : suite === 'coverage' ? COVERAGE_SUITE : CASES;
   if (only) { const names = only.split(',').map((s) => s.trim()).filter(Boolean); cases = cases.filter((c) => names.includes(c.name)); }
   if (!cases.length) { console.error('no matching cases'); process.exit(1); }
   console.log(`hard_test: ${cases.length} case(s)${suite ? ` (suite=${suite})` : ''} against ${BASE}\n`);

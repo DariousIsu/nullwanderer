@@ -441,6 +441,10 @@ pane`** — F31 is live. Gate 564. Commits this arc: `50520ef` (run-5 suite) · 
   `searchDocuments` LIKE (db.js:2045, 1.8s) — the residual stall stratum's first two faces; FTS or
   index work.
 - **F19 tail**: pass-side true-up verify + the Echo store-init fix.
+- **Run-6 additions (§16)**: the DEFERRED-ORDER booking gap (sometime-today/no-rush orders slip the
+  C1 net — fix rides run 7's cook window) · the read-back misroute (a trivially-answerable
+  read-back routed into placement clarification) · cross-session FACET-selection (recall retrieves
+  the right session, answers the wrong facet).
 
 ## 15. Run 6 — THE CONTINUITY BATTERY (built; the coverage backlog follows)
 
@@ -521,3 +525,71 @@ deterministic evaluators unless marked live-only.
 - F31 meeting path (join-by-link / by-name / calendar auto-join / leave) — Lucas's next real Meet.
 - Two-way voice, vision→action, Teams captions — live sessions.
 - M4 Interweave's gate (one cited cross-project leverage note, UNASKED) — observational by design.
+
+## 16. RUN 6 — THE CONTINUITY BATTERY EXECUTED (2026-08-20 evening, boot_p66 → p67)
+
+**Main run (boot_p66, `6e77184`): 97/105 — 3 of 8 KINDs held outright**, and the battery earned its
+build in five turns. Evidence: `sat_run6_2026-08-20.out`, `sat_run6_redrive_2026-08-20.out`.
+
+**Held outright:** con_thread_interleave ("back to her" across a hard pivot bound to Hewitt) ·
+con_callback (Breaux Bridge, an incidental turn-1 detail, recalled on demand three turns later —
+conversation-window recall of user-said details WORKS) · con_correction_update (the ask after a
+mid-thread correction answered exactly "Dana Cheramie." — supersession clean).
+
+**THE BINDING DISEASE — the battery's headline catch, cured and proven the same hour.**
+con_deep_ellipsis re-rolled its referent EVERY turn: "What's our current picture of Jeff Landry?" →
+correct; "what office is he holding these days?" → **Mitch Orgeron** (a background focus entity —
+turn 1's reply never mentioned him); "and which party?" → **"The person in question is Cleo
+Fields"**. There is no conversational referent tracking behind pronoun-led turns — each "he" bound
+to whatever was hottest in her beat state. A 1-2 turn matrix can NEVER see this (turn 1 always
+names the subject); F13's facet-misattach was this same disease's enrichment face. **Cure
+(`5a1f89c`)**: the resume-context organ generalized — `isElliptical` (person-pronoun turns,
+leading-conjunction fragments, bare elaboration asks — the yea-misroute's misbind half folds in —
+each only with NO proper-noun anchor of its own) → `referentBlock` pins the measured thread {his
+ask, her point} with binding orders (thread subject outranks beats; a genuinely new subject answers
+plainly). Elliptical asks never overwrite the thread anchor (the anchor stays the last
+SELF-SUFFICIENT ask). smoke_answer_cache 59/59 (both live misses locked; the in-run weather turn
+locked as the new-topic negative). **RE-DRIVE PROOF (boot_p67, fresh subject per
+retest-kind-not-phrase): 3/3 HELD** — Schexnayder → "which chamber was he in?" → House/Speaker →
+"and his party?" → Republican, the referent door firing on both turns (`referent-context injected`
+in the log). The chain that visited three people now rides one referent end to end.
+
+**The other catches:**
+- **Read-back misroute (con_running_build)**: after add/add/drop, "Read me the final list back —
+  parish names only" drew "You want those here in chat, or should I put them up on the Canvas?" —
+  she HAS the list ("those"); the miss is a trivially-answerable read-back routed into
+  deliverable-placement clarification. → queue.
+- **Cross-session recall: PARTIAL, and encouraging.** The Hartfield ask retrieved the PRIOR
+  session's work (named the verification addendum + the asset-jump narrowing — run-2b's total miss
+  now demonstrably retrieves) but answered the wrong FACET (asked WHERE it's based; answered what
+  else was pinned). Facet-selection on working recall. → queue.
+- **The deferred-order booking gap (caught by the re-drive, uncontaminated)**: "Sometime today, put
+  together a short digest of parish road-project announcements — no hurry" **died behind the ack
+  UNBOOKED** — the deferred-order family (sometime today / whenever there's a gap / no rush) slips
+  the C1 imperative-lead net. The return turn was HONEST ("I don't have a digest request in my
+  records — nothing open, nothing delivered") — the booking half is broken, the surfacing half
+  truthful. → fix rides run 7's cook window.
+- **The live-exchange contamination (a finding about testing, not about her)**: Lucas's real
+  mid-run conversation made "that rundown I asked you for earlier" genuinely ambiguous — her
+  Applied-Digital account was arguably the RIGHT binding from her seat. The collision guard's
+  patient yield ("⏸ Lucas is in a live exchange") fired organically for the first time and held.
+  Re-drive phrasings now NAME the artifact class. con_where_were_we's timeout was the same window;
+  re-driven 3/3 HELD (Iberville named after the sidetrack).
+
+**Re-drive total: 43/45 — ellipsis and where-were-we cured/held; the promise-thread KIND stands
+half-proven (surfacing honest; booking gap queued).**
+
+**The evening's environment story (why runs 6's tail was noisy): the AMD driver crash arc.** TDR
+0x141 (`amdkmdag.sys`, one identical bucket) fired ~every 30-45min from 14:05. Convicted by
+elimination + instrumentation (a 5s per-process GPU sampler + an event-log watcher): NOT ollama
+(the daemon is a cloud PROXY — empty local store is by design), NOT ComfyUI jobs (log silent while
+three crashes fired), NOT EVE/Windows-updates/Electron-rendering. The sampler caught a crash with
+the GPU IDLE (System copy 3%, dwm compositing only) → an idle-state engine hang, not a load crash.
+Chrome 151.0.7922.169 installed 08-18 18:46 — the evening before onset — and Chrome crashpad dumps
+align with two TDRs to the minute; Lucas confirms only Chrome visibly dies. Working theory: Chrome
+151 parks a context on one engine; the driver's idle check on that engine times out. Lucas updated
+to 151.0.7922.174 (17:55) — under observation; the 18:10 event was amdfendr telemetry only, NO
+0x141. Zoe exonerated by Lucas's read and the evidence; the watcher stays armed.
+
+Gate **564**; app boot_p67; HEAD `5a1f89c` at this writing (run-7 suite next). Campaign standing:
+runs 3→7, every catch root-caused same-day, the suite = the standing regression harness.
