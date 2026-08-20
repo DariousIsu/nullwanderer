@@ -54,6 +54,11 @@ ok(!pl.record({ taskClass: '', failed: 'a', worked: 'b' }).ok, 'a classless pair
   ok(/f25Failed/.test(src) && /f25Done/.test(src), 'capture: the chain loop tracks failed labels and banks once per chain');
   ok(/_pl\.record\(\{ taskClass: _tc, failed: _f, worked: _label \}\)/.test(src), 'capture: pairs record at the replan-SUCCESS moment');
   ok(/routeAllowsAny\('lookup', 'explore'\)[\s\S]{0,400}injectionBlock/.test(src), 'injection: gated on lookup/explore routes at tag-choice time');
+  // Saturation run-3 drill: the operator's internal fail→replan was invisible to both halves —
+  // the induced 404→search recovery banked nothing and operator briefs never carried lessons.
+  ok(/F25 OPERATOR SEAM[\s\S]{0,900}!autonomous && res && Array\.isArray\(res\.steps\)/.test(src), 'capture: the operator seam banks from res.steps on user-driven runs');
+  ok(/operator seam'?\)?`\)/.test(src) || /operator seam\)/.test(src), 'capture: the operator-seam bank logs distinctly');
+  ok(/lessons injected into the operator brief/.test(src), 'injection: the operator brief carries the class lessons');
 }
 
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);

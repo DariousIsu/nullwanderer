@@ -168,7 +168,10 @@ const _RECHECK_RE = /\b(?:recheck|re-?verify|fresh|double-?check|look (?:it )?up
 function wantsFresh(question) { return _RECHECK_RE.test(String(question || '')); }
 
 // ── RESUME CONTEXT (the 171s affirm-continue pathology) ─────────────────────────────────────────
-const _AFFIRM_CONTINUE_RE = /^\s*(?:ok(?:ay)?|yea(?:h)?|yes|right|cool|alright|good|k)?[,\s!]*(?:back to (?:it|work|business)|let'?s (?:continue|keep going|get back(?: to it)?|pick (?:it|this) (?:back )?up)|continue|keep going|where were we|as you were|carry on|pick up where we left off)\s*[.!?]*\s*$/i;
+// Run-3 catch (2026-08-20): "yea keep going with that" missed — the net demanded the continue
+// phrase END the message. A deictic tail (with/on/from + that/this/it/there) is still a resume;
+// a tail naming a SUBJECT ("keep going with the Indiana sweep") is a directive and stays out.
+const _AFFIRM_CONTINUE_RE = /^\s*(?:ok(?:ay)?|yea(?:h)?|yes|right|cool|alright|good|k)?[,\s!]*(?:back to (?:it|work|business)|let'?s (?:continue|keep going|get back(?: to it)?)|continue|keep going|where were we|as you were|carry on|pick (?:it|this) (?:back )?up|pick up where we left off)(?:\s+(?:with|on|from)\s+(?:that|this|it|there))?\s*[.!?]*\s*$/i;
 function isAffirmContinue(text) { return _AFFIRM_CONTINUE_RE.test(String(text || '')); }
 
 const _RESUME_KEY = (sid) => `resume_ctx.${sid}`;

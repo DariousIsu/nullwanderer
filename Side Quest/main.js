@@ -10061,9 +10061,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         try { _fanoutNote = await startReviewFanout(userMessage); }
         catch (e) { console.error('[review-fanout] start failed, falling back to single-context review:', e.message); }
       }
+      // F25 (saturation run-3 drill): class lessons ride the OPERATOR brief too — the tag-choice
+      // injection rides composedUserMessage, which this path never uses, so the serve-half of the
+      // learned-path loop was dark for exactly the turns the operator drives. History, not a fence.
+      const _plOpBlock = (() => { try { const _pl = require('./lib/procedural_lessons'); return _pl.injectionBlock(_pl.taskClassOf(userMessage)) || ''; } catch { return ''; } })();
+      if (_plOpBlock) console.log('[procedural] lessons injected into the operator brief');
       const opRes = _fanoutNote
         ? { answer: _fanoutNote, toolsUsed: ['spawn_agent_async'] }
-        : await runCloudOperator({ userMessage, context: _codeReviewSteer + (docSetBlock ? `${docSetBlock}\n\n` : '') + (distilledBrief || retrievedKnowledgeBlock || ''), task: directed, review: selfCodeReview });
+        : await runCloudOperator({ userMessage, context: _codeReviewSteer + (docSetBlock ? `${docSetBlock}\n\n` : '') + (distilledBrief || retrievedKnowledgeBlock || '') + (_plOpBlock ? `\n\n${_plOpBlock}` : ''), task: directed, review: selfCodeReview });
       // D-orphan structural gate (2026-08-16 drill): the operator RAN but the model can end on a bare ack
       // ("writing it now — stand by, I'll paste the output shortly") mid-loop. Delivering that verbatim
       // (the DELIVER block below) voices a PROMISE as "the complete result of the task you just ran" — the
@@ -13523,6 +13528,30 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
           try { require('./lib/learning').maybeCaptureLearnings({ query: (s.args && (s.args.query || s.args.need)) || userMessage, content: s.result }); } catch {}
         }
       }
+    }
+    // F25 OPERATOR SEAM (saturation run-3 drill, 2026-08-20): the chain-loop lesson seams never see
+    // the operator's INTERNAL fail→replan — the drill's induced 404 → successful search replan banked
+    // nothing, because since the merge THIS loop is the main engine and the whole recovery happened
+    // inside one run. Same contract as the chain seam: failed = a step with an empty/ERROR result;
+    // worked = the first LATER productive step; one lesson-set per run; user-driven runs only (the
+    // autonomous lanes have their own repetition — lessons are for the paths HIS asks travel).
+    if (!autonomous && res && Array.isArray(res.steps) && res.steps.length > 1) {
+      try {
+        const _pl = require('./lib/procedural_lessons');
+        const _failed = new Set();
+        for (const s of res.steps) {
+          const _r = s && s.result != null ? String(s.result) : '';
+          const _bad = !_r.trim() || /^ERROR/.test(_r);
+          if (_bad) { if (s && s.tool) _failed.add(String(s.tool)); continue; }
+          if (_failed.size && _r.length >= 80 && s.tool) {
+            const _tc = _pl.taskClassOf(userMessage);
+            let _n = 0;
+            for (const _f of Array.from(_failed).slice(0, 3)) { if (_pl.record({ taskClass: _tc, failed: _f, worked: String(s.tool) }).ok) _n++; }
+            if (_n) console.log(`[procedural] LESSON banked (${_tc}): ${Array.from(_failed).slice(0, 3).join('+')} failed → ${s.tool} worked (${_n} pair${_n === 1 ? '' : 's'}, operator seam)`);
+            break;   // the first landing is the lesson
+          }
+        }
+      } catch (e) { console.error('[procedural] operator lesson capture failed:', e.message); }
     }
     return res;
   } catch (e) {
