@@ -288,3 +288,64 @@ learned-path drill's two, which resolved as follows:
 **Gate at close: 561 suites green.** Commits this arc: `ba5494d` (suite) · `abb281b` (F19 s2) ·
 `b1b069e` (F28/F29/F30) · `6b39d8a` (F25 operator seams + resume tail) · `1c8a2ee` (re-drive
 phrasings + --only lists) · Echo local `8d402ab` (F19 s1).
+
+## 12. SATURATION RUN 4 (2026-08-20 midday — the collision, the stall cure, boot_p64)
+
+**Suite**: `72c037d` — fourth-generation all-fresh phrasings across the 14-KIND matrix, plus the
+CORRECTED learned-path drill per §11's design note: the induced failure is a localdb query against a
+table that does not exist (a real TOOL error — the exact class the organic bank proved), never a
+renderable error page. Evidence: `sat_run4_attempt1_2026-08-20.out` (the stopped first attempt),
+`sat_run4_2026-08-20.out` (the clean re-run on boot_p64).
+
+**Attempt 1 (boot_p63) — two catches, then stopped mid-run for the collision:**
+- **sat_order_edit_inplace: KIND HELD** on the third phrasing family ("Take notes/x.md and tighten
+  up any clumsy phrasing in the file itself") — F28's bridge + in-place vocabulary generalizes.
+- **Affirm-net dash catch**: "yes — back to it." missed `isAffirmContinue` — the joiner between
+  affirmation and continue-phrase only allowed `[,\s!]`. Fixed (`72289ff`): dash/colon/period/
+  ellipsis joiners accepted; regression cases locked.
+- **THE COLLISION (run 4's defining catch — Lucas caught it live: "last turns are broken")**: the
+  suite and Lucas's REAL conversation cross-threaded in one session (turns 12874-12884): his live
+  clarification sat UNANSWERED at 126s while the next test turn fired 3s before her reply landed,
+  and his real question's answer got polluted by test framing. Root: the port's live-guard counted
+  its OWN injected turns as "the user" (blind to Lucas vs harness) and an unanswered real turn older
+  than 120s never blocked. **The run was stopped immediately** — the collision was corrupting the
+  conversation testing exists to protect. Fix (`72289ff`, smoke 14/14 incl. the verbatim live case):
+  the port records the ts-windows of turns it injects; the newest user turn OUTSIDE those windows is
+  the real user; a real turn owns the pipeline for 10min and an UNANSWERED one for up to 30min;
+  `/status` exposes `lastRealUserTurnAgoMs`/`realUnanswered`; the harness YIELDS patiently ("Lucas
+  is in a live exchange") instead of colliding or dying.
+
+**The stall disease (Lucas-ordered mid-run: "fix the stall disease while run 4 cooks")**:
+- **The dominant strain was the F19 bridge itself — owned in full.** The durable stall timeline
+  showed a ~20s main-thread block once per minute ON the minute, starting exactly at boot_p63: the
+  60s tick's bridge query crawling agent_trajectory (3.06M rows; OLD callers DID populate token
+  columns on a historical slice, so the low watermark scanned the sparse region for ~20s/tick). The
+  earlier "sub-second, not the stall" exoneration had measured the CHEAP region (wm=0) — the live
+  watermark sat in the expensive one. Lucas's stalled turn ("first turn back died", the 150s chat
+  watchdog) was ~3 of these stacking. **Cured live with ONE meta write** (watermark → tip; fourteen
+  consecutive on-the-minute stalls, then silence — 25min verified) and **structurally** by
+  `89845d9` (>100k-behind-tip fast-forwards past pre-seam history; smoke-locked).
+- **The residual pre-existing stratum now names itself**: 22 blocks ≥10s across six pre-bridge
+  morning hours, all logged `active="idle"` (anonymous). `lib/slow_sync_probe.js` (`b088102`,
+  smoke 10/10) patches better-sqlite3 Statement/exec — any call ≥1s logs its OWN SQL + caller stack
+  into the stall timeline. Exonerated on the way: WAL checkpointing (5MB, healthy), the E1 LIKE scan
+  (6.4k rows, 13ms), the backup path (async since M1.3).
+- **Local ollama daemon found DOWN** (reflection + all four extraction organs erroring every tick,
+  ECONNREFUSED) — restarted (v0.31.1, 7900 XT ROCm); organs reconnected within seconds.
+
+**Boot p64 (clean cycle under the new recipe)**: no -WindowStyle; single root; **chat window
+VISIBLE check passing** (the §11 guard's first live use); slow-sync probe armed; port guard fields
+live. **F19 ACTIVATION PROVEN**: `[echo-spend] folded 16 Echo cloud call(s) into the usage meter
+(traj id ≤ 3,063,345)` — Echo's slice-1 seams write real token rows and the bridge folds them; the
+verify-then-govern loop is CLOSED (Python-side burn now rides spentSince/spentLastHour). The last
+F19 ⏳ from §11 is resolved; remaining F19 = pass-side true-up verify + Echo store-init.
+
+**Fresh run (boot_p64, in flight at this writing)** — early verdicts: **E1 KIND held ACROSS THE
+REBOOT** (cold stored pre-cycle in attempt 1 → verbatim HIT post-cycle; the answer cache is durable
+by design and now proven so live). The warm turn's only ✗ is the `fast` 20s ceiling vs 26.4s on a
+churning post-boot app — threshold calibration, the organ green.
+<!-- RUN4-FINAL-VERDICTS -->
+
+**Gate at close of this arc: 563 suites green.** Commits: `72c037d` (run-4 suite + corrected drill) ·
+`89845d9` (bridge fast-forward) · `b088102` (slow-sync probe) · `72289ff` (affirm dash joiner + the
+port collision guard + harness yield).
