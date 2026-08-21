@@ -18,8 +18,12 @@ const str = (v) => (v == null ? '' : String(v));
 
 // The artifact nouns a "report" can be phrased as.
 const ARTIFACT = 'report|brief|briefing|dossier|write-?up|writeup|document|summary|memo|profile|one-?pager';
-// Imperatives that mean PRODUCE it.
-const BUILD = /\b(build|compose|write|create|draft|generate|assemble|produce|print|prepare|put\s+together|make)\b/i;
+// Imperatives that mean PRODUCE it. Re-order verbs included (2026-08-21, the P0 gate's re-order
+// leg): "REBUILD the report on X" fell through to plain chat — the deterministic net lacked the
+// verb and the cloud router was quota-muted, so the order acked and dispatched NOTHING. With the
+// artifact registry a re-order is exactly a compose that updates the canonical file in place.
+// ("update" stays OUT: "any update on the report for X" is a STATUS ask and would false-fire.)
+const BUILD = /\b(build|compose|write|create|draft|generate|assemble|produce|print|prepare|put\s+together|make|re-?build|re-?compose|re-?generate|redo|re-?draft|refresh)\b/i;
 // Requests that, paired with the artifact noun, also mean "hand me the produced artifact".
 const REQUEST = /\b(give me|can i (?:have|get)|i(?:'| a)?m? ?want(?:ed)?|i need|hand me|let me have|send me|where(?:'s| is) (?:my|the))\b/i;
 // Non-build framings to EXCLUDE even when a report noun appears (asking ABOUT a report, not for one).

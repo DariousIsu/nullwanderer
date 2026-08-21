@@ -19,6 +19,14 @@ ok(rc.detect('print the dossier on Green South Foundation').topic === 'Green Sou
 ok(rc.detect('put together a write-up covering the data center fight in NC').topic === 'data center fight in NC', 'put together a write-up covering X');
 ok(rc.detect('give me the report on Hartfield').topic === 'Hartfield', 'give me the report on X (request form)');
 
+// --- RE-ORDER verbs (2026-08-21, the P0 gate's re-order leg): "rebuild the report on X" fell
+// through to plain chat live — the net lacked the verb and the cloud router was quota-muted.
+// A re-order is a compose that updates the registry's canonical file in place.
+ok(rc.detect('rebuild the report on anti-China and surveillance bills state by state with sponsors').topic === 'anti-China and surveillance bills state by state with sponsors', 'the LIVE miss: rebuild the report on X now fires');
+ok(rc.detect('regenerate the brief on the Hartfield Foundation').topic === 'Hartfield Foundation', 'regenerate the brief on X');
+ok(rc.detect('redo the report on Louisiana energy policy').topic === 'Louisiana energy policy', 'redo the report on X');
+ok(rc.detect('any update on the report for louisiana') === null, '"any update on the report" is a STATUS ask, never a build order (update stays out of BUILD)');
+
 // --- must NOT fire on questions ABOUT a report ---
 ok(rc.detect('what does the report say about Hartfield') === null, 'asking what a report SAYS is not a build order');
 ok(rc.detect('is the Hartfield report ready?') === null, 'asking if a report is READY is not a build order');
