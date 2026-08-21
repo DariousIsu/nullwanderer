@@ -6073,6 +6073,25 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   // (space) phrase-missed a corpus that writes "anti-China" (hyphen) — the phrase LIKE found ZERO
   // real docs and the report composed from token-search noise (#16491, the NM anti-harassment
   // policy). Both separator variants are tried.
+  // DIRECTED ACQUISITION (2026-08-21, Lucas: "I would like the output delivered as quickly as
+  // possible. Why would a direct user request get queued as a multi-day job") — a legislative
+  // topic naming states pulls its OWN fuel now: bounded live LegiScan searches landed as citable
+  // sheets BEFORE the gather below, so the compose never starves behind the corpus drain's pace.
+  // Fail-soft: no Echo / no results / a throw → the gather proceeds on held material unchanged.
+  try {
+    const la = require('./lib/legis_acquire');
+    const det = la.detect(t);
+    if (det.states.length && det.query) {
+      const got = await la.acquire({
+        ...det,
+        dispatch: (tag) => echoSuitLib.dispatch(tag),
+        insertDocument: (d) => db.insertDocument(d),
+        findExisting: (ref) => { try { return !!db.getDb().prepare('SELECT 1 FROM documents WHERE ref = ? LIMIT 1').get(ref); } catch { return false; } },
+        log: (m) => console.log(m),
+      });
+      if (got.landed || got.skipped) console.log(`[report-cmd] directed acquisition: ${got.landed} live LegiScan sheet(s) landed, ${got.skipped} already held (${det.states.join(',')} · "${det.query}")`);
+    }
+  } catch (e) { console.error('[report-cmd] directed acquisition failed (gather proceeds on held):', e.message); }
   const _clean = t.replace(/[%_]/g, '');
   const like = `%${_clean}%`;
   // LIKE's `_` wildcard matches any ONE char per separator position, so a single alt pattern

@@ -594,6 +594,9 @@ const smokes = [
   // BUILD 0 + BUILD 3 (2026-08-21): the browser-lane web_search floor (empty federation → her own
   // stealth lane) and the gap-plan approval surface (fillable/blocked/aggressive, cadence + fp gate).
   'smoke_gap_plan.js',
+  // Directed legislative acquisition (2026-08-21, "why would a direct user request get queued"):
+  // a report order naming states + legislation fetches its own LegiScan fuel inline, never drips.
+  'smoke_legis_acquire.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks
