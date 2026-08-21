@@ -8319,6 +8319,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       if (rb) { composedUserMessage = `${composedUserMessage}\n\n${rb}`; console.log('[answer-cache] referent-context injected (elliptical turn)'); }
     }
   } catch (e) { console.error('[answer-cache] resume inject failed:', e.message); }
+  // P1 slice 2 — THE PROJECT STATUS BLOCK (pre-reply, ONE VOICE): "where are we on X" answers
+  // FROM THE PROJECT ROW in the main say — status, canonical artifact + version, open scope.
+  // Live 2026-08-21 (boot_p86): the post-reply door version fired never — the reply writer had
+  // already answered, anchoring the status on a research DOC while the canonical v2 report sat
+  // registered. The row facts must ride the reply CONTEXT, like resume/referent above. Fires
+  // only on a project hit; an unmatched subject leaves the turn untouched.
+  try {
+    const _dp = require('./lib/deliverable_projects');
+    const _sa = _dp.detectStatusAsk(userMessage);
+    const _sb = _sa ? _dp.statusBrief(_sa.subject) : null;
+    if (_sb) {
+      composedUserMessage = `${composedUserMessage}\n\n[PROJECT STATUS — the durable project row for "${_sa.subject.slice(0, 80)}". Answer his status question from THESE FACTS ONLY: the status, the canonical artifact + its version and when it last updated, and any open scope still to fold in. Do NOT invent progress and do NOT present any other document as "the report":\n${_sb.brief}]`;
+      console.log(`[projects] status ask "${_sa.subject.slice(0, 60)}" → project "${_sb.slug}" — row facts injected into the reply context`);
+    }
+  } catch (e) { console.error('[projects] status inject failed (reply proceeds):', e.message); }
   // RETRIEVE-OR-ADMIT (anti-confabulation) — a personal-fact question ("what's my daughter's
   // name?") must be answered from real memory or honestly declined, never guessed. She once
   // fabricated a child's name AND a fake "you just mentioned it" justification. The directive
@@ -12445,23 +12460,6 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             .catch((e) => console.error('[canvas-cmd] failed:', e.message));
         }
       }
-    }
-
-    // P1 slice 2 — THE PROJECT STATUS DOOR: "where are we on X" reads the project ROW (spec,
-    // scope, canonical artifact + version), never re-runs the work and never guesses. Fires only
-    // when the subject resolves to a registered project; otherwise conversation is untouched.
-    if (!followupFired && !_artifactJudged && !_discoverAssignment) {
-      try {
-        const _dp = require('./lib/deliverable_projects');
-        const _sa = _dp.detectStatusAsk(userMessage);
-        const _sb = _sa ? _dp.statusBrief(_sa.subject) : null;
-        if (_sb) {
-          followupFired = true;
-          console.log(`[projects] status ask "${_sa.subject.slice(0, 60)}" → project "${_sb.slug}" — answering from the row`);
-          fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked where things stand on "${_sa.subject.slice(0, 80)}". Your durable PROJECT ROW says — answer from THESE FACTS ONLY, in your own voice, two or three sentences:\n${_sb.brief}\nName the status, the canonical artifact and when it last updated, and any open scope still to fold in. If scope is open, say what remains and that it's yours to finish — do NOT invent progress beyond these facts.]` })
-            .catch((e) => console.error('[projects] status followup failed:', e.message));
-        }
-      } catch (e) { console.error('[projects] status door failed (conversation proceeds):', e.message); }
     }
 
     if (!followupFired && !_artifactJudged && !_discoverAssignment && !/^(0|false|off)$/i.test(String(process.env.ZOE_PRODUCT_LEDGER || '').trim())) {

@@ -108,8 +108,10 @@ ok(/deliverable_projects'\)\.bindOrder\(\{ text: String\(userText\)/.test(main),
     'the bind runs BEFORE the kept/covered early-returns — kept orders are spec too');
 }
 ok(/deliverable_projects'\)\.noteCompose\(\{ topic: t, artifactSlug: slug \}\)/.test(main), 'the compose door links its landed artifact to the project');
-ok(/_dp\.detectStatusAsk\(userMessage\)/.test(main) && /_dp\.statusBrief\(_sa\.subject\)/.test(main), 'the status door detects the ask AND requires a project hit before firing');
-ok(/answer from THESE FACTS ONLY/.test(main), 'the status reply is pinned to the row facts — never invented progress');
+ok(/_dp\.detectStatusAsk\(userMessage\)/.test(main) && /_dp\.statusBrief\(_sa\.subject\)/.test(main), 'the status path detects the ask AND requires a project hit before injecting');
+ok(/row facts injected into the reply context/.test(main) && /composedUserMessage = `\$\{composedUserMessage\}\\n\\n\[PROJECT STATUS/.test(main),
+  'the row facts ride the reply CONTEXT pre-generation (one voice) — the live p86 post-reply door never fired');
+ok(/from THESE FACTS ONLY/.test(main), 'the status reply is pinned to the row facts — never invented progress');
 ok(/deliverable_projects'\)\.list\(\{ openScopeOnly: true \}\)/.test(read('lib/gap_plan.js')), 'maybePresent feeds open-scope projects into the sheet');
 
 console.log = _print;
