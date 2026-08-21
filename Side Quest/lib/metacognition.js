@@ -354,11 +354,18 @@ function verifyArtifactClaims(say, { fileExists = null, canvasWroteThisTurn = nu
 //   'pending'          — "X is still pending / due by <time>" about HER OWN deliverable when no measured
 //                        record (open promise, focus) matches X — the invented-deadline shape.
 const _WS_RECORDS_RE = /\b(?:(?:my|our|the) (?:records?|database|files?|notes?|logs?|history)\s+(?:indicates?|shows?|says?|confirms?)|records? (?:indicates?|shows?|says?|confirms?)|according to (?:my|our|the) (?:records?|database|notes?|files?|logs?)|i (?:checked|verified|confirmed) (?:my|our|the) (?:records?|database|notes?|files?|logs?))\b/i;
+// RUN-8 RECALL CONFABULATION (2026-08-20, con_cross_session): thin cross-session retrieval filled
+// with a recently-hot entity + invented session detail and closed with "That's what we verified."
+// (Hewitt-for-Selders; the held sheet never mentions Hewitt). The SHARED-past-verification family
+// is a records-attribution and enters the same scopes. Kept TIGHT (the F24 false-scold lesson): a
+// bare "we verified X" affirmation stays OUT — only the that's-what-we shape and we-verified with
+// an explicit past-session tail assert a shared verification record.
+const _WS_SHARED_VERIF_RE = /\b(?:that'?s|that is|which is) what (?:we|you and i) (?:verified|confirmed|found|established|landed on|pinned down)\b|\b(?:we|you and i) (?:verified|confirmed|established|landed on|pinned down|settled on)\b[^.?!]{0,50}\b(?:last time|earlier|in an? (?:earlier|prior|previous) session|a while (?:back|ago)|previously|back then)\b|\b(?:last time|in an? (?:earlier|prior|previous) session|a while (?:back|ago))\b[^.?!]{0,50}\b(?:we|you and i) (?:verified|confirmed|established|landed on|pinned down)\b/i;
 const _WS_PENDING_RE = /\b(?:is\s+)?still\s+(?:pending|open|outstanding|owed|unfinished|in\s+(?:the\s+)?queue)\b|\b(?:must|needs?\s+to|has\s+to)\s+be\s+(?:completed|finished|done|delivered)\s+by\b|\bdue\s+(?:by\s+)?(?:tomorrow|tonight|today|this\s+(?:morning|afternoon|evening|week)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
 // …only about HER OWN deliverables (a bill "still pending in committee" is the world, not her ledger).
 const _WS_DELIVERABLE_RE = /\b(?:briefing|report|dossier|roster|spreadsheet|sheet|list|summary|memo|draft|write-?up|deliverable|document)\b/i;
 const _WS_EXTERNAL_RE = /\b(?:bill|committee|legislature|legislative|session|court|case|county|city|council|agency|federal|congress|senate|house|vote|election|approval|application|permit|lawsuit|ruling)\b/i;
-const _WS_ANCHOR_STOP = new Set([..._CLAIM_ANCHOR_STOP, 'records', 'record', 'database', 'notes', 'files', 'history', 'pending', 'completed', 'finished', 'delivered', 'tomorrow', 'tonight', 'today', 'morning', 'afternoon', 'evening', 'according', 'indicates', 'indicate', 'shows', 'show', 'confirms', 'confirm', 'says', 'still', 'must', 'needs', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']);
+const _WS_ANCHOR_STOP = new Set([..._CLAIM_ANCHOR_STOP, 'records', 'record', 'database', 'notes', 'files', 'history', 'pending', 'completed', 'finished', 'delivered', 'tomorrow', 'tonight', 'today', 'morning', 'afternoon', 'evening', 'according', 'indicates', 'indicate', 'shows', 'show', 'confirms', 'confirm', 'says', 'still', 'must', 'needs', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'what']);
 function _wsAnchors(s) {
   const out = [];
   for (const m of String(s || '').match(/\b[A-Z][A-Za-z]{3,}\b/g) || []) {
@@ -377,15 +384,18 @@ function verifyWorkStateClaims(say, { gatherRanThisTurn = null, pendingRecordFor
   const violations = [];
   const ev = String(evidence || '').toLowerCase();
   const sentences = String(say || '').split(/(?<=[.!?])\s+|\n+/);
+  let prev = '';
   for (const sent of sentences) {
     const s = sent.trim();
-    if (s.length < 12 || _ART_FUTURE_RE.test(s)) continue;   // intent/offers aren't state assertions
-    // RECORDS-ATTRIBUTION: "records indicate/show/say X".
-    if (!violations.some((v) => v.kind.startsWith('records')) && _WS_RECORDS_RE.test(s)) {
+    if (s.length < 12 || _ART_FUTURE_RE.test(s)) { prev = s || prev; continue; }   // intent/offers aren't state assertions
+    // RECORDS-ATTRIBUTION: "records indicate/show/say X" — and the shared-past family ("that's
+    // what we verified"), whose ANCHORS live in the sentence it blesses (usually the previous one).
+    if (!violations.some((v) => v.kind.startsWith('records')) && (_WS_RECORDS_RE.test(s) || _WS_SHARED_VERIF_RE.test(s))) {
       let looked = true; try { looked = typeof gatherRanThisTurn === 'function' ? !!gatherRanThisTurn() : true; } catch { looked = true; }   // fail OPEN
       if (!looked) violations.push({ kind: 'records', claim: s.slice(0, 110) });
       else if (ev.length >= 40) {
-        const anchors = _wsAnchors(s);
+        const own = _wsAnchors(s);
+        const anchors = own.length ? own : _wsAnchors(prev);
         if (anchors.length && !anchors.some((a) => ev.includes(a))) violations.push({ kind: 'records-mismatch', claim: s.slice(0, 110), anchors });
       }
     }
@@ -397,6 +407,7 @@ function verifyWorkStateClaims(say, { gatherRanThisTurn = null, pendingRecordFor
         if (!backed) violations.push({ kind: 'pending', claim: s.slice(0, 110), anchors });
       }
     }
+    prev = s;
   }
   return { ok: violations.length === 0, violations };
 }

@@ -118,5 +118,21 @@ ok(!has("I'm working late tonight."), 'FP: bare progressive with no deliverable 
 ok(!has('Want me to compose the sheet for you?'), 'FP: an offer is still not a debt');
 ok(!has("I've already composed the sheet and landed it."), 'FP: a done-claim is still anti-fab\'s job');
 
+// ── run-8 recall confabulation: shared-past-verification is a records-attribution ────────────────────────
+{
+  const SAY = "Sharon Hewitt — Republican state senator, co-sponsored SB200 in the 2018 1st Extraordinary Session. That's what we verified.";
+  const EV = 'LA SB200 co-sponsors per the held sheet: Allain, Barrow, Bass, Cathey, Cloud, Connick, Edmonds, Fesi, Henry, Kleinpeter. Sen. Larry Selders (D-14) co-sponsored; died 2026-07-07.';
+  const r1 = mc.verifyWorkStateClaims(SAY, { gatherRanThisTurn: () => true, evidence: EV });
+  ok(!r1.ok && r1.violations.some((v) => v.kind === 'records-mismatch'), 'RUN-8 REGRESSION: "That\'s what we verified" mismatches when the retrieved sheet never mentions the named person (anchors from the BLESSED sentence)');
+  const r2 = mc.verifyWorkStateClaims(SAY, { gatherRanThisTurn: () => false, evidence: '' });
+  ok(!r2.ok && r2.violations.some((v) => v.kind === 'records'), 'the same claim with NO read this turn → a naked records-attribution');
+  const r3 = mc.verifyWorkStateClaims("Larry Selders co-sponsored SB200 — that's what we verified.", { gatherRanThisTurn: () => true, evidence: EV });
+  ok(r3.ok, 'a TRUE shared-verification claim (anchors present in the evidence) never scolds');
+  const r4 = mc.verifyWorkStateClaims('We verified the numbers together and they held up fine.', { gatherRanThisTurn: () => true, evidence: 'unrelated evidence text long enough to trigger the mismatch scope if it applied' });
+  ok(r4.ok, 'FP guard (the F24 lesson): a bare "we verified X" with no past-session tail stays OUT of the net');
+  const r5 = mc.verifyWorkStateClaims('We landed on the trust-fund framing in an earlier session. The Ellis angle came later.', { gatherRanThisTurn: () => true, evidence: 'the trust-fund framing rode the coastal briefing; Ellis Marsalis budget dispute notes.' });
+  ok(r5.ok, 'we-landed-on WITH a session tail but anchors present in evidence → clean');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
