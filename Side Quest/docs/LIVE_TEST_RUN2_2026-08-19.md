@@ -712,3 +712,41 @@ held (still-first-contact territory). Discovery value ≈ first-contact surface 
 **Recommendation: declare the knee.** Stop scheduled same-suite runs; adopt fix-wave-then-regate
 as the standing loop; let the meeting legs and the blind week carry discovery; hold the multi-day
 suite until after the blind week reports.
+
+## 19. THE RESUMED ARC — the confabulation cured in two cuts + the blind week armed (08-20 night)
+
+**Environment true-up**: the 20:58 app-down was LUCAS'S FULL MACHINE REBOOT, not a TDR kill (his
+read; my cycle timeline confirms no harness kill fits). Post-reboot with the app fully live: ZERO
+TDRs so far — consistent with his mismatched-driver hypothesis (or the reboot clearing a wedged
+driver state). The watch continues. Boots p69 (restoration; T-5 auto-join + paper-verb ARMED) →
+p70 (recall verifier layer 1) → p71 (layer 2). Ollama survived the reboot (auto-start).
+
+**The recall-confabulation cure, layer by layer (the campaign's priority item, closed to its
+honest floor):**
+- **Layer 1 (`08bd635`)**: the shared-past-verification family ("that's what we verified", "we
+  landed on X last time") enters the anti-fab records scopes, with anchors pulled from the BLESSED
+  sentence when the attribution is bare. Smoke 43/43 incl. both F24 false-scold guards.
+- **Re-drive 1 reproduced the confabulation VERBATIM — and named the escape.** Not the cache (zero
+  cache activity; but the cache held the FACT SOURCE: run-5's stored Hewitt answer carries
+  "sponsor in the 2018 1st Extraordinary Session" — recall MERGED the question's bill with the hot
+  entity's stored fact). The gate couldn't fire because retrieval returned the WRONG RECORD
+  (Hewitt's own file) — her anchors genuinely were in the evidence; the any-anchor pass held.
+  The gate verified attribution-vs-evidence; nothing verified evidence-vs-question.
+- **Layer 2 (`1211bc4`)**: BILL-NUMBER PAIRING semantics — every bill token a records-attributed
+  claim asserts must appear in the retrieved evidence (AND semantics; SB-200/SB200 spacing
+  normalized). The wrong-record escape is the locked regression (45/45).
+- **Re-drive 2 (boot_p71): THE FABRICATION IS GONE.** "We never built a verified product for SB200
+  co-sponsorship — there's nothing…" — no invented person, no invented session, no false "we
+  verified". Wrong on substance (the sheet EXISTS) but the failure mode moved from the WORST class
+  (confident fabrication wearing the verified costume) to the honest-miss class the doctrine
+  demands. The residual is RETRIEVAL-REACH: cross-session recall cannot find the held sponsors
+  sheet — the already-queued held-source homecoming disease, one root, not a new defect. The
+  cross-session KIND completes when that retrieval fix lands.
+
+**THE BLIND WEEK IS ARMED (21:41, §5b's gate, per §18's recommendation).**
+`scripts/blind_week_report.js` — read-only on every store, out-of-process, start stamp in a FILE
+(data/blind_week_start.txt) so her stores carry zero probe marks. Nothing announced. It scores the
+say-do doctrine from her own ledgers: usage volume · anti-fab corrections fired · honest-miss
+statements · threads born/resolved · commitments · canvas writes · workspace files · T-5 meeting
+auto-joins · main-thread stalls. Lucas uses her NORMALLY; the scorecard compiles on ask
+(`--md` writes docs/BLIND_WEEK_<date>.md).
