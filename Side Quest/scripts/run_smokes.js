@@ -603,6 +603,9 @@ const smokes = [
   // ONE project, composes update the canonical file in place, asks open the canonical current version).
   'smoke_reply_lane.js',
   'smoke_artifact_registry.js',
+  // P1 slice 1 — the project spine: orders bind (kin/mint), scope attaches, composes link,
+  // "where are we on X" has a row to read. Gate for the phase = the multi-day continuity suite.
+  'smoke_deliverable_projects.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks

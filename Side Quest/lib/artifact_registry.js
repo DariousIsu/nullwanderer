@@ -134,4 +134,8 @@ function matchAsk(subject) {
 function get(slug) { ensure(); try { return _handle().prepare('SELECT * FROM artifact_registry WHERE slug = ?').get(slug) || null; } catch { return null; } }
 function list() { return _rows(); }
 
-module.exports = { resolveOrMint, record, matchAsk, get, list, tokensOf, ensure, _setDb, KIN_FLOOR };
+/** Shared kin test for the P1 project spine — ONE identity vocabulary across stores, so the
+ *  registry and deliverable_projects can never drift apart on what counts as "the same subject". */
+function kinScore(aText, bText) { return _overlap(tokensOf(aText), tokensOf(bText)); }
+
+module.exports = { resolveOrMint, record, matchAsk, get, list, tokensOf, kinScore, ensure, _setDb, KIN_FLOOR };

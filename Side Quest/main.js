@@ -6224,6 +6224,9 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   // Register the landed artifact — the row IS the document's identity from here on (read-side
   // resolution + the next compose's update-in-place both go through it). Only a SAVED file registers.
   if (saved) { try { require('./lib/artifact_registry').record({ slug, relPath: rel, title: `Report — ${t}`.slice(0, 90), topic: t }); } catch (e) { console.error('[report-cmd] registry record failed:', e.message); } }
+  // P1 PROJECT SPINE: a landed compose links its artifact to the kin project and stamps it
+  // delivered-current ("where are we on X" reads this row). No kin project → quiet no-op.
+  if (saved) { try { const _pr = require('./lib/deliverable_projects').noteCompose({ topic: t, artifactSlug: slug }); if (_pr) console.log(`[projects] compose linked to project "${_pr.slug}" (delivered-current)`); } catch (e) { console.error('[projects] compose link failed:', e.message); } }
   let landed = false;
   try { landed = (await promiseArtifactEmit({ slug, title: `Report — ${t}`.slice(0, 60), markdown: md })) === true; } catch {}
   console.log(`[report-cmd] report on "${t}" composed (${md.length}ch, v${_regVersion}) → ${saved ? rel : '(save failed)'}${landed ? ' + canvas' : ' (canvas emit failed)'}`);
@@ -17557,6 +17560,10 @@ function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
     const ic = require('./lib/intake_contract');
     const order = ic.detectDeliverableOrder(userText);
     if (!order) return;
+    // P1 PROJECT SPINE: every deliverable ORDER binds to its project (kin → existing row gains
+    // the verbatim ask; new subject → mints, slug shared with the artifact registry) — kept or
+    // not, the spec is HIS words and the spine keeps them. Fail-soft; booking below is unchanged.
+    try { require('./lib/deliverable_projects').bindOrder({ text: String(userText).slice(0, 400), topic: order.topic || '', kind: 'report' }); } catch (e) { console.error('[projects] order bind failed:', e.message); }
     const kept = (() => {
       try { if (require('./lib/canvas_docs').lastWriteTs() >= (turnStartTs || 0)) return true; } catch {}
       try { if (require('./lib/echo_suit').lastContactWriteTs() >= (turnStartTs || 0)) return true; } catch {}
