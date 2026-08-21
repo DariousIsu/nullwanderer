@@ -118,6 +118,12 @@ const T = 1785400000000;
   ok(/tangipahoa/i.test(digOne) && !/ouachita/i.test(digOne), 'a specific body name selects only its bodies');
   ok(cs.civicDigestFor('the positive benefits of data centers to power grids') === '', 'an unrelated topic digests EMPTY — zero noise');
   ok(cs.civicDigestFor('') === '' && cs.civicDigestFor('the of and for') === '', 'empty/stopword-only topics are empty, never a throw');
+  // TOKEN EQUALITY (2026-08-21, the hollow report): topic token "anti" substring-matched
+  // atl-ANTI-c_county and rode Atlantic County NJ into an anti-China report. Substring is banned.
+  cs.upsertBody({ title: 'Atlantic County Board of Commissioners', level: 'county', state: 'NJ' });
+  cs.recordRoster({ bodyTitle: 'Atlantic County Board of Commissioners', members: [{ personName: 'John W. Risley Jr.', role: 'Chairman' }], sourceKind: 'official' });
+  ok(cs.civicDigestFor('anti china legislation') === '', 'HOLLOW-REPORT REGRESSION: "anti" never substring-matches atlANTIc — token equality only');
+  ok(/atlantic county/i.test(cs.civicDigestFor('the Atlantic County board')), 'the real Atlantic County topic still selects it');
   const digCapped = cs.civicDigestFor('parish leadership', { charBudget: 80 });
   ok(/\(\+\d+ more matching/.test(digCapped) && !/…$/.test(digCapped), 'a budget drop keeps WHOLE lines and NAMES the count — never a silent mid-line cut');
 

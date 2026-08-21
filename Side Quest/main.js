@@ -6069,8 +6069,21 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
       const hits = require('./lib/product_ledger').searchProducts({ db, query: t, notesDir: null, limit: 8 })
         .filter((h) => h.kind === 'doc');
       if (hits.length) {
-        rows = hits.map((h) => db.getDb().prepare('SELECT id, title, body FROM documents WHERE id = ?').get(h.id)).filter(Boolean);
-        console.log(`[report-cmd] phrase match empty — token search found ${rows.length} held doc(s)`);
+        // RELEVANCE GATE on the token fallback (2026-08-21, the hollow report: the single token
+        // 'legislation' pulled #16491, the NM anti-harassment policy, in as the report's ONE doc).
+        // A fallback doc must carry ≥2 distinct topic tokens (or the topic has only one); the
+        // dropped are logged so a starved gather is never silent.
+        const _topicToks = _clean.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3);
+        const _need = Math.min(2, _topicToks.length);
+        rows = hits.map((h) => db.getDb().prepare('SELECT id, title, body FROM documents WHERE id = ?').get(h.id)).filter(Boolean)
+          .filter((r) => {
+            const hay = `${r.title || ''} ${r.body || ''}`.toLowerCase();
+            const got = _topicToks.filter((tk) => hay.includes(tk)).length;
+            if (got >= _need) return true;
+            console.log(`[report-cmd] doc DROPPED by the relevance gate (${got}/${_need} topic tokens): #${r.id} ${String(r.title || '').slice(0, 60)}`);
+            return false;
+          });
+        console.log(`[report-cmd] phrase match empty — token search found ${rows.length} relevant held doc(s)`);
       }
     } catch (e) { console.error('[report-cmd] token search failed:', e.message); }
   }
@@ -6113,7 +6126,7 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   const material = [civicBlock, notesBlock, ...rows.map((r) => `--- DOC #${r.id}: ${String(r.title || '').slice(0, 120)} ---\n${String(r.body || '').slice(0, 9000)}`)].filter(Boolean).join('\n\n');
   console.log(`[report-cmd] composing from ${rows.length} held doc(s)${civicBlock ? ' + civic store' : ''}${notesBlock ? ' + notes deliverable(s)' : ''}: ${rows.map((r) => '#' + r.id).join(', ') || '(store only)'}`);
   const msgs = [
-    { role: 'system', content: `You are composing ONE finished, professional report from research documents the assistant ALREADY HOLDS. Rules — absolute:\n• Ground ONLY in the provided documents. Never add a fact, name, number, or URL that is not in them.\n• Every source annotation already present — "(source: …)" — stays attached to its claim. Never strip one, never invent one.\n• Structure: a title line, a 2-4 sentence executive summary, then "## " sections organized by what the material actually supports, then "## Open questions" naming what the documents do NOT answer.\n• Where the documents are thin or contradict each other, SAY SO in the text rather than papering over it. An honest gap is part of the report.\nOutput Markdown only — no preamble, no "here is".` },
+    { role: 'system', content: `You are composing ONE finished, professional report from research documents the assistant ALREADY HOLDS. Rules — absolute:\n• Ground ONLY in the provided documents. Never add a fact, name, number, or URL that is not in them.\n• Every source annotation already present — "(source: …)" — stays attached to its claim. Never strip one, never invent one.\n• Structure: a title line, a 2-4 sentence executive summary, then "## " sections organized by what the material actually supports, then "## Open questions" naming what the documents do NOT answer.\n• A supplied document that is NOT about the report subject is to be IGNORED ENTIRELY — never cited, never summarized, and NEVER listed as an open question. Open questions concern the SUBJECT only.\n• Where the documents are thin or contradict each other, SAY SO in the text rather than papering over it. An honest gap is part of the report.\nOutput Markdown only — no preamble, no "here is".` },
     { role: 'user', content: `REPORT SUBJECT: ${t}\n\nTHE DOCUMENTS YOU HOLD:\n"""\n${material.slice(0, 60000)}\n"""\n\nCompose the finished report on ${t} now.` },
   ];
   let md = '';
@@ -6159,7 +6172,10 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
       for (const line of m[1].split('\n')) {
         const q = line.replace(/^\s*[-*\d.]+\s*/, '').trim();
         if (q.length < 12) continue;
-        const r = rq.enqueue({ kind: 'open-question', subject: q.slice(0, 200), detail: { doc: `Report — ${t}`.slice(0, 80) }, priority: 5, bornFrom: 'report-gaps' });
+        // Priority 5 → 8 (2026-08-21, the gap audit: 140 open questions aged 12 days while the
+        // roster lane ate the passes). A gap born from a report LUCAS ORDERED outranks background
+        // lanes — his work outranks the sweep. detail.corpus keys same-report batching.
+        const r = rq.enqueue({ kind: 'open-question', subject: q.slice(0, 200), detail: { doc: `Report — ${t}`.slice(0, 80), corpus: slug }, priority: 8, bornFrom: 'report-gaps' });
         if (r.ok) openQs++;
       }
       if (openQs) console.log(`[report-cmd] ${openQs} open question(s) queued to the metabolism`);

@@ -376,7 +376,11 @@ function civicDigestFor(topic, { limit = 120, charBudget = 40000, deps = {} } = 
   let used = 0, dropped = 0;
   for (const b of bodies) {
     const key = String(b.body_key);
-    if (!toks.some((t) => key.includes(t))) continue;
+    // TOKEN EQUALITY, never substring (2026-08-21, the hollow report: topic token "anti" substring-
+    // matched atl-ANTI-c_county and rode Atlantic County NJ into an anti-China report — the exact
+    // "fuzzy key match DANGEROUS" trap the store's own notes warned about).
+    const keyToks = key.toLowerCase().split(/[^a-z0-9]+/);
+    if (!toks.some((t) => keyToks.includes(t))) continue;
     const rows = roster(key, { deps });
     if (!rows.length) continue;
     const named = rows.map((r) => `${r.person_name}${r.role && !/^member$/i.test(r.role) ? ` (${r.role})` : ''}`);
