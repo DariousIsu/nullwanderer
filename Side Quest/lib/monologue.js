@@ -35,6 +35,11 @@ const MODEL = require('./config').frontModel();   // her VOICE model (front)
 // (kimi) when it's up, else the local front (MODEL). generateThought-DERIVED thought rows label with THIS,
 // not the bare MODEL constant, so a cloud-written thought isn't mis-attributed to the demoted local front.
 let _lastThoughtModel = MODEL;
+// The local-floor breaker (2026-08-21): local engages only on SUSTAINED cloud absence.
+let _cloudOkTs = 0;
+let _monoBootTs = Date.now();
+// Smoke-only clock override — the breaker's 10min windows can't be waited out in a test.
+function __setFloorClock({ bootTs, cloudOkTs } = {}) { if (bootTs != null) _monoBootTs = bootTs; if (cloudOkTs != null) _cloudOkTs = cloudOkTs; }
 const TICK_INTERVAL_MS = 10 * 1000;     // 10s between ticks while idle
 const CAPTION_INTERVAL_MS = Math.max(2000, Math.round(TICK_INTERVAL_MS / 2));  // half-tick caption heartbeat
 const TICK_INTERVAL_BUSY_MS = 30 * 1000; // back off when conversation is active
@@ -809,6 +814,7 @@ async function generateThought({ messages, options = {}, signal, deps = {} } = {
         if (text && String(text).trim()) {
           if (deps.onUsage) { try { deps.onUsage(usage, { model: subModel }); } catch {} }
           _lastThoughtModel = subModel;
+          _cloudOkTs = Date.now();
           return String(text).trim();
         }
         console.warn('[monologue] cloud subconscious returned empty — falling back to local');
@@ -818,7 +824,13 @@ async function generateThought({ messages, options = {}, signal, deps = {} } = {
       }
     }
   }
-  // Local fallback (front model), streaming-accumulated.
+  // Local fallback (front model) — ABSOLUTE EXTREME LAST RESORT (Lucas 2026-08-21): one empty
+  // cloud reply or a single timeout must NEVER load 7.6GB. A skipped thought is benign; only a
+  // SUSTAINED outage (no cloud success ≥10min, incl. ≥10min uptime) engages the local floor.
+  const _now2 = Date.now();
+  const _sustained = (_now2 - _monoBootTs >= 10 * 60 * 1000) && (!_cloudOkTs || _now2 - _cloudOkTs >= 10 * 60 * 1000);
+  if (!_sustained) { console.log('[monologue] cloud blip — thought skipped (the local floor is reserved for a sustained outage)'); return ''; }
+  console.log('[monologue] SUSTAINED cloud outage — the local last-resort floor engages');
   let out = '';
   const sc = deps.streamChat || streamChat;
   await sc({ model: MODEL, messages, options, onToken: (t) => { out += t; }, signal });
@@ -3133,6 +3145,7 @@ async function runSearchLegacy(query, source, focusId = null) {
 }
 
 module.exports = {
+  __setFloorClock,
   startMonologueScheduler,
   stopMonologueScheduler,
   pause,

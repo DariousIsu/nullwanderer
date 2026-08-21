@@ -600,6 +600,14 @@ async function cognitionWindow(deps = {}) {
   } catch { return { num_ctx: FLOOR, isCloud: false, model: null }; }
 }
 
+// THE LOCAL FLOOR IS AN ABSOLUTE EXTREME LAST RESORT (Lucas, 2026-08-21 — the max-out incident:
+// a TRANSIENT cloud-source blip loaded the 7.6GB local 12b onto a machine already carrying Echo's
+// 8GB commit and ComfyUI's pinned reservation). The breaker: local engages ONLY on a SUSTAINED
+// cloud absence (≥10min, incl. ≥10min of uptime so boot-hydration lag never counts). A blip skips
+// the tick instead — idle cognition returning empty is benign by design ("nothing this tick").
+const _CLOUD_BLIP_MS = 10 * 60 * 1000;
+const _cognitionBoot = Date.now();
+let _cloudLastSeenTs = 0;
 async function streamCognition({ messages, options = {}, onToken, onThinking, signal, inactivityMs, maxMs, think, lane = 'idle' } = {}) {
   let subModel = '';
   try { subModel = require('./config').subconsciousModel(); } catch {}
@@ -607,6 +615,7 @@ async function streamCognition({ messages, options = {}, onToken, onThinking, si
     let cloud = null;
     try { cloud = (require('./models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch {}
     if (cloud) {
+      _cloudLastSeenTs = Date.now();
       // Idle cognition is a DEFERRABLE cloud lane — pass the lane so the choke-point gate can defer it when
       // the compute pool is low (protecting the interactive reply's headroom). A deferral is benign here:
       // swallow it into an empty cognition ("nothing this tick") rather than throwing into the idle loops.
@@ -621,10 +630,18 @@ async function streamCognition({ messages, options = {}, onToken, onThinking, si
       }
     }
   }
-  // Local fallback — the demoted front model, loaded on demand (cloud unset or unreachable). Local is free,
-  // so it is never gated (the choke-point gate only fires on cloud calls).
+  // Local fallback — the demoted front model. ABSOLUTE EXTREME LAST RESORT: only a SUSTAINED
+  // cloud absence reaches it; a blip (or boot-hydration lag) skips the tick instead of loading GBs.
+  const _now = Date.now();
+  const _sustainedOutage = (_now - _cognitionBoot >= _CLOUD_BLIP_MS)
+    && (!_cloudLastSeenTs || _now - _cloudLastSeenTs >= _CLOUD_BLIP_MS);
+  if (!_sustainedOutage) {
+    try { console.log('[cognition] cloud source momentarily absent — tick skipped (the local floor is reserved for a sustained outage)'); } catch {}
+    return '';
+  }
   let front;
   try { front = require('./config').frontModel(); } catch { front = options.model; }
+  try { console.log('[cognition] SUSTAINED cloud outage (≥10min) — the local last-resort floor engages'); } catch {}
   return streamChat({ model: front, messages, options, onToken, onThinking, signal, inactivityMs, maxMs, think });
 }
 

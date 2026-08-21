@@ -39,20 +39,29 @@ const msgs = [{ role: 'user', content: 'think about something interesting' }];
   ok(/deep cloud thought/.test(r1b), 'onUsage path returns the cloud thought text (object result normalized)');
   ok(gotUsage && gotUsage.prompt_tokens === 1200 && gotUsage.eval_tokens === 500, 'onUsage receives real token usage for budget accounting');
 
-  // --- LOCAL fallback: no subModel → local streamChat ---
+  // --- THE LOCAL-FLOOR BREAKER (2026-08-21, the max-out incident): a BLIP never loads local ---
+  // A recent cloud success (or young uptime) means any single failure/empty is a blip → the
+  // thought is SKIPPED (''), the 7.6GB local model untouched. Only a sustained outage engages it.
+  const mono = require('../lib/monologue');
+  mono.__setFloorClock({ bootTs: Date.now(), cloudOkTs: Date.now() });
+  let blipLocal = false;
+  const rB = await generateThought({ messages: msgs, options: {}, deps: { subModel: 'gpt-oss:120b', cloud, complete: async () => '', streamChat: async (o) => { blipLocal = true; o.onToken('x'); } } });
+  ok(rB === '' && !blipLocal, 'BREAKER: a cloud BLIP skips the thought — local never loads');
+  let blipLocal2 = false;
+  await generateThought({ messages: msgs, options: {}, deps: { subModel: 'gpt-oss:120b', cloud, complete: async () => { throw new Error('cloud 500'); }, streamChat: async (o) => { blipLocal2 = true; o.onToken('x'); } } });
+  ok(!blipLocal2, 'BREAKER: a single cloud error is a blip too — skipped, not localized');
+  // Sustained outage (clocks forced past the 10min windows) → the last-resort floor engages.
+  mono.__setFloorClock({ bootTs: Date.now() - 11 * 60 * 1000, cloudOkTs: Date.now() - 11 * 60 * 1000 });
   let localOut = false;
   const r2 = await generateThought({ messages: msgs, options: {}, deps: { subModel: '', streamChat: async (o) => { localOut = true; o.onToken('local thought'); } } });
-  ok(localOut && /local thought/.test(r2), 'no subModel → local front model');
-
-  // --- LOCAL fallback: cloud configured but DOWN (empty) → local ---
+  ok(localOut && /local thought/.test(r2), 'SUSTAINED outage + no subModel → the local floor engages');
   let fellBack = false;
   const r3 = await generateThought({ messages: msgs, options: {}, deps: { subModel: 'gpt-oss:120b', cloud, complete: async () => '', streamChat: async (o) => { fellBack = true; o.onToken('fallback thought'); } } });
-  ok(fellBack && /fallback thought/.test(r3), 'cloud empty → local fallback (fail-safe)');
-
-  // --- LOCAL fallback: cloud throws (non-abort) → local ---
+  ok(fellBack && /fallback thought/.test(r3), 'SUSTAINED outage + cloud empty → the local floor engages (fail-safe kept)');
   let fb2 = false;
   await generateThought({ messages: msgs, options: {}, deps: { subModel: 'gpt-oss:120b', cloud, complete: async () => { throw new Error('cloud 500'); }, streamChat: async (o) => { fb2 = true; o.onToken('x'); } } });
-  ok(fb2, 'cloud error → local fallback (no crash)');
+  ok(fb2, 'SUSTAINED outage + cloud error → the local floor engages (no crash)');
+  mono.__setFloorClock({ bootTs: Date.now(), cloudOkTs: Date.now() });
 
   // --- ABORT propagates (snap-back) ---
   let threw = false;
