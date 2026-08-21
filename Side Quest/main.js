@@ -8199,7 +8199,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // question pulls the matching held documents INTO the turn; the injection rides _replyEvidence,
   // so the anti-fab pairing check sees the same record the answer cites.
   try {
-    if (!collabTurn && /\b(?:do we (?:have|hold)|what do we (?:have|hold|know)|per (?:your|our|the) records|in (?:your|our|the) records|what did we (?:land on|verify|conclude|find|establish|pin down)|which [a-z]+ did (?:we|our)|who did we|remind me\b[^.?!]{0,30}\b(?:what|which|who)\b|pull from what we'?ve verified|what'?s (?:the latest|our (?:picture|read|file)) on|we (?:verified|tracked down|pinned down|landed on)\b)/i.test(userMessage)) {
+    if (!collabTurn && /\b(?:do we (?:have|hold)|what do we (?:have|hold|know)|per (?:your|our|the) records|in (?:your|our|the) records|what did we (?:land on|verify|conclude|find|establish|pin down)|which [a-z]+ did (?:we|our)|who did we|remind me\b[^.?!]{0,30}\b(?:what|which|who)\b|pull from what we'?ve verified|what'?s (?:the latest|our (?:picture|read|file)) on|we (?:verified|tracked down|pinned down|landed on)\b|where (?:are we|do we stand|did we (?:get to|land|stop|leave off)) (?:on|with)\b|how far did we get|what'?s left (?:on|to do on)\b|status of (?:the|our|that)\b)/i.test(userMessage)) {
       const gb2 = require('./lib/collab').groundingBlock({ sessionId, text: userMessage, mode: 'recall' });
       if (gb2) { composedUserMessage = `${composedUserMessage}\n\n${gb2}`; console.log('[recall-reach] held-source context injected'); }
       else console.log('[recall-reach] records-shaped question — no held documents matched');

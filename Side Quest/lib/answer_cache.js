@@ -173,7 +173,7 @@ function wantsFresh(question) { return _RECHECK_RE.test(String(question || ''));
 // a tail naming a SUBJECT ("keep going with the Indiana sweep") is a directive and stays out.
 // Run-4 catch (2026-08-20): "yes — back to it." missed — the joiner between the affirmation and the
 // continue phrase only allowed [,\s!]; a dash/colon/period/ellipsis there is the same utterance.
-const _AFFIRM_CONTINUE_RE = /^\s*(?:ok(?:ay)?|yea(?:h)?|yes|right|cool|alright|good|k)?[,.\s!…:;—–-]*(?:back to (?:it|work|business)|let'?s (?:continue|keep going|get back(?: to it)?)|continue|keep going|where were we|as you were|carry on|pick (?:it|this) (?:back )?up|pick up where we left off)(?:\s+(?:with|on|from)\s+(?:that|this|it|there))?\s*[.!?]*\s*$/i;
+const _AFFIRM_CONTINUE_RE = /^\s*(?:ok(?:ay)?|yea(?:h)?|yes|right|cool|alright|good|k)?[,.\s!…:;—–-]*(?:back to (?:it|work|business)|let'?s (?:continue|keep going|get back(?: to it)?)|continue|keep going|where were we|where (?:did|'?d) we leave off|as you were|carry on|pick (?:it|this) (?:back )?up|pick up where we left off)(?:\s+(?:with|on|from)\s+(?:that|this|it|there))?\s*[.!?]*\s*$/i;
 function isAffirmContinue(text) { return _AFFIRM_CONTINUE_RE.test(String(text || '')); }
 
 const _RESUME_KEY = (sid) => `resume_ctx.${sid}`;

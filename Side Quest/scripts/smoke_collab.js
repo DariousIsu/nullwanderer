@@ -66,6 +66,7 @@ ok(/IN THIS REPLY/.test(d) && /Do NOT create or edit any artifact/.test(d) && /l
   ok(/\[collab\] route override → converse/.test(src), 'wiring: the register outranks the route cascade');
   ok(/artifact-router \$\{verdict\.intent\} SUPPRESSED — thinking-together turn/.test(src) || /SUPPRESSED — thinking-together turn, no destination named/.test(src), 'wiring: the artifact-router hijack is gated');
   ok(/&& \(!collabTurn \|\| collabArtifactsOk\)/.test(src), 'wiring: canvas ownership and the booking backstop both respect the register');
+  ok(/where \(\?\:are we\|do we stand\|did we \(\?\:get to\|land\|stop\|leave off\)\)/.test(src), 'wiring: the progress-check family reaches the held-source door (blind-week #3: "where are we on the sponsors")');
 }
 
 console.log(`\nsmoke_collab: ${pass} passed, ${fail} failed`);
