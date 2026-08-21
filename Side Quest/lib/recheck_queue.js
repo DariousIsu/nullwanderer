@@ -1,5 +1,5 @@
 /*
- * lib/recheck_queue.js — THE METABOLISM's worklist. PURE decision logic + a fail-soft sq.db edge.
+ * lib/recheck_queue.js — THE METABOLISM's worklist. PURE decision logic + a fail-soft store edge.
  *
  * Lucas's north star (2026-08-07, [[program-end-state]]): an always-on program "always asking
  * questions, verifying and reverifying, testing and failing and retesting." The diagnosis of why
@@ -27,6 +27,29 @@ function db() { if (!_db) _db = require('./db'); return _db; }
 // Backoff for an unresolved recheck (distinct from the absence TTL, which governs re-ENQUEUE):
 // 6h, 12h, 24h, 48h … capped at 7d — an item that keeps failing to verify slows down, never spins.
 function backoffMs(attempts) { return Math.min(7 * 24 * 3600 * 1000, 6 * 3600 * 1000 * Math.pow(2, Math.max(0, attempts))); }
+
+// ── THE SUBJECT FLOOR (2026-08-21, the "nonsensical unprompt" catch) ────────────────────────────
+// The conversation-warming producer was minting an absence row for practically every noun phrase
+// a conversation carried — "that", "they", "a guy", "paper", "your body", a bare YouTube URL —
+// each burning up to 5 metabolism passes before the gap plan then presented them to Lucas as
+// research gaps needing "a whole-site crawl of the official source". A subject the metabolism can
+// actually RESEARCH names something: it carries a proper-noun-ish token (or a real number, e.g. a
+// bill), is not a pronoun/deictic/generic-noun fragment, and is not a URL or file path. Shared by
+// the producer (never enqueue), sweepAbsences (junk absences never re-enter), and the gap plan
+// (never presented). Parked rows are reversible; the net errs toward parking vagueness.
+const _SUBJ_JUNK_RE = /^(?:that|this|it|they|them|those|these|he|she|him|her|we|you|i|me|us|a (?:guy|girl|man|woman|thing)|some(?:one|thing|body)|any(?:one|thing)|every(?:one|thing)[\s\S]*|stuff|things?|papers?|docs?|documents?|compan(?:y|ies)|politicians?|agents?|captains?|planes?|op-?eds?|firehouse|(?:your |my )?body|scratch doc|test pass)$/i;
+// requireProper:false = the LAX floor for sources that LOWERCASE their subjects (the absence store
+// does — "ward 3 alderman of testville") where the proper-noun test would starve every legitimate
+// row. The lax floor still rejects junk words, URLs, file paths, and fragments under 5 chars.
+function researchable(subject, { requireProper = true } = {}) {
+  const s = String(subject || '').trim();
+  if (s.length < 5) return false;
+  if (/^https?:\/\//i.test(s)) return false;                       // a bare URL is a fetch, not a gap
+  if (/^[\w./\\-]+\.(?:md|txt|csv|pdf|docx?)$/i.test(s)) return false;   // a held file path is not a research subject
+  if (_SUBJ_JUNK_RE.test(s)) return false;
+  if (requireProper && !/[A-Z]/.test(s) && !/\b\d{2,4}\b/.test(s)) return false;   // no proper noun and no number → a generic fragment
+  return true;
+}
 
 /** enqueue({kind, subject, detail?, priority?, dueTs?, bornFrom?}) → {id, existing} — one OPEN row
  * per (kind, subject); a re-enqueue of an open item raises priority and keeps the EARLIER due. */
@@ -103,6 +126,7 @@ function sweepAbsences({ limit = 20, now = Date.now() } = {}) {
     const gaps = absence.openGaps({ limit: 200, now });
     for (const g of gaps) {
       if (absence.isFresh(g, now)) continue;                       // TTL not expired → not due yet
+      if (!researchable(g.subject, { requireProper: false })) continue;   // junk absences never re-enter (LAX: the store lowercases)
       const r = enqueue({ kind: 'absence', subject: g.subject, detail: { predicate: g.predicate, attempts: g.attempts }, priority: 4, bornFrom: 'absence-ttl', now });
       if (r.ok && !r.existing) queued++;
       if (queued >= limit) break;
@@ -360,4 +384,4 @@ function applyOutcome(item, ans, { now = Date.now() } = {}) {
   return { action: 'deferred' };
 }
 
-module.exports = { enqueue, due, openByKind, complete, defer, stats, sweepAbsences, buildPrompt, heldContext, parseVerdict, parseRoster, parseLocalRoster, applyOutcome, backoffMs, isBatchable, buildBatchPrompt, parseBatchVerdicts, BATCH_MAX };
+module.exports = { enqueue, due, openByKind, complete, defer, stats, sweepAbsences, buildPrompt, heldContext, parseVerdict, parseRoster, parseLocalRoster, applyOutcome, backoffMs, isBatchable, buildBatchPrompt, parseBatchVerdicts, BATCH_MAX, researchable };

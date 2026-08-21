@@ -2610,6 +2610,14 @@ app.whenReady().then(() => {
             const _gpSid = currentSessionId;
             const gp = await require('./lib/gap_plan').maybePresent({
               dispatch: (tag, o) => echoSuitLib.dispatch(tag, o),
+              // The FULL sheet is a workspace DOC (Lucas 08-21: a 2.4KB command wall in her chat
+              // voice was "nonsensical" — chat gets chatLine's one-liner, the sheet lives here).
+              writeDoc: (text) => {
+                const _fs = require('fs'); const _p = require('path');
+                const _dir = _p.join(__dirname, 'data', 'zoe_workspace', 'notes');
+                try { if (!_fs.existsSync(_dir)) _fs.mkdirSync(_dir, { recursive: true }); } catch {}
+                _fs.writeFileSync(_p.join(_dir, 'gap_plan.md'), `# Gap plan — updated ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET\n\n${text}\n`, 'utf8');
+              },
               deliver: (text) => {
                 const row = db.insertTurn({ sessionId: _gpSid, speaker: 'ai_said', content: text, model: 'gap-plan', unprompted: 1 });
                 try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
@@ -10924,7 +10932,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               let _warmed = 0;
               for (const g of (_man.gaps || []).slice(0, 5)) {
                 const _subj = String(g.surface || '').trim().slice(0, 200);
-                if (_subj.length < 3) continue;
+                // THE SUBJECT FLOOR (08-21): the manifest's gap surfaces include pronouns, deictics
+                // and generic nouns ("that", "a guy", "paper") — 234 junk rows reached the queue and
+                // the gap plan through this line's old 3-char floor. Only a researchable subject queues.
+                if (!_rq.researchable(_subj)) continue;
                 const r = _rq.enqueue({ kind: 'absence', subject: _subj, detail: { predicate: 'identity and current facts', doc: 'conversation neighborhood' }, priority: 8, bornFrom: 'conversation-gap' });
                 if (r.ok && !r.existing) _warmed++;
               }

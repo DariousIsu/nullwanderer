@@ -109,8 +109,15 @@ function keyBlockers(rows, probes = {}) {
   return out;
 }
 
-/** buildPlan({items, absenceOpen, keyRows, probes, now}) → the plan object — pure. */
+/** buildPlan({items, absenceOpen, keyRows, probes, now}) → the plan object — pure.
+ * THE SUBJECT FLOOR (08-21, the "nonsensical unprompt" catch): absence items whose subject the
+ * metabolism cannot research ("that", "scratch doc", a URL) are dropped BEFORE classification —
+ * they were being presented to Lucas as gaps needing "a whole-site crawl of the official source". */
 function buildPlan({ items = [], absenceOpen = 0, keyRows = [], probes = {}, now = Date.now() } = {}) {
+  const researchable = require('./recheck_queue').researchable;
+  // LAX floor: absence-ttl rows arrive lowercased from the absence store, and a real lowercase
+  // subject must still reach the plan. Strict proper-noun filtering happens at the PRODUCER.
+  items = items.filter((it) => it.kind !== 'absence' || researchable(it.subject, { requireProper: false }));
   const fillable = [], blockedItems = [], aggressive = [];
   for (const it of items) {
     const c = classifyItem(it, now);
@@ -137,7 +144,21 @@ function fingerprint(plan) {
   return djb2(parts.join('|'));
 }
 
-/** compose(plan, {userName}) → the deterministic chat text — pure. Bounded to ~2400 chars. */
+/** chatLine(plan) → the ONE-TO-TWO-SENTENCE chat surface, her voice, NO CLI, NO lists.
+ * Lucas 08-21 ("this is the second nonsensical long unprompt"): a 2.4KB wall of PowerShell
+ * commands in her chat voice is the wrong register — the full sheet lives in the workspace doc
+ * (compose below); chat only says the doc moved and what the headline is. */
+function chatLine(plan) {
+  const watchBlocked = plan.blockedKeys.filter((b) => _WATCH.has(b.name)).length + plan.blockedItems.length;
+  const nGo = plan.aggressive.length;
+  const top = nGo ? `"${str(plan.aggressive[0].subject).replace(/\s+/g, ' ').trim().slice(0, 60)}"` : '';
+  const bits = [];
+  if (nGo) bits.push(`${nGo} gap(s) are worth a deeper dig — top of the list: ${top}`);
+  if (watchBlocked) bits.push(`${watchBlocked} thing(s) need your hand`);
+  return `I've updated my gap plan — the full sheet is in my notes (gap_plan.md). Short version: ${bits.join(', and ')}. Ask me to walk through it, or give a go in plain words and I'll run it.`;
+}
+
+/** compose(plan, {userName}) → the FULL plan sheet (the workspace DOC body, not chat) — pure. */
 function compose(plan, { userName = 'Lucas' } = {}) {
   const L = [];
   const sub = (s, n = 80) => str(s).replace(/\s+/g, ' ').trim().slice(0, n);
@@ -173,8 +194,10 @@ function compose(plan, { userName = 'Lucas' } = {}) {
 }
 
 // ── the edge — cadence-gated sweep + present ────────────────────────────────────────────────────
-// dispatch(tag, opts) reaches Echo fail-soft (null when down); deliver(text) lands the chat turn.
-async function maybePresent({ now = Date.now(), dispatch = null, deliver = null } = {}) {
+// dispatch(tag, opts) reaches Echo fail-soft (null when down); deliver(text) lands the ONE-LINE
+// chat turn; writeDoc(text) lands the full sheet in the workspace (best-effort — a doc-write
+// failure never blocks the chat line, and vice versa).
+async function maybePresent({ now = Date.now(), dispatch = null, deliver = null, writeDoc = null } = {}) {
   try {
     if (typeof deliver !== 'function') return { presented: false, reason: 'no-deliver' };
     const last = parseInt(db().getMeta('gapplan.last_ts') || '0', 10);
@@ -213,11 +236,12 @@ async function maybePresent({ now = Date.now(), dispatch = null, deliver = null 
     const fp = fingerprint(plan);
     if (fp === db().getMeta('gapplan.fp') && now - last < _REAIR_MS) return { presented: false, reason: 'unchanged' };
 
-    deliver(compose(plan));
+    try { if (typeof writeDoc === 'function') writeDoc(compose(plan)); } catch { /* the sheet is best-effort */ }
+    deliver(chatLine(plan));
     db().setMeta('gapplan.last_ts', String(now));
     db().setMeta('gapplan.fp', fp);
     return { presented: true, reason: `${plan.counts.blocked + plan.blockedKeys.length} blocked, ${plan.counts.aggressive} need a go, ${plan.counts.fillable} fillable` };
   } catch (e) { return { presented: false, reason: `error: ${e.message}` }; }
 }
 
-module.exports = { classifyItem, keyBlockers, buildPlan, fingerprint, compose, maybePresent, _WATCH, _DECLINED, _AGGRESSIVE_ATTEMPTS, _MIN_INTERVAL_MS, _REAIR_MS };
+module.exports = { classifyItem, keyBlockers, buildPlan, fingerprint, compose, chatLine, maybePresent, _WATCH, _DECLINED, _AGGRESSIVE_ATTEMPTS, _MIN_INTERVAL_MS, _REAIR_MS };

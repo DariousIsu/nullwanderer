@@ -63,6 +63,24 @@ const DAY = 86400000;
   ok(!names.includes('FRED_API_KEY'), 'a set key with a passing probe is NOT a blocker');
   ok(gp._WATCH.has(names[0]), 'watch keys sort FIRST');
 
+  // ── the subject floor (the "nonsensical unprompt" catch) ──────────────────────────────────────
+  console.log('researchable:');
+  const rq = require('../lib/recheck_queue');
+  for (const junk of ['that', 'a guy', 'scratch doc', 'test pass', 'fire hydrant spray cap', 'your body', 'https://www.youtube.com/watch?v=x', 'notes/anti_china_followups.md', 'paper', 'they'])
+    ok(!rq.researchable(junk), `junk subject rejected: "${junk}"`);
+  for (const real of ['Louisiana parish roster', "De'Keither Stamps", 'Mississippi Public Service Commission', 'anti-china bills 2026', 'SB 200 co-sponsors'])
+    ok(rq.researchable(real), `real subject kept: "${real}"`);
+  const withJunk = [
+    { id: 1, kind: 'absence', subject: 'scratch doc', attempts: 5, priority: 8, created_ts: T - 20 * DAY },
+    { id: 2, kind: 'absence', subject: 'Evangeline Parish clerk', attempts: 5, priority: 8, created_ts: T - 20 * DAY },
+    { id: 3, kind: 'open-question', subject: 'who funds the data-center PAC', attempts: 0, priority: 8, created_ts: T - 11 * DAY },
+  ];
+  const pJunk = gp.buildPlan({ items: withJunk, keyRows: [], probes: {}, now: T });
+  ok(pJunk.aggressive.length === 2 && !pJunk.aggressive.some((a) => a.subject === 'scratch doc'),
+    'a junk-subject absence NEVER reaches the plan — even with 5 failed attempts');
+  ok(pJunk.aggressive.some((a) => a.subject === 'who funds the data-center PAC'),
+    'open-question rows (sentences, often lowercase) are NOT subject to the noun-phrase floor');
+
   // ── buildPlan + fingerprint ───────────────────────────────────────────────────────────────────
   console.log('fingerprint:');
   const items = [
@@ -75,7 +93,7 @@ const DAY = 86400000;
   const moreFillable = items.concat([{ id: 3, kind: 'absence', subject: 'another fillable', attempts: 0, priority: 5, created_ts: T }]);
   ok(gp.fingerprint(gp.buildPlan({ items: moreFillable, keyRows: rows, probes, now: T })) === gp.fingerprint(p1),
     'fillable churn does NOT move the fingerprint (no daily re-air of an unchanged ask)');
-  const moreAgg = items.concat([{ id: 4, kind: 'absence', subject: 'stuck thing', attempts: 6, priority: 5, created_ts: T - 30 * DAY }]);
+  const moreAgg = items.concat([{ id: 4, kind: 'absence', subject: 'Acadia Parish assessor', attempts: 6, priority: 5, created_ts: T - 30 * DAY }]);
   ok(gp.fingerprint(gp.buildPlan({ items: moreAgg, keyRows: rows, probes, now: T })) !== gp.fingerprint(p1),
     'a NEW aggressive item moves the fingerprint');
 
@@ -87,8 +105,12 @@ const DAY = 86400000;
   ok(text.includes('nx-echo.exe" keys set CONGRESS_GOV_API_KEY'), 'the FULL venv CLI path is printed (bare nx-echo is not on PATH)');
   ok(/run the deep crawl on/.test(text), 'the go example is a plain-words order the existing lanes execute');
   ok(text.length <= 2400, 'the plan is bounded');
-  const quiet = gp.buildPlan({ items: [{ id: 9, kind: 'absence', subject: 'ordinary', attempts: 0, priority: 5, created_ts: T }], keyRows: [], probes: {}, now: T });
+  const quiet = gp.buildPlan({ items: [{ id: 9, kind: 'absence', subject: 'Ordinary Parish', attempts: 0, priority: 5, created_ts: T }], keyRows: [], probes: {}, now: T });
   ok(!quiet.blockedKeys.length && !quiet.aggressive.length, 'an all-fillable inventory produces no action buckets (silent path)');
+  const line = gp.chatLine(p1);
+  ok(line.length < 400 && !/nx-echo|keys set|Register it|Re-set it/i.test(line),
+    'the CHAT surface is one short line in her voice — no CLI, no command walls');
+  ok(/gap_plan\.md/.test(line) && /Evangeline Parish/.test(line), 'the chat line points at the doc and names the top go item');
 
   // ── maybePresent edge (temp DB) ───────────────────────────────────────────────────────────────
   console.log('maybePresent:');
@@ -108,7 +130,7 @@ const DAY = 86400000;
   db.getDb().prepare(`INSERT INTO recheck_queue (kind, subject, detail, priority, due_ts, attempts, status, created_ts)
     VALUES ('absence', 'the Acadia Parish treasurer', NULL, 5, ?, 4, 'open', ?)`).run(T, T - 15 * DAY);
   const again = await gp.maybePresent({ now: T + 22 * 3600000, deliver });
-  ok(again.presented && delivered.length === 2 && /Acadia Parish/.test(delivered[1]), 'a CHANGED picture past the cadence re-presents');
+  ok(again.presented && delivered.length === 2 && /gap_plan\.md/.test(delivered[1]), 'a CHANGED picture past the cadence re-presents (as the one-line chat surface)');
   ok((await gp.maybePresent({ now: T + 22 * 3600000 + (gp._REAIR_MS + 20 * 3600000), deliver })).presented,
     'an unchanged plan still re-airs after the weekly window');
   ok(delivered.length === 3, 'exactly three plans went out across the whole cadence dance');
@@ -167,6 +189,8 @@ const DAY = 86400000;
   const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   const suitSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'echo_suit.js'), 'utf8');
   ok(/gap_plan'\)\.maybePresent/.test(mainSrc), 'main.js metabolism tick calls gap_plan.maybePresent');
+  ok(/writeDoc: \(text\) =>/.test(mainSrc) && /gap_plan\.md/.test(mainSrc), 'the full sheet writes to the workspace doc');
+  ok(/if \(!_rq\.researchable\(_subj\)\) continue/.test(mainSrc), 'the conversation-warming producer enforces the subject floor');
   ok(/_conversationActive\(\)\)\s*\{\s*\n\s*const _gpSid/.test(mainSrc) || /if \(currentSessionId && !_conversationActive\(\)\)/.test(mainSrc),
     'the gap-plan surface is lull-gated');
   ok(/const lane = await _webSearchLanePrimary\(tag\)/.test(suitSrc), 'echo_suit dispatch serves web_search from the stealth lane FIRST');
