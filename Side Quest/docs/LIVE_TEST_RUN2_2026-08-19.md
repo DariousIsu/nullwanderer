@@ -441,10 +441,17 @@ pane`** — F31 is live. Gate 564. Commits this arc: `50520ef` (run-5 suite) · 
   `searchDocuments` LIKE (db.js:2045, 1.8s) — the residual stall stratum's first two faces; FTS or
   index work.
 - **F19 tail**: pass-side true-up verify + the Echo store-init fix.
-- **Run-6 additions (§16)**: the DEFERRED-ORDER booking gap (sometime-today/no-rush orders slip the
-  C1 net — fix rides run 7's cook window) · the read-back misroute (a trivially-answerable
-  read-back routed into placement clarification) · cross-session FACET-selection (recall retrieves
-  the right session, answers the wrong facet).
+- **Run-6 additions (§16)**: ~~the DEFERRED-ORDER booking gap~~ ✅FIXED+PROVEN (run 8) · the
+  read-back misroute → UPGRADED by run 8 to its root: **the reply layer cannot READ canvas-doc
+  content** (she names where the list lives and offers to pull it — the content is unreachable) ·
+  ~~cross-session FACET-selection~~ → SUPERSEDED by the run-8 finding below.
+- **🚨 RECALL CONFABULATION (run 8, §18 — PRIORITY)**: thin cross-session retrieval fills with a
+  recently-hot entity + training-data specifics and claims "that's what we verified" — a false
+  records-attribution (Hewitt-for-Selders on SB200, verified against the held sheet). The F18
+  anti-fab scope cluster's sharpest live specimen; the fix is a recall-attribution verifier
+  against the actually-retrieved evidence, D-batch class.
+- **cov_papers tail**: the "write that up" verb widen ⏳arms next cycle; the paper conductor
+  end-to-end (a landed paper from thread content) still needs its first green live pass.
 
 ## 15. Run 6 — THE CONTINUITY BATTERY (built; the coverage backlog follows)
 
@@ -637,3 +644,71 @@ Womack interleave, Hewitt ellipsis, Abbeville callback, media-stops build, Fonte
 St. Landry where-were-we, the deferred-recap promise — re-driving the §16 deferral fix — and the
 SB200/Selders cross-session ask) + coverage gen-2 (fresh phrasings all ten; python = 17³−4096=817;
 a fresh staged ingest probe). The re-drives of every fix from tonight ride IN run 8 by design.
+
+## 18. RUN 8 + THE DIMINISHING-RETURNS ANALYSIS (2026-08-20 night, boot_p68)
+
+**Continuity gen-3: 114/116 — 6 of 8 KINDs held outright.** The binding fix held its SECOND fresh
+generation (Hewitt chamber/party, referent door firing both turns); **the deferred-order fix
+PROVEN LIVE** ("Whenever you find a window, knock out a quick recap… zero rush" → booked → honest
+account on return); interleave, callback, correction-update, where-were-we all held. The two ✗:
+- **con_running_build — the read-back's EVOLVED face**: this gen she built the list ON THE CANVAS,
+  and the read-back drew "I don't have that list in front of me — the file's on your Canvas… want
+  me to pull it down?" The gen-2 placement-stall is gone (she names where it is and offers the
+  road); the residual root = the reply layer cannot READ canvas-doc content. One root with the
+  §16 read-back misroute → queue, upgraded.
+- **con_cross_session — the run's one NEW defect class, and it is serious: RECALL CONFABULATION.**
+  "Which senator co-sponsored SB200?" → "Sharon Hewitt — co-sponsored SB200 in the 2018 1st
+  Extraordinary Session. That's what we verified." Ground truth (the held sponsors sheet): Selders,
+  with the death dagger; **Hewitt appears ZERO times in the document** — she was the ellipsis
+  subject FIVE TURNS EARLIER. When cross-session retrieval comes up thin, the answer fills from
+  the recently-hot entity + training-data specifics and wears the "we verified" costume — a false
+  records-attribution the anti-fab gate should catch. Joins the open F18 scope cluster as its
+  sharpest live specimen; cross-session recall is now 0-for-2 outright (wrong facet, then wrong
+  person) = the weakest continuity surface. → PRIORITY queue.
+
+**Coverage gen-2: 72/75 — 7 of 10 outright, 9 of 10 substantive.** **The compute fix PROVEN LIVE**:
+"17 cubed minus 4096" → the analysis lane ran, the compute-ground door fired, and the say was
+exactly "817." (the ✗ was a backslash-escaping bug in MY evaluator pattern — fixed). **The ingest
+door PROVEN LIVE** (fresh probe, "Absorb…" phrasing, doc landed + grounded say). cov_qr's ✗ was a
+POSITIVE find: my invented gen-2 URL doesn't resolve and she REFUSED to mint a QR to a dead target,
+honestly (verify-before-artifact; the lane itself proved in run 7). The one real residual:
+**cov_papers — "write THAT up" missed PAPER_VERB_RE** (the deictic rides between verb and
+particle; the C1 booking half HELD — the §17 fix works). One-line widen, smoke-locked (52/52),
+⏳arms next cycle; the paper conductor END-TO-END (a landed paper from thread content) remains the
+one coverage leg without a green live pass.
+
+### The campaign yield curve (runs 3→8, the full record)
+
+| run | suite/generation | board | real catches | of which root-class |
+|-----|------------------|-------|--------------|---------------------|
+| 3 | saturation gen-1 | 8/14 outright | 6 | 2 (operator-seam gap; the intake vocabulary disease) |
+| 4 | saturation gen-2 | 126/132, 10/14 | 2 (+2 collateral cures: the stall disease, the port collision) | the collaterals |
+| 5 | saturation gen-3 | 129/132, 12/14 | **0** | — |
+| 6 | continuity gen-1 | 97/105 + 43/45 | 4 | 2 (THE BINDING DISEASE; deferred-order booking) |
+| 7 | coverage gen-1 | 64/74 → 7/10 subst. | 3 (+3 evaluator calibrations) | 2 (freehand-compute; the ingest dangle) |
+| 8 | continuity g3 + coverage g2 | 114/116 + 72/75 | 2 (+1 regex) | 1 (recall confabulation — from the one KIND still at first contact) |
+
+**The law the table shows: returns diminish per SUITE GENERATION, not per run.** Generation 1 of
+every suite yields 3-6 catches with 2+ root-class finds; generation 2 yields 1-3 (vocabulary and
+phrase families); generation 3 yields ~zero. Three independent suites traced the same curve, and
+run 8 CONFIRMED the prediction — its only new defect CLASS came from the one KIND that had never
+held (still-first-contact territory). Discovery value ≈ first-contact surface area, nothing else.
+
+**Where the marginal value now sits:**
+1. **Another same-suite run (a "run 9") ≈ 0-1 phrase-family catches** — the port harness has hit
+   its knee. The converged suites' remaining value is REGRESSION GATING: run them after fix waves
+   (~35-90 min each), never on a schedule.
+2. **The open-defect queue now out-yields discovery**: recall confabulation (priority — it
+   violates the core answer-from-records doctrine), the canvas-content read-back root, F30b, the
+   slow-scan pair, the F19 tail, the F18/F24 D-batch. Every one is a KNOWN defect with no
+   discovery cost.
+3. **The remaining unknown-unknowns live where the port can't reach**: the blind week (Lucas-run,
+   zero announcements — the least gameable test left), the F31 + T-5 meeting legs (the next real
+   Meet proves both), voice guards, Interweave's unasked gate.
+4. **One first-contact suite remains unopened if another discovery cycle is ever wanted**:
+   multi-DAY continuity (promises across days, fact decay, session-boundary weave) — the gen-1
+   pattern predicts 2-4 root finds, but it is slow by nature (real elapsed days per data point).
+
+**Recommendation: declare the knee.** Stop scheduled same-suite runs; adopt fix-wave-then-regate
+as the standing loop; let the meeting legs and the blind week carry discovery; hold the multi-day
+suite until after the blind week reports.

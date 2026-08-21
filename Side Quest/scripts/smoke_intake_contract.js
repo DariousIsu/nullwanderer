@@ -101,6 +101,10 @@ ok(!ic.detectDeliverableOrder('put simply, the coastal market is contracting fas
   ok(!ic.detectDeliverableOrder('Sometime today the House schedule should firm up.'), 'a deferral with NO order verb never books');
   const d4 = ic.detectDeliverableOrder('Good — package that up as a short paper.');
   ok(d4 && d4.deliverable === 'paper', 'RUN-7 REGRESSION: an affirmation-led package order books (good-dash lead + paper noun)');
+  const pf = require('../lib/paper_finalize');
+  ok(pf.PAPER_VERB_RE.test('Perfect — write that up as a short paper.'), 'RUN-8 REGRESSION: "write THAT up" reaches the paper door (deictic between verb and particle)');
+  ok(pf.PAPER_VERB_RE.test('package that up as a short paper'), 'the package verb reaches the paper door');
+  ok(!pf.PAPER_VERB_RE.test('the write-up we discussed covers the paper trail'), 'noun-ish chatter never opens the conductor');
   ok(!ic.detectDeliverableOrder('No rush on my end — just thinking out loud about the digest idea.'), 'deferral chatter without an order lead never books');
 }
 

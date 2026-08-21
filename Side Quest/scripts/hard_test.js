@@ -385,7 +385,7 @@ const COVERAGE_SUITE = [
     expect: { landed: true, workHonest: true, delivered: true } },
   { name: 'cov_selfscript', kind: 'one-off python analysis on demand (the R3 lane)', maxMs: 240000,
     variants: ['Run the numbers in python: 17 cubed minus 4096 — exact answer.'],
-    expect: { saysRe: ['\b817\b'], logHas: ['\\[analysis\\]', 'compute-ground'], workHonest: true } },
+    expect: { saysRe: ['\\b817\\b'], logHas: ['\\[analysis\\]', 'compute-ground'], workHonest: true } },
   // One cell she provably holds (Landry), one she provably missed in run 5 (the Lt. Governor) —
   // the honest outcome is a filled cell AND a blank, which is the lane's whole doctrine.
   { name: 'cov_list_complete', kind: 'cite-or-leave-blank list completion', maxMs: 220000,
