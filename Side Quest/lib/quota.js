@@ -100,6 +100,7 @@ const NAMED_WEIGHTS = {
   'minimax-m3': 200,
   'kimi-k2.6': 300,
   'kimi-k2.7-code': 300,
+  'glm-5.2': 300,             // 756B MoE — kimi-class pacing (replier trial, Lucas 08-21)
 };
 const DEFAULT_WEIGHT = 100;
 

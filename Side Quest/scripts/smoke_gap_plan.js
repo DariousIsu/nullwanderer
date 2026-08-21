@@ -39,25 +39,29 @@ const DAY = 86400000;
   // ── keyBlockers ───────────────────────────────────────────────────────────────────────────────
   console.log('keyBlockers:');
   const rows = [
+    { name: 'CONGRESS_GOV_API_KEY', service_id: 'congress_gov', is_set: false, required: true },
     { name: 'TAVILY_API_KEY', service_id: 'tavily', is_set: false, required: false, can_probe: true },
     { name: 'OPENFDA_API_KEY', service_id: 'openfda', is_set: false, required: false, can_probe: true },
     { name: 'RELIEFWEB_APPNAME', service_id: 'reliefweb', is_set: false, required: true },
     { name: 'POLYGON_API_KEY', is_set: true, dormant: true, dormant_reason: "key returns 401 'Unknown API Key'" },
-    { name: 'EXA_API_KEY', service_id: 'exa', is_set: true, required: false, can_probe: true },
+    { name: 'EXA_API_KEY', service_id: 'exa', is_set: true, dormant: true, dormant_reason: 'mis-pasted, Exa 401s it' },
     { name: 'FRED_API_KEY', service_id: 'fred', is_set: true, required: true },
+    { name: 'BLS_API_KEY', service_id: 'bls', is_set: true, required: false, can_probe: true },
   ];
-  const probes = { exa: { ok: false, status_code: 401, key_set: true }, fred: { ok: true, status_code: 200 } };
+  const probes = { fred: { ok: true, status_code: 200 }, bls: { ok: false, status_code: 401, key_set: true } };
   const kb = gp.keyBlockers(rows, probes);
   const names = kb.map((b) => b.name);
-  ok(names.includes('TAVILY_API_KEY') && kb.find((b) => b.name === 'TAVILY_API_KEY').state === 'unset', 'an unset WATCH key blocks as unset');
+  ok(names.includes('CONGRESS_GOV_API_KEY') && kb.find((b) => b.name === 'CONGRESS_GOV_API_KEY').state === 'unset', 'an unset WATCH key blocks as unset');
+  ok(!names.includes('TAVILY_API_KEY') && !names.includes('EXA_API_KEY'),
+    'DECLINED search keys never nag — not when unset, not even when registered-but-rejected (Lucas 08-21: browser lanes ARE the search path)');
   ok(!names.includes('OPENFDA_API_KEY'), 'an unset OPTIONAL non-watch key is NOT a blocker (noise stays out)');
   ok(names.includes('RELIEFWEB_APPNAME'), 'an unset required:true key blocks even off the watch list');
   ok(kb.find((b) => b.name === 'POLYGON_API_KEY').state === 'rejected', 'a dormant row blocks as rejected');
-  const exa = kb.find((b) => b.name === 'EXA_API_KEY');
-  ok(exa && exa.state === 'rejected' && /401/.test(exa.detail) && /mis-paste/.test(exa.detail),
-    'a SET key whose probe 401s blocks as rejected with the mis-paste hint (the live Exa case)');
+  const bls = kb.find((b) => b.name === 'BLS_API_KEY');
+  ok(bls && bls.state === 'rejected' && /401/.test(bls.detail) && /mis-paste/.test(bls.detail),
+    'a SET non-declined key whose probe 401s blocks as rejected with the mis-paste hint');
   ok(!names.includes('FRED_API_KEY'), 'a set key with a passing probe is NOT a blocker');
-  ok(gp._WATCH.has(names[0]), 'watch keys sort FIRST (the search federation leads the ask)');
+  ok(gp._WATCH.has(names[0]), 'watch keys sort FIRST');
 
   // ── buildPlan + fingerprint ───────────────────────────────────────────────────────────────────
   console.log('fingerprint:');
@@ -80,7 +84,7 @@ const DAY = 86400000;
   const text = gp.compose(p1);
   ok(/Blocked — these need your hand/.test(text), 'the blocked section is present');
   ok(/Needs your go/.test(text), 'the approval section is present');
-  ok(text.includes('nx-echo\\.venv\\Scripts\\nx-echo.exe" keys set EXA_API_KEY'), 'the FULL venv CLI path is printed (bare nx-echo is not on PATH)');
+  ok(text.includes('nx-echo.exe" keys set CONGRESS_GOV_API_KEY'), 'the FULL venv CLI path is printed (bare nx-echo is not on PATH)');
   ok(/run the deep crawl on/.test(text), 'the go example is a plain-words order the existing lanes execute');
   ok(text.length <= 2400, 'the plan is bounded');
   const quiet = gp.buildPlan({ items: [{ id: 9, kind: 'absence', subject: 'ordinary', attempts: 0, priority: 5, created_ts: T }], keyRows: [], probes: {}, now: T });
@@ -142,6 +146,22 @@ const DAY = 86400000;
   ok((await suit._webSearchFloor(webTag, emptyFed, { search: async () => { throw new Error('lane died'); } })) === emptyFed,
     'a lane crash returns the original result — fail-soft');
 
+  // ── BUILD 0b: the stealth lane is the PRIMARY search ──────────────────────────────────────────
+  console.log('_webSearchLanePrimary:');
+  const prim = await suit._webSearchLanePrimary(webTag, { search: async () => laneHits });
+  const pj = JSON.parse(prim.text);
+  ok(pj.results.length === 1 && pj.results[0].source === 'browser-lane' && pj.providers_used[0] === 'browser-lane',
+    'the lane serves the PRIMARY result in the engine shape');
+  ok((await suit._webSearchLanePrimary(webTag, { search: async () => ({ results: [] }) })) === null,
+    'a lane miss returns null — dispatch falls through to the engine federation');
+  ok((await suit._webSearchLanePrimary(webTag, { search: async () => { throw new Error('lane died'); } })) === null,
+    'a lane crash returns null — never blocks the dispatch');
+  ok((await suit._webSearchLanePrimary({ kind: 'do', name: 'web_search', args: {} }, { search: async () => laneHits })) === null,
+    'a blank query is never searched');
+  const sl = require('../lib/search_lane');
+  ok(typeof sl.withSlot === 'function' && sl.POOL_SIZE >= 1 && sl.POOL_SIZE <= 6,
+    `search_lane loads with a bounded tab pool (POOL_SIZE=${sl.POOL_SIZE})`);
+
   // ── wiring greps ──────────────────────────────────────────────────────────────────────────────
   console.log('wiring:');
   const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
@@ -149,7 +169,9 @@ const DAY = 86400000;
   ok(/gap_plan'\)\.maybePresent/.test(mainSrc), 'main.js metabolism tick calls gap_plan.maybePresent');
   ok(/_conversationActive\(\)\)\s*\{\s*\n\s*const _gpSid/.test(mainSrc) || /if \(currentSessionId && !_conversationActive\(\)\)/.test(mainSrc),
     'the gap-plan surface is lull-gated');
-  ok(/_res = await _webSearchFloor\(tag, _res\)/.test(suitSrc), 'echo_suit dispatch routes every result through the floor');
+  ok(/const lane = await _webSearchLanePrimary\(tag\)/.test(suitSrc), 'echo_suit dispatch serves web_search from the stealth lane FIRST');
+  ok(/if \(!_laneMissed\) _res = await _webSearchFloor\(tag, _res\)/.test(suitSrc),
+    'the post-dispatch floor stands down when the primary lane already missed (no double lane attempt)');
   ok(require('../lib/echo_tier').classifyTool('secrets_check') === 'read',
     'secrets_check classifies READ — the tier gate must never starve the key probe (live 08-21 escape)');
 

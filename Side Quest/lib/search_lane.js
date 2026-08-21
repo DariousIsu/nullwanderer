@@ -12,8 +12,15 @@
  * host); Bing answers reliably and its SERP anchors carry the real destination URL.
  *
  * Own persistent profile (separate cookies / cf_clearance) so a heavy search burst here can
- * never fight her visible browser's profile lock. Launched lazily, reused across searches,
- * and every search is serialized through the single page (concurrent goto()s would race).
+ * never fight her visible browser's profile lock. Launched lazily, reused across searches.
+ *
+ * TAB POOL (Lucas 2026-08-21, "just use the stealth browsering even if we need to open more
+ * stealth browser lanes"): the lane is now the PRIMARY carrier for every background web_search
+ * (the keyed federation was declined), so the old single-page global lock became the program's
+ * search bottleneck — every consumer serialized behind one tab at ~2-15s each. The pool keeps
+ * ONE Chrome process and ONE profile but opens ZOE_SEARCH_LANE_TABS tabs (default 3); each tab
+ * has its own serialization chain (concurrent goto()s on the SAME tab race; on different tabs
+ * they're fine), and each call lands on the least-busy tab.
  */
 
 const path = require('path');
@@ -31,9 +38,13 @@ const CHROME_PATHS = [
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 ].filter(Boolean);
 
+const POOL_SIZE = Math.max(1, Math.min(6, parseInt(process.env.ZOE_SEARCH_LANE_TABS, 10) || 3));
+
 let context = null;
-let page = null;
-let lock = Promise.resolve();
+let pages = [];        // the tab pool — index-stable slots
+let locks = [];        // one serialization chain per slot
+let busy = [];         // queued+running count per slot — calls land on the least-busy
+let launching = null;  // single-flight launch guard (two slots must never race launchPersistentContext)
 
 function findChrome() { for (const p of CHROME_PATHS) { try { if (fs.existsSync(p)) return p; } catch {} } return null; }
 
@@ -70,13 +81,7 @@ function cleanQuery(s) {
   return q || String(s || '').trim();
 }
 
-async function ensure() {
-  if (context && page) {
-    let closed = true; try { closed = page.isClosed(); } catch { closed = true; }
-    if (!closed) return page;
-    try { page = await context.newPage(); page.setDefaultTimeout(8000); return page; }
-    catch { context = null; page = null; }   // context dead → relaunch below
-  }
+async function _launch() {
   // PATCHRIGHT (patched Playwright) drives REAL system Chrome with the automation leaks
   // neutralized — the same stealth path lib/web.js uses, but headless + a SEPARATE profile so
   // it stays invisible and never touches her visible browser.
@@ -100,11 +105,29 @@ async function ensure() {
     args: ['--no-first-run', '--no-default-browser-check', '--test-type', '--mute-audio',
            '--window-position=-32000,-32000', '--window-size=1280,900']
   });
-  context.on('close', () => { context = null; page = null; });
-  page = context.pages()[0] || await context.newPage();
-  page.setDefaultTimeout(8000);
-  return page;
+  context.on('close', () => { context = null; pages = []; locks = []; busy = []; });
+  const first = context.pages()[0] || await context.newPage();
+  first.setDefaultTimeout(8000);
+  pages = [first];
+  console.log(`[search-lane] stealth Chrome up — tab pool ${POOL_SIZE}`);
 }
+
+// Ensure the context is up and slot `i` holds a live tab. Launch is single-flight; per-slot
+// top-up is safe because each slot's work is serialized by its own lock (two DIFFERENT slots
+// topping up concurrently write different indexes).
+async function ensureSlot(i) {
+  if (!context) {
+    if (!launching) launching = _launch().catch((e) => { context = null; throw e; }).finally(() => { launching = null; });
+    await launching;
+  }
+  let p = pages[i];
+  let closed = true; try { closed = !p || p.isClosed(); } catch { closed = true; }
+  if (closed) { p = await context.newPage(); p.setDefaultTimeout(8000); pages[i] = p; }
+  return p;
+}
+
+// Back-compat single-page entry (exported; external callers get slot 0's tab).
+async function ensure() { return ensureSlot(0); }
 
 // Extract Bing SERP results (title + REAL url + snippet). Bing anchors usually carry the real
 // destination href; some are wrapped in bing.com/ck/a?…&u=a1<base64url> — decode that back.
@@ -140,11 +163,17 @@ async function readBingSerp(p, max = 8) {
   }, max), 5000, []);
 }
 
-// Serialize searches through the single page (concurrent goto()s on one tab race).
-function withLock(fn) {
-  const run = lock.then(fn, fn);
-  lock = run.then(() => {}, () => {});   // never let a rejection poison the chain
-  return run;
+// Land the call on the LEAST-BUSY tab and serialize through that tab's own chain (concurrent
+// goto()s on one tab race; on different tabs they run in parallel). `fn` receives the live page.
+function withSlot(fn) {
+  let i = 0;
+  for (let j = 1; j < POOL_SIZE; j++) if ((busy[j] || 0) < (busy[i] || 0)) i = j;
+  busy[i] = (busy[i] || 0) + 1;
+  const go = async () => fn(await ensureSlot(i));
+  const prev = locks[i] || Promise.resolve();
+  const run = prev.then(go, go);
+  locks[i] = run.then(() => {}, () => {});   // never let a rejection poison the chain
+  return run.finally(() => { busy[i] = Math.max(0, (busy[i] || 0) - 1); });
 }
 
 /**
@@ -157,8 +186,7 @@ async function search(query, { signal } = {}) {
   const q = cleanQuery(String(query || '').trim()).slice(0, 240);
   if (!q) return { query: '', results: [] };
   if (signal && signal.aborted) return { query: q, results: [] };
-  return withLock(async () => {
-    const p = await ensure();
+  return withSlot(async (p) => {
     await p.goto(SEARCH_URL(q), { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
     const results = await readBingSerp(p, 8);
     try { require('./echo_suit').markGather(); } catch {}   // a real SERP search = she LOOKED (feeds the absence gate)
@@ -185,8 +213,7 @@ async function search(query, { signal } = {}) {
 async function read(url, { timeoutMs = NAV_TIMEOUT } = {}) {
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) return { ok: false, url: target, error: 'not http(s)' };
-  return withLock(async () => {
-    const p = await ensure();
+  return withSlot(async (p) => {
     const isPdfBytes = (b) => !!(b && b.length > 4 && b.slice(0, 5).toString('latin1') === '%PDF-');
 
     // A PDF is fetched, never navigated to. Navigating hands it to Chrome's viewer extension and
@@ -273,10 +300,10 @@ async function read(url, { timeoutMs = NAV_TIMEOUT } = {}) {
 
 async function close() {
   try { if (context) await context.close(); } catch {}
-  context = null; page = null;
+  context = null; pages = []; locks = []; busy = [];
   return { ok: true };
 }
 
-function isConnected() { return !!(context && page); }
+function isConnected() { return !!(context && pages[0]); }
 
-module.exports = { search, read, close, ensure, isConnected, cleanQuery, PROFILE_DIR, SEARCH_URL };
+module.exports = { search, read, close, ensure, isConnected, cleanQuery, withSlot, PROFILE_DIR, SEARCH_URL, POOL_SIZE };

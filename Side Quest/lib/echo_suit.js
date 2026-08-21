@@ -587,10 +587,20 @@ class EchoSuit {
     // stays the ceiling for every interactive/agent-loop call, so a hung tool still can't stall a turn.
     const _TMO = (Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0) ? opts.timeoutMs : _TMO_DEFAULT;
     try {
+      // BUILD 0b (Lucas 08-21, "skip the keys — just use the stealth browsering"): web_search is
+      // served from HER OWN stealth lane FIRST (pooled tabs, lib/search_lane); the engine's keyless
+      // federation is the FALLBACK when the lane misses or errors. The finally block still runs on
+      // the early return, so route_obs + the gather stamps record the lane-served result too.
+      let _laneMissed = false;
+      if (tag && tag.kind === 'do' && tag.name === 'web_search') {
+        const lane = await _webSearchLanePrimary(tag);
+        if (lane) { _res = lane; return _res; }
+        _laneMissed = true;   // the lane just missed — don't let the post-dispatch floor re-run it
+      }
       _res = await _raceTimeout(this._maybeMemoized(tag, opts), _TMO, _toName);
       // BUILD 0 (2026-08-21): an EMPTY federated web_search falls back to her own browser search
       // lane (_webSearchFloor below). Reassigns _res so route_obs records what the caller ACTUALLY got.
-      _res = await _webSearchFloor(tag, _res);
+      if (!_laneMissed) _res = await _webSearchFloor(tag, _res);
       return _res;
     } catch (e) {
       _res = { ok: false, isError: true, text: String((e && e.message) || e) };
@@ -1862,6 +1872,34 @@ function normalizeNeighbors(kd) {
 // test seam: inject a fake connected suit
 function _setLiveForTest(suit) { _live = suit; }
 
+// ── BUILD 0b (2026-08-21): the stealth lane is the PRIMARY search ───────────────────────────────
+// Lucas declined the federation's provider keys outright ("Lets skip those for now and just use
+// the stealth browsering even if we need to open more stealth browser lanes") — so a web_search
+// dispatch serves from her own pooled stealth lane FIRST and only falls through to the engine's
+// keyless federation on a lane miss/error. Returns the normalized engine-shaped result, or null
+// (= dispatch to Echo as before). Bounded; fail-soft; deps.search is a test seam.
+async function _webSearchLanePrimary(tag, deps = {}) {
+  try {
+    const q = String((tag.args && (tag.args.query || tag.args.q)) || '').trim();
+    if (!q) return null;
+    const searchFn = deps.search || require('./web_search').search;
+    const sr = await Promise.race([
+      searchFn(q),
+      new Promise((resolve) => { const t = setTimeout(resolve, _FLOOR_LANE_TIMEOUT_MS); if (t.unref) t.unref(); }),
+    ]).catch(() => null);
+    const results = (sr && Array.isArray(sr.results) ? sr.results : [])
+      .map((r) => ({ title: r.title || '', url: r.url || '', snippet: r.snippet || null, source: 'browser-lane' }))
+      .filter((r) => r.url);
+    if (!results.length) return null;
+    return { ok: true, isError: false, text: JSON.stringify({
+      query: q, results,
+      providers_used: ['browser-lane'],
+      providers_skipped: {},
+      note: 'served by the stealth browser lane (primary); the engine federation is the fallback',
+    }) };
+  } catch { return null; }
+}
+
 // ── BUILD 0 (2026-08-21): the browser-lane search floor ─────────────────────────────────────────
 // The engine's federated web_search is key-gated (exa/jina/tavily/brave) and its zero-key floors
 // can die on this box (DDG null-routed the IP; raw Bing can meet a JS wall) — so background and
@@ -1976,7 +2014,7 @@ function routeCacheStats() {
 }
 
 module.exports = {
-  routeCacheStats, _raceTimeout, lastContactWriteTs, lastGatherTs, lastExternalGatherTs, markGather, _webSearchFloor,
+  routeCacheStats, _raceTimeout, lastContactWriteTs, lastGatherTs, lastExternalGatherTs, markGather, _webSearchFloor, _webSearchLanePrimary,
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
   placeholderComplaint, sanitizeFtsQuery, prepareDoArgs, recipeMisrouteHint, templateArgs,
   setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates, _salienceDominant

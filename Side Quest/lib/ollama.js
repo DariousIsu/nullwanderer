@@ -244,7 +244,7 @@ function _noteThinkingSalvage(model) {
     console.warn(`[ollama] ${k}: EMPTY content → answering from message.thinking (chain-of-thought salvaged as the answer)${n > 1 ? ` ×${n}` : ''} — this caller should pass think:false`);
   }
 }
-const _REASONING_RE = /(?:^|[\/:_-])(?:gpt-oss|qwen3|qwq|kimi|deepseek-r1|magistral|o1|o3)\b|:think\b/i;
+const _REASONING_RE = /(?:^|[\/:_-])(?:gpt-oss|qwen3|qwq|kimi|deepseek-r1|magistral|o1|o3|glm-5)\b|:think\b/i;
 function isReasoningModel(name) { return _REASONING_RE.test(String(name || '')); }
 
 async function completeDetailed({ model, messages, options = {}, base = OLLAMA_BASE, headers = {}, signal, timeoutMs = 180000, think, lane = undefined }) {

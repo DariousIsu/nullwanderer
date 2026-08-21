@@ -42,14 +42,16 @@ const _MAX_ROWS = 400;                        // sweep bound
 const _SHOW = 5;                              // rows shown per action bucket
 const _KEYS_CLI = '& "C:\\Users\\azrae\\Desktop\\NX ECHO\\nx-echo\\.venv\\Scripts\\nx-echo.exe" keys set';
 
-// The capability keys the plan watches by name (the search federation + the transcript lane).
-// Beyond these, any registry row with required:true left unset, and any dormant row, also blocks.
-const _WATCH = new Set(['EXA_API_KEY', 'JINA_API_KEY', 'TAVILY_API_KEY', 'BRAVE_SEARCH_API_KEY', 'CONGRESS_GOV_API_KEY']);
+// The capability keys the plan watches by name. Beyond these, any registry row with
+// required:true left unset, and any dormant row, also blocks.
+// SEARCH KEYS DECLINED (Lucas 08-21: "Lets skip those for now and just use the stealth
+// browsering even if we need to open more stealth browser lanes") — EXA/JINA/TAVILY/BRAVE are
+// deliberately OFF the watch AND on a suppress list: the browser lanes ARE the search path, and
+// the plan must never nag a key he has decided not to set. _DECLINED also mutes their dormant/
+// probe-rejected rows (the mis-pasted Exa key would otherwise nag forever).
+const _WATCH = new Set(['CONGRESS_GOV_API_KEY']);
+const _DECLINED = new Set(['EXA_API_KEY', 'JINA_API_KEY', 'TAVILY_API_KEY', 'BRAVE_SEARCH_API_KEY', 'SEARXNG_INSTANCE_URL']);
 const _KEY_ROLE = {
-  EXA_API_KEY: 'neural web search (the federated search lead)',
-  JINA_API_KEY: 'clean-snippet web search',
-  TAVILY_API_KEY: 'news/fresh search (the news intent lead)',
-  BRAVE_SEARCH_API_KEY: 'independent-index search (adversarial fact-checks)',
   CONGRESS_GOV_API_KEY: 'federal bills + members (the transcript lane is dark without it)',
 };
 
@@ -92,6 +94,7 @@ function keyBlockers(rows, probes = {}) {
   const out = [];
   for (const r of (rows || [])) {
     if (!r || !r.name) continue;
+    if (_DECLINED.has(r.name)) continue;   // Lucas declined these — never a blocker, never a nag
     const role = _KEY_ROLE[r.name] || str(r.display_name || r.scope_note).slice(0, 70) || 'a keyed capability';
     if (r.dormant) { out.push({ name: r.name, role, state: 'rejected', detail: str(r.dormant_reason).slice(0, 90) || 'registered but the service rejects it' }); continue; }
     const probe = r.service_id ? probes[r.service_id] : null;
@@ -217,4 +220,4 @@ async function maybePresent({ now = Date.now(), dispatch = null, deliver = null 
   } catch (e) { return { presented: false, reason: `error: ${e.message}` }; }
 }
 
-module.exports = { classifyItem, keyBlockers, buildPlan, fingerprint, compose, maybePresent, _WATCH, _AGGRESSIVE_ATTEMPTS, _MIN_INTERVAL_MS, _REAIR_MS };
+module.exports = { classifyItem, keyBlockers, buildPlan, fingerprint, compose, maybePresent, _WATCH, _DECLINED, _AGGRESSIVE_ATTEMPTS, _MIN_INTERVAL_MS, _REAIR_MS };
