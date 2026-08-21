@@ -113,6 +113,11 @@ ok(/row facts injected into the reply context/.test(main) && /composedUserMessag
   'the row facts ride the reply CONTEXT pre-generation (one voice) — the live p86 post-reply door never fired');
 ok(/from THESE FACTS ONLY/.test(main), 'the status reply is pinned to the row facts — never invented progress');
 ok(/deliverable_projects'\)\.list\(\{ openScopeOnly: true \}\)/.test(read('lib/gap_plan.js')), 'maybePresent feeds open-scope projects into the sheet');
+// ROOT A COMPLETENESS (continuity leg-A catch): a kept in-turn FILE delivery registers.
+ok(/in-turn file delivery registered/.test(main) && /require\('\.\/lib\/files'\)\.lastWrite\(\)/.test(main),
+  'a kept report-shaped order whose file landed in notes/ REGISTERS in the artifact registry');
+ok(/lastWrite\(\) \{ return \{ ts: _lastWriteTs, path: _lastWritePath \}; \}/.test(read('lib/files.js')) && (read('lib/files.js').match(/_lastWritePath = (?:abs|canon);/g) || []).length === 4,
+  'lib/files tracks the RESOLVED write path at all four write points (one-canonical redirects included)');
 
 console.log = _print;
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

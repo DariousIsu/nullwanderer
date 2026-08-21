@@ -17586,7 +17586,28 @@ function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
       if ((lastImageGenTs || 0) >= (turnStartTs || 0)) return true;
       return false;
     })();
-    if (kept) { console.log(`[intake] deliverable order delivered in-turn — no backstop booking (${order.deliverable})`); return; }
+    if (kept) {
+      // ROOT A COMPLETENESS (continuity suite leg A catch, 2026-08-21): the operator's in-turn
+      // FILE delivery ("draft the report on X" → the reply drafts + file-writes) satisfied the
+      // kept-check but bypassed the artifact registry entirely — the report existed with NO
+      // identity, invisible to the read-side and to update-in-place. A kept report-shaped order
+      // whose file landed in notes/ this turn REGISTERS: the registry records where the artifact
+      // ACTUALLY lives (the one-canonical fold may have redirected), and the project row links it.
+      try {
+        const _fw = require('./lib/files').lastWrite();
+        if (_fw && _fw.ts >= (turnStartTs || 0) && /[\\/]notes[\\/][^\\/]+\.md$/i.test(_fw.path || '')
+            && /report|brief|briefing|summary|write-?up|dossier|memo|document|one-?pager/i.test(String(order.deliverable || ''))) {
+          const _reg = require('./lib/artifact_registry');
+          const _r = _reg.resolveOrMint({ topic: order.topic || String(userText).slice(0, 120), kind: 'report' });
+          const _rel = 'notes/' + require('path').basename(_fw.path);
+          _reg.record({ slug: _r.slug, relPath: _rel, title: `Report — ${String(order.topic || '').slice(0, 80)}`, topic: order.topic || '' });
+          try { require('./lib/deliverable_projects').noteCompose({ topic: order.topic || '', artifactSlug: _r.slug }); } catch {}
+          console.log(`[artifact-registry] in-turn file delivery registered → ${_r.slug} (${_rel})`);
+        }
+      } catch (e) { console.error('[intake] in-turn delivery registration failed:', e.message); }
+      console.log(`[intake] deliverable order delivered in-turn — no backstop booking (${order.deliverable})`);
+      return;
+    }
     // her say already booked a promise this turn → the ledger is carrying it; don't double-book.
     try {
       const row = db.getDb().prepare(`SELECT COUNT(*) n FROM recheck_queue WHERE kind = 'promise' AND status = 'open' AND created_ts >= ?`).get(turnStartTs || 0);
