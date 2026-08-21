@@ -743,6 +743,14 @@ honest floor):**
   sheet — the already-queued held-source homecoming disease, one root, not a new defect. The
   cross-session KIND completes when that retrieval fix lands.
 
+**STABILITY-RECORD TRUE-UP (Lucas, 08-21 01:5x): the app runs as a CHILD of the Claude-harness
+process tree** — both of the evening's unintended app deaths (the ~20:58-adjacent one and the
+~01:50 one) were CLAUDE-HARNESS restarts tearing the child down (silent, no trace — parent-tree
+teardown), NOT program instability. Zoe's own stability sheet for the night: ZERO program-fault
+crashes; zero TDRs since the machine reboot. Standing arrangement by Lucas's choice: the harness
+holds the process through this testing phase (easy cycling); standalone launch comes at the next
+phase (~2 months out).
+
 ## 20. BLIND-WEEK CATCH #1 — THE COLLABORATION REGISTER (same night, boot_p72, `d057f71`)
 
 **The catch (Lucas's op-ed session, one session into the blind week — his diagnosis, confirmed
