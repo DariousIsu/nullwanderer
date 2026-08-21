@@ -813,6 +813,18 @@ further); (b) the ACK-THEN-ASYNC shape — the disambiguated turn promises the p
 trails past every window, with topical bleed en route ("Louisiana 811…"). Both → the queue with
 cure shapes; no more 3 AM regexes at this root.
 
+**Catch #4 — THE HOLLOW REPORT (08-21 morning, `35fe34d`, boot_p77):** "I need the anti china
+legislation report now" delivered in 21s a report composed from ONE irrelevant document (#16491,
+the NM anti-harassment policy) + Atlantic County padding — the BILLS AND SPONSORS entirely absent.
+Three stacked causes in buildReportFromHeld's gather: his spoken "anti china" (space) phrase-missed
+the corpus's "anti-China" (hyphen) → zero doc hits; the token fallback let 'legislation' noise in;
+and the notes cap of TWO dropped the sponsors sheet at rank three. Cures: a LIKE `_`-wildcard
+variant (separator-blind topic matching) · the notes cap 2→4 with the dropped tail LOGGED (a
+starved compose is never silent) · test-residue excluded from report material. **LIVE PROOF same
+hour**: the rebuild composed from 4 notes including the sheet — "Louisiana SB200 — Sen. Valarie
+Hodges (R-SD-13) sponsor, 35 co-sponsors" with per-claim sources, cross-state partisan analysis,
+zero padding, and `note DROPPED by the material cap: notes/atlantic_county_board.md` in the log.
+
 **THE BLIND WEEK IS ARMED (21:41, §5b's gate, per §18's recommendation).**
 `scripts/blind_week_report.js` — read-only on every store, out-of-process, start stamp in a FILE
 (data/blind_week_start.txt) so her stores carry zero probe marks. Nothing announced. It scores the
