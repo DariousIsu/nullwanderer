@@ -6036,7 +6036,15 @@ async function buildSplitFromOrder({ io, channel, sessionId, labels }) {
 
 async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) {
   const t = String(topic || '').trim();
-  const like = `%${t.replace(/[%_]/g, '')}%`;
+  // HYPHEN/SPACE NORMALIZATION (2026-08-21, the hollow anti-china report): his spoken "anti china"
+  // (space) phrase-missed a corpus that writes "anti-China" (hyphen) — the phrase LIKE found ZERO
+  // real docs and the report composed from token-search noise (#16491, the NM anti-harassment
+  // policy). Both separator variants are tried.
+  const _clean = t.replace(/[%_]/g, '');
+  const like = `%${_clean}%`;
+  // LIKE's `_` wildcard matches any ONE char per separator position, so a single alt pattern
+  // covers every space/hyphen mix ("anti-China legislation", "anti china legislation", …).
+  const likeAlt = `%${_clean.trim().split(/[\s-]+/).join('_')}%`;
   let rows = [];
   try {
     // Prefer REAL research material over chat transcripts: a "Conversation — …" doc that merely
@@ -6045,11 +6053,11 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
     // the report). Rank research/dossier docs first, then longest — thin stubs last.
     rows = db.getDb().prepare(
       `SELECT id, title, body FROM documents
-       WHERE (title LIKE ? OR body LIKE ?)
+       WHERE (title LIKE ? OR body LIKE ? OR title LIKE ? OR body LIKE ?)
          AND COALESCE(source,'') != 'news'
          AND COALESCE(title,'') NOT LIKE 'Conversation —%'
-       ORDER BY (title LIKE ?) DESC, LENGTH(COALESCE(body,'')) DESC LIMIT 8`
-    ).all(like, like, like);
+       ORDER BY (title LIKE ? OR title LIKE ?) DESC, LENGTH(COALESCE(body,'')) DESC LIMIT 8`
+    ).all(like, like, likeAlt, likeAlt, like, likeAlt);
   } catch (e) { console.error('[report-cmd] doc query failed:', e.message); }
   // TOKEN SEARCH (2026-08-08, the data-centers paper): a long topic as ONE LIKE pattern matches
   // nothing — "positive benefits of data centers to local communities and power grid
@@ -6082,12 +6090,15 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   let notesBlock = '';
   try {
     const notesDir = filesLib.resolvePath('notes');
-    const nhits = require('./lib/product_ledger').searchProducts({ db, query: t, notesDir, limit: 5 })
-      .filter((h) => h.kind === 'note' && !/(^|[\\/])report-/.test(String(h.path || '')));
+    const nhits = require('./lib/product_ledger').searchProducts({ db, query: t, notesDir, limit: 8 })
+      .filter((h) => h.kind === 'note' && !/(^|[\\/])report-/.test(String(h.path || '')) && !/(^|[\\/])_test_residue[\\/]/.test(String(h.path || '')));
     const used = [];
     const parts = [];
+    // Cap 2 → 4 (2026-08-21, the hollow anti-china report): the sponsors sheet — the corpus's
+    // richest artifact — ranked third and got DROPPED by the old two-note cap. The dropped tail
+    // logs so a starved compose is never silent.
     for (const h of nhits) {
-      if (parts.length >= 2) break;
+      if (parts.length >= 4) { console.log(`[report-cmd] note DROPPED by the material cap: ${h.path}`); continue; }
       try { const body = require('fs').readFileSync(filesLib.resolvePath(h.path), 'utf8'); if (body.trim().length > 80) { parts.push(`--- NOTE ${h.path} ---\n${body.slice(0, 14000)}`); used.push(h.path); } } catch {}
     }
     if (parts.length) { notesBlock = parts.join('\n\n'); console.log(`[report-cmd] ${parts.length} held NOTE deliverable(s) riding the material: ${used.join(', ')}`); }
