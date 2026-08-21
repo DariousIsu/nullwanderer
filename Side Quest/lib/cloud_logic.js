@@ -79,7 +79,14 @@ async function _complete(messages, { temperature = 0.2, num_predict = 400, model
       options: { temperature, top_p: 0.9, num_ctx: win.num_ctx, num_predict }
     });
     return { text: text || '', model };
-  } catch (e) { console.error('[cloud_logic] cloud call failed:', e.message); return null; }
+  } catch (e) {
+    // A quota DEFERRAL is governance, never a failure (need-65's decomposition, 2026-08-21: 93 of
+    // the week's 561 "autonomy failures" were the governor pacing correctly, logged at error level
+    // — so the self-watch minted breakage-needs from the budget system WORKING). Deferrals log as
+    // info on the [quota] lane; real failures keep the error channel.
+    if (e && (e.deferred || /^quota:/.test(String(e.message || '')))) { console.log(`[quota] cloud call deferred (governance, not failure): ${e.message}`); return null; }
+    console.error('[cloud_logic] cloud call failed:', e.message); return null;
+  }
 }
 
 // STREAMING counterpart to _complete — same endpoint/token resolution, tokens delivered as they
