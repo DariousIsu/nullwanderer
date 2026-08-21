@@ -12447,6 +12447,23 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     }
 
+    // P1 slice 2 — THE PROJECT STATUS DOOR: "where are we on X" reads the project ROW (spec,
+    // scope, canonical artifact + version), never re-runs the work and never guesses. Fires only
+    // when the subject resolves to a registered project; otherwise conversation is untouched.
+    if (!followupFired && !_artifactJudged && !_discoverAssignment) {
+      try {
+        const _dp = require('./lib/deliverable_projects');
+        const _sa = _dp.detectStatusAsk(userMessage);
+        const _sb = _sa ? _dp.statusBrief(_sa.subject) : null;
+        if (_sb) {
+          followupFired = true;
+          console.log(`[projects] status ask "${_sa.subject.slice(0, 60)}" → project "${_sb.slug}" — answering from the row`);
+          fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked where things stand on "${_sa.subject.slice(0, 80)}". Your durable PROJECT ROW says — answer from THESE FACTS ONLY, in your own voice, two or three sentences:\n${_sb.brief}\nName the status, the canonical artifact and when it last updated, and any open scope still to fold in. If scope is open, say what remains and that it's yours to finish — do NOT invent progress beyond these facts.]` })
+            .catch((e) => console.error('[projects] status followup failed:', e.message));
+        }
+      } catch (e) { console.error('[projects] status door failed (conversation proceeds):', e.message); }
+    }
+
     if (!followupFired && !_artifactJudged && !_discoverAssignment && !/^(0|false|off)$/i.test(String(process.env.ZOE_PRODUCT_LEDGER || '').trim())) {
       let _pask = null;
       try { _pask = require('./lib/product_ledger').detectAsk(userMessage); } catch {}

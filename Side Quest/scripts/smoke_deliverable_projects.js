@@ -39,8 +39,9 @@ ok(dp.bindOrder({ text: 'now add surveillance bills to the anti china report wit
 ok(dp.attachScope(b1.slug, 'surveillance bills', { now: 2100 }).ok, 'scope "surveillance bills" attaches');
 ok(dp.attachScope(b1.slug, 'per-state status table', { now: 2200 }).ok, 'a second scope item attaches');
 ok(dp.attachScope(b1.slug, 'Surveillance Bills', { now: 2300 }).existing === true, 'a case-variant re-attach is recognized, not duplicated');
-ok(dp.statusOf('the anti china report').openScope.length === 2, '"where are we on X" reads the row: 2 open scope items');
-ok(dp.completeScope(b1.slug, 'surveillance bills', { now: 2400 }).ok && dp.statusOf('anti china report').openScope.length === 1, 'completing a scope item closes exactly it');
+// (3 open: the day-2 bind AUTO-ATTACHED its novel-scope phrase + the two explicit attaches above)
+ok(dp.statusOf('the anti china report').openScope.length === 3, '"where are we on X" reads the row: 3 open scope items (incl. the auto-attached novel scope)');
+ok(dp.completeScope(b1.slug, 'surveillance bills', { now: 2400 }).ok && dp.statusOf('anti china report').openScope.length === 2, 'completing a scope item closes exactly it');
 
 // --- 4. the compose door links its artifact and stamps delivered-current ---
 // Day 1's compose registered the artifact (as the live door does); day 2's pursuit topic
@@ -64,7 +65,41 @@ ok(dp.findProject('') === null && dp.bindOrder({}) === null, 'empty inputs are i
 for (let i = 0; i < 40; i++) dp.bindOrder({ text: `hartfield brief follow-up number ${i} on the Hartfield Foundation`, topic: 'Hartfield Foundation', now: 5000 + i });
 ok(dp.get(b3.slug).spec.length <= dp.SPEC_CAP, `the spec is bounded at ${dp.SPEC_CAP} (oldest roll off)`);
 
-// --- 7. the wiring is pinned in main.js ---
+// --- 7. SLICE 2: novel scope auto-attaches on a kin bind; a pure re-order attaches nothing ---
+{
+  const p0 = dp.get(b1.slug).scope.length;
+  const nb = dp.bindOrder({ text: 'and add a per-state trend graph to the anti china report', topic: 'anti china report per-state trend graph', now: 6000 });
+  ok(!nb.created && nb.novel.length >= 1, 'a follow-up with NOVEL tokens binds and reports them');
+  ok(dp.get(b1.slug).scope.length === p0 + 1 && dp.get(b1.slug).scope.some((s) => /trend graph/.test(s.item) && s.status === 'open'), 'the novel sub-scope AUTO-ATTACHES as an open item');
+  const rb = dp.bindOrder({ text: 'and add a per-state trend graph to the anti china report', topic: 'anti china report per-state trend graph', now: 6100 });
+  ok(rb.novel.length === 0 && dp.get(b1.slug).scope.length === p0 + 1, 'a verbatim re-order carries nothing novel and attaches nothing');
+}
+
+// --- 8. SLICE 2: the status ask reads the row ---
+ok(dp.detectStatusAsk('where are we on the anti china report').subject === 'anti china report', 'detectStatusAsk: "where are we on X" → subject');
+ok(dp.detectStatusAsk("what's the status of the Hartfield brief").subject === 'Hartfield brief', 'detectStatusAsk: "what\'s the status of X" → subject');
+ok(dp.detectStatusAsk('any progress on the parish sheet?').subject === 'parish sheet', 'detectStatusAsk: "any progress on X?" → subject (trailing ? stripped)');
+ok(dp.detectStatusAsk('build the report on louisiana') === null, 'a build order is NOT a status ask');
+ok(dp.detectStatusAsk('I like the status quo of this design') === null || dp.statusBrief('status quo of this design') === null, 'a non-project subject never produces a brief (the door falls through)');
+{
+  const sb = dp.statusBrief('the anti china report');
+  ok(sb && sb.slug === b1.slug, 'statusBrief resolves the ask to the project');
+  ok(/PROJECT: /.test(sb.brief) && /CANONICAL ARTIFACT: notes\//.test(sb.brief) && /version 1/.test(sb.brief), 'the brief carries status + canonical artifact + version — row facts, nothing generated');
+  ok(/OPEN SCOPE \(still to fold in\):/.test(sb.brief) && /trend graph/.test(sb.brief), 'open scope items ride the brief');
+  ok(/SPEC: \d+ verbatim ask\(s\)/.test(sb.brief), 'the spec count + latest ask ride the brief');
+  ok(dp.statusBrief('the reno municipal roster') === null, 'an unknown subject briefs null');
+}
+
+// --- 9. SLICE 2: the gap plan lists projects with open scope ---
+{
+  const gp = require('../lib/gap_plan');
+  const sheet = gp.compose({ fillable: [], blockedItems: [], aggressive: [], blockedKeys: [], absenceOpen: 0, counts: { open: 0, fillable: 0, blocked: 0, aggressive: 0 }, now: 7000 }, { projects: dp.list({ openScopeOnly: true }) });
+  ok(/Ongoing deliverable projects with OPEN scope/.test(sheet) && /open item\(s\)/.test(sheet), 'the gap-plan sheet carries the open-scope project section');
+  const empty = gp.compose({ fillable: [], blockedItems: [], aggressive: [], blockedKeys: [], absenceOpen: 0, counts: { open: 0, fillable: 0, blocked: 0, aggressive: 0 }, now: 7000 }, { projects: [] });
+  ok(!/Ongoing deliverable projects/.test(empty), 'no open-scope projects → no section');
+}
+
+// --- 10. the wiring is pinned in main.js ---
 const main = read('main.js');
 ok(/deliverable_projects'\)\.bindOrder\(\{ text: String\(userText\)/.test(main), 'the intake order backstop BINDS every deliverable order to the spine');
 {
@@ -73,6 +108,9 @@ ok(/deliverable_projects'\)\.bindOrder\(\{ text: String\(userText\)/.test(main),
     'the bind runs BEFORE the kept/covered early-returns — kept orders are spec too');
 }
 ok(/deliverable_projects'\)\.noteCompose\(\{ topic: t, artifactSlug: slug \}\)/.test(main), 'the compose door links its landed artifact to the project');
+ok(/_dp\.detectStatusAsk\(userMessage\)/.test(main) && /_dp\.statusBrief\(_sa\.subject\)/.test(main), 'the status door detects the ask AND requires a project hit before firing');
+ok(/answer from THESE FACTS ONLY/.test(main), 'the status reply is pinned to the row facts — never invented progress');
+ok(/deliverable_projects'\)\.list\(\{ openScopeOnly: true \}\)/.test(read('lib/gap_plan.js')), 'maybePresent feeds open-scope projects into the sheet');
 
 console.log = _print;
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

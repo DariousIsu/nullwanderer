@@ -158,11 +158,21 @@ function chatLine(plan) {
   return `I've updated my gap plan — the full sheet is in my notes (gap_plan.md). Short version: ${bits.join(', and ')}. Ask me to walk through it, or give a go in plain words and I'll run it.`;
 }
 
-/** compose(plan, {userName}) → the FULL plan sheet (the workspace DOC body, not chat) — pure. */
-function compose(plan, { userName = 'Lucas' } = {}) {
+/** compose(plan, {userName, projects}) → the FULL plan sheet (the workspace DOC body, not chat) —
+ *  pure. `projects` = deliverable_projects.list({openScopeOnly:true}) rows (P1 slice 2): ongoing
+ *  deliverables with scope still to fold in ride the sheet so "what's outstanding" has ONE page. */
+function compose(plan, { userName = 'Lucas', projects = [] } = {}) {
   const L = [];
   const sub = (s, n = 80) => str(s).replace(/\s+/g, ' ').trim().slice(0, n);
   L.push(`Here's my standing gap plan — what I know I don't know, and what each gap needs. (${plan.counts.open} open items on the queue${plan.absenceOpen ? `; ${plan.absenceOpen} absence gap(s) cycling on their own timers` : ''}.)`);
+  if (projects.length) {
+    L.push(`\nOngoing deliverable projects with OPEN scope — mine to finish, listed so you can steer:`);
+    projects.slice(0, 6).forEach((p, i) => {
+      const open = (p.scope || []).filter((s) => s.status === 'open');
+      L.push(`${i + 1}. ${sub(p.title || p.slug, 70)} — ${open.length} open item(s): ${open.slice(0, 3).map((s) => `"${sub(s.item, 50)}"`).join('; ')}${open.length > 3 ? ` (+${open.length - 3} more)` : ''}`);
+    });
+    if (projects.length > 6) L.push(`(+${projects.length - 6} more projects with open scope.)`);
+  }
   if (plan.counts.fillable) {
     const next = plan.fillable.slice(0, 3).map((f) => `"${sub(f.subject, 60)}"`).join(', ');
     L.push(`\nWorking on my own — no action needed: ${plan.counts.fillable} item(s) my current tools can fill; the metabolism drains them around the clock.${next ? ` Next up: ${next}.` : ''}`);
@@ -236,7 +246,8 @@ async function maybePresent({ now = Date.now(), dispatch = null, deliver = null,
     const fp = fingerprint(plan);
     if (fp === db().getMeta('gapplan.fp') && now - last < _REAIR_MS) return { presented: false, reason: 'unchanged' };
 
-    try { if (typeof writeDoc === 'function') writeDoc(compose(plan)); } catch { /* the sheet is best-effort */ }
+    let _projects = []; try { _projects = require('./deliverable_projects').list({ openScopeOnly: true }); } catch { /* spine absent → section absent */ }
+    try { if (typeof writeDoc === 'function') writeDoc(compose(plan, { projects: _projects })); } catch { /* the sheet is best-effort */ }
     deliver(chatLine(plan));
     db().setMeta('gapplan.last_ts', String(now));
     db().setMeta('gapplan.fp', fp);

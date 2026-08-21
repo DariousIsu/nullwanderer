@@ -85,13 +85,23 @@ function bindOrder({ text, topic, kind = 'report', now = Date.now() } = {}) {
   const h = _handle();
   const hit = findProject(t) || (ask && ask !== t ? findProject(ask) : null);
   if (hit) {
+    // NOVEL SCOPE (slice 2): the follow-up's tokens the project has never seen — "and
+    // surveillance", "with sponsors" — attach as an OPEN scope item BEFORE the ask joins the
+    // spec (afterwards nothing would read as novel). A pure re-order carries nothing novel and
+    // attaches nothing. The scope item is the whole topic phrase — his words, greppable.
+    const known = new Set(reg.tokensOf(`${hit.title || ''} ${String(hit.slug).replace(/-/g, ' ')} ${hit.spec.map((s) => s.text).join(' ')}`));
+    const novel = reg.tokensOf(t).filter((w) => !known.has(w));
     const spec = hit.spec;
     if (ask && !spec.some((s) => s.text === ask)) spec.push({ ts: now, text: ask });
     while (spec.length > SPEC_CAP) spec.shift();
     h.prepare('UPDATE deliverable_projects SET spec_json = ?, updated_ts = ? WHERE slug = ?')
       .run(JSON.stringify(spec), now, hit.slug);
     console.log(`[projects] order binds to existing project "${hit.slug}" (kin ${hit.score.toFixed(2)}) — spec now ${spec.length} verbatim ask(s)`);
-    return { slug: hit.slug, created: false };
+    if (novel.length) {
+      attachScope(hit.slug, t.slice(0, 200), { now });
+      console.log(`[projects] novel scope (${novel.join(', ')}) → attached as an open item`);
+    }
+    return { slug: hit.slug, created: false, novel };
   }
   const r = reg.resolveOrMint({ topic: t, kind });
   const title = t.slice(0, 120);
@@ -150,10 +160,45 @@ function statusOf(text) {
   return { ...hit, openScope: hit.scope.filter((s) => s.status === 'open') };
 }
 
+// ── slice 2: the conversational read-side ───────────────────────────────────────────────────────
+// "Where are we on X" is a STATUS ask — it reads the project row, never re-runs the work and
+// never guesses. The detector is deliberately narrow (a status shape + a subject tail); the door
+// in main.js additionally requires statusOf() to HIT, so an unmatched subject falls through to
+// normal conversation untouched — zero false-positive blast radius.
+const _STATUS_ASK_RE = /\b(?:where (?:are we|do we stand|do things stand)|what(?:'|’)?s the status|status|any progress|how(?:'|’)?s it (?:coming|going))\b[^.?!]*?\b(?:on|of|with)\s+(.+?)\s*[.?!]?$/i;
+function detectStatusAsk(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 200) return null;
+  const m = t.match(_STATUS_ASK_RE);
+  if (!m || !m[1]) return null;
+  const subject = m[1].replace(/^(?:the|our|my|that)\s+/i, '').trim();
+  return subject.length >= 3 ? { subject } : null;
+}
+
+/** Grounded facts for the status reply — everything from the row + the registry, nothing
+ *  generated. Returns null when no project matches (the door falls through). */
+function statusBrief(text) {
+  const p = statusOf(text);
+  if (!p) return null;
+  const L = [];
+  L.push(`PROJECT: ${p.title || p.slug} (status: ${p.status})`);
+  if (p.artifact_slug) {
+    let art = null; try { art = reg.get(p.artifact_slug); } catch {}
+    if (art) L.push(`CANONICAL ARTIFACT: ${art.rel_path} — version ${art.version}, last updated ${new Date(art.updated_ts || 0).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET`);
+  } else {
+    L.push('CANONICAL ARTIFACT: none landed yet');
+  }
+  if (p.openScope.length) L.push(`OPEN SCOPE (still to fold in): ${p.openScope.map((s) => `"${s.item}"`).join('; ')}`);
+  else L.push('OPEN SCOPE: none — the artifact reflects the spec as ordered');
+  const lastAsk = p.spec.length ? p.spec[p.spec.length - 1] : null;
+  L.push(`SPEC: ${p.spec.length} verbatim ask(s) on record${lastAsk ? `; latest: "${String(lastAsk.text).slice(0, 140)}"` : ''}`);
+  return { slug: p.slug, brief: L.join('\n') };
+}
+
 function get(slug) { ensure(); return _parse(_handle().prepare('SELECT * FROM deliverable_projects WHERE slug = ?').get(slug)); }
 function list({ openScopeOnly = false } = {}) {
   const all = _rows().map(_parse);
   return openScopeOnly ? all.filter((p) => p.scope.some((s) => s.status === 'open')) : all;
 }
 
-module.exports = { ensure, bindOrder, attachScope, completeScope, noteCompose, statusOf, findProject, get, list, _setDb, SPEC_CAP };
+module.exports = { ensure, bindOrder, attachScope, completeScope, noteCompose, statusOf, findProject, detectStatusAsk, statusBrief, get, list, _setDb, SPEC_CAP, PROJECT_KIN_FLOOR };
