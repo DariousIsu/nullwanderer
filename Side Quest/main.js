@@ -2601,6 +2601,27 @@ app.whenReady().then(() => {
         await _surfaceOpenPromise();
         // Self-exploration share outbox → chat in a lull ("tell me about it as you go").
         await _surfaceExplorationShare();
+        // BUILD 3 (2026-08-21): the GAP-PLAN approval surface — Lucas's "why have we not filled the
+        // gaps or presented a plan for approval": one consolidated plan in chat when the picture
+        // changes (lib/gap_plan.js owns cadence + fingerprint; deterministic text, key names and
+        // commands must be exact — never a cloud paraphrase). Lull-gated like every unprompted door.
+        try {
+          if (currentSessionId && !_conversationActive()) {
+            const _gpSid = currentSessionId;
+            const gp = await require('./lib/gap_plan').maybePresent({
+              dispatch: (tag, o) => echoSuitLib.dispatch(tag, o),
+              deliver: (text) => {
+                const row = db.insertTurn({ sessionId: _gpSid, speaker: 'ai_said', content: text, model: 'gap-plan', unprompted: 1 });
+                try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+                try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: text }); } catch {}
+                try { require('./lib/blackboard').append({ source: 'gap-plan', kind: 'utterance', refTable: 'turns', refId: row.id, content: text }); } catch {}
+                return row;
+              },
+            });
+            if (gp.presented) console.log(`[gap-plan] plan presented (${gp.reason})`);
+            else if (!/^(cadence|unchanged|nothing-needs-action)$/.test(gp.reason)) console.log(`[gap-plan] no plan: ${gp.reason}`);
+          }
+        } catch (e) { console.error('[gap-plan] surface failed:', e.message); }
         // M9.4 — THE TREND LINE (2026-08-08): one snapshot per day of the open-gap inventory, so
         // "the backlog must DECLINE week over week" is a measurement, not a hope. Read the series
         // back via meta keys metabolism.trend.YYYY-MM-DD.

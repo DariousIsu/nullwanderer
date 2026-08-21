@@ -588,6 +588,9 @@ class EchoSuit {
     const _TMO = (Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0) ? opts.timeoutMs : _TMO_DEFAULT;
     try {
       _res = await _raceTimeout(this._maybeMemoized(tag, opts), _TMO, _toName);
+      // BUILD 0 (2026-08-21): an EMPTY federated web_search falls back to her own browser search
+      // lane (_webSearchFloor below). Reassigns _res so route_obs records what the caller ACTUALLY got.
+      _res = await _webSearchFloor(tag, _res);
       return _res;
     } catch (e) {
       _res = { ok: false, isError: true, text: String((e && e.message) || e) };
@@ -1859,6 +1862,46 @@ function normalizeNeighbors(kd) {
 // test seam: inject a fake connected suit
 function _setLiveForTest(suit) { _live = suit; }
 
+// ── BUILD 0 (2026-08-21): the browser-lane search floor ─────────────────────────────────────────
+// The engine's federated web_search is key-gated (exa/jina/tavily/brave) and its zero-key floors
+// can die on this box (DDG null-routed the IP; raw Bing can meet a JS wall) — so background and
+// agent searches routinely came back EMPTY while her "full human interface access through google
+// and ddg" (Lucas, 08-21) sat idle. This floor makes an empty federation fall back to HER OWN
+// stealth search lane (lib/web_search → search_lane's isolated headless Chrome, raw-Bing fallback
+// inside). Fail-soft in every direction: a non-web_search tag, a non-empty result, an error text,
+// unparseable JSON, or a lane miss all return the original result untouched. The synthesized
+// result mirrors the engine's web_search shape (rows carry source:'browser-lane') so every caller
+// parses it unchanged. The lane call is bounded (25s) so a hung browser can't stall a dispatch
+// that already beat the tool timeout. deps.search is a test seam.
+const _FLOOR_LANE_TIMEOUT_MS = 25000;
+async function _webSearchFloor(tag, res, deps = {}) {
+  try {
+    if (!tag || tag.kind !== 'do' || tag.name !== 'web_search') return res;
+    const q = String((tag.args && (tag.args.query || tag.args.q)) || '').trim();
+    if (!q) return res;
+    if (!res || !res.text || res.isError) return res;   // transport failure is its own signal — don't mask it
+    let parsed = null;
+    try { parsed = JSON.parse(res.text); } catch { return res; }
+    if (parsed && Array.isArray(parsed.results) && parsed.results.length) return res;   // the federation answered
+    const searchFn = deps.search || require('./web_search').search;
+    const sr = await Promise.race([
+      searchFn(q),
+      new Promise((resolve) => { const t = setTimeout(resolve, _FLOOR_LANE_TIMEOUT_MS); if (t.unref) t.unref(); }),
+    ]).catch(() => null);
+    const results = (sr && Array.isArray(sr.results) ? sr.results : [])
+      .map((r) => ({ title: r.title || '', url: r.url || '', snippet: r.snippet || null, source: 'browser-lane' }))
+      .filter((r) => r.url);
+    if (!results.length) return res;   // the lane also found nothing — the honest empty stands
+    console.log(`[echo-suit] web_search federation empty (providers unkeyed/dead) → browser-lane floor served ${results.length} result(s) for "${q.slice(0, 60)}"`);
+    return { ok: true, isError: false, text: JSON.stringify({
+      query: q, results,
+      providers_used: ['browser-lane'],
+      providers_skipped: (parsed && parsed.providers_skipped) || { federation: 'empty' },
+      note: 'engine federation returned nothing; served by the app browser search lane',
+    }) };
+  } catch { return res; }
+}
+
 // Generic dispatch to ANY Echo tool via the live suit — the graph-builder needs kg_neighborhood /
 // propose_entity / propose_relation / web_search / the data tools, not just the wrapped recalls.
 // Returns the raw normalized {ok,text,isError} (null when Echo isn't connected). Fail-soft.
@@ -1933,7 +1976,7 @@ function routeCacheStats() {
 }
 
 module.exports = {
-  routeCacheStats, _raceTimeout, lastContactWriteTs, lastGatherTs, lastExternalGatherTs, markGather,
+  routeCacheStats, _raceTimeout, lastContactWriteTs, lastGatherTs, lastExternalGatherTs, markGather, _webSearchFloor,
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
   placeholderComplaint, sanitizeFtsQuery, prepareDoArgs, recipeMisrouteHint, templateArgs,
   setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates, _salienceDominant
