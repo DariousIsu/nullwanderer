@@ -825,6 +825,46 @@ hour**: the rebuild composed from 4 notes including the sheet — "Louisiana SB2
 Hodges (R-SD-13) sponsor, 35 co-sponsors" with per-claim sources, cross-state partisan analysis,
 zero padding, and `note DROPPED by the material cap: notes/atlantic_county_board.md` in the log.
 
+## 22. DAY-2 ARC (08-21 morning→noon, boots p77-p79) — gaps, doctrine, the max-out, need-65
+
+**The gap machinery diagnosed (Lucas's three whys) + the relevance wave (`e35b53c`, armed p78):**
+unrelated projects rode reports because (a) civicDigestFor matched topic tokens by SUBSTRING
+(atl-ANTI-c county ← "anti") — now token-equality, smoke-locked; (b) the token-search fallback let
+one-token noise in (#16491 via 'legislation') — now a ≥2-token relevance gate with logged drops;
+(c) the composer listed off-topic docs AS gaps — now ordered to ignore them entirely. Gaps
+persisted because the queue held 140 open questions aged 12 days (52 ever done): the roster lane
+outranked them (report-born gaps now priority 8 + corpus tag), the pass-cap throttles, the search
+keys sat unset, and the daemon outages killed a week of throughput. No escalation organ exists —
+**Build 3 (the gap-plan approval surface) + Build 0 (background search falls back to her browser
+lanes; Lucas's own point: the keys were never the real blocker) remain PENDING his go.** Keys:
+values in hand; the CLI = `"Desktop\NX ECHO\nx-echo\.venv\Scripts\nx-echo.exe" keys set <NAME>`
+(hidden prompt; the bare `nx-echo` recipe was broken — never on PATH). I do not handle the values.
+
+**THE LOCAL-FLOOR DOCTRINE (Lucas): local LLM inference = ABSOLUTE EXTREME LAST RESORT.** The
+max-out incident: a transient cloud blip loaded the 7.6GB local 12b (the front slot is the
+designed outage floor, cloud-first since 08-11) beside Echo's 8GB commit and ComfyUI's 12.7GB
+pinned reservation → RAM ~99%, pagefile at 100% activity. Cures, all live: **the breaker**
+(`9e30689`, both local paths — a blip skips the tick; only a sustained ≥10min outage engages
+local; smoke-locked both directions) · **Echo bounced** (8GB → 139MB) · **ComfyUI runs
+`--disable-pinned-memory`** (`4b588bd`, verified on the live process). Machine: 18.7/31.1GB.
+Store-location true-up: the fleet lives at **Desktop\Core** (custom OLLAMA_MODELS) — the 08-20
+"empty store" read was a wrong-daemon artifact.
+
+**NEED-65 DECOMPOSED (her own monologue proposed the experiment; I ran it):** 561 autonomy
+failures/7d = 93 quota-deferrals-logged-as-errors (**fixed `be77159`** — deferral = governance,
+never failure; the self-watch was minting breakage-needs from the budget system working) + 133
+Echo tool-contract validation bugs (run_dedup_adjudication / propose_entity / create_contact) +
+37 dedup timeouts >90s + 72 cured-era daemon residue + 31 doc-extract DOMMatrix. Her monologue:
+substantially grounded, one confabulated thread (the "Lucas keeps retrying" claim), and a correct
+position — the rumination layer earning its keep.
+
+**✅ T-5 + F31 LIVE PROOF LANDED (08-21 10:56, organic):** `[meet] T-5 auto-join → "Weather
+Sovereignty 6-month Program Kick-off"` → `[gmeet] joining: joined` — she entered the real meeting
+through the canvas funnel four minutes early, unprompted. Residual: the intro chat-post locator
+failed 3× (queued). **NEW CATCH — voice AMBIENT PICKUP**: his dictation/nearby speech (12:21,
+12:29) landed as her user turns; "disregard error pick up" confirmed — the half-duplex gate needs
+an addressed-to-her guard (queued; also pollutes blind-week turn counts).
+
 **THE BLIND WEEK IS ARMED (21:41, §5b's gate, per §18's recommendation).**
 `scripts/blind_week_report.js` — read-only on every store, out-of-process, start stamp in a FILE
 (data/blind_week_start.txt) so her stores carry zero probe marks. Nothing announced. It scores the
