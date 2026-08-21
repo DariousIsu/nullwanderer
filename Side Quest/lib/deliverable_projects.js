@@ -160,6 +160,43 @@ function statusOf(text) {
   return { ...hit, openScope: hit.scope.filter((s) => s.status === 'open') };
 }
 
+// ── slice 2b: the SCOPE-ADD order (continuity leg-B catch, 2026-08-21) ─────────────────────────
+// "(also) fold Y into the X report" / "add Y to the X report" / "the X report should also cover
+// Y" is an order about an EXISTING deliverable — it names the project AND the new content, but
+// carries no produce-verb, so intake's deliverable-order detector (the only bind seam) missed
+// every variant and the spine never heard the scope. Live: she acked "folding it in now" while
+// the row stayed empty. The detector is narrow (deliverable noun required, both halves ≥3 chars)
+// and the wiring additionally requires findProject() to HIT — unmatched subjects fall through.
+const _DELIV_NOUN = 'report|brief|briefing|dossier|write-?up|writeup|summary|memo|document|one-?pager';
+const _SCOPE_ADD_RES = [
+  // fold/add/include/put/work Y into|to|in the X <noun>
+  new RegExp(`\\b(?:also\\s+)?(?:fold|add|include|put|work|weave|roll)\\s+(.+?)\\s+(?:into|to|in)\\s+(?:the|our|my)\\s+(.+?)\\s+(?:${_DELIV_NOUN})\\b`, 'i'),
+  // the X <noun> should (also) cover|include|get Y
+  new RegExp(`\\b(?:the|our|my)\\s+(.+?)\\s+(?:${_DELIV_NOUN})\\s+should\\s+(?:also\\s+)?(?:cover|include|get|carry|have)\\s+(.+?)\\s*[.?!]?$`, 'i'),
+];
+function detectScopeAdd(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 300) return null;
+  let m = t.match(_SCOPE_ADD_RES[0]);
+  if (m) { const item = m[1].trim(), target = m[2].trim(); if (item.length >= 3 && target.length >= 3) return { item, target }; }
+  m = t.match(_SCOPE_ADD_RES[1]);
+  if (m) { const target = m[1].trim(), item = m[2].trim(); if (item.length >= 3 && target.length >= 3) return { item, target }; }
+  return null;
+}
+
+/** The full scope-add flow: resolve the target to its project, attach the item as open scope,
+ *  and append the verbatim ask to the spec. No project → null (the caller falls through). */
+function applyScopeAdd({ text, now = Date.now() } = {}) {
+  const sa = detectScopeAdd(text);
+  if (!sa) return null;
+  const proj = findProject(sa.target);
+  if (!proj) return null;
+  bindOrder({ text, topic: sa.target, now });          // verbatim ask joins the spec (kin-binds, never mints here)
+  attachScope(proj.slug, sa.item, { now });
+  console.log(`[projects] scope-add order → project "${proj.slug}": ${sa.item.slice(0, 80)}`);
+  return { slug: proj.slug, item: sa.item };
+}
+
 // ── slice 2: the conversational read-side ───────────────────────────────────────────────────────
 // "Where are we on X" is a STATUS ask — it reads the project row, never re-runs the work and
 // never guesses. The detector is deliberately narrow (a status shape + a subject tail); the door
@@ -201,4 +238,4 @@ function list({ openScopeOnly = false } = {}) {
   return openScopeOnly ? all.filter((p) => p.scope.some((s) => s.status === 'open')) : all;
 }
 
-module.exports = { ensure, bindOrder, attachScope, completeScope, noteCompose, statusOf, findProject, detectStatusAsk, statusBrief, get, list, _setDb, SPEC_CAP, PROJECT_KIN_FLOOR };
+module.exports = { ensure, bindOrder, attachScope, completeScope, noteCompose, statusOf, findProject, detectStatusAsk, statusBrief, detectScopeAdd, applyScopeAdd, get, list, _setDb, SPEC_CAP, PROJECT_KIN_FLOOR };

@@ -75,6 +75,22 @@ ok(dp.get(b3.slug).spec.length <= dp.SPEC_CAP, `the spec is bounded at ${dp.SPEC
   ok(rb.novel.length === 0 && dp.get(b1.slug).scope.length === p0 + 1, 'a verbatim re-order carries nothing novel and attaches nothing');
 }
 
+// --- 7b. SLICE 2b: the SCOPE-ADD order (continuity leg-B catch) ---
+{
+  ok(dp.detectScopeAdd('also fold a grid reliability section into the louisiana energy policy report') !== null, 'detectScopeAdd: "also fold Y into the X report" (the live leg-B miss)');
+  ok(dp.detectScopeAdd('add a funding-sources breakdown to the anti china report') !== null, 'detectScopeAdd: "add Y to the X report"');
+  const s3 = dp.detectScopeAdd('the hartfield brief should also cover donor overlap');
+  ok(s3 && /donor overlap/.test(s3.item) && /hartfield/.test(s3.target), 'detectScopeAdd: "the X brief should also cover Y" (target + item both extracted)');
+  ok(dp.detectScopeAdd('add a contact to the CRM') === null, 'no deliverable noun → not a scope-add');
+  ok(dp.detectScopeAdd('what does the report say') === null, 'a question is not a scope-add');
+  const sBefore = dp.get(b1.slug).scope.length, spBefore = dp.get(b1.slug).spec.length;
+  const ap = dp.applyScopeAdd({ text: 'also fold a per-bill fiscal note into the anti china report', now: 8000 });
+  ok(ap && ap.slug === b1.slug, 'applyScopeAdd resolves the target to the project');
+  ok(dp.get(b1.slug).scope.length === sBefore + 1 && dp.get(b1.slug).scope.some((s) => /fiscal note/.test(s.item) && s.status === 'open'), 'the item attaches as OPEN scope');
+  ok(dp.get(b1.slug).spec.length === spBefore + 1, 'the verbatim scope-add ask joins the spec');
+  ok(dp.applyScopeAdd({ text: 'also fold maps into the reno municipal roster report', now: 8100 }) === null, 'an unknown target falls through (nothing invented)');
+}
+
 // --- 8. SLICE 2: the status ask reads the row ---
 ok(dp.detectStatusAsk('where are we on the anti china report').subject === 'anti china report', 'detectStatusAsk: "where are we on X" → subject');
 ok(dp.detectStatusAsk("what's the status of the Hartfield brief").subject === 'Hartfield brief', 'detectStatusAsk: "what\'s the status of X" → subject');
@@ -113,6 +129,7 @@ ok(/row facts injected into the reply context/.test(main) && /composedUserMessag
   'the row facts ride the reply CONTEXT pre-generation (one voice) — the live p86 post-reply door never fired');
 ok(/from THESE FACTS ONLY/.test(main), 'the status reply is pinned to the row facts — never invented progress');
 ok(/deliverable_projects'\)\.list\(\{ openScopeOnly: true \}\)/.test(read('lib/gap_plan.js')), 'maybePresent feeds open-scope projects into the sheet');
+ok(/deliverable_projects'\)\.applyScopeAdd\(\{ text: String\(userText\)/.test(main), 'a non-order turn runs the SCOPE-ADD net before falling through (leg-B catch)');
 // ROOT A COMPLETENESS (continuity leg-A catch): a kept in-turn FILE delivery registers.
 ok(/in-turn file delivery registered/.test(main) && /require\('\.\/lib\/files'\)\.lastWrite\(\)/.test(main),
   'a kept report-shaped order whose file landed in notes/ REGISTERS in the artifact registry');

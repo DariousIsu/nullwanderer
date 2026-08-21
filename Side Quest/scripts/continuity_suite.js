@@ -72,6 +72,14 @@ const bootId = () => { try { const l = fs.readdirSync('.').filter((f) => /^boot_
 
 // ── the legs ────────────────────────────────────────────────────────────────────────────────────
 (async () => {
+  // --redo: re-drive the LAST recorded leg after a defect it caught was cured (the failed
+  // record moves to state.redone — the audit trail keeps every attempt, honest).
+  if (args.redo && state.legs.length) {
+    const popped = state.legs.pop();
+    (state.redone = state.redone || []).push(popped);
+    console.log(`(redo: leg ${popped.leg}'s ${popped.fail}-fail record moved to the audit trail — re-driving it)`);
+    save();
+  }
   const leg = ['A', 'B', 'C'][state.legs.length];
   if (!leg) { console.log(`run "${state.run}" is COMPLETE — verdict already rendered. Start a new --run for a fresh pass.`); process.exit(0); }
   if (leg === 'A') {

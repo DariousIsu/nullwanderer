@@ -17574,7 +17574,14 @@ function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
   try {
     const ic = require('./lib/intake_contract');
     const order = ic.detectDeliverableOrder(userText);
-    if (!order) return;
+    if (!order) {
+      // P1 SCOPE-ADD (continuity leg-B catch): "(also) fold Y into the X report" is an order
+      // about an EXISTING deliverable — no produce-verb, so it is not a deliverable order, but
+      // the spine must hear it: the item attaches as open scope and the verbatim ask joins the
+      // spec. No matching project → quiet fall-through. Fail-soft.
+      try { require('./lib/deliverable_projects').applyScopeAdd({ text: String(userText).slice(0, 300) }); } catch (e) { console.error('[projects] scope-add failed:', e.message); }
+      return;
+    }
     // P1 PROJECT SPINE: every deliverable ORDER binds to its project (kin → existing row gains
     // the verbatim ask; new subject → mints, slug shared with the artifact registry) — kept or
     // not, the spec is HIS words and the spine keeps them. Fail-soft; booking below is unchanged.
