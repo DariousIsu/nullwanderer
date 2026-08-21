@@ -47,6 +47,12 @@ ok(/IN THIS REPLY/.test(d) && /Do NOT create or edit any artifact/.test(d) && /l
   ok(gb && new RegExp(`doc#${doc.id}`).test(gb) && /Entergy/.test(gb), 'grounding pulls the session-named doc with a real excerpt');
   ok(gb && /think WITH this/.test(gb) && gb.length < 2600, 'the block is framed for thinking and bounded');
   ok(cl.groundingBlock({ sessionId: 999999991, text: 'zzqx unmatchable terms qqzz' }) === null, 'nothing matched → null (fail-empty, no fabricated grounding)');
+
+  // ── recall mode: held-source homecoming (the run-8 residual) ──────────────────────────────────
+  const sheet = db.insertDocument({ title: 'Anti-China 2026 sponsors sheet', body: 'LA SB200 co-sponsors, Senate: Allain, Barrow, Cathey, Selders (D-14, died 2026-07-07), Stine, Womack. The Selders co-sponsorship predates his death.', source: 'smoke-sheet', origin: null });
+  const rb = cl.groundingBlock({ sessionId: 0, text: 'whose name is on the SB200 co-sponsorship we tracked down?', mode: 'recall' });
+  ok(rb && new RegExp(`doc#${sheet.id}`).test(rb) && /Selders/.test(rb), 'RUN-8 RESIDUAL: the SB200 question reaches the held sheet by FTS (Selders in the excerpt)');
+  ok(rb && /Answer FROM these documents/.test(rb) && /NEVER fill the gap/.test(rb), 'the recall frame orders answer-from-held or honest-miss');
 }
 
 // ── wiring: the four gates exist in main.js ─────────────────────────────────────────────────────

@@ -8194,6 +8194,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       console.log(`[collab] collaboration register — thinking-together turn (artifacts ${collabArtifactsOk ? 'allowed by explicit destination' : 'suppressed'}${gb ? ', grounding pulled' : ', no grounding matched'})`);
     }
   } catch (e) { console.error('[collab] register door failed (turn proceeds ungated):', e.message); }
+  // HELD-SOURCE HOMECOMING (the run-8 residual — the reply path never touched the documents
+  // store, so answers living in held docs missed honestly: SB200/Selders). A records/shared-past
+  // question pulls the matching held documents INTO the turn; the injection rides _replyEvidence,
+  // so the anti-fab pairing check sees the same record the answer cites.
+  try {
+    if (!collabTurn && /\b(?:do we (?:have|hold)|what do we (?:have|hold|know)|per (?:your|our|the) records|in (?:your|our|the) records|what did we (?:land on|verify|conclude|find|establish|pin down)|which [a-z]+ did (?:we|our)|who did we|remind me\b[^.?!]{0,30}\b(?:what|which|who)\b|pull from what we'?ve verified|what'?s (?:the latest|our (?:picture|read|file)) on|we (?:verified|tracked down|pinned down|landed on)\b)/i.test(userMessage)) {
+      const gb2 = require('./lib/collab').groundingBlock({ sessionId, text: userMessage, mode: 'recall' });
+      if (gb2) { composedUserMessage = `${composedUserMessage}\n\n${gb2}`; console.log('[recall-reach] held-source context injected'); }
+      else console.log('[recall-reach] records-shaped question — no held documents matched');
+    }
+  } catch (e) { console.error('[recall-reach] door failed (turn proceeds):', e.message); }
   // E1 RESUME CONTEXT (the 171s affirm-continue pathology): "ok back to it" / "where were we"
   // re-enters the MEASURED thread — his last substantive ask + her last point, snapshotted after
   // every substantive exchange — instead of re-deriving the whole context from scratch.

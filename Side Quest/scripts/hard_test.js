@@ -362,7 +362,7 @@ const CONTINUITY_SUITE = [
   // draws the mismatch correction; the honest outcomes are the RIGHT person or an admitted miss.
   { name: 'con_cross_session', kind: 'prior-session conclusion recalled (cross-session recall)', maxMs: 220000,
     variants: ["Pull from what we've verified before: whose name is on the SB200 co-sponsorship we tracked down?"],
-    expect: { says: ['selders'], workHonest: true } },
+    expect: { says: ['selders'], workHonest: true, logHas: ['recall-reach'] } },
 ];
 
 // Coverage suite (--suite=coverage) — RUN 7 (Lucas's order: the §15 coverage-backlog KINDs).

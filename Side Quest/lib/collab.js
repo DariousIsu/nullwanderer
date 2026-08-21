@@ -35,22 +35,28 @@ function directive() {
   return '[COLLABORATION REGISTER: this turn is THINKING TOGETHER, not a work order. Your ideas, reactions, and connections go IN THIS REPLY — concrete, specific, grounded in the held material below (cite it by name), and positioned so he can bounce them back. Give real substance: angles, framings, connections between his documents, disagreements. Do NOT create or edit any artifact, do NOT say "let me get that going" or "it\'s on your canvas", do NOT convert this into a deliverable or book work — unless he explicitly named a destination this turn. Conversation IS the deliverable.]';
 }
 
-const _STOP = new Set(['this', 'that', 'with', 'have', 'from', 'into', 'what', 'your', 'them', 'then', 'they', 'were', 'when', 'need', 'some', 'ideas', 'idea', 'help', 'come', 'think', 'through', 'about', 'more', 'here', 'there', 'want', 'going', 'just', 'like', 'work', 'working', 'feedback', 'thoughts', 'brainstorm', 'brainstorming']);
+const _STOP = new Set(['this', 'that', 'with', 'have', 'from', 'into', 'what', 'your', 'them', 'then', 'they', 'were', 'when', 'need', 'some', 'ideas', 'idea', 'help', 'come', 'think', 'through', 'about', 'more', 'here', 'there', 'want', 'going', 'just', 'like', 'work', 'working', 'feedback', 'thoughts', 'brainstorm', 'brainstorming', 'whose', 'name', 'which', 'down', 'know', 'tell', 'does', 'been', 'verified', 'records', 'record', 'tracked', 'pinned', 'landed', 'remind', 'pull', 'latest', 'hold', 'give']);
 function _terms(text, max = 6) {
   const out = [];
   for (const w of String(text || '').toLowerCase().match(/[a-z0-9]{4,}/g) || []) {
-    if (_STOP.has(w) || out.includes(w)) continue;
+    if (_STOP.has(w) || /^\d+$/.test(w) || out.includes(w)) continue;
     out.push(w);
-    if (out.length >= max) break;
   }
-  return out;
+  // Distinctiveness order: digit-bearing tokens (bill numbers) first, then longer words — so the
+  // bounded LIKE fallback's top-two picks are the question's real subject, not its scaffold.
+  out.sort((a, b) => (/\d/.test(b) ? 1 : 0) - (/\d/.test(a) ? 1 : 0) || b.length - a.length);
+  return out.slice(0, max);
 }
 
-/** The accreted-context pull for a collab turn. Bounded (~2200 chars), read-only, fail-empty.
+/** The accreted-context pull. Bounded (~2200 chars), read-only, fail-empty.
  *  Sources, in priority order:
  *   1. docs NAMED in this session's recent turns ("doc#17787" — the live thread's document);
- *   2. top held documents matching the turn's + the thread-ask's terms (documents_fts, bm25). */
-function groundingBlock({ sessionId, text = '' } = {}) {
+ *   2. top held documents matching the turn's + the thread-ask's terms (documents_fts, bm25).
+ *  mode 'collab' (default) frames for thinking-together; mode 'recall' (held-source homecoming,
+ *  the run-8 residual) frames for ANSWERING FROM the held documents — and because the injection
+ *  rides the composed message, it also becomes the anti-fab verifier's evidence: the same pull
+ *  that enables the right answer grounds the gate that checks it. */
+function groundingBlock({ sessionId, text = '', mode = 'collab' } = {}) {
   try {
     const d = db();
     const parts = [];
@@ -75,14 +81,28 @@ function groundingBlock({ sessionId, text = '' } = {}) {
     try { const ts = require('./answer_cache').threadState({ sessionId }); if (ts) ask = ts.ask || ''; } catch {}
     const terms = _terms(`${text} ${ask}`, 6);
     if (terms.length >= 2 && parts.length < 3) {
+      let rows = [];
       try {
-        const rows = d.getDb().prepare(
+        rows = d.getDb().prepare(
           `SELECT d2.id, d2.title, d2.body FROM documents_fts f JOIN documents d2 ON d2.id = f.rowid WHERE documents_fts MATCH ? ORDER BY bm25(documents_fts) LIMIT 4`
         ).all(terms.map((t) => `${t}*`).join(' OR '));
-        for (const r of rows) addDoc(r, 'held, matches this thread');
-      } catch {}
+      } catch { rows = []; }
+      if (!rows.length) {
+        // The fts index backfills on a tick — a JUST-ingested doc (or a fresh store) is not in it
+        // yet. Bounded LIKE fallback on the two strongest terms (heldContext's proven degradation).
+        try {
+          const [a, b] = terms;
+          rows = d.getDb().prepare(
+            `SELECT id, title, body FROM documents WHERE (title LIKE ? OR body LIKE ?)${b ? ' AND (title LIKE ? OR body LIKE ?)' : ''} ORDER BY id DESC LIMIT 4`
+          ).all(...(b ? [`%${a}%`, `%${a}%`, `%${b}%`, `%${b}%`] : [`%${a}%`, `%${a}%`]));
+        } catch { rows = []; }
+      }
+      for (const r of rows) addDoc(r, 'held, matches this thread');
     }
     if (!parts.length) return null;
+    if (mode === 'recall') {
+      return `[HELD-SOURCE CONTEXT (measured — these held documents match this question):\n${parts.join('\n')}\nAnswer FROM these documents and cite them by doc#. If they do not contain the answer, say so honestly — NEVER fill the gap from training data or from other recent subjects.]`;
+    }
     return `[COLLAB GROUNDING (measured, from the held stores — think WITH this, cite it by name):\n${parts.join('\n')}]`;
   } catch { return null; }
 }
