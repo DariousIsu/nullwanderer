@@ -50,7 +50,10 @@ const WRITE_RE = /^(propose_|ingest_|save_|update_|merge_|delete_|set_|add_|link
 // READ — clearly non-mutating lookups/retrievals. The allowlist that the auto loop is permitted to use.
 // db_query is Echo's SELECT-ONLY database query (parse-time rejects INSERT/UPDATE/DELETE/DDL/PRAGMA/
 // multi-statement) — a first-class READ surface over the whole Echo DB, safe on the auto loop.
-const READ_RE = /^(search|get_|list_|find_|describe_|quick_lookup|lookup|kg_|query_|db_query|graph_overview|stats\b|summarize_|audit_|cite_|score_|verify_|wayback|web_search|web_fetch|web_extract|web_resolve|academic_search|arxiv_search|recent_|fetch_feed|sql_cache_recall|knowledge_neighborhood|bill_lookup|bill_facets|contact_facets|represent_|civic_coverage|get_sources_for|propublica_nonprofit_(search|get)|fec_|usaspending_|edgar_|courtlistener_|legiscan_|fr_(search|get|agency)|ecfr_|gdelt_|openfda_|clinicaltrials_|ncbi_|mediawiki_|loc_(gov|names|subjects|authority)|gov_(search|get|list|recent|portals)|socrata_|ckan_|odata_|sdmx_|wb_|un_population|census_|geonames_|nws_|noaa_|usgs_|opensanctions_|ofac_|nvd_|cert_|hunter_find_email)/i;
+// secrets_check is the F.2 read-only key PROBE (never accepts, writes, or returns a key value) —
+// the gap-plan surface probes suspect keys on the autonomous tick; unclassified it fell to 'write'
+// and the tier gate silently starved the probe (live 08-21: the Exa mis-paste escaped the plan).
+const READ_RE = /^(search|get_|list_|find_|describe_|quick_lookup|lookup|kg_|query_|db_query|graph_overview|stats\b|summarize_|audit_|cite_|score_|verify_|secrets_check|wayback|web_search|web_fetch|web_extract|web_resolve|academic_search|arxiv_search|recent_|fetch_feed|sql_cache_recall|knowledge_neighborhood|bill_lookup|bill_facets|contact_facets|represent_|civic_coverage|get_sources_for|propublica_nonprofit_(search|get)|fec_|usaspending_|edgar_|courtlistener_|legiscan_|fr_(search|get|agency)|ecfr_|gdelt_|openfda_|clinicaltrials_|ncbi_|mediawiki_|loc_(gov|names|subjects|authority)|gov_(search|get|list|recent|portals)|socrata_|ckan_|odata_|sdmx_|wb_|un_population|census_|geonames_|nws_|noaa_|usgs_|opensanctions_|ofac_|nvd_|cert_|hunter_find_email)/i;
 
 // READ, part 2 — EXTERNAL PUBLIC-DATA APIs, by family.
 //

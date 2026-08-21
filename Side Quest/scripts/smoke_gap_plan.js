@@ -150,6 +150,8 @@ const DAY = 86400000;
   ok(/_conversationActive\(\)\)\s*\{\s*\n\s*const _gpSid/.test(mainSrc) || /if \(currentSessionId && !_conversationActive\(\)\)/.test(mainSrc),
     'the gap-plan surface is lull-gated');
   ok(/_res = await _webSearchFloor\(tag, _res\)/.test(suitSrc), 'echo_suit dispatch routes every result through the floor');
+  ok(require('../lib/echo_tier').classifyTool('secrets_check') === 'read',
+    'secrets_check classifies READ — the tier gate must never starve the key probe (live 08-21 escape)');
 
   console.log(`\nsmoke_gap_plan: ${pass} passed, ${fail} failed`);
   try { db.getDb().close(); fs.unlinkSync(process.env.SQ_DB_PATH); } catch {}
