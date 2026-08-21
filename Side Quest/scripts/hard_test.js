@@ -344,6 +344,15 @@ const CONTINUITY_SUITE = [
                'Circling back to that recap — where does it stand?'],
     expect: {},
     expectVariant: [ { booked: true, workHonest: true }, {}, { says: ['recap'], workHonest: true } ] },
+  // THE COLLABORATION REGISTER (blind-week catch #1) — a brainstorm/feedback thread STAYS
+  // conversation: ideas in the reply, zero artifacts, zero bookings, the held material cited.
+  // Turn 2 is the verbatim live miss; the notSays family is the deflection vocabulary she used.
+  { name: 'con_collab', kind: 'thinking-together stays conversation (no artifact deflection)', maxMs: 180000,
+    variants: ["What's your read on the strongest opening angle for the data-centers op-ed — polling first or agreements first?",
+               "We're brainstorming here, I need ideas"],
+    expect: { logHas: ['\\[collab\\] collaboration register'], workHonest: true,
+              notSays: ['let me get that going', 'on your canvas', 'added to your', "it's on the canvas", 'i’ll get that going'] },
+    expectVariant: [ {}, { logHas: ['\\[collab\\] collaboration register'] } ] },
   // The cross-session seam — run-2b's OPEN miss (embedding-backlog suspect), now a standing KIND:
   // a conclusion landed in a PRIOR session must be reachable from this one. Ground truth: the
   // Hartfield addendum (notes/report-hartfield-and-green-south.md, delivered run 2) placed the

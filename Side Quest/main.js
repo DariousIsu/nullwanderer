@@ -8178,6 +8178,22 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     }
   } catch (e) { console.error('[file-ingest] user-order door failed:', e.message); }
+  // THE COLLABORATION REGISTER (blind-week catch #1): a thinking-together turn — brainstorm,
+  // feedback, "I need ideas" — pins the conversational register: ideas IN the reply, artifacts and
+  // bookings SUPPRESSED (unless the turn names a destination), and the accreted held material
+  // pulled in as grounding. The order machinery had swallowed this register whole.
+  let collabTurn = false, collabArtifactsOk = true;
+  try {
+    const _cl = require('./lib/collab');
+    collabTurn = _cl.isCollabTurn(userMessage);
+    if (collabTurn) {
+      collabArtifactsOk = _cl.artifactsAllowed(userMessage);
+      composedUserMessage = `${composedUserMessage}\n\n${_cl.directive()}`;
+      const gb = _cl.groundingBlock({ sessionId, text: userMessage });
+      if (gb) composedUserMessage = `${composedUserMessage}\n\n${gb}`;
+      console.log(`[collab] collaboration register — thinking-together turn (artifacts ${collabArtifactsOk ? 'allowed by explicit destination' : 'suppressed'}${gb ? ', grounding pulled' : ', no grounding matched'})`);
+    }
+  } catch (e) { console.error('[collab] register door failed (turn proceeds ungated):', e.message); }
   // E1 RESUME CONTEXT (the 171s affirm-continue pathology): "ok back to it" / "where were we"
   // re-enters the MEASURED thread — his last substantive ask + her last point, snapshotted after
   // every substantive exchange — instead of re-deriving the whole context from scratch.
@@ -8787,7 +8803,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // data now lands that field pending + queued rather than fetched THIS turn — honest, and the metabolism
   // fills it; the pre-fix operator run fetched live but leaked the narration this removes. Live-data edits
   // through the edit-lane operator fallback are a separate follow-up if that trade ever bites.
-  const _canvasOwns = !!(_artifactVerdictEarly && (_artifactVerdictEarly.intent === 'canvas_create' || _artifactVerdictEarly.intent === 'canvas_edit'));
+  const _canvasOwns = !!(_artifactVerdictEarly && (_artifactVerdictEarly.intent === 'canvas_create' || _artifactVerdictEarly.intent === 'canvas_edit'))
+    && (!collabTurn || collabArtifactsOk);   // a collab turn without a named destination never hands the canvas the turn
   // TIER-2 escalation: on a CONFLICT (signals imply ≥2 routes) resolveTurnRoute asks lib/route_judge (a
   // bounded model call) to arbitrate; the clear majority stays on the cheap cascade. Gated by turn.router
   // (master) + turn.router.escalate (default on) so it's reversible; fail-open to the cheap decision.
@@ -8799,6 +8816,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     hasDirectedFocus: _hasDirectedFocusR, isAssignment: _isDirectedTaskR, isContactsQuery: _contactsQ.isQuery
   }, { text: userMessage, classify: require('./lib/route_judge').classifyRoute, escalate: routerOn && _escalateRoute });
   if (routerOn) console.log(`[turn-router] route=${turnRoute.route} (${turnRoute.reason}, conf ${turnRoute.confidence})`);
+  // The collaboration register outranks the cascade: a thinking-together turn is CONVERSE whatever
+  // the task/lookup signals said (the blind-week misroutes: brainstorm→task, feedback→lookup).
+  if (collabTurn && turnRoute.route !== 'converse') {
+    console.log(`[collab] route override → converse (was ${turnRoute.route})`);
+    turnRoute = { route: 'converse', reason: 'collab-register', confidence: 0.95 };
+  }
   const routeAllows = (r) => !routerOn || turnRoute.route === r;
   const routeAllowsAny = (...rs) => !routerOn || rs.includes(turnRoute.route);
 
@@ -11583,7 +11606,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // deliverable-target imperative that produced no artifact and no booking this turn gets booked
   // on the promise ledger (the same SPINE 3 pursuit that already delivers or honest-misses), so an
   // order can no longer die behind a confident ack. Logs "[intake] BOOKED" for the live harness.
-  try { _bookUserOrderBackstop(userMessage, { sessionId, turnStartTs: (userTurnRow && userTurnRow.ts) || 0 }); } catch {}
+  // A collab turn never books — thinking-together is not a debt (the register's third gate).
+  try { if (!collabTurn || collabArtifactsOk) _bookUserOrderBackstop(userMessage, { sessionId, turnStartTs: (userTurnRow && userTurnRow.ts) || 0 }); } catch {}
 
   try {
     // Include the corrected say ONLY when we rewrote it, so the renderer replaces the
@@ -12191,6 +12215,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             const _pullupSuppressed = verdict.intent === 'pullup' && !!operatorAnswer
               && !(() => { try { return require('./lib/delivery').claimsNonDelivery(operatorAnswer); } catch { return false; } })();
             if (_pullupSuppressed) { followupFired = true; console.log('[artifact-router] pull-up suppressed — operator gave a substantive answer this turn (single voice)'); }
+            // COLLAB GATE (the blind-week hijack: "I need ideas" → canvas_edit on the hottest doc):
+            // a collab turn with no named destination never reaches an artifact operation. The
+            // deictic rewrite of a thinking turn into a doc edit was the register's worst leak.
+            if (collabTurn && !collabArtifactsOk && (verdict.intent === 'canvas_edit' || verdict.intent === 'canvas_create')) {
+              console.log(`[collab] artifact-router ${verdict.intent} SUPPRESSED — thinking-together turn, no destination named`);
+              verdict = { intent: 'none' };
+            }
             if (verdict.intent !== 'none' && !_pullupSuppressed) {
               followupFired = true;
               console.log(`[artifact-router] intent=${verdict.intent}${verdict.subject ? ` subject="${verdict.subject}"` : ''}${verdict.instruction ? ` instruction="${verdict.instruction.slice(0, 60)}"` : ''}`);

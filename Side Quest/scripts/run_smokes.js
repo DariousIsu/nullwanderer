@@ -587,6 +587,10 @@ const smokes = [
   // F31: meeting URLs never open in her dedicated browser — web.open reroutes meet/teams meeting
   // links to the canvas funnel (all roads → canvas by construction; landing pages stay browsing).
   'smoke_meet_reroute.js',
+  // The collaboration register (blind-week catch #1): brainstorm/feedback turns are THINKING
+  // TOGETHER — converse route pinned, artifacts + bookings suppressed absent a named destination,
+  // held material pulled as conversational grounding.
+  'smoke_collab.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks
