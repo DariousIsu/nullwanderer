@@ -1891,6 +1891,7 @@ async function _webSearchLanePrimary(tag, deps = {}) {
       .map((r) => ({ title: r.title || '', url: r.url || '', snippet: r.snippet || null, source: 'browser-lane' }))
       .filter((r) => r.url);
     if (!results.length) return null;
+    console.log(`[echo-suit] web_search → stealth lane PRIMARY served ${results.length} result(s) for "${q.slice(0, 60)}"`);
     return { ok: true, isError: false, text: JSON.stringify({
       query: q, results,
       providers_used: ['browser-lane'],
