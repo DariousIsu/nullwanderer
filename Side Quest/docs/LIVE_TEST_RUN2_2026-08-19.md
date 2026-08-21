@@ -743,6 +743,39 @@ honest floor):**
   sheet — the already-queued held-source homecoming disease, one root, not a new defect. The
   cross-session KIND completes when that retrieval fix lands.
 
+## 20. BLIND-WEEK CATCH #1 — THE COLLABORATION REGISTER (same night, boot_p72, `d057f71`)
+
+**The catch (Lucas's op-ed session, one session into the blind week — his diagnosis, confirmed
+mechanically):** he asked for feedback, suggestions, and expanded brainstorming — never an order —
+and she converted every substantive turn into deliverable production. Route logs: brainstorm →
+`task (assignment)`, feedback → `lookup`; the one correct `converse` got HIJACKED by the
+artifact-router into a canvas edit on the hottest doc (which was HARNESS RESIDUE: run-8's booked
+media-stops order had re-delivered into his live session at 21:49 — promise #1885's machinery
+completing; the ledger is now clean, zero open). The honest calibration the catch forced: the
+campaign hardened the ORDER machinery until it swallowed the THINKING-PARTNER register — and the
+continuity battery tested reference continuity, never collaborative depth. The blind week found
+its blind spot in one session.
+
+**The cure (lib/collab.js + four main.js gates, smoke 25/25, gate 565):**
+- `isCollabTurn` — the thinking-together net (his verbatim turns locked as regressions:
+  "We're brainstorming here, I need ideas" / "help me come up with some ideas" + the family).
+- Four gates when it fires: route PINNED to converse over the cascade · the artifact-router's
+  deictic hijack suppressed · canvas ownership withdrawn · the order-booking backstop stands down
+  (a collab turn is never a debt). The carve-out: a named destination in the same turn keeps
+  production allowed.
+- The say-side register pin: ideas IN the reply; "let me get that going" / "it's on your canvas"
+  named as banned deflections. Conversation IS the deliverable.
+- **The grounding**: the live thread's own doc (by the doc# her replies name) + the top held
+  documents matching turn+thread terms (documents_fts, bm25) excerpted into the context — "the
+  living database at her fingertips" pointed at CONVERSATION, not just Q&A.
+
+**Re-drive (boot_p72): the KIND held 14/14** — turn 1 answered with a real position engaging the
+draft's content ("Polling first, but with a tighter tether — the current draft asks the reader to
+trust that the agreements answer the fears…"); the verbatim live miss stayed in the room, zero
+deflections, zero artifacts. Honest bound: the register and grounding are proven; idea QUALITY is
+the model's craft — the blind week's remaining sessions grade that. `con_collab` = a standing
+continuity KIND.
+
 **THE BLIND WEEK IS ARMED (21:41, §5b's gate, per §18's recommendation).**
 `scripts/blind_week_report.js` — read-only on every store, out-of-process, start stamp in a FILE
 (data/blind_week_start.txt) so her stores carry zero probe marks. Nothing announced. It scores the
