@@ -17412,9 +17412,36 @@ function _bookDeliveryPromises(say, { sessionId, turnStartTs = 0 } = {}) {
     if (kept) return;   // a deliverable landed this turn → don't book
     const rq = require('./lib/recheck_queue');
     const dueTs = Date.now() + PROMISE_GRACE_MS;   // a grace window: she may still deliver before we surface it
+    // IN-FLIGHT ATTACH (2026-08-21, the mis-bound #2047 audit): a follow-up say narrating work
+    // ALREADY carried by an open promise in this session must not mint a second booking — the
+    // duplicate's pursuit closed as "delivered" on an off-topic artifact while the real debt died.
+    const openPromises = (() => {
+      try {
+        return db.getDb().prepare(`SELECT id, detail FROM recheck_queue WHERE kind = 'promise' AND status = 'open' LIMIT 20`)
+          .all().map((r) => { try { return { id: r.id, ...(JSON.parse(r.detail) || {}) }; } catch { return { id: r.id }; } });
+      } catch { return []; }
+    })();
     for (const p of promises) {
+      const carried = openPromises.find((o) => o.sessionId === sessionId && String(o.deliverable || '').toLowerCase() === String(p.deliverable || '').toLowerCase());
+      if (carried) { console.log(`[delivery] follow-up say rides open promise#${carried.id} (${p.deliverable}) — no new booking`); continue; }
       const subject = dlv.bookingSubject(p);
-      const topic = dlv.deliverySubjectFrom(p.sentence, p.deliverable);   // the TOPIC to compose, captured while context is fresh
+      let topic = dlv.deliverySubjectFrom(p.sentence, p.deliverable);   // the TOPIC to compose, captured while context is fresh
+      // TOPIC FLOOR: her own narration/destination is not a topic. Re-derive from the thread's real
+      // ask; if nothing viable exists, DON'T book — a wrong artifact is worse than a miss (F27).
+      if (!dlv.topicViable(topic)) {
+        let fromAsk = '';
+        try {
+          const ts = require('./lib/answer_cache').threadState({ sessionId });
+          if (ts && ts.ask) fromAsk = dlv.deliverySubjectFrom(ts.ask, p.deliverable) || String(ts.ask).slice(0, 120);
+        } catch { /* no thread state → stand down below */ }
+        if (dlv.topicViable(fromAsk)) {
+          console.log(`[delivery] promise topic was say-narration — re-derived from the thread's ask: "${fromAsk.slice(0, 70)}"`);
+          topic = fromAsk;
+        } else {
+          console.log(`[delivery] promise topic unbookable (say-narration, no viable thread ask) — NOT booked: "${String(topic).slice(0, 70)}"`);
+          continue;
+        }
+      }
       const r = rq.enqueue({ kind: 'promise', subject, detail: { say: p.sentence, deliverable: p.deliverable, topic, sessionId }, priority: 6, dueTs, bornFrom: 'delivery-binding' });
       if (r && r.ok && !r.existing) console.log(`[delivery] booked unkept promise → recheck#${r.id}: ${p.deliverable}`);
     }

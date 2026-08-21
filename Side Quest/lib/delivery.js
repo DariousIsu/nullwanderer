@@ -72,6 +72,12 @@ function deliverySubjectFrom(say, deliverable) {
   // keep only the promise clause — drop a "… and park/save/send it" tail (that's the destination, not the topic)
   s = s.split(/\b(?:and (?:then )?(?:park|save|drop|put|stick|store|send|email|share|file)\b)|,\s*then\b|;\s/i)[0].trim();
   s = s.replace(_PROMISE_LEAD, ' ');
+  // DESTINATION ≠ TOPIC (2026-08-21, the mis-bound #2047 audit): "I'll build the report state by
+  // state ON YOUR CANVAS, and once all seven are in…" bound "your canvas, and once all seven…" as
+  // the report TOPIC — a destination clause plus her own narration tail, which the pursuit then
+  // "delivered" as an off-topic artifact under a garbage slug. Strip destination prepositional
+  // phrases BEFORE the topic-clause match so "on the canvas" can never be read as an about-clause.
+  s = s.replace(/\b(?:on|to|in|at)\s+(?:your|my|the|her)\s+(?:canvas|desktop|workspace|screen|chat|notes?)\b/gi, ' ');
   // an explicit topic clause wins: "report ON the Hartfield Foundation", "roster FOR Louisiana"
   const on = s.match(/\b(?:on|about|regarding|covering|of|for)\s+(.+)$/i);
   let subj = on && on[1] ? on[1] : s;
@@ -87,6 +93,21 @@ function deliverySubjectFrom(say, deliverable) {
     .replace(/[\s,]+(?:on|about|of|for|and|with)$/i, '')
     .trim();
   return subj.slice(0, 120);
+}
+
+// Can this derived topic actually STEER a composition? (2026-08-21, the mis-bound #2047 audit.)
+// A topic that is a clause of her own narration ("…once all seven are in, I ll add per-state
+// status breakdown…") composes an off-topic artifact under a garbage slug — worse than not
+// booking at all (F27: a wrong artifact is worse than a miss). Pure; the booking path re-derives
+// from the thread's real ask when this says no, and stands down when nothing viable exists.
+const _TOPIC_NARRATION_RE = /\b(?:i|we)\s*(?:'|’)?(?:ll|m|re|ve)\b|\bonce (?:all|that|those|these|it)\b|\b(?:i|we) (?:will|am|are|was|were|can|going to)\b/i;
+const _TOPIC_DEST_LEAD_RE = /^(?:your|my|the|her)\s+(?:canvas|desktop|workspace|screen|chat|notes?)\b/i;
+function topicViable(topic) {
+  const t = String(topic || '').trim();
+  if (t.length < 4) return false;
+  if (_TOPIC_DEST_LEAD_RE.test(t)) return false;      // a destination is where it lands, not what it's about
+  if (_TOPIC_NARRATION_RE.test(t)) return false;      // her own forward narration leaked into the topic
+  return true;
 }
 
 // ── F27: edit-output sanity (pure) ───────────────────────────────────────────────────────────────────
@@ -255,4 +276,4 @@ function resultBearingDeliveries(turns, max = 3) {
   return out;
 }
 
-module.exports = { detectPromise, bookingSubject, deliverySubjectFrom, editSanity, holdsDigest, isAckOrphan, claimsNonDelivery, isOwedClaim, resultBearingDeliveries, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD, _EXPLORE_LEAD, _PLAN_CHAIN, _RESULT_STRONG, _NONDELIVERY_RE, _OWED_RE };
+module.exports = { detectPromise, bookingSubject, deliverySubjectFrom, topicViable, editSanity, holdsDigest, isAckOrphan, claimsNonDelivery, isOwedClaim, resultBearingDeliveries, _PROMISE_LEAD, _OFFER_RE, _DELIVER_VERB, _DELIVERABLE_OBJ, _DONE_RE, _ACK_LEAD, _RESULT_PAYLOAD, _EXPLORE_LEAD, _PLAN_CHAIN, _RESULT_STRONG, _NONDELIVERY_RE, _OWED_RE };

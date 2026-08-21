@@ -64,6 +64,21 @@ ok(!has('I prefer working from primary sources.'), 'FP: a stated preference → 
   ok(/louisiana/i.test(subj('Let me compile the Louisiana parish roster.')), 'subject: "Louisiana parish roster" → the state modifier survives (feeds resolveState)');
   ok(!/\b(report|roster|file|spreadsheet)\b/i.test(subj('I\'ll draft the report on donor trends')), 'subject: the deliverable NOUN is stripped, leaving the topic (donor trends)');
   ok(d.deliverySubjectFrom('', 'report') === '', 'subject: empty say → empty (SAFE: the builder honest-misses on an unknown topic, never fabricates)');
+
+  // ── DESTINATION ≠ TOPIC + the topic floor (2026-08-21, the mis-bound #2047 audit) ──────────────
+  // The live escape: "I'll build the report state by state on your canvas, and once all seven are
+  // in, I'll add the per-state status breakdown…" booked topic = "your canvas, and once all seven
+  // are in, I ll add per-state…" → an off-topic 11KB artifact delivered under a garbage slug.
+  const live = "I'll build the report state by state on your canvas, and once all seven are in, I'll add the per-state status breakdown table and pull enough session-by-session";
+  const liveTopic = d.deliverySubjectFrom(live, 'report');
+  ok(!/canvas/i.test(liveTopic), 'the live #2047 sentence: "on your canvas" is never read as the topic (destination stripped)');
+  ok(/Hartfield Foundation/.test(d.deliverySubjectFrom("I'll drop the report on the Hartfield Foundation on your canvas", 'report')),
+    'a real "report ON X" topic survives the destination strip ("…on your canvas" tail gone, X kept)');
+  ok(!d.topicViable('your canvas, and once all seven are in, I ll add per-state status breakdown'), 'topic floor: the live garbage topic is NOT viable');
+  ok(!d.topicViable("once all seven are in, I'll add the table"), 'topic floor: her forward narration is NOT viable');
+  ok(!d.topicViable(''), 'topic floor: empty is NOT viable');
+  ok(d.topicViable('anti-China legislation in Arizona, Texas, Florida, Tennessee, Louisiana, Iowa'), 'topic floor: a real subject IS viable');
+  ok(d.topicViable('Hartfield Foundation'), 'topic floor: a plain entity topic IS viable');
 }
 
 // ── the backstop's OUTWARD classifier: a send/hand-off is HIS call (announced "ready to send", never auto-

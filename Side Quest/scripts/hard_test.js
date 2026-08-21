@@ -96,7 +96,7 @@ const INV = {
   // ── run-3 invariants (plan of record: docs/LIVE_TEST_RUN2_2026-08-19.md §5 retest rule) ─────────
   // An order never dies behind a confident ack: it is either BOOKED into the ledger or delivered
   // in-turn (the two honest outcomes of C1/C2). The markers are the live intake/delivery log lines.
-  booked: (_x, r) => { const ok = /\[intake\] BOOKED promise#|\[delivery\] booked unkept promise|order already covered by a promise booked this turn|deliverable order delivered in-turn/.test(joinLines(r)); return { ok, detail: ok ? 'order booked or delivered in-turn' : 'order left UNBOOKED and UNDELIVERED (died behind the ack)' }; },
+  booked: (_x, r) => { const ok = /\[intake\] BOOKED promise#|\[delivery\] booked unkept promise|follow-up say rides open promise#|order already covered by a promise booked this turn|deliverable order delivered in-turn/.test(joinLines(r)); return { ok, detail: ok ? 'order booked or delivered in-turn' : 'order left UNBOOKED and UNDELIVERED (died behind the ack)' }; },
   // B1: a spawned agent's output is consumed through the followup path, never left dangling.
   consumed: (_x, r) => { const ok = /\[agent-consume\] run \d+ .* consumed/.test(joinLines(r)); return { ok, detail: ok ? 'agent output consumed' : 'no [agent-consume] in this turn window' }; },
   // The promised artifact actually LANDED: a canvas block, a real file write, or a ledger close.
