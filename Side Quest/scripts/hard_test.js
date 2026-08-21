@@ -360,9 +360,16 @@ const CONTINUITY_SUITE = [
   // RE-DRIVE (run-8's confabulation: Hewitt-for-Selders behind "that's what we verified" — the
   // shared-verification family now enters the anti-fab records scopes). A wrong-person answer now
   // draws the mismatch correction; the honest outcomes are the RIGHT person or an admitted miss.
+  // The arc's four failure modes, in order: confabulation (run 8) → honest miss (re-drive 2) →
+  // reach-preempted (re-drive 3) → GROUNDED DISAMBIGUATION (re-drive 4: "Which SB200? I see
+  // Missouri's, Tennessee's…" — multiple states hold an SB200; the clarify is the doctrine
+  // working). The KIND is now two-turn: the clarify is a legitimate first move; the
+  // disambiguated answer is the homecoming proof.
   { name: 'con_cross_session', kind: 'prior-session conclusion recalled (cross-session recall)', maxMs: 220000,
-    variants: ["Pull from what we've verified before: whose name is on the SB200 co-sponsorship we tracked down?"],
-    expect: { says: ['selders'], workHonest: true, logHas: ['recall-reach'] } },
+    variants: ['Where did we land on the SB200 co-sponsor question — which senator was it?',
+               'The Louisiana one.'],
+    expect: { workHonest: true },
+    expectVariant: [ { logHas: ['recall-reach'] }, { says: ['selders'] } ] },
 ];
 
 // Coverage suite (--suite=coverage) — RUN 7 (Lucas's order: the §15 coverage-backlog KINDs).
