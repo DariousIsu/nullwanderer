@@ -17,7 +17,7 @@
  */
 const db = () => require('./db');
 
-const _COLLAB_RE = /\b(?:brainstorm(?:ing)?|spitball(?:ing)?|riff(?:ing)? (?:on|with)|kick(?:ing)? (?:some )?ideas? around|bounce (?:some )?(?:ideas?|this|thoughts?) (?:off|around|back)|workshop(?:ping)? (?:this|the|it|my)|i need ideas?|give me (?:some )?ideas?|help me (?:come up with|think through|figure out|shape|sharpen)|what do you think|what are your thoughts|your (?:thoughts|read|take) on|thoughts on (?:this|the|my|that)|feedback on|give me feedback|weigh in on|talk (?:this|it|me) through|think (?:this|it) through with me|let'?s think|sanity.check (?:this|my)|poke holes in|react to (?:this|my))\b/i;
+const _COLLAB_RE = /\b(?:brainstorm(?:ing)?|spitball(?:ing)?|riff(?:ing)? (?:on|with)|kick(?:ing)? (?:some )?ideas? around|bounce (?:some )?(?:ideas?|this|thoughts?) (?:off|around|back)|workshop(?:ping)? (?:this|the|it|my)|i need ideas?|give me (?:some )?ideas?|help me (?:come up with|think through|figure out|shape|sharpen)|what do you think|what are your thoughts|your (?:thoughts|read|take) on|thoughts on (?:this|the|my|that)|feedback on|give me feedback|weigh in on|talk (?:this|it|me) through|think (?:this|it) through with me|let'?s think|sanity.check (?:this|my)|poke holes in|react to (?:this|my)|do you remember|you remember\b|remember (?:when|that|what|how|the)\b|remember(?=\s*\?)|ring (?:a|any) bells?|you know what i'?m talking about)\b/i;
 function isCollabTurn(text) {
   const t = String(text || '');
   if (t.trim().length < 8) return false;

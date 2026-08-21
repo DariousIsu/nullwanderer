@@ -19,6 +19,9 @@ ok(cl.isCollabTurn('your read on the Entergy angle?'), 'your-read-on is collab')
 ok(cl.isCollabTurn("let's think through the closer together"), 'let\'s-think is collab');
 ok(cl.isCollabTurn('poke holes in this argument for me'), 'poke-holes is collab');
 ok(cl.isCollabTurn('bounce some ideas around with me on the framing'), 'bounce-ideas is collab');
+ok(cl.isCollabTurn('Hey Zo, a couple of days ago we started getting together a list of all the anti china bills, remember?'), 'LIVE REGRESSION (blind-week #2): a memory-check gets RECOGNITION, never a placement offer');
+ok(cl.isCollabTurn('do you remember the Hartfield work?'), 'do-you-remember is a recognition turn');
+ok(!cl.isCollabTurn('remember to send the sheet tomorrow'), 'a reminder-order is NOT a memory check');
 
 // ── the net stays out of the order road ─────────────────────────────────────────────────────────
 ok(!cl.isCollabTurn('Post a short two-item overview on the canvas.'), 'a placement order is NOT collab');
