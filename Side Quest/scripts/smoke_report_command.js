@@ -41,7 +41,10 @@ ok(rc.cleanTopic('all United States Senators') === 'United States Senators', 'cl
   ok(/async function buildReportFromHeld/.test(m), 'the compose-from-held handler exists');
   ok(/FROM documents/.test(m) && /NOT LIKE 'Conversation —%'/.test(m), 'it composes from HELD documents and excludes chat transcripts');
   ok(/hold NO research documents about it/.test(m) && /Do NOT invent a document/.test(m), 'holding nothing → says so honestly, never fabricates');
-  ok(/promiseArtifactEmit\(\{ slug: `report-/.test(m) && /notes\/report-\$\{slug\}\.md/.test(m), 'the composed report lands on the CANVAS and is saved to notes/');
+  // Since the artifact registry (Phase 0, doc-plan #5) the slug is the PROJECT's — resolved via
+  // resolveOrMint (kin topics update the canonical file in place) with a legacy fallback shape.
+  ok(/promiseArtifactEmit\(\{ slug, title: `Report/.test(m) && /resolveOrMint\(\{ topic: t, kind: 'report' \}/.test(m) && /rel = `notes\/\$\{slug\}\.md`/.test(m),
+    'the composed report lands on the CANVAS and is saved to notes/ under its PROJECT slug (registry-resolved)');
   ok(/ZOE_REPORT_CMD/.test(m), 'the net has a kill switch');
   // the runaway revalidator cap (same session)
   ok(/ZOE_MAX_PLAN_REV/.test(m) && (m.match(/revalidation CAPPED at rev/g) || []).length === 2, 'plan revalidation is capped on BOTH lanes (the rev-102 chat flood)');

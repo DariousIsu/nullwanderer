@@ -597,6 +597,12 @@ const smokes = [
   // Directed legislative acquisition (2026-08-21, "why would a direct user request get queued"):
   // a report order naming states + legislation fetches its own LegiScan fuel inline, never drips.
   'smoke_legis_acquire.js',
+  // ── PHASE 0 of the document-production plan (2026-08-21, docs/DOCUMENT_PRODUCTION_PLAN_2026-08-21.md):
+  // the reply lane is single-voice (failure #7 — two reply streams zipped character-by-character into
+  // one bubble) and documents have identity (failure #5 — the artifact registry: kin topics resolve to
+  // ONE project, composes update the canonical file in place, asks open the canonical current version).
+  'smoke_reply_lane.js',
+  'smoke_artifact_registry.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks

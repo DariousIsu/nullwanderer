@@ -79,6 +79,15 @@ ok(!has('I prefer working from primary sources.'), 'FP: a stated preference → 
   ok(!d.topicViable(''), 'topic floor: empty is NOT viable');
   ok(d.topicViable('anti-China legislation in Arizona, Texas, Florida, Tennessee, Louisiana, Iowa'), 'topic floor: a real subject IS viable');
   ok(d.topicViable('Hartfield Foundation'), 'topic floor: a plain entity topic IS viable');
+  // PHASE 0 NOUN-FLOOR (doc-plan failure #8): live booking #2099 booked the topic "give you as
+  // soon as" — pure filler that slid past the narration net because no I/we survived the strip.
+  // A topic must keep at least one content token or the booking stands down.
+  ok(!d.topicViable('give you as soon as'), 'noun floor: the live #2099 filler topic is NOT viable');
+  ok(!d.topicViable('right away for you now'), 'noun floor: promise-verb residue + time filler is NOT viable');
+  ok(!d.topicViable('that in just a minute'), 'noun floor: deictic + time filler is NOT viable');
+  ok(d.topicViable('the weather tomorrow in Tallahassee'), 'noun floor: a lowercase-led real subject with a content noun survives');
+  ok(d.topicViable('surveillance bills with sponsors'), 'noun floor: an all-lowercase real subject survives (lax researchable — no proper-noun demand)');
+  ok(!d.topicViable('https://legiscan.com/LA'), 'noun floor: a bare URL is a fetch, not a topic (researchable family)');
 }
 
 // ── the backstop's OUTWARD classifier: a send/hand-off is HIS call (announced "ready to send", never auto-

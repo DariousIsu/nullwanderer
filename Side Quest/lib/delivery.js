@@ -102,11 +102,29 @@ function deliverySubjectFrom(say, deliverable) {
 // from the thread's real ask when this says no, and stands down when nothing viable exists.
 const _TOPIC_NARRATION_RE = /\b(?:i|we)\s*(?:'|’)?(?:ll|m|re|ve)\b|\bonce (?:all|that|those|these|it)\b|\b(?:i|we) (?:will|am|are|was|were|can|going to)\b/i;
 const _TOPIC_DEST_LEAD_RE = /^(?:your|my|the|her)\s+(?:canvas|desktop|workspace|screen|chat|notes?)\b/i;
+// PHASE 0 NOUN-FLOOR (doc-plan failure #8, live booking #2099): the topic "give you as soon as"
+// passed the narration net — no I/we survived the lead-strip — yet it is ALL function words and
+// promise-verb residue; nothing in it can steer a composition. A viable topic must keep at least
+// one CONTENT token once function words, promise-verb residue, and time-filler are removed.
+// The junk-word/URL/file-path floor is the recheck queue's `researchable` family (lax mode —
+// booked topics are usually lowercase), so the two floors stay ONE vocabulary, not two drifting ones.
+const _TOPIC_FILLER = new Set(('a an the and or but of on in at to for by with about as so that this it its is are was be been being ' +
+  'you your yours me my mine i we our us they them their he she him her ' +
+  'will would can could shall should may might must do does did have has had ' +
+  'get gets got give gives gave giving send sends sent sending put puts make makes made bring brings let lets know knows ' +
+  'soon now then when once just right away back over out up down here there again shortly momentarily quick quickly asap ' +
+  'minute minutes moment moments sec secs second seconds bit little while today tonight tomorrow morning afternoon evening ' +
+  'all some any more most very really well also too').split(' '));
+function _hasNounSubstance(t) {
+  return String(t).toLowerCase().split(/[^a-z0-9&-]+/).some((w) => w.length >= 3 && !_TOPIC_FILLER.has(w));
+}
 function topicViable(topic) {
   const t = String(topic || '').trim();
   if (t.length < 4) return false;
   if (_TOPIC_DEST_LEAD_RE.test(t)) return false;      // a destination is where it lands, not what it's about
   if (_TOPIC_NARRATION_RE.test(t)) return false;      // her own forward narration leaked into the topic
+  try { if (!require('./recheck_queue').researchable(t, { requireProper: false })) return false; } catch {}
+  if (!_hasNounSubstance(t)) return false;            // all filler → nothing steers the composition
   return true;
 }
 

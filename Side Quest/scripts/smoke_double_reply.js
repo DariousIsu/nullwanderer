@@ -78,7 +78,9 @@ const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   // Window widened + `await` allowed since the turn-watchdog (setTimeout + try/finally clearTimeout)
   // now sits between the handler open and the call, and the call is `return await runChatTurn(...)`
   // so finally can clear the timer. io is still the inline object literal built per chat:send.
-  ok(/ipcMain\.handle\('chat:send'[\s\S]{0,1300}?return await runChatTurn\(userMessage, attachments, \{/.test(src),
+  // Widened again 2026-08-21: the reply-lane claim + raw-sender block (Phase 0, doc-plan #7) sits
+  // between the handler open and the call now — the assertion's point (io inline per turn) holds.
+  ok(/ipcMain\.handle\('chat:send'[\s\S]{0,2800}?return await runChatTurn\(userMessage, attachments, \{/.test(src),
     'io is constructed inline per chat:send — _spoke cannot survive into the next turn');
   ok(!/^\s*let _spoke/m.test(src) && !/global\._spoke/.test(src),
     'no module-level or global _spoke that would leak across turns');

@@ -6195,8 +6195,21 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
     return { delivered: false, miss: 'narration', topic: t };
   }
   md = md.trim();
-  const slug = t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'report';
-  const rel = `notes/report-${slug}.md`;
+  // ARTIFACT REGISTRY v0 (Phase 0, doc-plan #5 — Root A): the topic resolves to its PROJECT.
+  // A kin topic ("…and surveillance…", a re-order, his re-phrasing) reuses the project's canonical
+  // file and UPDATES it in place (version++); only a genuinely new subject mints a file. The old
+  // way — slug = raw topic slice — minted four anti-China siblings in one day and she anchored to
+  // a stale one. Fail-soft: a registry error falls back to the legacy slug so a report always lands.
+  let slug, rel, _regVersion = 1;
+  try {
+    const _reg = require('./lib/artifact_registry');
+    const _r = _reg.resolveOrMint({ topic: t, kind: 'report' });
+    slug = _r.slug; rel = _r.relPath; _regVersion = _r.nextVersion;
+  } catch (e) {
+    console.error('[report-cmd] artifact registry failed (legacy slug fallback):', e.message);
+    slug = 'report-' + (t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'untitled');
+    rel = `notes/${slug}.md`;
+  }
   let saved = false;
   // LATENT BUG FIX (found 08-07 via lint): main.js has no module-level `fs` — this call threw
   // ReferenceError into the catch on EVERY report, so the notes/ file never actually saved
@@ -6206,11 +6219,14 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
     notesBlock ? 'held notes deliverable(s)' : '',
     civicBlock ? 'the civic store' : '',
   ].filter(Boolean).join(' + ') || 'held material';
-  try { require('fs').writeFileSync(filesLib.resolvePath(rel), `# Report — ${t}\n\n${md}\n\n---\n_Composed from ${_srcAttr}._\n`, 'utf8'); saved = true; }
+  try { require('fs').writeFileSync(filesLib.resolvePath(rel), `# Report — ${t}\n\n${md}\n\n---\n_Composed from ${_srcAttr}. Version ${_regVersion} — updated ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET._\n`, 'utf8'); saved = true; }
   catch (e) { console.error('[report-cmd] save failed:', e.message); }
+  // Register the landed artifact — the row IS the document's identity from here on (read-side
+  // resolution + the next compose's update-in-place both go through it). Only a SAVED file registers.
+  if (saved) { try { require('./lib/artifact_registry').record({ slug, relPath: rel, title: `Report — ${t}`.slice(0, 90), topic: t }); } catch (e) { console.error('[report-cmd] registry record failed:', e.message); } }
   let landed = false;
-  try { landed = (await promiseArtifactEmit({ slug: `report-${slug}`, title: `Report — ${t}`.slice(0, 60), markdown: md })) === true; } catch {}
-  console.log(`[report-cmd] report on "${t}" composed (${md.length}ch) → ${saved ? rel : '(save failed)'}${landed ? ' + canvas' : ' (canvas emit failed)'}`);
+  try { landed = (await promiseArtifactEmit({ slug, title: `Report — ${t}`.slice(0, 60), markdown: md })) === true; } catch {}
+  console.log(`[report-cmd] report on "${t}" composed (${md.length}ch, v${_regVersion}) → ${saved ? rel : '(save failed)'}${landed ? ' + canvas' : ' (canvas emit failed)'}`);
   // MEMORY FIRST, THEN RESEARCH THE GAPS — ONE FLOW (Lucas 2026-08-08: "why would those be
   // separate tracks?"). The compose contract already forces "## Open questions" naming what the
   // held documents do NOT answer; consuming it was the missing half. Each open question enqueues
@@ -6237,7 +6253,7 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   const _reportHolds = require('./lib/delivery').holdsDigest(md, { cap: 800 });
   if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The report Lucas asked for is BUILT and delivered — it is on his Canvas${saved ? ` and saved at ${rel}` : ''}, composed from ${rows.length} document(s) you already held (${rows.map((r) => '#' + r.id).join(', ')}). Tell him it's ready, where it is, and give the ONE most substantive finding in it — drawn ONLY from its actual contents below, naming nothing not present in them:\n${_reportHolds}\nIn your own voice, two or three sentences.${planNote} Do not re-paste the whole report.]` });
   // delivered reflects what ACTUALLY landed (canvas OR notes) — never a compose-only claim; nothing landed → miss.
-  return { delivered: (landed || saved), canvas: landed, topic: t, rel: saved ? rel : null, canvasTab: landed ? `promise-report-${slug}` : null, docCount: rows.length, openQs, miss: (landed || saved) ? undefined : 'nothing-landed' };
+  return { delivered: (landed || saved), canvas: landed, topic: t, rel: saved ? rel : null, canvasTab: landed ? `promise-${slug}` : null, docCount: rows.length, openQs, miss: (landed || saved) ? undefined : 'nothing-landed' };
 }
 
 async function promiseArtifactEmit({ slug, title, markdown }) {
@@ -12349,6 +12365,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               // instead of pretending.)
               if (!_artifactAckAppended) console.log(`[one-voice] verdict arrived post-reply (early judgment missed) — the reply did not carry the ack for intent=${verdict.intent}`);
               if (verdict.intent === 'pullup') {
+                // ARTIFACT REGISTRY FIRST (Phase 0, doc-plan #5 — the read side): a subject that
+                // resolves to a REGISTERED project opens the canonical current version — never a
+                // filename guess among slug-siblings (the live 08-21 wrong-file anchoring: she read
+                // a stale sibling, declared its count the truth, and called her real report fabricated).
+                let _regHit = null;
+                try { _regHit = require('./lib/artifact_registry').matchAsk(verdict.subject || userMessage); } catch {}
+                if (_regHit) {
+                  console.log(`[artifact-router] pull-up resolves through the registry → ${_regHit.label} (${_regHit.path})`);
+                  presentHeldProduct({ io, channel, sessionId, hit: _regHit, alternates: [], subject: verdict.subject || userMessage.slice(0, 120) })
+                    .catch((e) => console.error('[artifact-router] registry pull-up failed:', e.message));
+                } else {
                 let _phits = [];
                 try { _phits = require('./lib/product_ledger').searchProducts({ db, query: verdict.subject || userMessage, notesDir: filesLib.resolvePath('notes'), limit: 3 }); } catch {}
                 // TITLE-MATCH GATE (2026-08-15): searchProducts admits body-only matches (a doc with zero
@@ -12371,6 +12398,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                   // body-only decoy as the artifact (the model judged RETRIEVAL, not a fresh build).
                   fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked you to pull up a product ("${(verdict.subject || userMessage).slice(0, 120)}") but NO such product exists in the stores — you two never made one, or it predates the ledger. Say that plainly and OFFER to build it fresh; do not silently substitute a new query's output as if it were the old product.]` })
                     .catch(() => {});
+                }
                 }
               }
             }
@@ -12420,6 +12448,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       let _pask = null;
       try { _pask = require('./lib/product_ledger').detectAsk(userMessage); } catch {}
       if (_pask && _pask.subject) {
+        // ARTIFACT REGISTRY FIRST (Phase 0, doc-plan #5 — the read side, mirroring the router door):
+        // a registered project's ask opens its canonical current version, never a sibling guess.
+        let _regHitL = null;
+        try { _regHitL = require('./lib/artifact_registry').matchAsk(_pask.subject); } catch {}
+        if (_regHitL) {
+          followupFired = true;
+          console.log(`[pull-up] ask resolves through the registry → ${_regHitL.label} (${_regHitL.path})`);
+          presentHeldProduct({ io, channel, sessionId, hit: _regHitL, alternates: [], subject: _pask.subject })
+            .catch((e) => console.error('[pull-up] registry present failed:', e.message));
+        } else {
         let _phits = [];
         try { _phits = require('./lib/product_ledger').searchProducts({ db, query: _pask.subject, notesDir: filesLib.resolvePath('notes'), limit: 3 }); }
         catch (e) { console.error('[pull-up] search failed:', e.message); }
@@ -12437,6 +12475,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             .catch((e) => console.error('[pull-up] present failed:', e.message));
         } else {
           console.log(`[pull-up] product ask "${_pask.subject}" → no TITLE-matching held product — falling through (a fresh build must be offered, not substituted)`);
+        }
         }
       }
     }
@@ -12901,24 +12940,43 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
     console.error(`[chat] turn watchdog (${CHAT_TURN_WATCHDOG_MS}ms) fired — force-resumed background loops after a stalled turn`);
     try { event.sender.send('chat:error', "That turn stalled on my end — I've reset and I'm listening again."); } catch {}
   }, CHAT_TURN_WATCHDOG_MS);
+  // THE REPLY LANE IS SINGLE-VOICE (Phase 0, doc-plan #7): a stale async followup still streaming
+  // when this turn begins is muted NOW (quiet thinking-dots window), and this turn's own stream
+  // claims the lane on its first token — see lib/reply_lane.js for the collision story.
+  const _replyLane = require('./lib/reply_lane');
+  _replyLane.preemptForTurn();
+  const _laneClaim = _replyLane.open('turn');
+  // The RAW sender: renderer token + streaming voice. The main stream reaches it through the lane
+  // claim; an async followup wraps it with its OWN claim (io._rawEmit below) so a muted stream
+  // never speaks and never renders — arbitration lives in exactly one place.
+  const _rawSend = (t) => {
+    sayBuf += t;
+    try { event.sender.send('chat:say-token', { t, s: 'reply' }); } catch {}
+    // STREAMING voice: speak each complete sentence the moment it lands, so she starts talking almost
+    // immediately instead of after the whole reply. Only <say> reaches here — never her <think>.
+    try {
+      const clean = require('./lib/tts').prepareText(sayBuf, { maxChars: 100000 });
+      const upto = _lastSentenceEnd(clean, spokenIdx);
+      if (upto > spokenIdx) { _speech.enqueue(clean.slice(spokenIdx, upto)); spokenIdx = upto; }
+    } catch {}
+  };
   try {
     return await runChatTurn(userMessage, attachments, {
       // STREAM DISCRIMINATOR (2026-07-30, reply-delivery-path root fix): every say-token now names
       // its stream — the renderer routes by FACT, not by the promptedReplyPending/latch heuristics
       // that misfiled real answers into the sheep rail when a suppressed autonomous stream leaked.
-      emit: (t) => {
-        sayBuf += t;
-        try { event.sender.send('chat:say-token', { t, s: 'reply' }); } catch {}
-        // STREAMING voice: speak each complete sentence the moment it lands, so she starts talking almost
-        // immediately instead of after the whole reply. Only <say> reaches here — never her <think>.
-        try {
-          const clean = require('./lib/tts').prepareText(sayBuf, { maxChars: 100000 });
-          const upto = _lastSentenceEnd(clean, spokenIdx);
-          if (upto > spokenIdx) { _speech.enqueue(clean.slice(spokenIdx, upto)); spokenIdx = upto; }
-        } catch {}
-      },
+      emit: _laneClaim.feed(_rawSend),
+      _rawEmit: _rawSend,
       onComplete: (info) => {
-        try { event.sender.send('chat:complete', { ...(info || {}), s: 'reply' }); } catch {}
+        // Lane verdict: 'live' closes the bubble as the reply; 'demoted' (this stream lost the lane
+        // to a newer turn) must NOT close the newer turn's bubble — the finished say goes through
+        // the unprompted door so nothing is lost, and it can never garble the live stream.
+        if (_laneClaim.complete() === 'live') {
+          try { event.sender.send('chat:complete', { ...(info || {}), s: 'reply' }); } catch {}
+        } else {
+          console.warn('[reply-lane] turn stream demoted at completion — say routed to the unprompted rail');
+          try { event.sender.send('chat:complete', { ...(info || {}), s: 'preempted', unprompted: true, say: (info && info.say) || sayBuf.trim() }); } catch {}
+        }
         // speak any trailing partial sentence (the global queue releases voice:speaking when it drains).
         try {
           const clean = require('./lib/tts').prepareText(sayBuf, { maxChars: 100000 });
@@ -12957,6 +13015,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
   // calling us; we re-pause for our duration and resume only when the OUTERMOST followup finishes.
   const _topHop = echoHop === 0;
   if (_topHop) { try { pauseMonologue(); pauseHeartbeat(); pauseContinuity(); pauseReflection(); selfDialogue.pause(); } catch {} }
+  let _laneClose = () => 'live';   // rebound once the lane claim opens below; hoisted so the finally can always release
   try {
     const userName = require('./lib/interlocutor').liveName('them');
     const recentTurns = db.getRecentTurns(8, sessionId);
@@ -12983,7 +13042,17 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       echoSuitBlock: canChain ? echoSuit.suitContextBlock() : null,
       pendingInbounds: [], newUserMessage: note
     });
-    const emit = io && io.emit ? io.emit : (() => {});
+    // THE REPLY LANE (Phase 0, doc-plan #7): this followup streams through its OWN lane claim over
+    // the turn's RAW sender — if a prompted turn takes the lane mid-stream (the live 08-21 garble:
+    // a slow followup zipped character-by-character with the next turn's reply), the rest of this
+    // stream mutes and the finished say demotes to the unprompted door at the delivery site below.
+    // _laneClose is idempotent and called on EVERY exit (delivery, pre-chain, outer finally) so a
+    // held lane can never leak; the FIRST call's verdict is the one that routes the delivery.
+    const _replyLane = require('./lib/reply_lane');
+    const _laneClaim = (io && (io._rawEmit || io.emit)) ? _replyLane.open('followup') : null;
+    let _laneDone = false, _laneVerdict = 'live';
+    _laneClose = () => { if (!_laneDone) { _laneDone = true; if (_laneClaim) _laneVerdict = _laneClaim.complete(); } return _laneVerdict; };
+    const emit = _laneClaim ? _laneClaim.feed(io._rawEmit || io.emit) : (() => {});
     const _ff = require('./lib/leakguard').makeStreamFilter(emit);   // same live directive filter as the main path
     const parser = new TagStreamParser({ onSayToken: (t) => { try { _ff.feed(t); } catch {} } });
     // CLOUD WRITES THE FOLLOW-UP TOO (V1). This is the same job as the main reply — read a tool
@@ -13126,16 +13195,25 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
         }
         if (channel === 'discord') {
           try { await discordLib.sendDM(sayOut); } catch (e) { console.error('[main] followup discord DM failed:', e.message); }
-        } else {
+        } else if (_laneClose() === 'live') {
           // `unprompted` follows the SAME `prompted` flag the DB row above uses — this was hardcoded
           // `true`, so every find→do→answer reply was live-labeled autonomous and reached the
           // transcript only by winning the renderer's currentAiTurnDiv race (chat.js:322 files the
           // losers in the sheep rail). The stored row was always right; the live event now agrees.
           try { if (io && io.onComplete) io.onComplete(followupDisclaimed ? { saidId: saidRow ? saidRow.id : null, truncated: 0, unprompted: !prompted, say: sayOut } : { saidId: saidRow ? saidRow.id : null, truncated: 0, unprompted: !prompted }); } catch {}
+        } else {
+          // DEMOTED (the lane went to a newer prompted turn mid-stream): deliver the finished say
+          // through the unprompted door so nothing is lost (a terminal hop is also a DB row above),
+          // and never close the live turn's bubble with a stale completion.
+          console.warn('[reply-lane] followup delivery demoted — say routed to the unprompted rail');
+          try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: saidRow ? saidRow.id : null, truncated: 0, unprompted: true, say: sayOut, s: 'preempted' }); } catch {}
         }
         console.log('[main] tool follow-up delivered via', channel);
       }
     }
+    // Release the lane BEFORE any chain recursion — the child hop opens its own claim, and a
+    // parent still holding the lane would mute its own child. Idempotent (no-op after delivery).
+    _laneClose();
     // ECHO CHAIN: she emitted follow-on Echo tag(s) → dispatch them and recurse with the results
     // (echoHop+1), so find→do→answer completes in one flow. Bounded by MAX_ECHO_HOPS.
     //
@@ -13247,6 +13325,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
   } catch (err) {
     console.error('[main] fireToolFollowup failed:', err.message);
   } finally {
+    try { _laneClose(); } catch {}   // a throw mid-stream must never leave the reply lane held
     if (_topHop) { try { resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume(); } catch {} }
   }
 }

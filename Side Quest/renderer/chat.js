@@ -642,6 +642,15 @@ async function send() {
     ? `\n[attached: ${pendingAttachments.map(a => a.name).join(', ')}]`
     : '');
   renderUserTurn(displayText);
+  // SEAL the previous live bubble (Phase 0, doc-plan #7): if a stale async stream was mid-bubble
+  // when this message was sent, the main process mutes it (reply_lane) — but without this seal the
+  // NEW reply's first token would append into that half-finished div. A fresh turn always opens a
+  // fresh bubble; whatever half-streamed stays sealed as-is (its full say arrives via the demoted
+  // completion on the sheep rail, and the DB row is intact).
+  if (currentAiTurnDiv) { console.warn('[chat] sealing a half-streamed bubble — a new prompted turn starts fresh'); }
+  currentAiTurnDiv = null;
+  currentAiSaidNode = null;
+  liveSayBuffer = '';
   promptedReplyPending = true;   // the next streamed reply belongs in the transcript
   showThinking();
   const attachmentsToSend = pendingAttachments.slice();
