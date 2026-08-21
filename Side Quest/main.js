@@ -3370,7 +3370,11 @@ function ensureComfyUI() {
   const dir = process.env.COMFYUI_DIR || 'C:/Users/azrae/Desktop/ComfyUI-Zluda';
   const py = process.env.COMFYUI_PYTHON || path.join(dir, '.venv-rocm', 'Scripts', 'python.exe');
   if (!fs.existsSync(py)) { console.warn(`[comfyui] python not found at ${py} — local image-gen unavailable (set COMFYUI_DIR/COMFYUI_PYTHON or install ComfyUI)`); return; }
-  const args = ['main.py', '--listen', '127.0.0.1', '--port', '8188', '--use-split-cross-attention', '--disable-smart-memory'];
+  // --disable-pinned-memory (Lucas 2026-08-21, the max-out incident): the pinned reservation was
+  // 12.7GB of RAM held permanently for an occasional image-gen workload — on a 31GB machine beside
+  // Echo and the browsers it was a standing pressure source. Generation gets marginally slower
+  // weight-offload; the RAM comes back to the system.
+  const args = ['main.py', '--listen', '127.0.0.1', '--port', '8188', '--use-split-cross-attention', '--disable-smart-memory', '--disable-pinned-memory'];
   const env = { ...process.env, HIP_VISIBLE_DEVICES: process.env.HIP_VISIBLE_DEVICES || '1', MIOPEN_FIND_MODE: process.env.MIOPEN_FIND_MODE || 'NORMAL' };
   try {
     const { spawn } = require('child_process');
