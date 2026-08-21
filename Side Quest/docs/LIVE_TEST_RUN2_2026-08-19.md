@@ -784,6 +784,35 @@ deflections, zero artifacts. Honest bound: the register and grounding are proven
 the model's craft — the blind week's remaining sessions grade that. `con_collab` = a standing
 continuity KIND.
 
+## 21. BLIND-WEEK NIGHT ONE — three catches cured, the homecoming arc's honest floor (08-21, boots p73-p76)
+
+**Catches #2 and #3 (Lucas live, 02:0x), both cured same-hour:**
+- **#2 — the recognition family** (`508112a`): "…the anti china bills, remember?" drew "Want this on
+  the Canvas or here in chat?" — a memory-check wants RECOGNITION, not a placement offer. The
+  family (do-you-remember / trailing ", remember?" / ring-a-bell) joins the collaboration register;
+  his verbatim turn locked. (His exchange self-corrected after one nudge: "the anti-China bill
+  sweep across seven states" — accurate recognition, right register.)
+- **#3 — progress-checks reach the held sources** (`7493f5b`): "Where did we leave off on it?"
+  bound to TWO wrong threads across two emissions (the op-ed + the media-stops residue), and
+  "Where are we on the sponsors?" drew a FALSE "not pulled yet" — the sponsors sheet is the run-2
+  deliverable. Cures: where-did-we-leave-off joins the affirm/resume net (the measured thread);
+  the where-are-we-on / status-of family joins the recall-reach door (the held sheet). The
+  harness's media-stops residue archived out of her working set (notes/_test_residue/).
+
+**The homecoming arc, run to its honest floor (5 generations in one night):**
+confabulation (Hewitt + invented session + "we verified") → honest miss → reach-proven-but-
+preempted → **grounded disambiguation** ("Which SB200? I see Missouri's, Tennessee's…" — multiple
+states hold an SB200; the KIND became two-turn to honor the legitimate clarify) → **CACHE
+POISONING found and cured** (`035c631`: the clarify itself had been CACHED as the answer and
+verbatim-served, skipping every grounding door — clarifying question-backs are now uncacheable;
+the poisoned row purged; the final run proves the door fires live). **The residual, precisely
+named**: (a) INSTANCE disambiguation — her stores hold a 2018 Louisiana SB200 tied to Hewitt
+(which retroactively explains every Hewitt intrusion in this arc) beside the 2026 anti-china one,
+and the thread's instance doesn't yet dominate the lookup fan (SB20 substring matches widen it
+further); (b) the ACK-THEN-ASYNC shape — the disambiguated turn promises the pull and the answer
+trails past every window, with topical bleed en route ("Louisiana 811…"). Both → the queue with
+cure shapes; no more 3 AM regexes at this root.
+
 **THE BLIND WEEK IS ARMED (21:41, §5b's gate, per §18's recommendation).**
 `scripts/blind_week_report.js` — read-only on every store, out-of-process, start stamp in a FILE
 (data/blind_week_start.txt) so her stores carry zero probe marks. Nothing announced. It scores the
