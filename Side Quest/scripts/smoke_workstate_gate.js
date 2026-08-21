@@ -132,6 +132,13 @@ ok(!has("I've already composed the sheet and landed it."), 'FP: a done-claim is 
   ok(r4.ok, 'FP guard (the F24 lesson): a bare "we verified X" with no past-session tail stays OUT of the net');
   const r5 = mc.verifyWorkStateClaims('We landed on the trust-fund framing in an earlier session. The Ellis angle came later.', { gatherRanThisTurn: () => true, evidence: 'the trust-fund framing rode the coastal briefing; Ellis Marsalis budget dispute notes.' });
   ok(r5.ok, 'we-landed-on WITH a session tail but anchors present in evidence → clean');
+  // The re-drive escape: retrieval returned the WRONG record (Hewitt's own file), so her name IS
+  // in the evidence — but the claim pairs her with a bill the evidence never mentions.
+  const EV_WRONG = 'Sharon Hewitt — Republican state senator, SD-1. Email hewitts@legis.la.gov; sponsor activity in the 2018 1st Extraordinary Session; gubernatorial run 2023.';
+  const r6 = mc.verifyWorkStateClaims(SAY, { gatherRanThisTurn: () => true, evidence: EV_WRONG });
+  ok(!r6.ok && r6.violations.some((v) => v.kind === 'records-mismatch' && v.anchors.includes('sb200')), 'RE-DRIVE REGRESSION: a bill-number pairing (SB200) absent from the retrieved record mismatches even when the PERSON anchors are present');
+  const r7 = mc.verifyWorkStateClaims("Selders co-sponsored SB200 — that's what we verified.", { gatherRanThisTurn: () => true, evidence: 'the sheet: SB 200 co-sponsors include Selders (D-14).' });
+  ok(r7.ok, 'a true pairing holds even across the SB-200/SB200 spacing difference');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} passed, ${fail} failed`);

@@ -397,6 +397,17 @@ function verifyWorkStateClaims(say, { gatherRanThisTurn = null, pendingRecordFor
         const own = _wsAnchors(s);
         const anchors = own.length ? own : _wsAnchors(prev);
         if (anchors.length && !anchors.some((a) => ev.includes(a))) violations.push({ kind: 'records-mismatch', claim: s.slice(0, 110), anchors });
+        // BILL-NUMBER PAIRING (the run-8 re-drive escape): retrieval returned the WRONG record
+        // (a hot entity whose anchors ARE in the evidence), so the any-anchor pass held while the
+        // claim paired that person with a bill the evidence never mentions. Bill tokens get AND
+        // semantics: every bill number a records-attributed claim asserts must appear in what was
+        // actually retrieved.
+        else {
+          const bills = (((s + ' ' + prev).match(/\b[A-Z]{1,3}\s?\d{2,5}\b/g)) || []).map((b) => b.replace(/\s+/g, '').toLowerCase());
+          const evFlat = ev.replace(/\s+/g, '');
+          const missing = [...new Set(bills)].filter((b) => !evFlat.includes(b));
+          if (missing.length) violations.push({ kind: 'records-mismatch', claim: s.slice(0, 110), anchors: missing });
+        }
       }
     }
     // PENDING/DEADLINE about her own deliverable: needs a measured record behind it.
