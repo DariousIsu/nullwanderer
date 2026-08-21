@@ -101,7 +101,10 @@ function subjectsOf(question) {
 }
 
 // ── store: only a real, delivered, grounded answer — never a miss, never a correction ───────────
-const _UNCACHEABLE_ANSWER_RE = /\[Correction|couldn'?t find|could not find|don'?t (?:have|hold|know)|not (?:sure|certain)|didn'?t complete|failed|unable to|no results|drew a blank|still (?:looking|checking|pending)|i'?ll (?:check|look|get back)/i;
+// A CLARIFYING QUESTION is not an answer (2026-08-21, the homecoming re-drive's cache poisoning:
+// "Which SB200 are you asking about?" got cached and then VERBATIM-served to the next asker,
+// skipping every grounding door). Question-backs never cache.
+const _UNCACHEABLE_ANSWER_RE = /\[Correction|couldn'?t find|could not find|don'?t (?:have|hold|know)|not (?:sure|certain)|didn'?t complete|failed|unable to|no results|drew a blank|still (?:looking|checking|pending)|i'?ll (?:check|look|get back)|which [^.?!\n]{0,60}are you (?:asking|referring|talking) about|^\s*(?:which|what|who|do you mean)\b[^.?!\n]{0,80}\?\s*$/i;
 function store({ question, answer, kind = null, now = Date.now() } = {}) {
   try {
     const k = kind || classifyKind(question);
