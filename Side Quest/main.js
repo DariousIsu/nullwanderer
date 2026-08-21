@@ -8330,7 +8330,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const _sa = _dp.detectStatusAsk(userMessage);
     const _sb = _sa ? _dp.statusBrief(_sa.subject) : null;
     if (_sb) {
-      composedUserMessage = `${composedUserMessage}\n\n[PROJECT STATUS — the durable project row for "${_sa.subject.slice(0, 80)}". Answer his status question from THESE FACTS ONLY: the status, the canonical artifact + its version and when it last updated, and any open scope still to fold in. Do NOT invent progress and do NOT present any other document as "the report":\n${_sb.brief}]`;
+      composedUserMessage = `${composedUserMessage}\n\n[PROJECT STATUS — the durable project row for "${_sa.subject.slice(0, 80)}". Answer his status question from THESE FACTS ONLY: the status, the canonical artifact NAMED BY ITS FILE PATH exactly as written below (never a doc# id or any other document — those are source material, not the report), its version and when it last updated, and any open scope still to fold in. Do NOT invent progress:\n${_sb.brief}]`;
       console.log(`[projects] status ask "${_sa.subject.slice(0, 60)}" → project "${_sb.slug}" — row facts injected into the reply context`);
     }
   } catch (e) { console.error('[projects] status inject failed (reply proceeds):', e.message); }
