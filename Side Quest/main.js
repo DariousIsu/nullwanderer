@@ -7267,6 +7267,27 @@ function _mirrorCanvasWrite(t, r) {
     if (t.name === 'saga_canvas_open_tab') {
       require('./lib/canvas_docs').recordTab({ tabKey: key, mode: a.mode || 'DOC', title: a.title || key });
       console.log(`[canvas] mirrored her tab "${a.title || key}" → durable store`);
+      // THE EMPTY-TAB BACKSTOP (live 08-22 14:28, Lucas's screenshot "No content yet."): she opened
+      // the tab, said "that's on your canvas now", and never authored the add_block tag — the post-
+      // say channel held ONLY the open-tab (161ch), while the document she promised was HER OWN SAY
+      // (it opens with the markdown H1). 25s after an open-tab, a tab still holding ZERO blocks
+      // receives the newest document-shaped say as its body (engine + mirror); no document-shaped
+      // say → a loud log names the hole (the anti-fab class owns the scold). Fail-soft throughout.
+      setTimeout(async () => {
+        try {
+          const store = require('./lib/canvas_docs');
+          const n = store._db().prepare('SELECT COUNT(*) n FROM blocks WHERE tab_key = ?').get(key).n;
+          if (n > 0) return;
+          const say = db.getDb().prepare(`SELECT content FROM turns WHERE speaker = 'ai_said' ORDER BY ts DESC LIMIT 3`).all()
+            .map((r2) => String(r2.content || '')).find((c2) => /(^|\n)#\s/.test(c2) && c2.length > 600);
+          if (!say) { console.warn(`[canvas] tab "${key}" opened but NO block landed and no document-shaped say to backstop — the doc stays EMPTY (she promised content she never wrote)`); return; }
+          const md = say.slice(say.search(/(^|\n)#\s/)).split(/\n\[Correction —/)[0].trim();
+          const cb2 = pollCallTool();
+          const r3 = await cb2('saga_canvas_add_block', { tab_key: key, block_type: 'paragraph', data: { markdown: md } });
+          store.recordBlock({ tabKey: key, blockId: (r3 && r3.block_id) || `backstop-${Date.now().toString(36)}`, blockType: 'paragraph', data: { markdown: md } });
+          console.log(`[canvas] EMPTY-TAB BACKSTOP — landed the say's own document (${md.length}ch) into "${key}" (the open-tab tag came alone; the promised content was the say itself)`);
+        } catch (e2) { console.error('[canvas] empty-tab backstop failed:', e2.message); }
+      }, 25000);
     } else {
       // dispatch() returns {ok,isError,text} — there is NO structured result to read a block_id back
       // from, so use the one she pre-assigned or mint a unique one. The id only has to be stable
