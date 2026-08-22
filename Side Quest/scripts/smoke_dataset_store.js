@@ -130,10 +130,14 @@ ok(lrows[0].attrs.state === 'AZ' && lrows[0].attrs.tags[0] === 'surveillance' &&
     ok(/if \(_dsSection\) md = `\$\{md\}\$\{_dsSection\}`/.test(main), 'the data section is CODE-authored and appended — save + canvas both carry it');
     ok(/NEVER state a count, total, percentage, or tally/.test(main), 'the compose rule forbids model-authored numbers when a dataset rides');
     ok(/DATASET COUNTS — EXACT/.test(main) && /renderCounts\(_rows2/.test(main), '"how many" injects exact SELECT-COUNT numbers into the reply context');
-    ok(/\bhow many\b/.source ? /if \(\/\\bhow many\\b\/i\.test\(userMessage\)\)/.test(main) : false, 'the count injection is gated on the ask shape + a project + rows');
+    ok(/if \(_dsCountAuthority\) \{/.test(main) && /how many\|how much\|totals\?\|counts\?\|breakdown\|by state/.test(main),
+      'the count injection is gated on the ONE shared authority predicate (ask-shape family + project + rows)');
     // P3 gate catch #2: the answer cache replayed a STALE count after the dataset landed.
-    ok(/stood down — the question is DATASET-BACKED/.test(main) && main.indexOf('_dsAuthority') < main.indexOf('_ac.lookup(userMessage)'),
+    ok(/stood down — the question is DATASET-BACKED/.test(main) && main.indexOf('_dsCountAuthority') < main.indexOf('_ac.lookup(userMessage)'),
       'a dataset-backed question NEVER serves from the answer cache (SELECT COUNT is the authority)');
+    // battery-3 catch: the operator drove 8 redundant hops and voiced a wrong 32 against the exact 355.
+    ok(/\[operator\] stood down — dataset-backed count ask/.test(main) && /!_dsCountAuthority && \(routeAllowsAny/.test(main),
+      'the operator STANDS DOWN on a dataset-backed count ask (one predicate, three consumers)');
     ok(/la2\.enrich\(\{/.test(main) && main.indexOf('la2.enrich({') < main.indexOf('const _clean = t.replace'), 'enrichment runs in the compose door AFTER acquisition, BEFORE the gather/renders');
     ok(/renders proceed on held attrs/.test(main), 'enrichment is fail-soft — a miss never blocks the report');
     ok(/_ds\.trendBy\(_dsRows, _renderDims\.trendKey\)/.test(main) && /block_type: 'chart', data: chart/.test(main), 'the trend rides the canvas as a REAL chart block (code-authored monthly points)');
