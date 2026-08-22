@@ -70,6 +70,17 @@ function audit({ topic = '', body = '', dsRows = [], dataShaped = false, doneSco
   //    ship as prose — the honest move is the gap report ("I could not acquire the data").
   if (dataShaped && !dsRows.length) violations.push({ check: 'dataset-starved', detail: 'the topic is data-shaped but acquisition landed no rows — report the gap, never the report' });
 
+  // 7. QUERY-LEAK (the P4 adversarial catch, 2026-08-22): every query that FED the dataset must
+  //    be made of the topic's own content tokens. A leaked order-verb ("build") once landed 50
+  //    generic construction bills as a nonsense project's data — and the report passed its audit
+  //    on poisoned fuel. Rows without query tags (e.g. civic-store rows) are exempt.
+  if (dsRows.length) {
+    const topicToks = new Set(toks);
+    const leaked = [...new Set(dsRows.flatMap((r) => (r.attrs && Array.isArray(r.attrs.tags)) ? r.attrs.tags : []))]
+      .filter((q) => q && !String(q).toLowerCase().split(/\s+/).every((w) => topicToks.has(w)));
+    if (leaked.length) violations.push({ check: 'query-leak', detail: `dataset fed by queries outside the topic: ${leaked.join(', ')}` });
+  }
+
   return { ok: violations.length === 0, violations };
 }
 

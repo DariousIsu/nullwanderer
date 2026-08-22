@@ -35,9 +35,17 @@ const STATE_CODES = {
 
 const _LEGIS_RE = /\b(?:bills?|legislation|legislative|statutes?|acts?|laws?)\b/i;
 // Tokens that steer the report but not the SEARCH — states, deliverable words, connective filler.
+// The produce-verb family joined 2026-08-22 (the P4 adversarial gate): a pursuit topic can be
+// the RAW ORDER TEXT ("build the report on Hartfield Zorblat bills…") and 'build' became the
+// LegiScan query — 50 generic construction bills landed as the "Zorblat" dataset and a garbage-
+// fueled report passed its audit. Order verbs are never search subjects. ('building' stays a
+// valid subject — building codes are real legislation; only the bare verb forms are stopped.)
 const _QUERY_STOP = new Set(['legislation', 'legislative', 'bill', 'bills', 'statute', 'statutes', 'act', 'acts',
   'law', 'laws', 'state', 'states', 'report', 'reports', 'status', 'statuses', 'breakdown', 'breakdowns', 'session', 'sessions', 'trend', 'trends',
-  'graph', 'table', 'anti', 'pro', 'the', 'and', 'per', 'via', 'already', 'landed', 'legiscan', 'with', 'for']);
+  'graph', 'table', 'anti', 'pro', 'the', 'and', 'per', 'via', 'already', 'landed', 'legiscan', 'with', 'for',
+  'build', 'rebuild', 'make', 'draft', 'redraft', 'write', 'compose', 'recompose', 'create', 'compile', 'produce',
+  'generate', 'regenerate', 'prepare', 'put', 'together', 'pull', 'knock', 'redo', 'refresh', 'deliver', 'finish', 'complete', 'update',
+  'sponsors', 'cosponsors', 'co-sponsors', 'sponsor', 'contact', 'contacts']);
 
 /** detect(topic) → { states: ['UT',…], query } — pure. Empty states = no acquisition. */
 function detect(topic) {

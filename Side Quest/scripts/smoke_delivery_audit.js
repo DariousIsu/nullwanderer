@@ -38,6 +38,19 @@ ok(v(da.audit({ topic: topic7, body: goodBody, dsRows: rows(9), dataShaped: true
 ok(v(da.audit({ topic: topic7, body: goodBody.replace(/\*\*Total: 5\*\*/, ''), dsRows: rows(5), dataShaped: true })).includes('data-section-missing'), 'rows held but no deterministic Total fails');
 ok(v(da.audit({ topic: topic7, body: goodBody.replace(/## The data[\s\S]*$/, 'prose only ' + 'x'.repeat(300)), dsRows: [], dataShaped: true })).includes('dataset-starved'),
   '⭐ THE ADVERSARIAL CASE: a data-shaped topic over a STARVED dataset fails — the gap, never the report');
+// P4 adversarial catch (live, boot_p98): 'build' leaked from the raw order into the LegiScan
+// query — 50 construction bills fed a nonsense project and the audit passed on poisoned fuel.
+{
+  const tagged = (tags) => rows(5).map((r, i) => ({ ...r, attrs: { tags } }));
+  ok(v(da.audit({ topic: 'build the report on Hartfield Zorblat bills in Louisiana', body: goodBody + ' hartfield zorblat louisiana', dsRows: tagged(['build']), dataShaped: true })).includes('query-leak'),
+    '⭐ a dataset fed by a query OUTSIDE the topic fails (the live order-verb leak)');
+  ok(!v(da.audit({ topic: topic7, body: goodBody, dsRows: tagged(['china']), dataShaped: true })).includes('query-leak'),
+    'a topic-token query passes');
+  ok(!v(da.audit({ topic: 'the Louisiana parish leadership contact table', body: goodBody + ' louisiana parish leadership contact', dsRows: rows(5).map((r) => ({ ...r, attrs: {} })), dataShaped: true })).includes('query-leak'),
+    'rows without query tags (civic store) are exempt');
+}
+const laDetect = require('../lib/legis_acquire').detect('build the report on Hartfield Zorblat bills in Louisiana');
+ok(laDetect.queries.join(',') === 'hartfield,zorblat', 'the acquirer stoplist strips order verbs — the raw order text yields only SUBJECT queries');
 ok(da.describe([{ check: 'a', detail: 'b' }, { check: 'c', detail: 'd' }]) === 'a: b · c: d', 'describe renders one honest line');
 ok(da.namedStates('Utah and new mexico, plus Indianapolis').map((s) => s.code).sort().join(',') === 'NM,UT', 'namedStates: names matched, city-lookalikes not');
 
