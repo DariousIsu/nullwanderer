@@ -6128,6 +6128,28 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
       }
     } catch {}
   }
+  // THE VERIFIED-ABSENCE TOMBSTONE (battery-2 escape #2, 08-22): her own turn honestly verified
+  // "there is no such thing as Krellworth-Vance…" (databases + the open web) — and the machinery
+  // then researched the fabricated subject anyway, registered a directed-task dossier as the
+  // canonical, and delivered a 28.5KB report whose body names the subject only to REFUTE it (the
+  // subject-anchor audit passes on refutation text by construction). The say IS the verdict here:
+  // when a recent say declares the topic's named subject nonexistent, the compose honest-refuses —
+  // the gap stands. Bounded: 20 minutes, all anchors in the SAME say as the absence phrase.
+  try {
+    const _tokSet2 = new Set(require('./lib/artifact_registry').tokensOf(t));
+    const _anchors = [...new Set((t.match(/(?<![A-Za-z])[A-Z][a-z]{2,}/g) || []).map((w) => w.toLowerCase()))]
+      .filter((w) => _tokSet2.has(w) && !Object.keys(require('./lib/legis_acquire').STATE_CODES).some((n) => n.split(' ').includes(w)));
+    if (_anchors.length) {
+      const _recent = db.getDb().prepare(`SELECT content FROM turns WHERE speaker='ai_said' AND ts > ? ORDER BY ts DESC LIMIT 8`).all(Date.now() - 20 * 60e3);
+      const _ABS_RE = /(?:no such thing as|no record of(?: any)?|does ?n['’]?t exist|does not exist|couldn['’]?t find any|no evidence (?:that|of))/i;
+      const _dead = _recent.some((r2) => { const c2 = String(r2.content || ''); if (!_ABS_RE.test(c2)) return false; const low = c2.toLowerCase(); return _anchors.every((a) => low.includes(a)); });
+      if (_dead) {
+        console.log(`[report-cmd] VERIFIED-ABSENCE tombstone — a recent say declared "${_anchors.join(' ')}" nonexistent (checked incl. the open web); the gap stands, nothing composes`);
+        if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The "${t}" report was NOT built: your own recent verification concluded the named subject (${_anchors.join(', ')}) does not exist — not in the databases and not on the open web. Tell Lucas plainly that the gap stands and ask for a spelling or bill-number correction if he has one. NEVER say a report is ready or that a dossier was produced.]` });
+        return { delivered: false, miss: 'verified-absence', topic: t };
+      }
+    }
+  } catch (e) { console.error('[report-cmd] absence-tombstone check failed (compose proceeds):', e.message); }
   // HYPHEN/SPACE NORMALIZATION (2026-08-21, the hollow anti-china report): his spoken "anti china"
   // (space) phrase-missed a corpus that writes "anti-China" (hyphen) — the phrase LIKE found ZERO
   // real docs and the report composed from token-search noise (#16491, the NM anti-harassment
@@ -17793,7 +17815,11 @@ function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
       // ACTUALLY lives (the one-canonical fold may have redirected), and the project row links it.
       try {
         const _fw = require('./lib/files').lastWrite();
+        // battery-2 escape #2 (08-22): a DIRECTED-TASK scratch file (notes/directed-4023.md) became
+        // the registered canonical of a report project — research MATERIAL is never the deliverable.
+        const _fwBase = _fw ? require('path').basename(_fw.path || '') : '';
         if (_fw && _fw.ts >= (turnStartTs || 0) && /[\\/]notes[\\/][^\\/]+\.md$/i.test(_fw.path || '')
+            && !/^directed-\d+/i.test(_fwBase)
             && /report|brief|briefing|summary|write-?up|dossier|memo|document|one-?pager/i.test(String(order.deliverable || ''))) {
           const _reg = require('./lib/artifact_registry');
           const _r = _reg.resolveOrMint({ topic: order.topic || String(userText).slice(0, 120), kind: 'report' });

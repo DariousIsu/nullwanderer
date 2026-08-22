@@ -81,6 +81,11 @@ ok(/fail-open, delivery proceeds/.test(main), 'an audit ERROR fails open (a brok
 // subject, gated on BOTH spines agreeing (registry reuse + project bind).
 ok(/topic adopts the bound project's canonical subject/.test(main), 'a re-compose runs under the PROJECT\'s canonical subject, never an order fragment');
 ok(/if \(_regVersion > 1\) \{/.test(main), 'topic adoption is gated on the registry having REUSED the canonical (a new subject never inherits)');
+// battery-2 escape #2 (08-22): the say declared the subject nonexistent; the machinery shipped anyway.
+ok(/VERIFIED-ABSENCE tombstone/.test(main) && /miss: 'verified-absence'/.test(main), 'a subject her own recent say verified as NONEXISTENT never composes — the gap stands');
+ok(main.indexOf('VERIFIED-ABSENCE tombstone') < main.indexOf('DIRECTED ACQUISITION (2026-08-21'), 'the tombstone gates BEFORE acquisition (no API spend on a refuted subject)');
+ok(/NEVER say a report is ready or that a dossier was produced/.test(main), 'the tombstone followup forbids the artifact done-claim');
+ok(/!\/\^directed-\\d\+\/i\.test\(_fwBase\)/.test(main), 'a directed-task scratch file never registers as a report canonical (research material is not the deliverable)');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
