@@ -9598,15 +9598,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // The open-threads → chat leak is handled structurally in the Lane split instead (grounding-critical
   // turns don't carry standing-work primacy), not by an ineffective embedding gate.
   if (userQv) {
+    // LATENCY CUT 1a (08-22, the gap dig): the gate embedded row by row, sequentially, and the two
+    // gates ran back to back — up to a dozen embedder round-trips in single file on the critical
+    // path. All rows embed CONCURRENTLY now, and both gates race together. Same verdicts, same
+    // order (map preserves position), same fail-open per row.
     const gate = async (rows) => {
-      const out = [];
-      for (const r of rows || []) {
-        try { const v = await memoryLib.embed(r.content || ''); if (v && memoryLib.cosine(userQv, v) >= 0.4) out.push(r); }
-        catch { out.push(r); }
-      }
-      return out;
+      const verdicts = await Promise.all((rows || []).map(async (r) => {
+        try { const v = await memoryLib.embed(r.content || ''); return (v && memoryLib.cosine(userQv, v) >= 0.4); }
+        catch { return true; }
+      }));
+      return (rows || []).filter((_, i) => verdicts[i]);
     };
-    try { recentMonologue = await gate(recentMonologue); recentReadings = await gate(recentReadings); }
+    try { [recentMonologue, recentReadings] = await Promise.all([gate(recentMonologue), gate(recentReadings)]); }
     catch (e) { console.error('[main] recency gate failed:', e.message); }
   }
 
@@ -9615,13 +9618,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // replaces the firehose (knowledge/past-turns/thoughts/readings/threads/positions/reflections);
   // the anchors (awareness, persona, self-model, self-narrative, protocols, live dialogue) stay.
   // Fail-safe: cloud down → null → full local context unchanged. Skipped on light/social turns.
+  // LATENCY CUT 1b (08-22, the gap dig): the distill's 1-2s cloud call used to BLOCK the chain
+  // here, but its result is consumed only far downstream (the operator's context + the prompt
+  // build) — so it now STARTS here and is awaited at the consumption seam, overlapping the whole
+  // answer-draft/cognition stretch. The blocks object captures the CURRENT array references
+  // (the recency gate above already ran); nothing between here and the await mutates them.
   let distilledBrief = null;
+  let _distillP = Promise.resolve(null);
   try {
     const distillLib = require('./lib/distill');
     const distillBlocks = { knowledge: retrievedKnowledgeBlock, monologue: recentMonologue, readings: recentReadings, pastTurns: relevantPastTurns, threads: openThreads, commitments: heldCommitments, reflections: recentReflections };
     if (!socialTurn && distillLib.shouldDistill(distillBlocks)) {
-      distilledBrief = await distillLib.distill({ userMessage, blocks: distillBlocks });
-      if (distilledBrief) console.log(`[main] context distilled → brief ${distilledBrief.length}c (from ~${distillLib.contextSize(distillBlocks)}c of context)`);
+      _distillP = distillLib.distill({ userMessage, blocks: distillBlocks }).then((d) => {
+        if (d) console.log(`[main] context distilled → brief ${d.length}c (from ~${distillLib.contextSize(distillBlocks)}c of context) — overlapped, not blocking`);
+        return d;
+      }).catch((e) => { console.error('[main] distill step failed:', e.message); return null; });
     }
   } catch (e) { console.error('[main] distill step failed:', e.message); }
 
@@ -10529,6 +10540,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // learned-path loop was dark for exactly the turns the operator drives. History, not a fence.
       const _plOpBlock = (() => { try { const _pl = require('./lib/procedural_lessons'); return _pl.injectionBlock(_pl.taskClassOf(userMessage)) || ''; } catch { return ''; } })();
       if (_plOpBlock) console.log('[procedural] lessons injected into the operator brief');
+      distilledBrief = await _distillP;   // latency cut 1b: first consumption — the overlap ends here
       const opRes = _fanoutNote
         ? { answer: _fanoutNote, toolsUsed: ['spawn_agent_async'] }
         : await runCloudOperator({ userMessage, context: _codeReviewSteer + (docSetBlock ? `${docSetBlock}\n\n` : '') + (distilledBrief || retrievedKnowledgeBlock || '') + (_plOpBlock ? `\n\n${_plOpBlock}` : ''), task: directed, review: selfCodeReview });
@@ -10919,6 +10931,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // reused by BOTH the inject arg AND the irreversible consume below — a deferred email is never dropped.
   const _emailDigestOK = !routerOn || (require('./lib/turn_router').isConversational(turnRoute.route) && turnRoute.route !== 'lookup');
   const _promptInbounds = _emailDigestOK ? pendingInbounds : (pendingInbounds || []).filter((i) => i.source !== 'email');
+  distilledBrief = await _distillP;   // latency cut 1b: the prompt build is the last consumer (idempotent await)
   const messages = buildChatPrompt({
     userName,
     recentReflections: distilledBrief ? [] : recentReflections,
