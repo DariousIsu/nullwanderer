@@ -6250,6 +6250,27 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   }
   md = md.trim();
   if (_dsSection) md = `${md}${_dsSection}`;   // the data section is CODE-authored — appended, never generated
+  // ── P4: VERIFY BEFORE ANNOUNCE ─────────────────────────────────────────────────────────────────
+  // The deterministic pre-announce audit: substance · topic relevance · every named state present ·
+  // done-scope actually in the document · the Total IS the dataset's · a data-shaped topic never
+  // ships prose over a STARVED dataset. Any violation → honest non-delivery: nothing saves, nothing
+  // lands on the canvas, nothing registers — the done-claim is structurally unreachable.
+  try {
+    const _da = require('./lib/delivery_audit');
+    const _proj = (() => { try { return require('./lib/deliverable_projects').findProject(t); } catch { return null; } })();
+    const _verdictA = _da.audit({
+      topic: t, body: md,
+      dsRows: (() => { try { return require('./lib/dataset_store').rowsFor(slug); } catch { return []; } })(),
+      dataShaped: !!_renderDims,
+      doneScope: _proj ? _proj.scope.filter((s) => s.status === 'done').map((s) => s.item) : [],
+    });
+    if (!_verdictA.ok) {
+      const _gap = _da.describe(_verdictA.violations);
+      console.log(`[report-cmd] pre-announce AUDIT FAILED — honest non-delivery: ${_gap.slice(0, 220)}`);
+      if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The "${t}" report FAILED its pre-announce audit and was NOT delivered — nothing is saved, on the canvas, or registered. What the deterministic audit found: ${_gap.slice(0, 500)}. Tell Lucas plainly what is MISSING and what you would need to close each gap (which data to acquire, which states are absent). NEVER say the report is ready or done — it is not.]` });
+      return { delivered: false, miss: `audit: ${_verdictA.violations.map((v) => v.check).join(',')}`, topic: t };
+    }
+  } catch (e) { console.error('[report-cmd] pre-announce audit errored (fail-open, delivery proceeds):', e.message); }
   let saved = false;
   // LATENT BUG FIX (found 08-07 via lint): main.js has no module-level `fs` — this call threw
   // ReferenceError into the catch on EVERY report, so the notes/ file never actually saved

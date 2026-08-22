@@ -612,6 +612,9 @@ const smokes = [
   // P3 slice 1 — the acquirer registry: acquirers keyed by topic domain (legislation wraps
   // legis_acquire verbatim; civic-roster reads the civic store); render dims per data shape.
   'smoke_acquirer_registry.js',
+  // P4 — verify before announce: the deterministic pre-announce audit; any violation makes
+  // the done-claim structurally unreachable (honest gap report instead).
+  'smoke_delivery_audit.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks
