@@ -17670,6 +17670,21 @@ function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
           console.log(`[artifact-registry] in-turn file delivery registered → ${_r.slug} (${_rel})`);
         }
       } catch (e) { console.error('[intake] in-turn delivery registration failed:', e.message); }
+      // P3 GATE CATCH (2026-08-22, gate FAIL 9/10): the operator's in-turn draft DELIVERS but
+      // bypasses the dataset spine entirely — no acquisition, no rows, no deterministic renders,
+      // and "how many" has nothing to inject. When the order's topic matches an ACQUIRER, the
+      // canonical recomposes through buildReportFromHeld (fire-and-forget, io-less): rows land,
+      // the data section renders, the canonical bumps IN PLACE — one order yields a data-backed
+      // document whichever delivery path answered first. Prose-shaped topics skip untouched.
+      try {
+        const _arK = require('./lib/acquirer_registry');
+        if (order.topic && _arK.detect(order.topic)) {
+          console.log('[intake] kept in-turn report is DATA-SHAPED — recomposing the canonical through the dataset spine');
+          buildReportFromHeld({ io: null, channel: 'chat', sessionId, userName: require('./lib/interlocutor').liveName('them'), topic: order.topic })
+            .then((o) => console.log(`[intake] dataset recompose: ${o && o.delivered ? `landed (${o.rel || 'canvas'})` : (o && o.miss) || 'miss'}`))
+            .catch((e) => console.error('[intake] dataset recompose failed:', e.message));
+        }
+      } catch (e) { console.error('[intake] dataset recompose gate failed:', e.message); }
       console.log(`[intake] deliverable order delivered in-turn — no backstop booking (${order.deliverable})`);
       return;
     }

@@ -67,6 +67,9 @@ ok(ar.detect('county contact directory for Iowa').name === 'civic-roster', 'coun
     ok(/acquirer_registry'\)/.test(main) && /_ar\.detect\(t\)/.test(main) && /_ar\.acquire\(\{/.test(main), 'the compose door routes acquisition through the REGISTRY');
     ok(/_renderDims = _det\.renderDims/.test(main) && /renderReportData\(_dsRows, _renderDims \|\| \{\}\)/.test(main), 'the matched acquirer\'s render dims reach the data section');
     ok(/directed acquisition \[\$\{_det\.name\}\]/.test(main), 'the acquisition log names its acquirer');
+    // P3 gate catch: a kept in-turn report with a DATA-SHAPED topic recomposes through the spine.
+    ok(/kept in-turn report is DATA-SHAPED/.test(main) && /_arK\.detect\(order\.topic\)/.test(main) && /buildReportFromHeld\(\{ io: null, channel: 'chat', sessionId, userName: require\('\.\/lib\/interlocutor'\)/.test(main),
+      'the operator\'s in-turn delivery triggers the dataset recompose (one order → a data-backed canonical, whichever path answers)');
     _print(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
     process.exit(fail === 0 ? 0 : 1);
   }
