@@ -117,9 +117,12 @@ async function _runInjectedTurn(runChatTurn, { text, settleMs, maxMs }) {
   const logLines = [];
   let lastLineTs = Date.now();
   const origLog = console.log, origErr = console.error;
+  // STAMPED timeline (08-22, the gap investigation): every captured line carries +ms from turn
+  // start, so one drive yields the full stage-attribution of a turn's wall time — which door,
+  // which hop, which stall. The stamp is a PREFIX; substring checks on line content still hold.
   const tap = (orig, tag) => (...args) => {
     try {
-      logLines.push(`${tag}${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}`.slice(0, 500));
+      logLines.push(`+${Date.now() - started}ms ${tag}${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}`.slice(0, 500));
       lastLineTs = Date.now();
     } catch {}
     return orig(...args);
@@ -128,10 +131,11 @@ async function _runInjectedTurn(runChatTurn, { text, settleMs, maxMs }) {
   console.error = tap(origErr, 'ERR ');
 
   let say = '', complete = null, error = null, turnDone = false;
+  let firstEmitMs = null, sayDoneMs = null;   // TTFT + say-complete, the user-felt gap's two edges
   try {
     const r = await runChatTurn(String(text), [], {
-      emit: (t) => { say += t; },
-      onComplete: (info) => { complete = info || {}; },
+      emit: (t) => { if (firstEmitMs == null && String(t).trim()) firstEmitMs = Date.now() - started; say += t; },
+      onComplete: (info) => { complete = info || {}; if (sayDoneMs == null) sayDoneMs = Date.now() - started; },
       onError: (e) => { error = typeof e === 'string' ? e : (e && e.message) || String(e); },
       busy: () => {},
     });
@@ -159,6 +163,7 @@ async function _runInjectedTurn(runChatTurn, { text, settleMs, maxMs }) {
   console.error = origErr;
   return {
     ok: !error, say: say.slice(0, 20000), says: _saysSince(started), complete, error,
+    firstEmitMs, sayDoneMs,
     logLines, canvasWrites: _canvasWritesSince(started),
     tookMs: Date.now() - started, settled,
   };

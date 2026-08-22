@@ -55,6 +55,9 @@ async function fakeRunChatTurn(text, _atts, io) {
   // `say` concatenates every stream (it can double-count); `says` = the stored rows, the truth.
   ok('says carries the STORED say rows — one clean row per say', Array.isArray(r1.body.says) && r1.body.says.length === 1
     && r1.body.says[0].content === 'routed: CONVERT THE DOC' && r1.body.says[0].unprompted === false && r1.body.says[0].ts >= 0);
+  // the gap instruments: stamped log lines + the user-felt edges (TTFT, say-complete)
+  ok('logLines carry the +ms stage stamp', r1.body.logLines.some((l) => /^\+\d+ms .*fake-door/.test(l)));
+  ok('firstEmitMs and sayDoneMs ride the response', typeof r1.body.firstEmitMs === 'number' && typeof r1.body.sayDoneMs === 'number' && r1.body.firstEmitMs <= r1.body.sayDoneMs);
   ok('console lines during the window are captured', r1.body.logLines.some((l) => /fake-door/.test(l)));
   ok('turn settles when the console goes quiet', r1.body.settled === true);
   ok('completion info rides along', r1.body.complete && r1.body.complete.said === true);
