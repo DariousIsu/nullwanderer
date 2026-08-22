@@ -8010,7 +8010,22 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // orders, recall, personal) never reach the cache by construction (lib/answer_cache).
   try {
     const _ac = require('./lib/answer_cache');
-    if (!_ac.wantsFresh(userMessage)) {
+    // P3 GATE CATCH #2 (2026-08-22): a DATASET-BACKED question must never serve from the cache —
+    // the cached "1,683 contacts" replayed verbatim after 802 rows had landed, short-circuiting
+    // the exact-count injection. The dataset is the authority for its own facts; a count-shaped
+    // ask whose subject resolves to a project WITH rows always generates fresh. Same predicate as
+    // the injection, so the two can never disagree.
+    let _dsAuthority = false;
+    try {
+      if (/\bhow many\b/i.test(userMessage)) {
+        const _p = require('./lib/deliverable_projects').findProject(userMessage);
+        if (_p && require('./lib/dataset_store').countFor(_p.artifact_slug || _p.slug) > 0) {
+          _dsAuthority = true;
+          console.log('[answer-cache] stood down — the question is DATASET-BACKED (SELECT COUNT is the authority, never a cached reply)');
+        }
+      }
+    } catch {}
+    if (!_dsAuthority && !_ac.wantsFresh(userMessage)) {
       const hit = _ac.lookup(userMessage);
       if (hit) {
         const say = _ac.serveText(hit);

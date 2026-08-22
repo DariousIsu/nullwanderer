@@ -116,6 +116,9 @@ ok(lrows[0].attrs.state === 'AZ' && lrows[0].attrs.tags[0] === 'surveillance' &&
     ok(/NEVER state a count, total, percentage, or tally/.test(main), 'the compose rule forbids model-authored numbers when a dataset rides');
     ok(/DATASET COUNTS — EXACT/.test(main) && /renderCounts\(_rows2/.test(main), '"how many" injects exact SELECT-COUNT numbers into the reply context');
     ok(/\bhow many\b/.source ? /if \(\/\\bhow many\\b\/i\.test\(userMessage\)\)/.test(main) : false, 'the count injection is gated on the ask shape + a project + rows');
+    // P3 gate catch #2: the answer cache replayed a STALE count after the dataset landed.
+    ok(/stood down — the question is DATASET-BACKED/.test(main) && main.indexOf('_dsAuthority') < main.indexOf('_ac.lookup(userMessage)'),
+      'a dataset-backed question NEVER serves from the answer cache (SELECT COUNT is the authority)');
     ok(/la2\.enrich\(\{/.test(main) && main.indexOf('la2.enrich({') < main.indexOf('const _clean = t.replace'), 'enrichment runs in the compose door AFTER acquisition, BEFORE the gather/renders');
     ok(/renders proceed on held attrs/.test(main), 'enrichment is fail-soft — a miss never blocks the report');
     _print(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
