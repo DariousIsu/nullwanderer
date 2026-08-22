@@ -111,7 +111,7 @@ ok(lrows[0].attrs.state === 'AZ' && lrows[0].attrs.tags[0] === 'surveillance' &&
     const main = read('main.js');
     ok(/landRows: \(rows\) => _ds\.upsertRows\(\{ slug, rows \}\)/.test(main), 'acquisition lands rows under the PROJECT slug');
     ok(/hasRowsFor: \(state, q\) => _ds\.rowsFor\(slug\)\.some/.test(main), 'the rows-refresh path is wired PER (state, query) — a held sheet never starves the dataset, query A never suppresses query B');
-    ok(main.indexOf('resolveOrMint({ topic: t, kind: \'report\' })') < main.indexOf('const det = la.detect(t);'), 'the registry resolve is HOISTED above acquisition (rows need the slug)');
+    ok(main.indexOf('resolveOrMint({ topic: t, kind: \'report\' })') < main.indexOf('_ar.detect(t)'), 'the registry resolve is HOISTED above acquisition (rows need the slug)');
     ok(/if \(_dsSection\) md = `\$\{md\}\$\{_dsSection\}`/.test(main), 'the data section is CODE-authored and appended — save + canvas both carry it');
     ok(/NEVER state a count, total, percentage, or tally/.test(main), 'the compose rule forbids model-authored numbers when a dataset rides');
     ok(/DATASET COUNTS — EXACT/.test(main) && /renderCounts\(_rows2/.test(main), '"how many" injects exact SELECT-COUNT numbers into the reply context');

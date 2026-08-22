@@ -114,6 +114,7 @@ function renderRoster(rows, { cap = 200 } = {}) {
     if (a.status) bits.push(`${a.status}.`);
     if (a.lastAction) bits.push(`${String(a.lastAction).slice(0, 110)}${a.lastActionDate ? ` (${a.lastActionDate})` : ''}.`);
     if (Array.isArray(a.sponsors) && a.sponsors.length) bits.push(`Sponsors: ${a.sponsors.slice(0, 15).join('; ')}${a.sponsors.length > 15 ? ` +${a.sponsors.length - 15} more` : ''}.`);
+    if (a.email || a.phone) bits.push([a.email, a.phone].filter(Boolean).join(' · '));   // contact rows: reachability IS the payload
     if (r.sourceUrl) bits.push(`Source: ${r.sourceUrl}`);
     return bits.join(' ');
   });
@@ -121,12 +122,16 @@ function renderRoster(rows, { cap = 200 } = {}) {
   return L.join('\n');
 }
 
-/** The full deterministic data section for a report document. */
-function renderReportData(rows) {
+/** The full deterministic data section for a report document. `dims` comes from the acquirer
+ *  registry — each data shape names the dimensions it honestly supports (legislation:
+ *  state × status; civic rosters: body × role). Omitted → the legislation defaults. */
+function renderReportData(rows, dims = {}) {
   if (!rows.length) return '';
+  const countKeys = dims.countKeys || ['state', 'status'];
+  const rowKey = dims.rowKey || 'state', colKey = dims.colKey || 'status';
   return [
-    `### Counts (deterministic — rendered from the dataset, ${rows.length} row(s))`, '', renderCounts(rows), '',
-    `### The table`, '', renderTable(rows), '',
+    `### Counts (deterministic — rendered from the dataset, ${rows.length} row(s))`, '', renderCounts(rows, countKeys), '',
+    `### The table`, '', renderTable(rows, { rowKey, colKey }), '',
     `### Every row`, '', renderRoster(rows),
   ].join('\n');
 }

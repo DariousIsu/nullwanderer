@@ -609,6 +609,9 @@ const smokes = [
   // P2 slice 1 — datasets under documents: rows land under the project slug; counts/tables/
   // rosters render deterministically; the model never authors a number; 'how many' = SELECT COUNT.
   'smoke_dataset_store.js',
+  // P3 slice 1 — the acquirer registry: acquirers keyed by topic domain (legislation wraps
+  // legis_acquire verbatim; civic-roster reads the civic store); render dims per data shape.
+  'smoke_acquirer_registry.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks

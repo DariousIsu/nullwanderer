@@ -50,8 +50,11 @@ const T = 1785700000000;
 
   console.log('wiring:');
   const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  ok(/legis_acquire'\)/.test(mainSrc) && /directed acquisition/.test(mainSrc), 'buildReportFromHeld runs the directed acquisition before the gather');
-  ok(mainSrc.indexOf("require('./lib/legis_acquire')") < mainSrc.indexOf('const _clean = t.replace'), 'the acquisition runs BEFORE the phrase-LIKE gather');
+  // P3: the compose door routes through the ACQUIRER REGISTRY now; legislation is acquirer #1
+  // inside it (behavior unchanged — the P2 gate passed on it).
+  ok(/acquirer_registry'\)/.test(mainSrc) && /directed acquisition/.test(mainSrc), 'buildReportFromHeld runs the directed acquisition (via the registry) before the gather');
+  ok(mainSrc.indexOf("require('./lib/acquirer_registry')") < mainSrc.indexOf('const _clean = t.replace'), 'the acquisition runs BEFORE the phrase-LIKE gather');
+  ok(/name: 'legislation'/.test(fs.readFileSync(path.join(__dirname, '..', 'lib', 'acquirer_registry.js'), 'utf8')), 'legislation is acquirer #1 in the registry');
 
   console.log(`\nsmoke_legis_acquire: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

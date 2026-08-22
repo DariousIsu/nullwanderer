@@ -6094,22 +6094,27 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   // P2: the SAME results land as DATASET ROWS under the project — counts/tables/rosters render
   // deterministically from them below; the model never authors a number.
   // Fail-soft: no Echo / no results / a throw → the gather proceeds on held material unchanged.
+  let _renderDims = null;   // the matched acquirer names the dimensions its data honestly supports
   try {
-    const la = require('./lib/legis_acquire');
-    const det = la.detect(t);
-    if (det.states.length && det.query) {
+    const _ar = require('./lib/acquirer_registry');
+    const _det = _ar.detect(t);
+    if (_det) {
+      _renderDims = _det.renderDims;
       const _ds = require('./lib/dataset_store');
-      const got = await la.acquire({
-        ...det,
-        dispatch: (tag) => echoSuitLib.dispatch(tag),
-        insertDocument: (d) => db.insertDocument(d),
-        findExisting: (ref) => { try { return !!db.getDb().prepare('SELECT 1 FROM documents WHERE ref = ? LIMIT 1').get(ref); } catch { return false; } },
-        landRows: (rows) => _ds.upsertRows({ slug, rows }),
-        // per (state, query): rows from query A must not suppress query B's search (the union)
-        hasRowsFor: (state, q) => _ds.rowsFor(slug).some((r) => r.attrs.state === state && Array.isArray(r.attrs.tags) && r.attrs.tags.includes(q)),
-        log: (m) => console.log(m),
+      const got = await _ar.acquire({
+        ..._det, slug,
+        deps: {
+          db,
+          dispatch: (tag) => echoSuitLib.dispatch(tag),
+          insertDocument: (d) => db.insertDocument(d),
+          findExisting: (ref) => { try { return !!db.getDb().prepare('SELECT 1 FROM documents WHERE ref = ? LIMIT 1').get(ref); } catch { return false; } },
+          landRows: (rows) => _ds.upsertRows({ slug, rows }),
+          // per (state, query): rows from query A must not suppress query B's search (the union)
+          hasRowsFor: (state, q) => _ds.rowsFor(slug).some((r) => r.attrs.state === state && Array.isArray(r.attrs.tags) && r.attrs.tags.includes(q)),
+          log: (m) => console.log(m),
+        },
       });
-      if (got.landed || got.skipped || got.rows) console.log(`[report-cmd] directed acquisition: ${got.landed} sheet(s) landed, ${got.skipped} held, ${got.rows} dataset row(s) (${det.states.join(',')} · "${det.query}")`);
+      if (got.landed || got.skipped || got.rows) console.log(`[report-cmd] directed acquisition [${_det.name}]: ${got.landed} sheet(s) landed, ${got.skipped} held, ${got.rows} dataset row(s)`);
     }
   } catch (e) { console.error('[report-cmd] directed acquisition failed (gather proceeds on held):', e.message); }
   // P2 slice 2 — BILL-DETAIL ENRICHMENT: rows missing status/sponsors get the canonical Bill
@@ -6221,7 +6226,7 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   try {
     const _ds = require('./lib/dataset_store');
     const _dsRows = _ds.rowsFor(slug);
-    if (_dsRows.length) { _dsSection = `\n\n## The data (deterministic — ${_dsRows.length} row(s), rendered from the dataset)\n\n${_ds.renderReportData(_dsRows)}`; console.log(`[report-cmd] dataset section rendered: ${_dsRows.length} row(s) — the numbers are code-authored`); }
+    if (_dsRows.length) { _dsSection = `\n\n## The data (deterministic — ${_dsRows.length} row(s), rendered from the dataset)\n\n${_ds.renderReportData(_dsRows, _renderDims || {})}`; console.log(`[report-cmd] dataset section rendered: ${_dsRows.length} row(s) — the numbers are code-authored`); }
   } catch (e) { console.error('[report-cmd] dataset render failed (prose proceeds):', e.message); }
   const material = [civicBlock, notesBlock, ...rows.map((r) => `--- DOC #${r.id}: ${String(r.title || '').slice(0, 120)} ---\n${String(r.body || '').slice(0, 9000)}`)].filter(Boolean).join('\n\n');
   console.log(`[report-cmd] composing from ${rows.length} held doc(s)${civicBlock ? ' + civic store' : ''}${notesBlock ? ' + notes deliverable(s)' : ''}: ${rows.map((r) => '#' + r.id).join(', ') || '(store only)'}`);
