@@ -70,24 +70,51 @@ function sheetBody({ state, query, results, total, dateStr }) {
     `${(results || []).length > 40 ? ' First 40 shown.' : ''}\n\n${rows.join('\n')}\n`;
 }
 
+/** P2 — search results as DATASET ROWS (pure): entity = "ST BILLNUM"; attrs carry what the
+ *  search actually returned (state, title, last action + date, relevance, the query tag). */
+function resultsToRows({ state, query, results = [] }) {
+  return results.filter((r) => r && (r.bill_number || r.bill_id)).map((r) => ({
+    entity: `${state} ${str(r.bill_number || r.bill_id)}`,
+    attrs: {
+      state,
+      title: str(r.title).slice(0, 200),
+      lastAction: str(r.last_action).slice(0, 160),
+      lastActionDate: str(r.last_action_date),
+      relevance: r.relevance != null ? Number(r.relevance) : undefined,
+      tags: [query],
+    },
+    sourceUrl: str(r.url),
+    provenance: `legiscan_search ${state} "${query}"`,
+  }));
+}
+
 /**
- * acquire({states, query, dispatch, insertDocument, findExisting, now, log}) → { landed, skipped }.
+ * acquire({states, query, dispatch, insertDocument, findExisting, landRows, hasRowsFor, now, log})
+ * → { landed, skipped, rows }.
  * dispatch = the suit's Echo dispatch (legiscan_search is a READ tool — never tier-blocked, never
  * quota-deferred: this runs inside a user-ordered turn). Fail-soft: any per-state failure moves on.
+ * P2: `landRows(rowArray)` lands the SAME results as dataset rows under the project; when the
+ * day's sheet already exists but the project holds no rows for the state (the first post-P2 run),
+ * the search still runs for ROWS ONLY — a skipped sheet must never mean a starved dataset.
  */
-async function acquire({ states = [], query = '', dispatch, insertDocument, findExisting = () => false, now = Date.now(), log = () => {} } = {}) {
-  const out = { landed: 0, skipped: 0 };
+async function acquire({ states = [], query = '', dispatch, insertDocument, findExisting = () => false, landRows = null, hasRowsFor = () => true, now = Date.now(), log = () => {} } = {}) {
+  const out = { landed: 0, skipped: 0, rows: 0 };
   if (!states.length || !query || typeof dispatch !== 'function' || typeof insertDocument !== 'function') return out;
   const dateStr = new Date(now).toISOString().slice(0, 10);
   for (const state of states) {
     const ref = `legiscan-search:${state.toLowerCase()}:${query.replace(/\s+/g, '-')}:${dateStr}`;
     try {
-      if (findExisting(ref)) { out.skipped++; continue; }         // today's sheet already held
+      const sheetHeld = findExisting(ref);
+      if (sheetHeld && (!landRows || hasRowsFor(state))) { out.skipped++; continue; }   // sheet AND rows already held
       const r = await dispatch({ kind: 'do', name: 'legiscan_search', args: { state, query } });
       if (!r || !r.ok || !r.text) continue;
       let j = null; try { j = JSON.parse(r.text); } catch { continue; }
       const results = Array.isArray(j.results) ? j.results : [];
       if (!results.length) continue;                              // an honest empty is not a sheet
+      if (typeof landRows === 'function') {
+        try { const rows = resultsToRows({ state, query, results }); landRows(rows); out.rows += rows.length; } catch (e) { log(`[legis-acquire] ${state} row landing failed (${e && e.message}) — sheet path continues`); }
+      }
+      if (sheetHeld) { out.skipped++; continue; }                  // rows refreshed; today's sheet stands
       const id = insertDocument({
         title: `LegiScan sweep — ${query} bills: ${state} (${dateStr})`,
         body: sheetBody({ state, query, results, total: j.total_results, dateStr }),
@@ -101,4 +128,4 @@ async function acquire({ states = [], query = '', dispatch, insertDocument, find
   return out;
 }
 
-module.exports = { detect, acquire, sheetBody, STATE_CODES };
+module.exports = { detect, acquire, sheetBody, resultsToRows, STATE_CODES };

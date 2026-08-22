@@ -6069,6 +6069,20 @@ async function buildSplitFromOrder({ io, channel, sessionId, labels }) {
 
 async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) {
   const t = String(topic || '').trim();
+  // ARTIFACT REGISTRY (Phase 0 #5, hoisted to the TOP for Phase 2): the topic resolves to its
+  // PROJECT before anything else — a kin topic reuses the canonical file (version++), only a new
+  // subject mints — and the DIRECTED ACQUISITION below lands its dataset ROWS under this slug.
+  // Fail-soft: a registry error falls back to the legacy slug so a report always lands.
+  let slug, rel, _regVersion = 1;
+  try {
+    const _reg = require('./lib/artifact_registry');
+    const _r = _reg.resolveOrMint({ topic: t, kind: 'report' });
+    slug = _r.slug; rel = _r.relPath; _regVersion = _r.nextVersion;
+  } catch (e) {
+    console.error('[report-cmd] artifact registry failed (legacy slug fallback):', e.message);
+    slug = 'report-' + (t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'untitled');
+    rel = `notes/${slug}.md`;
+  }
   // HYPHEN/SPACE NORMALIZATION (2026-08-21, the hollow anti-china report): his spoken "anti china"
   // (space) phrase-missed a corpus that writes "anti-China" (hyphen) — the phrase LIKE found ZERO
   // real docs and the report composed from token-search noise (#16491, the NM anti-harassment
@@ -6077,19 +6091,24 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   // possible. Why would a direct user request get queued as a multi-day job") — a legislative
   // topic naming states pulls its OWN fuel now: bounded live LegiScan searches landed as citable
   // sheets BEFORE the gather below, so the compose never starves behind the corpus drain's pace.
+  // P2: the SAME results land as DATASET ROWS under the project — counts/tables/rosters render
+  // deterministically from them below; the model never authors a number.
   // Fail-soft: no Echo / no results / a throw → the gather proceeds on held material unchanged.
   try {
     const la = require('./lib/legis_acquire');
     const det = la.detect(t);
     if (det.states.length && det.query) {
+      const _ds = require('./lib/dataset_store');
       const got = await la.acquire({
         ...det,
         dispatch: (tag) => echoSuitLib.dispatch(tag),
         insertDocument: (d) => db.insertDocument(d),
         findExisting: (ref) => { try { return !!db.getDb().prepare('SELECT 1 FROM documents WHERE ref = ? LIMIT 1').get(ref); } catch { return false; } },
+        landRows: (rows) => _ds.upsertRows({ slug, rows }),
+        hasRowsFor: (state) => _ds.hasRows(slug, { state }),
         log: (m) => console.log(m),
       });
-      if (got.landed || got.skipped) console.log(`[report-cmd] directed acquisition: ${got.landed} live LegiScan sheet(s) landed, ${got.skipped} already held (${det.states.join(',')} · "${det.query}")`);
+      if (got.landed || got.skipped || got.rows) console.log(`[report-cmd] directed acquisition: ${got.landed} sheet(s) landed, ${got.skipped} held, ${got.rows} dataset row(s) (${det.states.join(',')} · "${det.query}")`);
     }
   } catch (e) { console.error('[report-cmd] directed acquisition failed (gather proceeds on held):', e.message); }
   const _clean = t.replace(/[%_]/g, '');
@@ -6175,11 +6194,22 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   }
   // notesBlock leads (after the civic digest): the hand-built deliverables/dossiers are the richest,
   // most-complete material — the composer should stand on them first, then the thinner doc_store rows.
+  // P2 — THE DETERMINISTIC DATA SECTION (computed BEFORE the compose so the prompt can pin it):
+  // rendered by CODE from the project's dataset rows and appended to the document at save time.
+  // Even a wayward narrative cannot corrupt the numbers — they never pass through the model.
+  // Empty dataset → no section, no rule (prose-only reports are unchanged).
+  let _dsSection = '';
+  try {
+    const _ds = require('./lib/dataset_store');
+    const _dsRows = _ds.rowsFor(slug);
+    if (_dsRows.length) { _dsSection = `\n\n## The data (deterministic — ${_dsRows.length} row(s), rendered from the dataset)\n\n${_ds.renderReportData(_dsRows)}`; console.log(`[report-cmd] dataset section rendered: ${_dsRows.length} row(s) — the numbers are code-authored`); }
+  } catch (e) { console.error('[report-cmd] dataset render failed (prose proceeds):', e.message); }
   const material = [civicBlock, notesBlock, ...rows.map((r) => `--- DOC #${r.id}: ${String(r.title || '').slice(0, 120)} ---\n${String(r.body || '').slice(0, 9000)}`)].filter(Boolean).join('\n\n');
   console.log(`[report-cmd] composing from ${rows.length} held doc(s)${civicBlock ? ' + civic store' : ''}${notesBlock ? ' + notes deliverable(s)' : ''}: ${rows.map((r) => '#' + r.id).join(', ') || '(store only)'}`);
+  const _dsRule = _dsSection ? `\n• A DETERMINISTIC DATA section (counts, table, per-row roster) is appended to this document by the SYSTEM — you do not write it. NEVER state a count, total, percentage, or tally: refer the reader to the data section instead ("the data section below carries the exact counts"). Any specific bill/row you discuss must exist in the DATASET RENDERS provided.` : '';
   const msgs = [
-    { role: 'system', content: `You are composing ONE finished, professional report from research documents the assistant ALREADY HOLDS. Rules — absolute:\n• Ground ONLY in the provided documents. Never add a fact, name, number, or URL that is not in them.\n• Every source annotation already present — "(source: …)" — stays attached to its claim. Never strip one, never invent one.\n• Structure: a title line, a 2-4 sentence executive summary, then "## " sections organized by what the material actually supports, then "## Open questions" naming what the documents do NOT answer.\n• A supplied document that is NOT about the report subject is to be IGNORED ENTIRELY — never cited, never summarized, and NEVER listed as an open question. Open questions concern the SUBJECT only.\n• Where the documents are thin or contradict each other, SAY SO in the text rather than papering over it. An honest gap is part of the report.\nOutput Markdown only — no preamble, no "here is".` },
-    { role: 'user', content: `REPORT SUBJECT: ${t}\n\nTHE DOCUMENTS YOU HOLD:\n"""\n${material.slice(0, 60000)}\n"""\n\nCompose the finished report on ${t} now.` },
+    { role: 'system', content: `You are composing ONE finished, professional report from research documents the assistant ALREADY HOLDS. Rules — absolute:\n• Ground ONLY in the provided documents. Never add a fact, name, number, or URL that is not in them.\n• Every source annotation already present — "(source: …)" — stays attached to its claim. Never strip one, never invent one.\n• Structure: a title line, a 2-4 sentence executive summary, then "## " sections organized by what the material actually supports, then "## Open questions" naming what the documents do NOT answer.\n• A supplied document that is NOT about the report subject is to be IGNORED ENTIRELY — never cited, never summarized, and NEVER listed as an open question. Open questions concern the SUBJECT only.\n• Where the documents are thin or contradict each other, SAY SO in the text rather than papering over it. An honest gap is part of the report.${_dsRule}\nOutput Markdown only — no preamble, no "here is".` },
+    { role: 'user', content: `REPORT SUBJECT: ${t}\n\n${_dsSection ? `THE DATASET RENDERS (deterministic; the system appends these to the document — write the narrative AROUND them):\n"""${_dsSection.slice(0, 20000)}\n"""\n\n` : ''}THE DOCUMENTS YOU HOLD:\n"""\n${material.slice(0, 50000)}\n"""\n\nCompose the finished report on ${t} now.` },
   ];
   let md = '';
   try { md = await condenseComplete(msgs, { numPredict: 2600 }); } catch (e) { console.error('[report-cmd] compose call failed:', e.message); }
@@ -6195,21 +6225,7 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
     return { delivered: false, miss: 'narration', topic: t };
   }
   md = md.trim();
-  // ARTIFACT REGISTRY v0 (Phase 0, doc-plan #5 — Root A): the topic resolves to its PROJECT.
-  // A kin topic ("…and surveillance…", a re-order, his re-phrasing) reuses the project's canonical
-  // file and UPDATES it in place (version++); only a genuinely new subject mints a file. The old
-  // way — slug = raw topic slice — minted four anti-China siblings in one day and she anchored to
-  // a stale one. Fail-soft: a registry error falls back to the legacy slug so a report always lands.
-  let slug, rel, _regVersion = 1;
-  try {
-    const _reg = require('./lib/artifact_registry');
-    const _r = _reg.resolveOrMint({ topic: t, kind: 'report' });
-    slug = _r.slug; rel = _r.relPath; _regVersion = _r.nextVersion;
-  } catch (e) {
-    console.error('[report-cmd] artifact registry failed (legacy slug fallback):', e.message);
-    slug = 'report-' + (t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'untitled');
-    rel = `notes/${slug}.md`;
-  }
+  if (_dsSection) md = `${md}${_dsSection}`;   // the data section is CODE-authored — appended, never generated
   let saved = false;
   // LATENT BUG FIX (found 08-07 via lint): main.js has no module-level `fs` — this call threw
   // ReferenceError into the catch on EVERY report, so the notes/ file never actually saved
@@ -8334,6 +8350,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       console.log(`[projects] status ask "${_sa.subject.slice(0, 60)}" → project "${_sb.slug}" — row facts injected into the reply context`);
     }
   } catch (e) { console.error('[projects] status inject failed (reply proceeds):', e.message); }
+  // P2 — THE EXACT-COUNT ANSWER: "how many bills total" on a project that carries a dataset
+  // answers by SELECT COUNT — the number NEVER comes from the model ("how many bills total" was
+  // unanswerable under the prose pipeline; doc-plan failure #6). Fires only when the subject
+  // resolves to a project AND that project holds rows; everything else is untouched.
+  try {
+    if (/\bhow many\b/i.test(userMessage)) {
+      const _dp2 = require('./lib/deliverable_projects');
+      const _proj = _dp2.findProject(userMessage);
+      if (_proj) {
+        const _ds2 = require('./lib/dataset_store');
+        const _rows2 = _ds2.rowsFor(_proj.artifact_slug || _proj.slug);
+        if (_rows2.length) {
+          composedUserMessage = `${composedUserMessage}\n\n[DATASET COUNTS — EXACT, computed by the system from the "${_proj.slug}" project's dataset. These numbers are FINAL: answer with them verbatim, never estimate, never adjust, never add counts of your own:\n${_ds2.renderCounts(_rows2, ['state', 'status', 'tags'])}]`;
+          console.log(`[dataset] count ask → project "${_proj.slug}" — exact counts injected (${_rows2.length} row(s))`);
+        }
+      }
+    }
+  } catch (e) { console.error('[dataset] count inject failed (reply proceeds):', e.message); }
   // RETRIEVE-OR-ADMIT (anti-confabulation) — a personal-fact question ("what's my daughter's
   // name?") must be answered from real memory or honestly declined, never guessed. She once
   // fabricated a child's name AND a fake "you just mentioned it" justification. The directive

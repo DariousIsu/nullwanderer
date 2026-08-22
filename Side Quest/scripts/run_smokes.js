@@ -606,6 +606,9 @@ const smokes = [
   // P1 slice 1 — the project spine: orders bind (kin/mint), scope attaches, composes link,
   // "where are we on X" has a row to read. Gate for the phase = the multi-day continuity suite.
   'smoke_deliverable_projects.js',
+  // P2 slice 1 — datasets under documents: rows land under the project slug; counts/tables/
+  // rosters render deterministically; the model never authors a number; 'how many' = SELECT COUNT.
+  'smoke_dataset_store.js',
   // ── the interceptor-hijack cluster (2026-08-16 drill): directed programming tasks were stolen by the
   // stop / pull-up / status doors and answered with an "I'm on it" ack that never executed or delivered.
   'smoke_operator_directed.js',   // D-route: exec/production imperatives are directed tasks
