@@ -36,6 +36,8 @@ function directive() {
 }
 
 const _STOP = new Set(['this', 'that', 'with', 'have', 'from', 'into', 'what', 'your', 'them', 'then', 'they', 'were', 'when', 'need', 'some', 'ideas', 'idea', 'help', 'come', 'think', 'through', 'about', 'more', 'here', 'there', 'want', 'going', 'just', 'like', 'work', 'working', 'feedback', 'thoughts', 'brainstorm', 'brainstorming', 'whose', 'name', 'which', 'down', 'know', 'tell', 'does', 'been', 'verified', 'records', 'record', 'tracked', 'pinned', 'landed', 'remind', 'pull', 'latest', 'hold', 'give']);
+// A bill-number-shaped token ("sb200", "hb1234", "ssb1683") — an identifier, never a word stem.
+const _BILLNUM_RE = /^[a-z]{1,4}\d{1,5}$/;
 function _terms(text, max = 6) {
   const out = [];
   for (const w of String(text || '').toLowerCase().match(/[a-z0-9]{4,}/g) || []) {
@@ -81,11 +83,18 @@ function groundingBlock({ sessionId, text = '', mode = 'collab' } = {}) {
     try { const ts = require('./answer_cache').threadState({ sessionId }); if (ts) ask = ts.ask || ''; } catch {}
     const terms = _terms(`${text} ${ask}`, 6);
     if (terms.length >= 2 && parts.length < 3) {
+      // INSTANCE DISCIPLINE (campaign §21a, 08-22): a bill-number token is an IDENTIFIER, not a
+      // stem — the 2018 Louisiana "SB200" (Hewitt) rode prefix/substring widening into every 2026
+      // anti-china SB200 ask. Bill numbers match as EXACT fts tokens (never sb200* ⊇ sb2000, never
+      // sb20 ⊆ sb200 via LIKE), the substring fallback boundary-checks them, and the fan is RANKED
+      // by the thread's other terms so the thread's own instance dominates a same-numbered stranger.
+      const billToks = terms.filter((t) => _BILLNUM_RE.test(t));
+      const otherToks = terms.filter((t) => !_BILLNUM_RE.test(t));
       let rows = [];
       try {
         rows = d.getDb().prepare(
           `SELECT d2.id, d2.title, d2.body FROM documents_fts f JOIN documents d2 ON d2.id = f.rowid WHERE documents_fts MATCH ? ORDER BY bm25(documents_fts) LIMIT 4`
-        ).all(terms.map((t) => `${t}*`).join(' OR '));
+        ).all(terms.map((t) => (_BILLNUM_RE.test(t) ? `"${t}"` : `${t}*`)).join(' OR '));
       } catch { rows = []; }
       if (!rows.length) {
         // The fts index backfills on a tick — a JUST-ingested doc (or a fresh store) is not in it
@@ -96,6 +105,20 @@ function groundingBlock({ sessionId, text = '', mode = 'collab' } = {}) {
             `SELECT id, title, body FROM documents WHERE (title LIKE ? OR body LIKE ?)${b ? ' AND (title LIKE ? OR body LIKE ?)' : ''} ORDER BY id DESC LIMIT 4`
           ).all(...(b ? [`%${a}%`, `%${a}%`, `%${b}%`, `%${b}%`] : [`%${a}%`, `%${a}%`]));
         } catch { rows = []; }
+        // Boundary discipline on the substring path: a row that rode in on a bill-number LIKE must
+        // hold that number as a WHOLE token, or genuinely match a non-bill term.
+        if (billToks.length) {
+          rows = rows.filter((r) => {
+            const hay = `${r.title || ''} ${r.body || ''}`;
+            return billToks.some((bt) => new RegExp(`\\b${bt}\\b`, 'i').test(hay)) || otherToks.some((ot) => hay.toLowerCase().includes(ot));
+          });
+        }
+      }
+      // The thread's instance dominates the fan: rank by how many non-bill thread terms each row
+      // holds (the 2026 sheet carries "china"/"surveillance"; the 2018 stranger doesn't). Stable.
+      if (otherToks.length && rows.length > 1) {
+        const inst = (r) => { const hay = `${r.title || ''} ${r.body || ''}`.toLowerCase(); return otherToks.reduce((n, t2) => n + (hay.includes(t2) ? 1 : 0), 0); };
+        rows = rows.map((r, i) => ({ r, i, s: inst(r) })).sort((x, y) => y.s - x.s || x.i - y.i).map((x) => x.r);
       }
       for (const r of rows) addDoc(r, 'held, matches this thread');
     }

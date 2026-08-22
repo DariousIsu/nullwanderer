@@ -53,9 +53,22 @@ ok(/IN THIS REPLY/.test(d) && /Do NOT create or edit any artifact/.test(d) && /l
 
   // ── recall mode: held-source homecoming (the run-8 residual) ──────────────────────────────────
   const sheet = db.insertDocument({ title: 'Anti-China 2026 sponsors sheet', body: 'LA SB200 co-sponsors, Senate: Allain, Barrow, Cathey, Selders (D-14, died 2026-07-07), Stine, Womack. The Selders co-sponsorship predates his death.', source: 'smoke-sheet', origin: null });
+  db.syncDocumentsFts();   // the index backfills on a tick in production — sync so FTS is the path under test
   const rb = cl.groundingBlock({ sessionId: 0, text: 'whose name is on the SB200 co-sponsorship we tracked down?', mode: 'recall' });
   ok(rb && new RegExp(`doc#${sheet.id}`).test(rb) && /Selders/.test(rb), 'RUN-8 RESIDUAL: the SB200 question reaches the held sheet by FTS (Selders in the excerpt)');
   ok(rb && /Answer FROM these documents/.test(rb) && /NEVER fill the gap/.test(rb), 'the recall frame orders answer-from-held or honest-miss');
+
+  // ── instance discipline (campaign §21a): the 2018 stranger never dominates a 2026 ask ──────────
+  const stranger = db.insertDocument({ title: 'LA 2018 session archive — SB200 (Hewitt)', body: 'Louisiana 2018 regular session: SB200 by Hewitt, water infrastructure funding. Committee referrals and fiscal notes from the 2018 archive.', source: 'smoke-archive', origin: null });
+  const wide = db.insertDocument({ title: 'MO SB2000 omnibus', body: 'Missouri SB2000 omnibus package covering unrelated transport items.', source: 'smoke-archive', origin: null });
+  db.syncDocumentsFts();
+  const rb2 = cl.groundingBlock({ sessionId: 0, text: 'what is the status of SB200 in the anti china sweep?', mode: 'recall' });
+  ok(rb2 && rb2.indexOf(`doc#${wide.id}`) === -1, '⭐ a bill number is an IDENTIFIER: sb200 never matches SB2000 (the prefix-star widening is gone)');
+  {
+    const iSheet = rb2 ? rb2.indexOf(`doc#${sheet.id}`) : -1, iStr = rb2 ? rb2.indexOf(`doc#${stranger.id}`) : -1;
+    ok(iSheet > -1 && (iStr === -1 || iSheet < iStr), '⭐ THE HEWITT SPECIMEN: the thread\'s instance (2026 anti-china) LEADS the fan — the 2018 SB200 never dominates');
+  }
+  ok(cl.groundingBlock({ sessionId: 0, text: 'any updates on SB20 anywhere?', mode: 'recall' }) === null, 'sb20 never rides INTO sb200 documents (no substring widening either direction)');
 }
 
 // ── wiring: the four gates exist in main.js ─────────────────────────────────────────────────────
