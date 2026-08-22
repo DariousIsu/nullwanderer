@@ -26,6 +26,9 @@ ok(rc.detect('rebuild the report on anti-China and surveillance bills state by s
 ok(rc.detect('regenerate the brief on the Hartfield Foundation').topic === 'Hartfield Foundation', 'regenerate the brief on X');
 ok(rc.detect('redo the report on Louisiana energy policy').topic === 'Louisiana energy policy', 'redo the report on X');
 ok(rc.detect('any update on the report for louisiana') === null, '"any update on the report" is a STATUS ask, never a build order (update stays out of BUILD)');
+// P2 gate catch: the FULL seven-state order (159ch) was silently rejected by the 120 topic cap.
+ok(rc.detect('rebuild the report on anti-China and surveillance bills state by state with sponsors and co-sponsors: Utah, Arizona, Texas, Florida, Tennessee, Louisiana, Iowa') !== null,
+  'the LIVE P2-gate order (159ch, full state list) fires — the topic cap fits a real multi-state spec');
 
 // --- must NOT fire on questions ABOUT a report ---
 ok(rc.detect('what does the report say about Hartfield') === null, 'asking what a report SAYS is not a build order');

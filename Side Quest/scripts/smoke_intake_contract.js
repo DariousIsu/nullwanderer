@@ -17,6 +17,11 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
 }
 ok(!!ic.detectDeliverableOrder('Update notes/anti_china_2026_sponsors.md in place — close or dead-end each open question.'), 'C1: "update notes/… in place" → detected');
 ok(!!ic.detectDeliverableOrder('build the bill-sponsors sheet. One row per bill: state, bill number, title.'), 'C1: "build the … sheet" → detected');
+// P2 gate catch (2026-08-21): "REBUILD the report on X" was not an order to this detector — the
+// intake filed a direct imperative as "topic discussed, not commanded" and NOTHING dispatched.
+ok(!!ic.detectDeliverableOrder('rebuild the report on anti-China and surveillance bills state by state with sponsors and co-sponsors: Utah, Arizona, Texas, Florida, Tennessee, Louisiana, Iowa'),
+  'P2-GATE REGRESSION: the LIVE "rebuild the report on …" order is an ORDER (re-order verbs joined)');
+ok(!!ic.detectDeliverableOrder('regenerate the Hartfield brief with the new 990 data'), 'regenerate → an order');
 ok(!!ic.detectDeliverableOrder('then land the working outline on the canvas as our op-ed doc: hook, the mechanism, the close'), 'C1: "land the outline on the canvas" → detected (canvas target)');
 ok(!!ic.detectDeliverableOrder('I need you to compile a summary of the Green South filings by Friday.'), 'C1: "I need you to compile a summary" → detected');
 {

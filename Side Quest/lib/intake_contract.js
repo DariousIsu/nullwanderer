@@ -36,7 +36,10 @@ const _QUESTION_RE = /\?\s*$|^(?:who|what|where|why|how|hows|how's|is|are|was|we
 // evidence downstream keeps them precise) and "Go into notes/x.md and smooth the rough sentences
 // right in the file" (an approach-verb lead — go into/open/take — with the order verb after "and";
 // the file went untouched behind "Got it — smoothing now"). The bridge is bounded to one sentence.
-const _ORDER_VERB = /(?:finish|complete|update|build|make|compile|compose|create|assemble|land|write|draft|produce|generate|deliver|put together|pull together|knock out|redo|polish|tighten|revise|rework|reword|edit|refine|smooth|trim|clean\s*up|copy-?edit|proofread|put|drop|place|post|package)/i;
+// re-order verbs joined 2026-08-21 (P2 gate catch): "REBUILD the report on X" was not an order
+// to this detector — no booking, no bind, and the intake filed a direct imperative as "topic
+// discussed, not commanded". Mirrors the report net's f2163db verb set.
+const _ORDER_VERB = /(?:finish|complete|update|build|re-?build|make|compile|compose|re-?compose|create|assemble|land|write|draft|re-?draft|produce|generate|re-?generate|refresh|deliver|put together|pull together|knock out|redo|polish|tighten|revise|rework|reword|edit|refine|smooth|trim|clean\s*up|copy-?edit|proofread|put|drop|place|post|package)/i;
 // The bridge span stays inside one sentence but must cross FILENAME dots ("notes/x.md and smooth…"):
 // a dot followed by non-space is an extension dot, a dot followed by space/EOL ends the sentence.
 const _APPROACH_BRIDGE = `(?:(?:go\\s+(?:into|to|through|over)|open(?:\\s+up)?|take|grab|pull\\s+up)\\s+(?:[^.!?;\\n]|\\.(?=\\S)){0,80}?\\b(?:and|then)\\s+)?`;

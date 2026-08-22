@@ -45,7 +45,10 @@ function detect(text) {
   const m = t.match(new RegExp(`\\b(?:${ARTIFACT})\\b[^.?!]*?\\b(?:on|about|for|covering|regarding|of|into)\\s+(.+?)\\s*(?:\\bplease\\b|\\bnow\\b|\\basap\\b|\\bthanks?\\b|\\bthank you\\b|[.?!]|$)`, 'i'));
   let topic = m ? m[1] : '';
   topic = cleanTopic(topic);
-  if (topic.length < 3 || topic.length > 120) return null;
+  // Ceiling 120 → 200 (P2 gate catch, 2026-08-21): the full seven-state order — "…with sponsors
+  // and co-sponsors: Utah, Arizona, …" — is 159 chars and the net silently rejected it; the order
+  // fell to plain conversation. A real multi-state spec is long; 200 still bounds runaway captures.
+  if (topic.length < 3 || topic.length > 200) return null;
   return { topic };
 }
 
