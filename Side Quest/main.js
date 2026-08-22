@@ -6111,6 +6111,24 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
       if (got.landed || got.skipped || got.rows) console.log(`[report-cmd] directed acquisition: ${got.landed} sheet(s) landed, ${got.skipped} held, ${got.rows} dataset row(s) (${det.states.join(',')} · "${det.query}")`);
     }
   } catch (e) { console.error('[report-cmd] directed acquisition failed (gather proceeds on held):', e.message); }
+  // P2 slice 2 — BILL-DETAIL ENRICHMENT: rows missing status/sponsors get the canonical Bill
+  // object via legiscan_bill_get (READ tool, in-turn), highest-relevance first, bounded by count
+  // AND time — the cross-tab gains its status dimension and the roster its sponsors. A non-data
+  // project has no rows → no-op. Fail-soft: renders proceed on whatever attrs the rows hold.
+  try {
+    const _dsE = require('./lib/dataset_store');
+    const _rowsE = _dsE.rowsFor(slug);
+    if (_rowsE.length) {
+      const la2 = require('./lib/legis_acquire');
+      const er = await la2.enrich({
+        rows: _rowsE,
+        dispatch: (tag) => echoSuitLib.dispatch(tag),
+        upsert: (rows2) => _dsE.upsertRows({ slug, rows: rows2 }),
+        log: (m) => console.log(m),
+      });
+      if (er.done || er.failed || er.remaining) console.log(`[report-cmd] enrichment: ${er.done} bill(s) detailed, ${er.failed} miss(es), ${er.remaining} still plain (later runs pick them up)`);
+    }
+  } catch (e) { console.error('[report-cmd] enrichment failed (renders proceed on held attrs):', e.message); }
   const _clean = t.replace(/[%_]/g, '');
   const like = `%${_clean}%`;
   // LIKE's `_` wildcard matches any ONE char per separator position, so a single alt pattern

@@ -77,6 +77,7 @@ function resultsToRows({ state, query, results = [] }) {
     entity: `${state} ${str(r.bill_number || r.bill_id)}`,
     attrs: {
       state,
+      billId: r.bill_id != null ? Number(r.bill_id) : undefined,   // the enrichment key (legiscan_bill_get)
       title: str(r.title).slice(0, 200),
       lastAction: str(r.last_action).slice(0, 160),
       lastActionDate: str(r.last_action_date),
@@ -86,6 +87,65 @@ function resultsToRows({ state, query, results = [] }) {
     sourceUrl: str(r.url),
     provenance: `legiscan_search ${state} "${query}"`,
   }));
+}
+
+// ── P2 slice 2 — BILL-DETAIL ENRICHMENT ────────────────────────────────────────────────────────
+// The search rows carry no STATUS and no SPONSORS — the cross-tab's missing dimension and the
+// roster's missing half. legiscan_bill_get (Echo READ tool — never tier-blocked, never quota-
+// deferred inside a user-ordered turn) returns the canonical Bill object; billToAttrs distills
+// exactly the render-relevant fields. Bounded by COUNT and TIME, highest-relevance rows first,
+// so the top bills are always detailed even when the budget cuts; the rest enrich on later runs.
+const STATUS_MAP = { 1: 'Introduced', 2: 'Engrossed', 3: 'Enrolled', 4: 'Passed', 5: 'Vetoed', 6: 'Failed' };
+
+/** Distill one canonical Bill object to render attrs — pure. Primary sponsors lead the list. */
+function billToAttrs(bill) {
+  const out = {};
+  const st = STATUS_MAP[Number(bill && bill.status)] || undefined;
+  if (st) out.status = st;
+  const sp = Array.isArray(bill && bill.sponsors) ? bill.sponsors : [];
+  if (sp.length) {
+    const nm = (s) => {
+      const n = str(s.name) || `${str(s.first_name)} ${str(s.last_name)}`.trim();
+      const tag = [str(s.party), str(s.district)].filter(Boolean).join('-');
+      return tag ? `${n} (${tag})` : n;
+    };
+    const prim = sp.filter((s) => Number(s.sponsor_type_id) === 1).map(nm);
+    const cos = sp.filter((s) => Number(s.sponsor_type_id) !== 1).map(nm);
+    out.sponsors = [...prim, ...cos].slice(0, 40);
+    out.primarySponsors = prim.length;
+  }
+  const hist = Array.isArray(bill && bill.history) ? bill.history : [];
+  const last = hist.length ? hist[hist.length - 1] : null;
+  if (last && last.action) { out.lastAction = str(last.action).slice(0, 160); if (last.date) out.lastActionDate = str(last.date); }
+  return out;
+}
+
+/**
+ * enrich({rows, dispatch, upsert, cap, budgetMs, now, log}) → {done, failed, remaining}.
+ * rows = the project's dataset rows; only those with a billId and missing status/sponsors are
+ * fetched. upsert() receives MERGED attrs (fresh detail over the search row). Fail-soft per bill.
+ */
+async function enrich({ rows = [], dispatch, upsert, cap = 120, budgetMs = 150000, now = () => Date.now(), log = () => {} } = {}) {
+  const out = { done: 0, failed: 0, remaining: 0 };
+  if (typeof dispatch !== 'function' || typeof upsert !== 'function') return out;
+  const todo = rows
+    .filter((r) => r && r.attrs && r.attrs.billId && (!r.attrs.status || !r.attrs.sponsors))
+    .sort((a, b) => (b.attrs.relevance || 0) - (a.attrs.relevance || 0));
+  const t0 = now();
+  for (const r of todo) {
+    if (out.done + out.failed >= cap || now() - t0 > budgetMs) break;
+    try {
+      const res = await dispatch({ kind: 'do', name: 'legiscan_bill_get', args: { bill_id: r.attrs.billId } });
+      if (!res || !res.ok || !res.text) { out.failed++; continue; }
+      let j = null; try { j = JSON.parse(res.text); } catch { out.failed++; continue; }
+      const bill = (j && j.bill) || (j && j.result && j.result.bill) || null;
+      if (!bill) { out.failed++; continue; }
+      upsert([{ entity: r.entity, attrs: { ...r.attrs, ...billToAttrs(bill) }, sourceUrl: r.sourceUrl || str(bill.url), provenance: r.provenance }]);
+      out.done++;
+    } catch (e) { out.failed++; log(`[legis-enrich] ${r.entity} failed (${e && e.message}) — moving on`); }
+  }
+  out.remaining = todo.length - out.done - out.failed;
+  return out;
 }
 
 /**
@@ -128,4 +188,4 @@ async function acquire({ states = [], query = '', dispatch, insertDocument, find
   return out;
 }
 
-module.exports = { detect, acquire, sheetBody, resultsToRows, STATE_CODES };
+module.exports = { detect, acquire, sheetBody, resultsToRows, billToAttrs, enrich, STATUS_MAP, STATE_CODES };

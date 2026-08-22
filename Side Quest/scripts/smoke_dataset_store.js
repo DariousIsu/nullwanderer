@@ -79,6 +79,33 @@ ok(lrows[0].attrs.state === 'AZ' && lrows[0].attrs.tags[0] === 'surveillance' &&
     });
     ok(out2.skipped === 1 && out2.rows === 0, 'sheet AND rows held → true skip, no search');
 
+    // --- 3b. SLICE 2: bill-detail enrichment ---
+    const bill = { status: 4, url: 'https://legiscan.com/TN/SB318',
+      sponsors: [ { name: 'Paul Rose', party: 'R', district: 'SD-032', sponsor_type_id: 2 }, { name: 'Adam Lowe', party: 'R', district: 'SD-001', sponsor_type_id: 1 } ],
+      history: [ { action: 'Introduced', date: '2026-01-05' }, { action: 'Signed by Governor', date: '2026-05-01' } ] };
+    const ba = la.billToAttrs(bill);
+    ok(ba.status === 'Passed', 'billToAttrs: the status CODE maps to its word');
+    ok(ba.sponsors[0] === 'Adam Lowe (R-SD-001)' && ba.sponsors[1] === 'Paul Rose (R-SD-032)' && ba.primarySponsors === 1, 'billToAttrs: primary sponsors LEAD the roster');
+    ok(ba.lastAction === 'Signed by Governor' && ba.lastActionDate === '2026-05-01', 'billToAttrs: the history TAIL is the last action');
+    ok(JSON.stringify(la.billToAttrs({})) === '{}', 'an empty bill distills to nothing (no invented fields)');
+    {
+      const upserts = [];
+      const mkRow = (e, rel, extra = {}) => ({ entity: e, attrs: { billId: 100 + rel, relevance: rel, state: 'TN', tags: ['china'], ...extra }, sourceUrl: '', provenance: 'p' });
+      const rowsE = [mkRow('TN SB1', 50), mkRow('TN SB2', 99), mkRow('TN SB3', 10, { status: 'Passed', sponsors: ['X'] }), { entity: 'TN NOID', attrs: {} }];
+      const seen = [];
+      const disp = async (tag) => { seen.push(tag.args.bill_id); return { ok: true, text: JSON.stringify({ bill_id: tag.args.bill_id, bill } ) }; };
+      la.enrich({ rows: rowsE, dispatch: disp, upsert: (rs) => upserts.push(...rs), cap: 1 }).then((er) => {
+        ok(er.done === 1 && seen[0] === 199, 'enrich: bounded by cap, HIGHEST relevance first');
+        ok(er.remaining === 1, 'the un-fetched tail is reported (later runs pick it up)');
+        ok(upserts[0].attrs.status === 'Passed' && upserts[0].attrs.state === 'TN' && upserts[0].attrs.tags[0] === 'china', 'enrich MERGES: detail attrs join the search attrs (state/tags survive)');
+        ok(!seen.includes(110), 'already-enriched rows are never re-fetched');
+        return la.enrich({ rows: [mkRow('TN SB9', 5)], dispatch: async () => ({ ok: false }), upsert: () => {}, cap: 5 });
+      }).then((er2) => {
+        ok(er2.failed === 1 && er2.done === 0, 'a failed detail fetch is counted, never fatal');
+        finishWiring();
+      });
+    }
+    function finishWiring() {
     console.log = _print;
     // --- 4. the wiring is pinned ---
     const main = read('main.js');
@@ -89,7 +116,10 @@ ok(lrows[0].attrs.state === 'AZ' && lrows[0].attrs.tags[0] === 'surveillance' &&
     ok(/NEVER state a count, total, percentage, or tally/.test(main), 'the compose rule forbids model-authored numbers when a dataset rides');
     ok(/DATASET COUNTS — EXACT/.test(main) && /renderCounts\(_rows2/.test(main), '"how many" injects exact SELECT-COUNT numbers into the reply context');
     ok(/\bhow many\b/.source ? /if \(\/\\bhow many\\b\/i\.test\(userMessage\)\)/.test(main) : false, 'the count injection is gated on the ask shape + a project + rows');
+    ok(/la2\.enrich\(\{/.test(main) && main.indexOf('la2.enrich({') < main.indexOf('const _clean = t.replace'), 'enrichment runs in the compose door AFTER acquisition, BEFORE the gather/renders');
+    ok(/renders proceed on held attrs/.test(main), 'enrichment is fail-soft — a miss never blocks the report');
     _print(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
     process.exit(fail === 0 ? 0 : 1);
+    }
   })();
 }
