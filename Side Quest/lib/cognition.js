@@ -361,6 +361,10 @@ async function _enrichRouted(need, deps = {}) {
 // tiers with a real source URL (graph/routed are our own data → nothing to bank). Fail-safe.
 function _kickWriteBack({ query, answer, url, source, text = null, deps = {} }) {
   if (!url || !answer || !query) return;
+  // INSTANCE GUARD on the bank (08-22, the poison loop's second head): p102's wrong-instance answer
+  // (Colorado SB25-200 for an SB200 question) WROTE ITSELF BACK as knowledge, so the next ask found
+  // it in "our own records". An answer whose bill tokens don't include the question's never banks.
+  if (_instanceMismatch(query, `${answer} ${text || ''}`)) { console.log('[cognition] write-back SKIPPED — bill-instance mismatch (a wrong-instance answer must never become a record)'); return; }
   const wb = deps.writeBack || ((a) => { try { return require('./learning').captureRecovered(a); } catch { return Promise.resolve(); } });
   // content = the text that was actually read — captureRecovered's grounding gate checks the answer's
   // anchors against it, so a fused answer with invented specifics never banks under the page's URL.

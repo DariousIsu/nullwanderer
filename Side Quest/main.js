@@ -8425,6 +8425,41 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       else console.log('[recall-reach] records-shaped question — no held documents matched');
     }
   } catch (e) { console.error('[recall-reach] door failed (turn proceeds):', e.message); }
+  // BILL-INSTANCE CENSUS (campaign §21a's second half, 08-22): a bill-number question that names
+  // no state is AMBIGUOUS across held instances — p102/p103 confidently answered COLORADO's
+  // SB25-200 for a bare "SB200" ask while Louisiana's 2026 SB200 sat in the stores. Census the
+  // held documents for the asked number (EXACT fts token — SB25-200 never counts as SB200): ≥2
+  // states → the reply must disambiguate or answer per-instance; exactly 1 → anchor that instance.
+  try {
+    const _cg = require('./lib/cognition');
+    const _bt = [..._cg._billToksOf(userMessage)];
+    if (_bt.length === 1 && (/\?\s*$/.test(userMessage.trim()) || /^(?:who|whose|what|which|when|where|how|did|does|is|are|was|were)\b/i.test(userMessage.trim()))) {
+      const _la3 = require('./lib/legis_acquire');
+      const _stated = Object.entries(_la3.STATE_CODES).some(([nm, cd]) => new RegExp(`\\b${nm}\\b`, 'i').test(userMessage) || new RegExp(`\\b${cd}\\b`).test(userMessage));
+      if (!_stated) {
+        const _tok = _bt[0];
+        let _rows3 = [];
+        try { _rows3 = db.getDb().prepare(`SELECT d2.title, substr(d2.body, 1, 400) head FROM documents_fts f JOIN documents d2 ON d2.id = f.rowid WHERE documents_fts MATCH ? LIMIT 12`).all(`"${_tok}"`); } catch {}
+        const _codeSet = new Set(Object.values(_la3.STATE_CODES));
+        const _found = new Set();
+        for (const r3 of _rows3) {
+          const hay3 = `${r3.title} ${r3.head}`;
+          const sm3 = hay3.match(/\*\*State:\*\*\s*([A-Z]{2})\b/);
+          if (sm3 && _codeSet.has(sm3[1])) { _found.add(sm3[1]); continue; }
+          for (const [nm, cd] of Object.entries(_la3.STATE_CODES)) { if (new RegExp(`\\b${nm}\\b`, 'i').test(hay3)) { _found.add(cd); break; } }
+        }
+        const _up = _tok.toUpperCase();
+        if (_found.size >= 2) {
+          composedUserMessage = `${composedUserMessage}\n\n[BILL-INSTANCE DISCIPLINE: the question names ${_up} without a state, and your held records carry ${_up} in MULTIPLE states: ${[..._found].join(', ')}. Different states' same-numbered bills are DIFFERENT bills. Ask which one he means (name the instances you hold), or answer clearly per instance — never silently pick one, and never substitute a similar-numbered bill (SB25-200 is not SB200).]`;
+          console.log(`[bill-census] ${_up} held in ${_found.size} states (${[..._found].join(',')}) — disambiguation directive injected`);
+        } else if (_found.size === 1) {
+          const _only = [..._found][0];
+          composedUserMessage = `${composedUserMessage}\n\n[BILL-INSTANCE DISCIPLINE: the question names ${_up} without a state; the only ${_up} in your held records is ${_only}'s. Answer for THAT instance — never substitute another state's bill or a similar-numbered one (SB25-200 is not SB200).]`;
+          console.log(`[bill-census] ${_up} held only in ${_only} — instance anchored`);
+        }
+      }
+    }
+  } catch (e) { console.error('[bill-census] door failed (turn proceeds):', e.message); }
   // E1 RESUME CONTEXT (the 171s affirm-continue pathology): "ok back to it" / "where were we"
   // re-enters the MEASURED thread — his last substantive ask + her last point, snapshotted after
   // every substantive exchange — instead of re-deriving the whole context from scratch.

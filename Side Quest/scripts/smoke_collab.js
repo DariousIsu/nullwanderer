@@ -93,6 +93,10 @@ ok(/IN THIS REPLY/.test(d) && /Do NOT create or edit any artifact/.test(d) && /l
   ok(/artifact-router \$\{verdict\.intent\} SUPPRESSED — thinking-together turn/.test(src) || /SUPPRESSED — thinking-together turn, no destination named/.test(src), 'wiring: the artifact-router hijack is gated');
   ok(/&& \(!collabTurn \|\| collabArtifactsOk\)/.test(src), 'wiring: canvas ownership and the booking backstop both respect the register');
   ok(/where \(\?\:are we\|do we stand\|did we \(\?\:get to\|land\|stop\|leave off\)\)/.test(src), 'wiring: the progress-check family reaches the held-source door (blind-week #3: "where are we on the sponsors")');
+  // §21a second half: the bill-instance census door (the p102/p103 SB25-200-for-SB200 pick)
+  ok(/BILL-INSTANCE CENSUS/.test(src) && /never silently pick one/.test(src) && /SB25-200 is not SB200/.test(src), 'wiring: a state-less bill ask censuses held instances — disambiguate or anchor, never silently pick');
+  ok(/_bt\.length === 1 && \(\/\\\?\\s\*\$\//.test(src) || /_bt\.length === 1/.test(src), 'wiring: the census gates on a question-shaped, single-bill-token, state-less ask');
+  ok(src.indexOf('BILL-INSTANCE CENSUS') > src.indexOf('[recall-reach] door failed'), 'wiring: the census door sits after the recall-reach door (both pre-reply)');
 }
 
 console.log(`\nsmoke_collab: ${pass} passed, ${fail} failed`);
