@@ -77,6 +77,19 @@ function open({ question, bornFrom = null, deps = {}, nowMs = Date.now() } = {})
     try { existing = d.prepare("SELECT id, question, status FROM inquiries WHERE status IN ('active','parked','closed_answered') ORDER BY last_touched_ts DESC").all(); } catch {}
     for (const e of existing) {
       if (questionOverlap(q, e.question) >= DUP_THRESHOLD) {
+        // FOLLOW-UP ≠ DUPLICATE (live 2026-08-22 15:19: Lucas ADDED scope — ratepayer impacts,
+        // taxes, bonuses, infrastructure — to a jobs dig that had already closed_answered; the
+        // overlap metric read the shared site tokens as a near-duplicate, REFUSED silently, and
+        // her say "adding those to the dig" pointed at work that never opened). A CLOSED twin
+        // where the new ask carries ≥2 NOVEL content tokens is a follow-up asking something the
+        // answered question did not — it opens as NEW. A genuine re-ask (novel <2) still refuses.
+        if (e.status === 'closed_answered') {
+          const novel = [...(_qTokens(q))].filter((w) => !_qTokens(e.question).has(w));
+          if (novel.length >= 2) {
+            console.log(`[inquiry] follow-up to closed #${e.id} — ${novel.length} novel token(s) (${novel.slice(0, 4).join(', ')}) → opens as NEW, not a duplicate`);
+            continue;
+          }
+        }
         return { id: e.status === 'closed_answered' ? null : e.id, duplicate: true, existing: e.status, existingId: e.id, reason: `near-duplicate of inquiry #${e.id} (${e.status})` };
       }
     }

@@ -25,12 +25,14 @@ const kga = require('./kg_activity');   // kg:activity push bus — match.hit re
 // stayed NULL). Stamped centrally in dispatch() so it catches a write from ANY caller (operator tool loop
 // included). A tool that dispatches OK but returns its OWN {ok:false}/error does NOT stamp — that IS the miss.
 let _lastContactWriteTs = 0;
+let _lastAgentTs = 0;   // last REAL delegate/agent/team spawn — the agent-claim gate's ground truth
 // F18 (run-2): the stamp covered only the contacts/accounts doors — a record landed via the ENTITY store
 // (propose_entity et al) left the stamp cold, so a true "saved it" claim about an entity write could be
 // false-scolded. The stamp now covers every record-store write door she'd claim in a say.
 const _CONTACT_WRITE_TOOLS = new Set(['create_contact', 'update_contact', 'upsert_account', 'update_account', 'create_account',
   'propose_entity', 'promote_proposal', 'merge_entities', 'propose_relation', 'add_manual_relation']);
 function lastContactWriteTs() { return _lastContactWriteTs; }
+function lastAgentTs() { return _lastAgentTs; }
 
 // GATHER STAMP (2026-08-10, Spine 2 step 1 — docs/BIDIRECTIONAL_VERIFICATION_GATE.md). The absence gate
 // (metacognition.groundAbsence) must justify a "couldn't find it / none listed" claim: an honest absence
@@ -630,6 +632,15 @@ class EchoSuit {
           let okWrite = _res && _res.ok !== false && !_res.isError;
           if (okWrite && _res.text) { try { const _j = JSON.parse(_res.text); if (_j && (_j.ok === false || _j.error)) okWrite = false; } catch { /* non-JSON success text is fine */ } }
           if (okWrite) _lastContactWriteTs = Date.now();
+        }
+      } catch { /* stamping never breaks dispatch */ }
+      // AGENT stamp (live 08-22 15:21: "the legislative analyst agent is wrapping up now" — no
+      // delegate had ever been spawned; the tool's persona was cited without the tool being
+      // called). A REAL delegate/agent/team spawn stamps here; metacognition's agent-claim gate
+      // reads it, so a named-agent status can only be voiced over a measured run.
+      try {
+        if (tag && tag.kind === 'do' && /^(?:delegate_to_|spawn_agent|spawn_workflow|team_spawn)/.test(tag.name || '') && _res && _res.ok !== false && !_res.isError) {
+          _lastAgentTs = Date.now();
         }
       } catch { /* stamping never breaks dispatch */ }
       // GATHER stamp: any dispatched retrieval tool means she ACTUALLY LOOKED this turn — feeds the absence
@@ -2015,7 +2026,7 @@ function routeCacheStats() {
 }
 
 module.exports = {
-  routeCacheStats, _raceTimeout, lastContactWriteTs, lastGatherTs, lastExternalGatherTs, markGather, _webSearchFloor, _webSearchLanePrimary,
+  routeCacheStats, _raceTimeout, lastContactWriteTs, lastAgentTs, lastGatherTs, lastExternalGatherTs, markGather, _webSearchFloor, _webSearchLanePrimary,
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
   placeholderComplaint, sanitizeFtsQuery, prepareDoArgs, recipeMisrouteHint, templateArgs,
   setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates, _salienceDominant

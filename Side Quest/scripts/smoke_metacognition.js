@@ -307,5 +307,16 @@ ok(m.groundPrediction('SB200 is going to pass.').violations.some(v => v.kind ===
   'F26 guard: "going to pass" still fires');
 ok(/expectation|certainty|probabilit/i.test(m.verificationCorrection([{ kind: 'prediction', claim: 'x' }])), 'verificationCorrection: prediction → reframes as expectation/probability, not certainty');
 
+// ── agent/ETA claims (live 08-22 15:21 — the invented "legislative analyst agent") ──────────────
+{
+  const agv = (say, ran) => m.verifyWorkStateClaims(say, { agentRanRecently: () => ran }).violations.some((v) => v.kind === 'agent');
+  ok(agv('Fifteen seconds — the legislative analyst agent is wrapping up now.', false), '⭐ THE LIVE SPECIMEN: a named agent + ETA with NO recorded run → agent violation');
+  ok(!agv('Fifteen seconds — the legislative analyst agent is wrapping up now.', true), 'the same claim over a REAL recorded agent run passes');
+  ok(!agv('Give me a couple of minutes and I will have it for you.', false), 'FP guard: a bare ETA with no agent mention never scolds (the operator may genuinely be running)');
+  ok(agv('I dispatched the research delegate for this a moment ago.', false), '"dispatched … delegate" with no recorded run → violation');
+  ok(!agv('An agent of the state filed the paperwork last week.', false), 'FP guard: "agent" as an ordinary noun with no working-status verb never trips');
+  ok(/no agent run is actually recorded/.test(m.workStateCorrection([{ kind: 'agent', claim: 'x' }])), 'the correction names the invented status plainly');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

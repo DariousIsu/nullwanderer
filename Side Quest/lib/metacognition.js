@@ -380,7 +380,15 @@ function _wsAnchors(s) {
  *  gatherRanThisTurn()->bool — did ANY tool read run this turn (echo_suit.lastGatherTs >= turnStart)?
  *  pendingRecordFor(anchors)->bool — does any measured record (open promise / focus) match the anchors?
  *  evidence — the text this turn's reads actually returned (same string stage-4 groundFacts sees). */
-function verifyWorkStateClaims(say, { gatherRanThisTurn = null, pendingRecordFor = null, evidence = '' } = {}) {
+// AGENT/ETA claim shapes (live 08-22 15:21: "Fifteen seconds — the legislative analyst agent is
+// wrapping up now" — NO delegate had ever been spawned; the tool's persona was cited without the
+// tool being called, and the ETA was invented). Scoped TIGHT to sentences that NAME an agent or
+// delegate — a bare "give me a minute" while the operator genuinely runs must never draw a false
+// scold (the F18/F24 lesson).
+const _WS_AGENT_RE = /\b(?:agents?|delegates?)\b[^.!?\n]{0,60}\b(?:is|are|'s)\b[^.!?\n]{0,40}\b(?:running|working|wrapping(?: up)?|finishing|processing|crunching|almost (?:done|there)|about to|on it)\b|\b(?:spun up|kicked off|launched|dispatched)\b[^.!?\n]{0,40}\b(?:agents?|delegates?)\b/i;
+const _WS_ETA_NUM_RE = /\b(?:\d{1,4}|a few|a couple(?: of)?|five|ten|fifteen|twenty|thirty|forty-?five|sixty|ninety)\s*(?:more\s+)?(?:seconds?|secs?|minutes?|mins?)\b/i;
+
+function verifyWorkStateClaims(say, { gatherRanThisTurn = null, pendingRecordFor = null, agentRanRecently = null, evidence = '' } = {}) {
   const violations = [];
   const ev = String(evidence || '').toLowerCase();
   const sentences = String(say || '').split(/(?<=[.!?])\s+|\n+/);
@@ -410,6 +418,12 @@ function verifyWorkStateClaims(say, { gatherRanThisTurn = null, pendingRecordFor
         }
       }
     }
+    // AGENT/ETA: a named agent/delegate described as actively working (or given a numeric
+    // completion estimate) needs a MEASURED agent run behind it. Fails OPEN at the probe.
+    if (!violations.some((v) => v.kind === 'agent') && (_WS_AGENT_RE.test(s) || (/\b(?:agents?|delegates?)\b/i.test(s) && _WS_ETA_NUM_RE.test(s)))) {
+      let ran = true; try { ran = typeof agentRanRecently === 'function' ? !!agentRanRecently() : true; } catch { ran = true; }
+      if (!ran) violations.push({ kind: 'agent', claim: s.slice(0, 110) });
+    }
     // PENDING/DEADLINE about her own deliverable: needs a measured record behind it.
     if (!violations.some((v) => v.kind === 'pending') && _WS_PENDING_RE.test(s) && _WS_DELIVERABLE_RE.test(s) && !_WS_EXTERNAL_RE.test(s)) {
       const anchors = _wsAnchors(s);
@@ -428,6 +442,7 @@ function workStateCorrection(violations = []) {
   const parts = [];
   if (violations.some((v) => v.kind === 'records')) parts.push(`I attributed that to my records, but I didn't actually read any record this turn`);
   if (violations.some((v) => v.kind === 'records-mismatch')) parts.push(`I said my records show that, but what I actually retrieved this turn doesn't contain it — treat it as unverified`);
+  if (violations.some((v) => v.kind === 'agent')) parts.push(`I described an agent working on this (or gave a completion estimate), but no agent run is actually recorded — that status was invented, don't wait on it`);
   if (violations.some((v) => v.kind === 'pending')) parts.push(`I called that pending work with a deadline, but I hold no record of it as open work — don't trust that status until I've actually checked`);
   if (!parts.length) return '';
   return `\n\n[Correction — ${parts.join('; ')}.]`;

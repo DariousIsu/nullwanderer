@@ -44,6 +44,10 @@ const NOW = 1753400000000;
     I.close(fresh.id, { kind: 'answered', answer: 'resolved', nowMs: NOW + 203 });
     const ansDup = I.open({ question: 'What was the confirmed casualty count from that Gulf pipeline incident?', nowMs: NOW + 204 });
     ok(ansDup.id === null && ansDup.duplicate === true && ansDup.existing === 'closed_answered', 'a near-duplicate of an ANSWERED line is DECLINED (question already solved)');
+    // FOLLOW-UP ≠ DUPLICATE (live 08-22 15:19: Lucas's scope-add refused as a near-duplicate of a
+    // CLOSED jobs dig while her say claimed "adding those to the dig")
+    const follow = I.open({ question: 'What were the ratepayer impacts from the Gulf pipeline incident?', nowMs: NOW + 205 });
+    ok(follow.id != null && !follow.duplicate, '⭐ THE LIVE SCOPE-ADD: a closed twin + ≥2 novel tokens (ratepayer, impacts) opens as a NEW inquiry, never a silent refusal');
     ok(I.questionOverlap('Louisiana parish sheriffs and clerks', 'the offshore wind project count') < I.DUP_THRESHOLD, 'questionOverlap: unrelated questions score below the dedup floor');
   }
 

@@ -13405,6 +13405,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       const _wsv = _mc.verifyWorkStateClaims(sayOut, {
         gatherRanThisTurn: () => { if (!_fuAnchor) return true; try { return require('./lib/echo_suit').lastGatherTs() >= _fuAnchor; } catch { return true; } },
         pendingRecordFor: (anchors) => { try { return _wsLib.pendingRecordFor(anchors, _wsLib.snapshot()); } catch { return true; } },
+        agentRanRecently: () => { try { return require('./lib/echo_suit').lastAgentTs() >= Date.now() - 15 * 60e3; } catch { return true; } },
         evidence: String(resultText || ''),
       });
       if (!_wsv.ok) {
@@ -17686,6 +17687,7 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
       const wsv = _mc.verifyWorkStateClaims(out, {
         gatherRanThisTurn: () => { if (!turnStartTs) return true; try { return require('./lib/echo_suit').lastGatherTs() >= turnStartTs; } catch { return true; } },
         pendingRecordFor: (anchors) => { try { return ws.pendingRecordFor(anchors, ws.snapshot()); } catch { return true; } },
+        agentRanRecently: () => { try { return require('./lib/echo_suit').lastAgentTs() >= Date.now() - 15 * 60e3; } catch { return true; } },
         evidence,
       });
       if (!wsv.ok) {
