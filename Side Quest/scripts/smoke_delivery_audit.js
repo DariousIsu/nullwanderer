@@ -64,6 +64,11 @@ ok(iAudit < main.indexOf("artifact_registry').record({ slug, relPath: rel"), '�
 ok(/NEVER say the report is ready or done/.test(main), 'the failure followup forbids the done-claim in her voice');
 ok(/miss: `audit: \$\{_verdictA\.violations/.test(main), 'the return is an honest miss naming each failed check');
 ok(/fail-open, delivery proceeds/.test(main), 'an audit ERROR fails open (a broken audit never blocks a good report)');
+// battery-1 catch (08-22): a scope-add fragment as topic made the audit condemn the project's own
+// feeding query ('surveillance' ∉ fragment) — the compose now adopts the bound project's canonical
+// subject, gated on BOTH spines agreeing (registry reuse + project bind).
+ok(/topic adopts the bound project's canonical subject/.test(main), 'a re-compose runs under the PROJECT\'s canonical subject, never an order fragment');
+ok(/if \(_regVersion > 1\) \{/.test(main), 'topic adoption is gated on the registry having REUSED the canonical (a new subject never inherits)');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -6097,7 +6097,7 @@ async function buildSplitFromOrder({ io, channel, sessionId, labels }) {
 }
 
 async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) {
-  const t = String(topic || '').trim();
+  let t = String(topic || '').trim();
   // ARTIFACT REGISTRY (Phase 0 #5, hoisted to the TOP for Phase 2): the topic resolves to its
   // PROJECT before anything else — a kin topic reuses the canonical file (version++), only a new
   // subject mints — and the DIRECTED ACQUISITION below lands its dataset ROWS under this slug.
@@ -6111,6 +6111,22 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
     console.error('[report-cmd] artifact registry failed (legacy slug fallback):', e.message);
     slug = 'report-' + (t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'untitled');
     rel = `notes/${slug}.md`;
+  }
+  // TOPIC ADOPTION (08-22, battery-1 catch: the query-leak FALSE POSITIVE): a scope-add re-compose
+  // ran under the ORDER FRAGMENT ("fold a month-by-month trend note into the anti china report"),
+  // whose tokens lack half the project's real subject — the audit then condemned the project's own
+  // legitimate feeding query ('surveillance' ∉ fragment tokens) and refused a valid rebuild. The
+  // durable subject lives in the PROJECT SPINE. Gated on BOTH spines agreeing (the registry REUSED
+  // the canonical AND the project binds), so a genuinely new topic can never inherit a stranger's
+  // subject; the compose, acquisition, renders, and audit all run under the canonical subject.
+  if (_regVersion > 1) {
+    try {
+      const _pj = require('./lib/deliverable_projects').findProject(t);
+      if (_pj && _pj.title && String(_pj.title).trim() && _pj.title !== t) {
+        console.log(`[report-cmd] topic adopts the bound project's canonical subject: "${String(_pj.title).slice(0, 90)}" (order fragment: "${t.slice(0, 60)}")`);
+        t = String(_pj.title).trim();
+      }
+    } catch {}
   }
   // HYPHEN/SPACE NORMALIZATION (2026-08-21, the hollow anti-china report): his spoken "anti china"
   // (space) phrase-missed a corpus that writes "anti-China" (hyphen) — the phrase LIKE found ZERO
