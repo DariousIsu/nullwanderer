@@ -29,17 +29,21 @@ const get = (p) => new Promise((resolve, reject) => {
   http.get({ host: '127.0.0.1', port: PORT, path: p }, (res) => { let d = ''; res.on('data', (c) => d += c); res.on('end', () => resolve({ code: res.statusCode, body: JSON.parse(d) })); }).on('error', reject);
 });
 
-// A fake pipeline with the REAL callback shape: emits tokens, logs a detached "door" line after
-// the turn resolves (the async-door pattern the settle window exists for), completes.
+// A fake pipeline with the REAL callback shape: emits tokens, STORES the say as a turns row (the
+// real pipeline does — `says` reads the rows back), logs a detached "door" line after the turn
+// resolves (the async-door pattern the settle window exists for), completes.
+let smokeSid = null;
 async function fakeRunChatTurn(text, _atts, io) {
   io.emit('routed: ');
   io.emit(text.toUpperCase());
+  db.insertTurn({ sessionId: smokeSid, speaker: 'ai_said', content: `routed: ${text.toUpperCase()}` });
   console.log('[fake-door] landed after turn');
   io.onComplete({ said: true });
   return { ok: true, say: '' };
 }
 
 (async () => {
+  smokeSid = db.startSession();
   TP.start({ runChatTurn: fakeRunChatTurn, port: PORT });
   await new Promise((r) => setTimeout(r, 300));
 
@@ -48,6 +52,9 @@ async function fakeRunChatTurn(text, _atts, io) {
 
   const r1 = await post({ text: 'convert the doc', settleMs: 1200, maxMs: 15000 });
   ok('turn runs and reply is captured', r1.code === 200 && r1.body.ok && /CONVERT THE DOC/.test(r1.body.say));
+  // `say` concatenates every stream (it can double-count); `says` = the stored rows, the truth.
+  ok('says carries the STORED say rows — one clean row per say', Array.isArray(r1.body.says) && r1.body.says.length === 1
+    && r1.body.says[0].content === 'routed: CONVERT THE DOC' && r1.body.says[0].unprompted === false && r1.body.says[0].ts >= 0);
   ok('console lines during the window are captured', r1.body.logLines.some((l) => /fake-door/.test(l)));
   ok('turn settles when the console goes quiet', r1.body.settled === true);
   ok('completion info rides along', r1.body.complete && r1.body.complete.said === true);

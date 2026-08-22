@@ -24,10 +24,14 @@
  *     so everything captured belongs to the window) and always passes through to the real log.
  *
  * POST /turn {"text": "...", "settleMs"?: 8000, "maxMs"?: 240000}
- *   → { ok, say, complete, error, logLines, canvasWrites, tookMs, settled }
+ *   → { ok, say, says, complete, error, logLines, canvasWrites, tookMs, settled }
  *     Resolution: the turn resolves AND the console stays quiet for settleMs (detached doors
  *     announce themselves in the log; silence = the pathway finished), or maxMs hard-caps a
  *     stuck pathway (settled:false says so honestly).
+ *     `say` is the RAW emit capture — the main stream AND every followup stream concatenated with
+ *     no boundary, so two clean says can read as one self-repeating one (the P2/P3 "duplicated
+ *     count sentence" was THIS, not her voice). `says` is the stored ai_said rows for the turn's
+ *     window — the DB row is the truth; checkers assert on `says`.
  * GET /status → { ok, inFlight, lastUserTurnAgoMs, port }
  */
 'use strict';
@@ -87,6 +91,17 @@ function _realUserState(now = Date.now()) {
   } catch { return { agoMs: null, unanswered: false }; }
 }
 
+// The stored say rows for the injection window — THE TRUTH (08-22, the P3 finding: the port's one
+// emit accumulator concatenates every stream, so the capture double-counts what the DB stores as
+// separate clean rows). One row per say, in order, with its unprompted flag.
+function _saysSince(sinceTs) {
+  try {
+    const db = require('./db');
+    return db.getDb().prepare(`SELECT id, ts, content, unprompted FROM turns WHERE speaker = 'ai_said' AND ts >= ? ORDER BY ts`)
+      .all(sinceTs).map((r) => ({ id: r.id, ts: r.ts, content: String(r.content || '').slice(0, 20000), unprompted: !!r.unprompted }));
+  } catch { return []; }
+}
+
 // Canvas blocks touched since `sinceTs` — the doors' observable landings, read from the mirror.
 function _canvasWritesSince(sinceTs) {
   try {
@@ -143,7 +158,7 @@ async function _runInjectedTurn(runChatTurn, { text, settleMs, maxMs }) {
   console.log = origLog;
   console.error = origErr;
   return {
-    ok: !error, say: say.slice(0, 20000), complete, error,
+    ok: !error, say: say.slice(0, 20000), says: _saysSince(started), complete, error,
     logLines, canvasWrites: _canvasWritesSince(started),
     tookMs: Date.now() - started, settled,
   };

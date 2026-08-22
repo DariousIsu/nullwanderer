@@ -6222,11 +6222,18 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   // rendered by CODE from the project's dataset rows and appended to the document at save time.
   // Even a wayward narrative cannot corrupt the numbers — they never pass through the model.
   // Empty dataset → no section, no rule (prose-only reports are unchanged).
-  let _dsSection = '';
+  let _dsSection = '', _dsChart = null;
   try {
     const _ds = require('./lib/dataset_store');
     const _dsRows = _ds.rowsFor(slug);
     if (_dsRows.length) { _dsSection = `\n\n## The data (deterministic — ${_dsRows.length} row(s), rendered from the dataset)\n\n${_ds.renderReportData(_dsRows, _renderDims || {})}`; console.log(`[report-cmd] dataset section rendered: ${_dsRows.length} row(s) — the numbers are code-authored`); }
+    // P2's last open render (08-22): when the dims carry a time dimension, the same monthly buckets
+    // that render the markdown trend also ride the canvas as a REAL chart block — code-authored
+    // points, the renderer draws the SVG. <2 dated months = no trend, no block.
+    if (_dsRows.length && _renderDims && _renderDims.trendKey) {
+      const _tb = _ds.trendBy(_dsRows, _renderDims.trendKey).slice(-24);
+      if (_tb.length >= 2) _dsChart = { kind: 'bar', x_key: 'month', y_keys: ['count'], title: `Monthly trend (${_renderDims.trendKey}) — ${t}`.slice(0, 80), series: _tb.map(([mo, c]) => ({ month: mo, count: c })) };
+    }
   } catch (e) { console.error('[report-cmd] dataset render failed (prose proceeds):', e.message); }
   const material = [civicBlock, notesBlock, ...rows.map((r) => `--- DOC #${r.id}: ${String(r.title || '').slice(0, 120)} ---\n${String(r.body || '').slice(0, 9000)}`)].filter(Boolean).join('\n\n');
   console.log(`[report-cmd] composing from ${rows.length} held doc(s)${civicBlock ? ' + civic store' : ''}${notesBlock ? ' + notes deliverable(s)' : ''}: ${rows.map((r) => '#' + r.id).join(', ') || '(store only)'}`);
@@ -6289,7 +6296,7 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   // delivered-current ("where are we on X" reads this row). No kin project → quiet no-op.
   if (saved) { try { const _pr = require('./lib/deliverable_projects').noteCompose({ topic: t, artifactSlug: slug }); if (_pr) console.log(`[projects] compose linked to project "${_pr.slug}" (delivered-current)`); } catch (e) { console.error('[projects] compose link failed:', e.message); } }
   let landed = false;
-  try { landed = (await promiseArtifactEmit({ slug, title: `Report — ${t}`.slice(0, 60), markdown: md })) === true; } catch {}
+  try { landed = (await promiseArtifactEmit({ slug, title: `Report — ${t}`.slice(0, 60), markdown: md, chart: _dsChart })) === true; } catch {}
   console.log(`[report-cmd] report on "${t}" composed (${md.length}ch, v${_regVersion}) → ${saved ? rel : '(save failed)'}${landed ? ' + canvas' : ' (canvas emit failed)'}`);
   // MEMORY FIRST, THEN RESEARCH THE GAPS — ONE FLOW (Lucas 2026-08-08: "why would those be
   // separate tracks?"). The compose contract already forces "## Open questions" naming what the
@@ -6320,7 +6327,7 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   return { delivered: (landed || saved), canvas: landed, topic: t, rel: saved ? rel : null, canvasTab: landed ? `promise-${slug}` : null, docCount: rows.length, openQs, miss: (landed || saved) ? undefined : 'nothing-landed' };
 }
 
-async function promiseArtifactEmit({ slug, title, markdown }) {
+async function promiseArtifactEmit({ slug, title, markdown, chart = null }) {
   try {
     if (!(await ensureEngine())) return false;
     const callTool = pollCallTool();
@@ -6336,6 +6343,16 @@ async function promiseArtifactEmit({ slug, title, markdown }) {
     await callTool('saga_canvas_open_tab', { mode: 'DOC', tab_key: tabKey, title: String(title || 'Promised document').slice(0, 60) });
     const r = await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'paragraph', data: { markdown: String(markdown || '') } });
     canvasMirror(tabKey, 'DOC', String(title || 'Promised document').slice(0, 60), (r && r.block_id) || null, 'paragraph', { markdown: String(markdown || '') });
+    // The dataset's trend as a REAL chart block under the body (P2's last open render, 08-22) —
+    // deterministic points from trendBy, the engine/renderer draws the SVG. Fail-soft: a rejected
+    // chart never costs the document above it (the markdown trend already rides the body).
+    if (chart && Array.isArray(chart.series) && chart.series.length) {
+      try {
+        const c = await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'chart', data: chart });
+        canvasMirror(tabKey, 'DOC', String(title || 'Promised document').slice(0, 60), (c && c.block_id) || null, 'chart', chart);
+        console.log(`[canvas] trend chart block landed (${chart.series.length} month bucket(s))`);
+      } catch (e) { console.error('[canvas] trend chart block failed (the markdown trend still rides the body):', e.message); }
+    }
     return true;
   } catch (e) { console.error('[canvas] promise-artifact emit failed:', e.message); return false; }
 }

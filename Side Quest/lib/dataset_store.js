@@ -104,6 +104,36 @@ function renderTable(rows, { rowKey = 'state', colKey = 'status' } = {}) {
   return [head, sep, ...body].join('\n');
 }
 
+/** Month buckets over a date attr (YYYY-MM-DD strings) → [['YYYY-MM', n], …] ascending. Pure. */
+function trendBy(rows, key) {
+  const m = new Map();
+  for (const r of rows) {
+    const mm = String((r.attrs || {})[key] || '').match(/^(\d{4})-(\d{2})/);
+    if (!mm) continue;
+    const k = `${mm[1]}-${mm[2]}`;
+    m.set(k, (m.get(k) || 0) + 1);
+  }
+  return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+/** The trend graph as deterministic markdown (P2's last open render, 08-22): month × count with a
+ *  scaled bar per row. One dated month is not a trend — returns ''. Rows without the date attr and
+ *  months beyond the cap are NAMED, never silently dropped. */
+function renderTrend(rows, { dateKey = 'lastActionDate', cap = 24 } = {}) {
+  if (!rows.length) return '';
+  const all = trendBy(rows, dateKey);
+  if (all.length < 2) return '';
+  const buckets = all.slice(-cap);
+  const dated = all.reduce((n, [, c]) => n + c, 0);
+  const max = Math.max(...buckets.map(([, c]) => c));
+  const bar = (c) => '█'.repeat(Math.max(1, Math.round((c / max) * 20)));
+  const L = ['| month | count | trend |', '|---|---|---|', ...buckets.map(([mo, c]) => `| ${mo} | ${c} | ${bar(c)} |`)];
+  const notes = [];
+  if (all.length > buckets.length) notes.push(`${all.length - buckets.length} earlier month(s) not shown`);
+  if (dated < rows.length) notes.push(`${rows.length - dated} row(s) carry no ${dateKey}`);
+  return `${L.join('\n')}${notes.length ? `\n\n_(${notes.join('; ')}.)_` : ''}`;
+}
+
 /** Per-entity roster lines — title, status/action, sponsors when held, ALWAYS the source URL. */
 function renderRoster(rows, { cap = 200 } = {}) {
   if (!rows.length) return '';
@@ -129,11 +159,13 @@ function renderReportData(rows, dims = {}) {
   if (!rows.length) return '';
   const countKeys = dims.countKeys || ['state', 'status'];
   const rowKey = dims.rowKey || 'state', colKey = dims.colKey || 'status';
+  const trend = dims.trendKey ? renderTrend(rows, { dateKey: dims.trendKey }) : '';
   return [
     `### Counts (deterministic — rendered from the dataset, ${rows.length} row(s))`, '', renderCounts(rows, countKeys), '',
     `### The table`, '', renderTable(rows, { rowKey, colKey }), '',
+    ...(trend ? [`### The trend (by ${dims.trendKey}, monthly)`, '', trend, ''] : []),
     `### Every row`, '', renderRoster(rows),
   ].join('\n');
 }
 
-module.exports = { ensure, upsertRows, rowsFor, countFor, hasRows, countsBy, renderCounts, renderTable, renderRoster, renderReportData, _setDb };
+module.exports = { ensure, upsertRows, rowsFor, countFor, hasRows, countsBy, renderCounts, renderTable, renderRoster, trendBy, renderTrend, renderReportData, _setDb };

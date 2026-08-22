@@ -20,6 +20,17 @@ ok(has("Let me gather the emails and build a table."), 'promise: "gather the ema
   ok(p[0] && /roster/i.test(p[0].deliverable), 'promise: the deliverable phrase is captured (roster)');
 }
 
+// ── the work-through/pull-together shape (P0 live gate 08-21 — slid past the artifact-noun net) ─────────
+{
+  const p = d.detectPromise("I'll work through all seven states in one pass and pull both tracks together.");
+  ok(p[0] && /both tracks/i.test(p[0].deliverable), 'promise: "work through X and pull BOTH TRACKS together" → the split construction names its object (the live miss)');
+}
+ok(has("I'm working through the filings now and pulling the whole picture together."), 'promise: progressive "working through … pulling … together" → detected');
+ok(has("Let me piece the timeline together from what we hold."), 'promise: "piece the timeline together" → the same split-construction kind');
+ok(has("I'll pull it all together tonight."), 'promise: "pull it all together" → detected (pronoun object still a debt)');
+ok(!has("I'll pull myself together and get back to it."), 'FP: "pull myself together" (reflexive) is composure, not a deliverable');
+ok(!has("I'm working on it."), 'FP: bare "working on it" (no deliver-verb, no object) → not a promise');
+
 // ── NOT debts: offers, questions, done-claims, conversational "I'll" ─────────────────────────────────────
 ok(!has('Want me to pull that roster together?'), 'FP: an OFFER ("want me to …?") is not a debt');
 ok(!has('Should I compile the list for you?'), 'FP: a question ("should I …?") is not a debt');

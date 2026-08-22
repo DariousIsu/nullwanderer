@@ -52,6 +52,21 @@ ok(/Sponsors: Adam Lowe \(R\); Paul Rose \(R\)/.test(sp), 'renderRoster: sponsor
 ok(ds.renderReportData([]) === '' && ds.renderCounts([]) === '', 'empty dataset renders NOTHING (no fabricated structure)');
 ok(/### Counts \(deterministic/.test(ds.renderReportData(rows)) && /### The table/.test(ds.renderReportData(rows)) && /### Every row/.test(ds.renderReportData(rows)), 'renderReportData: counts + table + roster, one section');
 
+// --- 2b. the TREND render (P2's last open item, 08-22) ---
+const dated = (mo, i) => ({ entity: `UT B${mo}${i}`, attrs: { state: 'UT', lastActionDate: `${mo}-1${i % 9}` } });
+const trows = [dated('2026-01', 1), dated('2026-01', 2), dated('2026-03', 3), { entity: 'UT NODATE', attrs: { state: 'UT' } }];
+ok(JSON.stringify(ds.trendBy(trows, 'lastActionDate')) === '[["2026-01",2],["2026-03",1]]', 'trendBy: month buckets ascending; undated rows excluded');
+const tr = ds.renderTrend(trows, { dateKey: 'lastActionDate' });
+ok(/\| month \| count \| trend \|/.test(tr) && /\| 2026-01 \| 2 \| █/.test(tr) && /\| 2026-03 \| 1 \|/.test(tr), 'renderTrend: month × count with a scaled bar');
+ok(/1 row\(s\) carry no lastActionDate/.test(tr), 'renderTrend: undated rows are NAMED, never silently dropped');
+ok(ds.renderTrend([dated('2026-01', 1), dated('2026-01', 2)], {}) === '', 'one dated month is not a trend — renders nothing');
+{
+  const many = Array.from({ length: 30 }, (_, j) => dated(`20${10 + Math.floor(j / 12)}-${String((j % 12) + 1).padStart(2, '0')}`, 1));
+  ok(/6 earlier month\(s\) not shown/.test(ds.renderTrend(many, {})), 'renderTrend: the 24-month cap names what it cut');
+}
+ok(/### The trend \(by lastActionDate/.test(ds.renderReportData(trows, { trendKey: 'lastActionDate' })), 'renderReportData: dims with a trendKey add the trend section');
+ok(!/### The trend/.test(ds.renderReportData(trows, {})), 'no trendKey → no trend section (renders only what the dims declare)');
+
 // --- 3. the acquirer's row path ---
 const lrows = la.resultsToRows({ state: 'AZ', query: 'surveillance', results: [
   { bill_number: 'SB1683', title: 'Foreign adversary land', last_action: 'Chaptered', last_action_date: '2026-05-01', url: 'https://legiscan.com/AZ/SB1683', relevance: 99 },
@@ -121,6 +136,8 @@ ok(lrows[0].attrs.state === 'AZ' && lrows[0].attrs.tags[0] === 'surveillance' &&
       'a dataset-backed question NEVER serves from the answer cache (SELECT COUNT is the authority)');
     ok(/la2\.enrich\(\{/.test(main) && main.indexOf('la2.enrich({') < main.indexOf('const _clean = t.replace'), 'enrichment runs in the compose door AFTER acquisition, BEFORE the gather/renders');
     ok(/renders proceed on held attrs/.test(main), 'enrichment is fail-soft — a miss never blocks the report');
+    ok(/_ds\.trendBy\(_dsRows, _renderDims\.trendKey\)/.test(main) && /block_type: 'chart', data: chart/.test(main), 'the trend rides the canvas as a REAL chart block (code-authored monthly points)');
+    ok(/chart: _dsChart/.test(main), 'the compose door threads the trend chart into the canvas emit');
     _print(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
     process.exit(fail === 0 ? 0 : 1);
     }

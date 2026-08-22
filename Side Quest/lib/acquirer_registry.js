@@ -20,7 +20,7 @@ const _CIVIC_SCOPE = /\b(?:parish(?:es)?|county|counties|municipal|city|town|vil
 const ACQUIRERS = [
   {
     name: 'legislation',
-    renderDims: { rowKey: 'state', colKey: 'status', countKeys: ['state', 'status', 'tags'] },
+    renderDims: { rowKey: 'state', colKey: 'status', countKeys: ['state', 'status', 'tags'], trendKey: 'lastActionDate' },
     detect(topic) {
       const d = la.detect(topic);
       return d.states.length && d.query ? d : null;

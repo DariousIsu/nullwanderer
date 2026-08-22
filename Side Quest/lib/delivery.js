@@ -16,17 +16,26 @@
 // present-progressive commitment ("I'm pulling it now", "I'm composing the sheet"), which run-2
 // (2026-08-19) showed dangling unbooked: it asserts work-in-motion and is exactly as much a debt as
 // "I'll pull it". Progressive form requires a work-verb so "I'm hoping/thinking" never leads.
-const _PROMISE_LEAD = /\b(?:i'?ll|i will|i'?m going to|i'?m gonna|let me|going to|i'?ll go ahead and|i'?m (?:now |currently )?(?:pull|grabb|fetch|compil|compos|build|check|gather|runn|quer|writ|draft|prepar)\w*ing)\b/i;
+// ('work' joined 2026-08-22 — "I'm working through the filings and pulling it together" is the
+// same debt; the deliver-verb + object gates downstream keep "I'm working on it" from booking.)
+const _PROMISE_LEAD = /\b(?:i'?ll|i will|i'?m going to|i'?m gonna|let me|going to|i'?ll go ahead and|i'?m (?:now |currently )?(?:pull|grabb|fetch|compil|compos|build|check|gather|runn|quer|writ|draft|prepar|work)\w*ing)\b/i;
 // …but an OFFER or a question is not a debt — leave it open. "let me know" is HER asking THEM.
 const _OFFER_RE = /\b(?:want me to|would you like|do you want|should i\b|shall i\b|if you'?d like|let me know|happy to|i can (?:also )?(?:help|do that)\b)|\?\s*$/i;
 // the ACT of producing a deliverable (compose/land added 2026-08-19 — "I'll compose the sheet and
 // land it at notes/…" dangled unbooked in run 2)
-const _DELIVER_VERB = /\b(?:pull(?:ing)?(?: together| up)?|put(?:ting)? together|compil\w+|compos\w+|assembl\w+|build\w*|draft\w*|writ\w*|prepar\w+|generat\w+|creat\w+|send\w*|export\w*|deliver\w*|land\w+|gather\w+|collect\w+|get you|grab)\b/i;
+const _DELIVER_VERB = /\b(?:pull(?:ing)?(?: together| up)?|put(?:ting)? together|piec\w+|compil\w+|compos\w+|assembl\w+|build\w*|draft\w*|writ\w*|prepar\w+|generat\w+|creat\w+|send\w*|export\w*|deliver\w*|land\w+|gather\w+|collect\w+|get you|grab)\b/i;
 // …a THING to hand over. Artifact-shaped, or an explicit "that/it/them for you". (bare "sheet" +
 // "filings"/"990s" + "agent output" added 2026-08-19 — run-2's sponsors-sheet promises missed the net)
 const _DELIVERABLE_OBJ = /\b(?:roster|list|spreadsheet|sheets?|report|file|filings?|document|dossier|brief(?:ing)?|summary|table|memo|deck|csv|xlsx?|docx?|pdf|990[\w-]*|agent (?:output|results?)|the e-?mails?|the contacts?|the numbers?|the data|the breakdown|the write-?up)\b|\b(?:that|it|them|those|this) for you\b/i;
 // already CLAIMED done (past/perfect) → the anti-fabrication gate owns this, not us.
 const _DONE_RE = /\b(?:i'?ve|i have|already|just)\b[^.!?\n]*\b(?:pulled|compiled|assembled|built|drafted|wrote|written|prepared|generated|created|sent|exported|put together)\b|\bis (?:saved|ready|done|attached|on your canvas)\b/i;
+// The split "pull/put/piece X together" construction NAMES its object as the deliverable — run-2's
+// "I'll work through all seven states … pull both tracks together" ack (P0 live gate, 08-21) slid
+// past the artifact-noun net because "both tracks" is a domain noun, not an artifact noun. The
+// construction itself is the commitment; whatever sits between the verb and "together" is what she
+// owes. Reflexives ("pull myself together") are composure, not deliverables.
+const _PULL_TOGETHER_OBJ = /\b(?:pull(?:ing|ed|s)?|put(?:ting|s)?|piec\w+)\s+((?:[a-z][a-z0-9'-]*\s+){0,4}[a-z][a-z0-9'-]*)\s+together\b/i;
+const _REFLEXIVE = /\b(?:my|your|him|her|it|our|them)sel(?:f|ves)\b/i;
 
 // Find the delivery PROMISES in a reply. Returns [{ sentence, deliverable }]. A promise requires: a
 // committal lead + a deliver-verb + a deliverable object, and is NOT an offer/question and NOT a
@@ -41,7 +50,11 @@ function detectPromise(say) {
     if (_OFFER_RE.test(s)) continue;          // an offer/question is not a debt
     if (_DONE_RE.test(s)) continue;           // "I've already compiled it" → anti-fab's job, not ours
     if (!_DELIVER_VERB.test(s)) continue;
-    const m = s.match(_DELIVERABLE_OBJ);
+    let m = s.match(_DELIVERABLE_OBJ);
+    if (!m) {
+      const pt = s.match(_PULL_TOGETHER_OBJ);
+      if (pt && !_REFLEXIVE.test(pt[1])) m = [pt[1]];
+    }
     if (!m) continue;
     out.push({ sentence: s.slice(0, 160), deliverable: m[0].replace(/\s+/g, ' ').trim() });
     if (out.length >= 3) break;               // one reply rarely makes more than a few real promises
