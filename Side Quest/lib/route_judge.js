@@ -68,11 +68,17 @@ Reply with ONLY one word: ${words.join(' or ')}.`,
 
   let raw = '';
   try {
+    // LATENCY CUT slice 2 (08-22, the gap dig): this judge shares its model with the background
+    // importance scorer, and the daemon serializes per model — a metabolism call ahead of the
+    // USER'S turn queued the router for 8+ seconds (battery-2 turns 4/7). The judge is an
+    // escalation that fails OPEN by design, so it gets a hard ceiling: an arbitration that can't
+    // land in 2.5s keeps the cheap cascade decision instead of stalling the whole turn.
     await streamChat({
       model,
       messages,
       options: { temperature: 0, top_p: 1, num_ctx: 8192, num_predict: 6 },
       think: false,
+      maxMs: 2500,
       onToken: (tk) => { raw += tk; },
     });
   } catch (e) {
