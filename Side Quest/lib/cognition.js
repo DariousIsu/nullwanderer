@@ -185,7 +185,17 @@ async function _enrichConvo(need, deps = {}) {
   const retrieve = deps.retrieveTurns || ((q, o) => { try { return require('./memory').retrieveTurns(q, o); } catch { return Promise.resolve([]); } });
   let hits = [];
   // scan deep — the whole point is reaching past the recency window the default 400 covers.
-  try { hits = (await retrieve(need, { k: 4, minSim: 0.42, scan: 4000 })) || []; } catch {}
+  // BOUNDED (08-22): the un-bounded await hung forever when the embedder pool had no drain timer
+  // (offline/smoke context) and SILENTLY TRUNCATED the suite at exit 0 — and in the live app a hung
+  // embedder stalled the whole ladder. 6s then the tier honestly yields nothing.
+  try {
+    hits = (await new Promise((resolve) => {
+      const t = setTimeout(() => resolve([]), deps.convoTimeoutMs || 6000);
+      Promise.resolve(retrieve(need, { k: 4, minSim: 0.42, scan: 4000 }))
+        .then((r) => { clearTimeout(t); resolve(r || []); })
+        .catch(() => { clearTimeout(t); resolve([]); });
+    })) || [];
+  } catch {}
   if (!hits.length) return { text: '', url: null };
   const lines = hits.map((h) => {
     const who = h.speaker === 'user' ? 'Lucas said' : 'You said';
@@ -379,6 +389,33 @@ function _hasStaleGrounding(grounding, now) {
   return false;
 }
 
+// BILL-INSTANCE GUARD (campaign, 08-22 — the live SB25-200-for-SB200 swap): a bill number in the
+// QUESTION is an identifier. A web search for "SB200 co-sponsor" surfaced Colorado's SB25-200 and
+// the re-draft answered from it — the operator's own grounded line (LA SB200, Hodges) lost to a
+// wrong-instance fragment, and the wrong answer got CACHED. Retrieval that carries bill tokens of
+// which NONE normalizes to the question's must not become the draft's grounding. Text with no
+// bill token at all PASSES (context is not a mismatch); errors fail open.
+const _BILL_TOK_RE = /\b((?:[A-Za-z]\.?){1,4})[\s-]?(\d{1,5})\b/g;
+const _BILL_PREFIXES = /^(?:s|h|sb|hb|ssb|hsb|sjr|hjr|scr|hcr|sr|hr|ab|lb|sf|hf)$/i;
+function _billToksOf(text) {
+  const out = new Set(); let m;
+  const t = String(text || ''); _BILL_TOK_RE.lastIndex = 0;
+  while ((m = _BILL_TOK_RE.exec(t)) !== null) {
+    const letters = m[1].replace(/\./g, '');   // "S.B." → "SB"
+    if (_BILL_PREFIXES.test(letters)) out.add(`${letters.toLowerCase()}${m[2]}`);
+  }
+  return out;
+}
+function _instanceMismatch(question, text) {
+  try {
+    const qb = _billToksOf(question);
+    if (!qb.size) return false;
+    const tb = _billToksOf(text);
+    if (!tb.size) return false;
+    return ![...qb].some((b) => tb.has(b));
+  } catch { return false; }
+}
+
 // The turn's grounded answer with the enrich/recovery reflex. Returns:
 //   { say, enriched, enrichSource, missed?, need? }  — the substance for the voice block, or
 //   null  → cloud unavailable → caller uses the normal local flow.
@@ -390,9 +427,14 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   // hinges on brittle phrase regexes ("who's" vs "who is", "now" vs "the"). Parallel with the draft it always
   // makes → ~zero added latency. Fail-safe: parseIntent never throws and degrades to the regex fallback.
   const _ip = () => { try { return require('./intent_parse'); } catch { return null; } };
+  // deps.ask threads into parseIntent (2026-08-22): with an INJECTED ask (tests) the parse uses it and
+  // resolves deterministically — the un-threaded call reached the real cloud pool from inside smokes,
+  // whose drain timer never runs there, so the await never resolved and the suite SILENTLY TRUNCATED
+  // at this line (exit 0 after 2 cases — the silent-green trap). Production passes no deps.ask → the
+  // behavior there is exactly as before.
   const [step0, it0] = await Promise.all([
     _draftOrNeed(userMessage, g, deps),
-    deps.intent ? Promise.resolve(deps.intent) : (async () => { const ip = _ip(); return ip ? ip.parseIntent(userMessage, {}) : null; })()
+    deps.intent ? Promise.resolve(deps.intent) : (async () => { const ip = _ip(); return ip ? ip.parseIntent(userMessage, { ask: deps.ask || null, deps }) : null; })()
   ]);
   let step = step0;
   if (!step) return null;                                    // cloud down → local flow
@@ -417,6 +459,7 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
       // (Echo still records Biden as president) this path exists to catch.
       try { fresh = (tier === 'news' ? await _enrichNews(topic, deps) : tier === 'wiki' ? await _enrichWiki(topic, deps) : await _enrichExcavate(topic, deps)) || fresh; } catch {}
       if (!fresh.text) continue;
+      if (_instanceMismatch(userMessage, fresh.text)) { console.log(`[cognition] ${tier} fresh-check DROPPED — bill-instance mismatch`); continue; }
       const gv = [`Fresh check for the current fact (${topic}):\n${fresh.text}`, g].filter(Boolean).join('\n\n');   // fresh check LEADS so the draft cap keeps the verified value, not the stale grounding it's meant to override
       const v = await _draftOrNeed(userMessage, gv, deps);
       if (v && v.answer) {
@@ -473,6 +516,7 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
               : mode === 'web' ? await _enrichWeb(q, deps)
               : await _enrichExcavate(q, deps);
     if (!res || !res.text) continue;
+    if (_instanceMismatch(userMessage, res.text)) { console.log(`[cognition] ${mode} retrieval DROPPED — bill-instance mismatch (the question's bill number is absent from the retrieved text; a different bill must never ground the answer)`); continue; }
     // LEAD with the freshest retrieval. It was fetched specifically for THIS need, so it is the highest-value
     // grounding; the earlier tiers already FAILED to answer, so they are the least valuable and should be the
     // part that trails off past _draftOrNeed's char cap. Proven bug (probe_truncation): grounding was already
@@ -517,4 +561,4 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   return { say: `${where}, but I couldn't pin down ${need0}.`, enriched: true, missed: true, need: need0, tried: _tried };
 }
 
-module.exports = { answerGrounded, _draftOrNeed, _enrichConvo, _enrichGraph, _enrichWiki, _enrichNews, _enrichForecast, isForecastQuestion, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _hasStaleGrounding, _entLine, NEED_RE };
+module.exports = { answerGrounded, _draftOrNeed, _enrichConvo, _enrichGraph, _enrichWiki, _enrichNews, _enrichForecast, isForecastQuestion, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _hasStaleGrounding, _entLine, _billToksOf, _instanceMismatch, NEED_RE };

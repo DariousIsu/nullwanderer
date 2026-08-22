@@ -8,6 +8,9 @@ const cog = require('../lib/cognition');
 
 let pass = 0, fail = 0;
 const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++; console.log('  ✗', t); } };
+// TAIL-GUARD: a drained event loop mid-suite (a hung await with no live handles) exits with THIS
+// code — so a silently-truncated run can never read green. The final line overrides it.
+process.exitCode = 1;
 
 // A mock cloud `ask`: answers when the grounding names cabinet members, else emits NEED.
 const askMock = async ({ input }) => {
@@ -32,27 +35,27 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   ok('NEED: x'.match(cog.NEED_RE)[1] === 'x', 'NEED_RE parses the need');
 
   // 1) grounding already answers → no enrich
-  const a = await cog.answerGrounded({ userMessage: 'who is in his cabinet?', grounding: 'cabinet: Marco Rubio, Lee Zeldin', deps: { ask: askMock, dispatch: dispatchMock } });
+  const a = await cog.answerGrounded({ userMessage: 'who is in his cabinet?', grounding: 'cabinet: Marco Rubio, Lee Zeldin', deps: { retrieveTurns: async () => [], ask: askMock, dispatch: dispatchMock } });
   ok(a && a.enriched === false && /Rubio/.test(a.say), 'sufficient grounding → grounded answer, no enrich');
 
   // 2) THE cabinet case: thin grounding → NEED → graph enrich → redraft → found answer
-  const b = await cog.answerGrounded({ userMessage: 'who are the members of his cabinet?', grounding: 'Donald Trump (US) — President', object: { id: 1528616, name: 'Donald Trump (US)' }, deps: { ask: askMock, dispatch: dispatchMock } });
+  const b = await cog.answerGrounded({ userMessage: 'who are the members of his cabinet?', grounding: 'Donald Trump (US) — President', object: { id: 1528616, name: 'Donald Trump (US)' }, deps: { retrieveTurns: async () => [], ask: askMock, dispatch: dispatchMock } });
   ok(b && b.enriched === true && b.enrichSource === 'graph', 'thin grounding → NEED → GRAPH enrich → answer (the cabinet fix)');
   ok(b && /Rubio/.test(b.say), 'enriched answer names the members it went and found');
 
   // 3) NEED but nothing found anywhere → honest recovery, NOT a dead-end, NOT invented
-  const c = await cog.answerGrounded({ userMessage: 'who are the members of his cabinet?', grounding: 'Donald Trump (US) — President', object: { id: 1528616, name: 'Donald Trump (US)' }, deps: { ask: askMock, dispatch: emptyDispatch, webSearch: async () => ({ results: [] }), excavate: async () => ({ found: false }) } });
+  const c = await cog.answerGrounded({ userMessage: 'who are the members of his cabinet?', grounding: 'Donald Trump (US) — President', object: { id: 1528616, name: 'Donald Trump (US)' }, deps: { retrieveTurns: async () => [], ask: askMock, dispatch: emptyDispatch, webSearch: async () => ({ results: [] }), excavate: async () => ({ found: false }) } });
   ok(c && c.missed === true && /couldn't/i.test(c.say) && !/Rubio/.test(c.say), 'nothing found → honest "couldn\'t pin down", never invented');
 
   // 4) graph empty → escalate to WEB via deps.webSearch (the app's own DDG, not Echo's keyless one)
   const emptyGraph = async () => ({ ok: true, text: '{"result":[]}' });
   const webMock = async (q) => ({ results: [{ title: 'Trump cabinet', snippet: 'Marco Rubio Secretary of State' }] });
-  const d = await cog.answerGrounded({ userMessage: 'latest on X?', grounding: '', deps: { ask: async ({ input }) => /Rubio|Secretary/.test(input.grounding) ? 'It is happening.' : 'NEED: latest on X', dispatch: emptyGraph, webSearch: webMock, newsStories: () => [] } });
+  const d = await cog.answerGrounded({ userMessage: 'latest on X?', grounding: '', deps: { ask: async ({ input }) => /Rubio|Secretary/.test(input.grounding) ? 'It is happening.' : 'NEED: latest on X', dispatch: emptyGraph, webSearch: webMock, newsStories: () => [], retrieveTurns: async () => [] } });
   ok(d && d.enriched === true && d.enrichSource === 'web', 'empty graph → escalate to WEB (deps.webSearch) → answer');
 
   // 5) graph empty → cloud TOOL EXECUTOR (routeNeed) answers a count before falling to web
   const routeMock = async (q) => ({ ok: true, text: 'John Curtis sponsored 42 bills in the 118th Congress.', chose: 'recipe count-bills' });
-  const e = await cog.answerGrounded({ userMessage: 'how many bills did Curtis sponsor?', grounding: 'John Curtis (US-US) — US Senator', object: { id: 1524282, name: 'John Curtis (US-US)' }, deps: { ask: async ({ input }) => /42/.test(input.grounding) ? 'Curtis sponsored 42 bills.' : 'NEED: number of bills sponsored by John Curtis', dispatch: emptyGraph, routeNeed: routeMock } });
+  const e = await cog.answerGrounded({ userMessage: 'how many bills did Curtis sponsor?', grounding: 'John Curtis (US-US) — US Senator', object: { id: 1524282, name: 'John Curtis (US-US)' }, deps: { ask: async ({ input }) => /42/.test(input.grounding) ? 'Curtis sponsored 42 bills.' : 'NEED: number of bills sponsored by John Curtis', dispatch: emptyGraph, routeNeed: routeMock, retrieveTurns: async () => [] } });
   ok(e && e.enriched === true && e.enrichSource === 'routed' && /42/.test(e.say), 'graph empty → routeNeed (cloud tool executor) answers the count');
   // _enrichRouted must NOT feed an error / no-fit result as grounding (the stale "Lloyd Austin" bug: an
   // error-as-grounding made the model confabulate from training AND short-circuit excavation).
@@ -247,6 +250,36 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   const frv = await cog.answerGrounded({ userMessage: 'who chairs Acme', grounding: '[VERIFIED as of 2026-07-05] The current chair of Acme is Person.', object: { name: 'Acme' }, deps: {
     now: NOW, newsStories: () => [], ask: async () => 'Person chairs Acme.', wikiLookup: async () => { throw new Error('wiki should not be called for a fresh fact'); } } });
   ok(frv && frv.enrichSource === null && /Person/.test(frv.say), 'staleness: a FRESH verified fact does not trigger re-verify');
+
+  // 14) BILL-INSTANCE GUARD (campaign 08-22 — the live SB25-200-for-SB200 Colorado swap): a bill
+  // number in the question is an IDENTIFIER; retrieval about a DIFFERENT bill never grounds the draft.
+  ok(cog._billToksOf('Which senator co-sponsored SB200?').has('sb200'), '_billToksOf: sb200 extracted from the question');
+  ok(cog._billToksOf('S.B. 200 passed; also HB 22 and vote 142').has('sb200') && cog._billToksOf('S.B. 200').size === 1, '_billToksOf: "S.B. 200" normalizes to sb200; "vote 142" is not a bill');
+  ok(cog._instanceMismatch('Which senator co-sponsored SB200?', 'Senator Kyle Mullica is a prime sponsor of SB25-200 in Colorado.') === true, '⭐ THE LIVE SWAP: SB25-200 text never grounds an SB200 question');
+  ok(cog._instanceMismatch('Which senator co-sponsored SB200?', 'Louisiana SB 200 was authored by Sen. Valarie Hodges.') === false, 'the right instance ("SB 200") passes');
+  ok(cog._instanceMismatch('Which senator co-sponsored SB200?', 'Senator Hodges chairs the committee.') === false, 'text with no bill token passes (context is not a mismatch)');
+  ok(cog._instanceMismatch('who chairs Acme now?', 'SB25-200 is a Colorado bill.') === false, 'a question with no bill token never trips the guard');
+  {
+    // the ladder drops a wrong-instance retrieval and continues to one that matches
+    const seen = [];
+    const r = await cog.answerGrounded({ userMessage: 'Which senator co-sponsored SB200?', grounding: '', deps: {
+      newsStories: () => [],
+      ask: async ({ input }) => {
+        const g = String(input.grounding || '');
+        if (/Hodges/.test(g)) return 'Louisiana SB200 was authored by Valarie Hodges.';
+        if (!g.trim()) return 'NEED: SB200 co-sponsor';
+        return 'NEED: SB200 co-sponsor';
+      },
+      retrieveTurns: async () => [],
+      dispatch: async () => ({ ok: true, text: '{"result":[]}' }),
+      wikiLookup: async () => [{ title: 'SB25-200', extract: 'Senator Kyle Mullica is a prime sponsor of SB25-200 alongside Chris Kolker.' }],
+      routeNeed: async () => ({ ok: false }),
+      webSearch: async () => ({ results: [{ title: 'LA SB200', snippet: 'Louisiana SB 200 authored by Sen. Valarie Hodges', url: 'https://legiscan.com/LA/bill/SB200/2026' }] }),
+      excavate: async () => ({ found: false }),
+      writeBack: async () => {},
+    } });
+    ok(r && /Hodges/.test(r.say) && !/Mullica/.test(r.say), '⭐ the ladder DROPS the wrong-instance wiki text and answers from the matching web hit');
+  }
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
