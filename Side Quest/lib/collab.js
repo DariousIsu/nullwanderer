@@ -58,7 +58,7 @@ function _terms(text, max = 6) {
  *  the run-8 residual) frames for ANSWERING FROM the held documents — and because the injection
  *  rides the composed message, it also becomes the anti-fab verifier's evidence: the same pull
  *  that enables the right answer grounds the gate that checks it. */
-function groundingBlock({ sessionId, text = '', mode = 'collab' } = {}) {
+function groundingBlock({ sessionId, text = '', mode = 'collab', _notesDir = null } = {}) {
   try {
     const d = db();
     const parts = [];
@@ -82,14 +82,47 @@ function groundingBlock({ sessionId, text = '', mode = 'collab' } = {}) {
     let ask = '';
     try { const ts = require('./answer_cache').threadState({ sessionId }); if (ts) ask = ts.ask || ''; } catch {}
     const terms = _terms(`${text} ${ask}`, 6);
+    // INSTANCE DISCIPLINE (campaign §21a, 08-22): a bill-number token is an IDENTIFIER, not a
+    // stem — the 2018 Louisiana "SB200" (Hewitt) rode prefix/substring widening into every 2026
+    // anti-china SB200 ask. Bill numbers match as EXACT fts tokens (never sb200* ⊇ sb2000, never
+    // sb20 ⊆ sb200 via LIKE), the substring fallback boundary-checks them, and the fan is RANKED
+    // by the thread's other terms so the thread's own instance dominates a same-numbered stranger.
+    const billToks = terms.filter((t) => _BILLNUM_RE.test(t));
+    const otherToks = terms.filter((t) => !_BILLNUM_RE.test(t));
+    // 2a. THE HELD-SOURCE HOMECOMING (the run-8/blind-week root, cured 08-22): a hand-built notes
+    //     deliverable often IS the answer — the sponsors sheet held the full SB200 roster while the
+    //     fan searched only doc rows and honest-missed ("our records don't list any co-sponsors").
+    //     Bounded top-level scan of notes/*.md (filename+content term match; bill numbers exact-
+    //     token, double-weighted); the excerpt cuts AROUND the strongest match so a big sheet
+    //     surfaces its relevant row, never just its header. notes/_test_residue is a SUBDIRECTORY
+    //     → naturally excluded (top-level .md files only). Outranks doc-store matches.
     if (terms.length >= 2 && parts.length < 3) {
-      // INSTANCE DISCIPLINE (campaign §21a, 08-22): a bill-number token is an IDENTIFIER, not a
-      // stem — the 2018 Louisiana "SB200" (Hewitt) rode prefix/substring widening into every 2026
-      // anti-china SB200 ask. Bill numbers match as EXACT fts tokens (never sb200* ⊇ sb2000, never
-      // sb20 ⊆ sb200 via LIKE), the substring fallback boundary-checks them, and the fan is RANKED
-      // by the thread's other terms so the thread's own instance dominates a same-numbered stranger.
-      const billToks = terms.filter((t) => _BILLNUM_RE.test(t));
-      const otherToks = terms.filter((t) => !_BILLNUM_RE.test(t));
+      try {
+        const fs2 = require('fs'), p2 = require('path');
+        const dir = _notesDir || require('./files').resolvePath('notes');
+        const names = fs2.existsSync(dir) ? fs2.readdirSync(dir).filter((n) => n.endsWith('.md')).slice(0, 300) : [];
+        let best = null, bestScore = 0;
+        for (const n of names) {
+          const fp = p2.join(dir, n);
+          let body = '';
+          try { if (!fs2.statSync(fp).isFile() || fs2.statSync(fp).size > 300 * 1024) continue; body = fs2.readFileSync(fp, 'utf8'); } catch { continue; }
+          const hay = `${n}\n${body}`.toLowerCase();
+          let score = 0;
+          for (const t2 of otherToks) if (hay.includes(t2)) score++;
+          for (const bt of billToks) if (new RegExp(`\\b${bt}\\b`, 'i').test(hay)) score += 2;
+          if (score > bestScore) { bestScore = score; best = { n, body }; }
+        }
+        if (best && bestScore >= 2) {
+          let at = -1;
+          for (const bt of billToks) { const m2 = best.body.match(new RegExp(`\\b${bt}\\b`, 'i')); if (m2) { at = m2.index; break; } }
+          if (at < 0) { const hayL = best.body.toLowerCase(); for (const t2 of otherToks) { const i2 = hayL.indexOf(t2); if (i2 > -1) { at = i2; break; } } }
+          const from = Math.max(0, at - 80);
+          const ex = best.body.slice(from, from + 560).replace(/\s+/g, ' ').trim();
+          parts.push(`- notes/${best.n} (a deliverable YOU built — often the answer itself): ${ex}…`);
+        }
+      } catch {}
+    }
+    if (terms.length >= 2 && parts.length < 3) {
       let rows = [];
       try {
         rows = d.getDb().prepare(
@@ -124,7 +157,7 @@ function groundingBlock({ sessionId, text = '', mode = 'collab' } = {}) {
     }
     if (!parts.length) return null;
     if (mode === 'recall') {
-      return `[HELD-SOURCE CONTEXT (measured — these held documents match this question):\n${parts.join('\n')}\nAnswer FROM these documents and cite them by doc#. If they do not contain the answer, say so honestly — NEVER fill the gap from training data or from other recent subjects.]`;
+      return `[HELD-SOURCE CONTEXT (measured — these held documents match this question):\n${parts.join('\n')}\nAnswer FROM these documents and cite them by doc# or file path. If they do not contain the answer, say so honestly — NEVER fill the gap from training data or from other recent subjects.]`;
     }
     return `[COLLAB GROUNDING (measured, from the held stores — think WITH this, cite it by name):\n${parts.join('\n')}]`;
   } catch { return null; }

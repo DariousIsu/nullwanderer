@@ -69,6 +69,19 @@ ok(/IN THIS REPLY/.test(d) && /Do NOT create or edit any artifact/.test(d) && /l
     ok(iSheet > -1 && (iStr === -1 || iSheet < iStr), '⭐ THE HEWITT SPECIMEN: the thread\'s instance (2026 anti-china) LEADS the fan — the 2018 SB200 never dominates');
   }
   ok(cl.groundingBlock({ sessionId: 0, text: 'any updates on SB20 anywhere?', mode: 'recall' }) === null, 'sb20 never rides INTO sb200 documents (no substring widening either direction)');
+
+  // ── held-source homecoming: the notes deliverable IS the answer (the run-8 root, cured 08-22) ──
+  const fs2 = require('fs');
+  const ndir = path.join(os.tmpdir(), `sq_collab_notes_${process.pid}`);
+  fs2.mkdirSync(path.join(ndir, '_test_residue'), { recursive: true });
+  fs2.writeFileSync(path.join(ndir, 'anti_china_2026_sponsors.md'), '# Sponsors sheet\n\n| LA | SB200 | expropriation near military bases | Sen. Valarie Hodges | 35 co-sponsors incl. Larry Selders (D-14) died 2026-07-07 |\n');
+  fs2.writeFileSync(path.join(ndir, 'grocery_list.md'), 'milk, eggs, bread');
+  fs2.writeFileSync(path.join(ndir, '_test_residue', 'decoy.md'), 'SB200 sponsors china sweep decoy — harness residue, must never ride');
+  const hb = cl.groundingBlock({ sessionId: 0, text: 'which senator co-sponsored SB200 in the china sweep?', mode: 'recall', _notesDir: ndir });
+  ok(hb && /anti_china_2026_sponsors\.md/.test(hb) && /Selders/.test(hb), '⭐ THE HOMECOMING: the notes sheet rides the fan and its excerpt carries the ANSWER (Selders), never just the header');
+  ok(hb && !/decoy/.test(hb), 'notes/_test_residue never rides (subdirectories excluded)');
+  ok(hb && hb.indexOf('anti_china_2026_sponsors.md') < hb.indexOf(`doc#${sheet.id}`), 'the hand-built deliverable OUTRANKS doc-store matches');
+  try { fs2.rmSync(ndir, { recursive: true, force: true }); } catch {}
 }
 
 // ── wiring: the four gates exist in main.js ─────────────────────────────────────────────────────
