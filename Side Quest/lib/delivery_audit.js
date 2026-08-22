@@ -81,6 +81,25 @@ function audit({ topic = '', body = '', dsRows = [], dataShaped = false, doneSco
     if (leaked.length) violations.push({ check: 'query-leak', detail: `dataset fed by queries outside the topic: ${leaked.join(', ')}` });
   }
 
+  // 8. SUBJECT-ANCHOR (battery-2 escape, 2026-08-22): a HALF-fabricated topic — "Blorvik-Hansen
+  //    procurement bills in Vermont" — rode its REAL half past every floor above: 'procurement'
+  //    landed 50 genuine rows (not starved), procurement+vermont hit the ½-token relevance floor
+  //    exactly, and the feeding query was a topic token — so a 30KB garbage report DELIVERED while
+  //    her own say honestly reported "no record of any Blorvik-Hansen bill". The same principle as
+  //    check #3, generalized: every PROPER-NOUN token the topic names (capitalized, non-state,
+  //    content-bearing) must appear in the body — a named subject absent from its own report is a
+  //    reportable gap, never a silent hole. All-lowercase topics leave this check inert (honest
+  //    bound; the starved and relevance checks still stand).
+  {
+    const stateNames = new Set(Object.keys(STATE_CODES).flatMap((n) => n.split(' ')));
+    const tokSet = new Set(toks);
+    const proper = [...new Set((String(topic).match(/(?<![A-Za-z])[A-Z][a-z]{2,}/g) || [])
+      .map((w) => w.toLowerCase())
+      .filter((w) => tokSet.has(w) && !stateNames.has(w)))];
+    const absent = proper.filter((w) => !new RegExp(`\\b${w}\\b`, 'i').test(b));
+    if (absent.length) violations.push({ check: 'subject-missing', detail: `the topic names ${absent.join(', ')} — absent from the entire document (a named subject the material never reached)` });
+  }
+
   return { ok: violations.length === 0, violations };
 }
 

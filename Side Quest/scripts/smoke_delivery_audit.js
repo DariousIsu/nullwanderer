@@ -49,6 +49,18 @@ ok(v(da.audit({ topic: topic7, body: goodBody.replace(/## The data[\s\S]*$/, 'pr
   ok(!v(da.audit({ topic: 'the Louisiana parish leadership contact table', body: goodBody + ' louisiana parish leadership contact', dsRows: rows(5).map((r) => ({ ...r, attrs: {} })), dataShaped: true })).includes('query-leak'),
     'rows without query tags (civic store) are exempt');
 }
+// battery-2 escape (08-22): the HALF-fabricated topic — real rows + the generic half present, the
+// NAMED subject absent from the whole document → a garbage report delivered while her say honestly
+// reported "no record of any Blorvik-Hansen bill". Check #8: every proper-noun the topic names
+// must appear in the body (states stay check #3's job).
+ok(v(da.audit({ topic: 'build the report on Blorvik-Hansen procurement bills in Vermont',
+  body: `Vermont procurement bills overview and analysis of the procurement landscape. ${'x'.repeat(300)}\n**Total: 50**`,
+  dsRows: rows(50).map((r) => ({ ...r, attrs: { tags: ['procurement'] } })), dataShaped: true })).includes('subject-missing'),
+  '⭐ THE HALF-FABRICATED TOPIC: 50 real rows + procurement/Vermont present, Blorvik/Hansen absent → subject-missing');
+ok(!v(da.audit({ topic: 'the Hartfield Foundation funding network', body: `Hartfield Foundation funding flows and the network around it. ${'x'.repeat(300)}`, dsRows: [], dataShaped: false })).includes('subject-missing'),
+  'a named subject present in its own report passes');
+ok(!v(da.audit({ topic: 'parish leadership contact table for louisiana', body: `parish leadership contact table content ${'x'.repeat(300)}`, dsRows: [], dataShaped: false })).includes('subject-missing'),
+  'an all-lowercase topic leaves check #8 inert (the honest bound; starved + relevance still stand)');
 const laDetect = require('../lib/legis_acquire').detect('build the report on Hartfield Zorblat bills in Louisiana');
 ok(laDetect.queries.join(',') === 'hartfield,zorblat', 'the acquirer stoplist strips order verbs — the raw order text yields only SUBJECT queries');
 ok(da.describe([{ check: 'a', detail: 'b' }, { check: 'c', detail: 'd' }]) === 'a: b · c: d', 'describe renders one honest line');
