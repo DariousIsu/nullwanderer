@@ -136,6 +136,14 @@ function topicViable(topic) {
   if (t.length < 4) return false;
   if (_TOPIC_DEST_LEAD_RE.test(t)) return false;      // a destination is where it lands, not what it's about
   if (_TOPIC_NARRATION_RE.test(t)) return false;      // her own forward narration leaked into the topic
+  // STATUS-CLAUSE SHRAPNEL (live, 2026-08-22 13:51 — the "Beyond , be straight project is still in
+  // research mode, not into yet" report): a fragment of her own STATE-DESCRIPTION say became a booked
+  // subject — it carries noun substance (project/research/mode) so every gate above passed, and the
+  // backstop built, registered, and canvas'd a 9.7KB report ON A SENTENCE FRAGMENT OF HER OWN VOICE,
+  // announcing "Done" into Lucas's unrelated live thread. A subject is a THING, never a status claim.
+  if (/\b(?:is|are|was|were|remains?|stays?)\s+(?:still\s+|not\s+|now\s+|already\s+)?(?:in|at|on|under|behind|ahead|pending|ongoing|running|waiting|ready|done|finished|complete|incomplete)\b/i.test(t)) return false;
+  if (/\bnot\s+(?:into\s+)?(?:yet|done|finished|ready|complete)\b/i.test(t)) return false;
+  if (/^[^a-z0-9]*(?:beyond|anyway|also|so|and|but|plus)\b[\s,]*[,;]/i.test(t) || /^\W*,|,\s*$/.test(t)) return false;   // orphan-punctuation / discourse-lead shrapnel
   try { if (!require('./recheck_queue').researchable(t, { requireProper: false })) return false; } catch {}
   if (!_hasNounSubstance(t)) return false;            // all filler → nothing steers the composition
   return true;

@@ -93,6 +93,12 @@ ok(!has('I prefer working from primary sources.'), 'FP: a stated preference → 
   // PHASE 0 NOUN-FLOOR (doc-plan failure #8): live booking #2099 booked the topic "give you as
   // soon as" — pure filler that slid past the narration net because no I/we survived the strip.
   // A topic must keep at least one content token or the booking stands down.
+  // status-clause shrapnel (live 08-22 13:51 — recheck#2203 built a 9.7KB report ON A FRAGMENT OF
+  // HER OWN SAY and announced "Done" into Lucas's unrelated live thread)
+  ok(!d.topicViable('Beyond , be straight project is still in research mode, not into yet'), '⭐ THE LIVE SHRAPNEL: a status clause of her own say is never a subject');
+  ok(!d.topicViable('the report is still pending review'), 'status floor: "X is still pending" is a claim, not a subject');
+  ok(!d.topicViable('results are not yet ready'), 'status floor: "not yet X" shrapnel is NOT viable');
+  ok(d.topicViable('Meta and Applied Digital community benefits in Louisiana'), 'status floor: the real live subject IS viable (the re-derive lands here)');
   ok(!d.topicViable('give you as soon as'), 'noun floor: the live #2099 filler topic is NOT viable');
   ok(!d.topicViable('right away for you now'), 'noun floor: promise-verb residue + time filler is NOT viable');
   ok(!d.topicViable('that in just a minute'), 'noun floor: deictic + time filler is NOT viable');
