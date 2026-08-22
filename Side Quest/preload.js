@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('sq', {
   setMeta: (key, value) => ipcRenderer.invoke('meta:set', key, value),
   getRecentHistory: () => ipcRenderer.invoke('history:recent'),
   sendMessage: (text, attachments) => ipcRenderer.invoke('chat:send', text, attachments || []),
-  sttTranscribe: (audioBuf) => ipcRenderer.invoke('stt:transcribe', audioBuf),   // two-way voice input: audio bytes → { ok, text }
+  sttTranscribe: (audioBuf, opts) => ipcRenderer.invoke('stt:transcribe', audioBuf, opts || null),   // two-way voice input: audio bytes → { ok, text }; opts.handsFree arms the addressed gate
   onVoiceSpeaking: (cb) => ipcRenderer.on('voice:speaking', (_e, info) => cb(info)),   // conversation mode: {on} — suspend/reopen the ear while she speaks
   speak: (text) => ipcRenderer.invoke('voice:speak', text),   // speak an unprompted utterance aloud (utterances only, never her thoughts)
   onVoicePlay: (cb) => ipcRenderer.on('voice:play', (_e, info) => cb(info)),   // S3: play her voice IN this renderer (AEC reference + instant cancel)

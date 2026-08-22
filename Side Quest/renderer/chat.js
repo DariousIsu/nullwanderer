@@ -947,9 +947,9 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
       return;   // stay in the enrollment loop; the mic keeps capturing samples
     }
 
-    // NORMAL TURN: transcribe + SPEAKER-GATE.
+    // NORMAL TURN: transcribe + SPEAKER-GATE (+ the hands-free ADDRESSED gate, main-side).
     try {
-      const res = await window.sq.sttTranscribe(ab);
+      const res = await window.sq.sttTranscribe(ab, { handsFree: true });
       const sp2 = res && res.speaker;
       const spLog = sp2 ? `spk=${sp2.match ? 'MATCH' : 'REJECT'} score=${sp2.score} thr=${sp2.threshold}${sp2.enrolled ? '' : ' unenrolled'}${sp2.failOpen ? ' FAILOPEN' : ''}` : 'spk=n/a';
       console.log(`[voice] STT ${(blob.size / 1024).toFixed(0)}KB dur=${res && res.dur}s peak=${res && res.peak} ${spLog} → ${res && res.ok ? JSON.stringify((res.text || '').slice(0, 60)) : 'FAIL ' + (res && res.error)}`);
@@ -959,6 +959,13 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
         // enrolled (spk.match defaults true), so the app still works before he teaches her his voice.
         if (sp2 && sp2.match === false) {
           console.log(`[voice] IGNORED — not the operator (score ${sp2.score} < ${sp2.threshold}): ${JSON.stringify((res.text || '').slice(0, 80))}`);
+          if (convoOn && !awaitingReply) setLabel('🎙️ listening…');
+          return;
+        }
+        // ADDRESSED GATE (campaign §22): his voice, but not talking TO HER (dictation / nearby
+        // speech) — main already shelved it as room awareness; no user turn is minted.
+        if (res.addressed && res.addressed.turn === false) {
+          console.log(`[voice] IGNORED — not addressed to her (${res.addressed.reason}): ${JSON.stringify((res.text || '').slice(0, 80))}`);
           if (convoOn && !awaitingReply) setLabel('🎙️ listening…');
           return;
         }

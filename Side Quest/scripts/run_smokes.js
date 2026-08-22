@@ -353,6 +353,7 @@ const smokes = [
   'smoke_org_backfill.js',
   'smoke_recheck_queue.js',
   'smoke_test_port.js',
+  'smoke_voice_addressed.js',
   'smoke_work_coords.js',
   'smoke_pathway_cadence.js',
   'smoke_fetch_reuse.js',

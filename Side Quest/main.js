@@ -3106,7 +3106,7 @@ ipcMain.handle('companion:toggle', () => {
 // Two-way voice INPUT (Slice 1): the renderer captures push-to-talk mic audio (webm/opus) and hands the
 // raw bytes here; we write a temp file and run the CPU faster-whisper sidecar (lib/stt.js). Returns
 // { ok, text }. Fail-soft — never throws; the renderer drops back to idle on ok:false.
-ipcMain.handle('stt:transcribe', async (_e, audioBuf) => {
+ipcMain.handle('stt:transcribe', async (_e, audioBuf, sttOpts) => {
   const fs = require('fs'), os = require('os');
   let tmp = null;
   try {
@@ -3156,8 +3156,37 @@ ipcMain.handle('stt:transcribe', async (_e, audioBuf) => {
         }
       }
     } catch {}
+    // THE ADDRESSED GATE (campaign §22, 08-22): on the HANDS-FREE lane only, a transcription that
+    // passed the speaker gate must also be addressed TO HER before the renderer mints a user turn
+    // (his dictation / nearby speech IS his voice — that's why the speaker gate passed). A dropped
+    // utterance shelves on room.overheard (labelled AMBIENT) — awareness survives, the false turn
+    // doesn't. Push-to-talk (no opts) never comes here: tapping the mic is addressing her.
+    let addressed = null;
+    try {
+      if (sttOpts && sttOpts.handsFree && res && res.ok && (res.text || '').trim() && !(spkr && spkr.match === false)) {
+        const va = require('./lib/voice_addressed');
+        let lastExchange = 0;
+        try { const r = db.getDb().prepare(`SELECT MAX(ts) t FROM turns WHERE speaker = 'user'`).get(); if (r && r.t) lastExchange = r.t; } catch {}
+        try { const a = parseInt(db.getMeta('last_ai_utterance_at') || '0', 10) || 0; if (a > lastExchange) lastExchange = a; } catch {}
+        addressed = va.verdict({
+          text: res.text,
+          name: db.getMeta('chosen_name') || 'zoe',
+          inExchangeWindow: (Date.now() - lastExchange) < va.EXCHANGE_WINDOW_MS,
+          appFocused: !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()),
+        });
+        if (!addressed.turn) {
+          console.log(`[voice] AMBIENT — addressed gate dropped the turn (${addressed.reason}): ${JSON.stringify(String(res.text).trim().slice(0, 90))}`);
+          try {
+            const ring = (JSON.parse(db.getMeta('room.overheard') || '[]') || [])
+              .filter(o => o && o.text && (Date.now() - o.ts) < 60 * 60e3);
+            ring.push({ ts: Date.now(), text: `[ambient, his voice] ${String(res.text).trim().slice(0, 180)}` });
+            db.setMeta('room.overheard', JSON.stringify(ring.slice(-5)));
+          } catch {}
+        }
+      }
+    } catch (e) { addressed = null; console.error('[voice] addressed gate errored (fail-open, turn proceeds):', e.message); }
     return (res && res.ok)
-      ? { ok: true, text: res.text || '', ms: res.ms, lang: res.lang, dur: res.dur, peak: res.peak, speaker: spkr }
+      ? { ok: true, text: res.text || '', ms: res.ms, lang: res.lang, dur: res.dur, peak: res.peak, speaker: spkr, addressed }
       : { ok: false, error: (res && res.error) || 'stt failed', speaker: spkr };
   } catch (e) {
     return { ok: false, error: e.message };
