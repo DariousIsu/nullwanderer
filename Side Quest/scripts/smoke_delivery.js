@@ -30,6 +30,8 @@ ok(has("Let me piece the timeline together from what we hold."), 'promise: "piec
 ok(has("I'll pull it all together tonight."), 'promise: "pull it all together" → detected (pronoun object still a debt)');
 ok(!has("I'll pull myself together and get back to it."), 'FP: "pull myself together" (reflexive) is composure, not a deliverable');
 ok(!has("I'm working on it."), 'FP: bare "working on it" (no deliver-verb, no object) → not a promise');
+ok(has('Let me actually run both searches now and get you real findings.'), '⭐ THE LIVE DANGLE (08-22): "get you real findings" is a bookable debt (findings joined the noun net)');
+ok(has("I'll pull the research together tonight."), 'promise: "pull the research together" → detected');
 
 // ── NOT debts: offers, questions, done-claims, conversational "I'll" ─────────────────────────────────────
 ok(!has('Want me to pull that roster together?'), 'FP: an OFFER ("want me to …?") is not a debt');

@@ -26,7 +26,10 @@ const _OFFER_RE = /\b(?:want me to|would you like|do you want|should i\b|shall i
 const _DELIVER_VERB = /\b(?:pull(?:ing)?(?: together| up)?|put(?:ting)? together|piec\w+|compil\w+|compos\w+|assembl\w+|build\w*|draft\w*|writ\w*|prepar\w+|generat\w+|creat\w+|send\w*|export\w*|deliver\w*|land\w+|gather\w+|collect\w+|get you|grab)\b/i;
 // …a THING to hand over. Artifact-shaped, or an explicit "that/it/them for you". (bare "sheet" +
 // "filings"/"990s" + "agent output" added 2026-08-19 — run-2's sponsors-sheet promises missed the net)
-const _DELIVERABLE_OBJ = /\b(?:roster|list|spreadsheet|sheets?|report|file|filings?|document|dossier|brief(?:ing)?|summary|table|memo|deck|csv|xlsx?|docx?|pdf|990[\w-]*|agent (?:output|results?)|the e-?mails?|the contacts?|the numbers?|the data|the breakdown|the write-?up)\b|\b(?:that|it|them|those|this) for you\b/i;
+// ('findings' + 'research' joined 2026-08-22 — the live Meta/Applied dangle: "let me actually run
+// both searches now and get you real findings" re-promised THREE times with nothing bookable, so
+// the debt never carried and each turn restarted from zero.)
+const _DELIVERABLE_OBJ = /\b(?:roster|list|spreadsheet|sheets?|report|file|filings?|document|dossier|brief(?:ing)?|summary|table|memo|deck|csv|xlsx?|docx?|pdf|990[\w-]*|agent (?:output|results?)|findings|research|the e-?mails?|the contacts?|the numbers?|the data|the breakdown|the write-?up)\b|\b(?:that|it|them|those|this) for you\b/i;
 // already CLAIMED done (past/perfect) → the anti-fabrication gate owns this, not us.
 const _DONE_RE = /\b(?:i'?ve|i have|already|just)\b[^.!?\n]*\b(?:pulled|compiled|assembled|built|drafted|wrote|written|prepared|generated|created|sent|exported|put together)\b|\bis (?:saved|ready|done|attached|on your canvas)\b/i;
 // The split "pull/put/piece X together" construction NAMES its object as the deliverable — run-2's
