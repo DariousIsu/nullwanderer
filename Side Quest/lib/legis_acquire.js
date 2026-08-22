@@ -57,8 +57,11 @@ function detect(topic) {
     .filter((w) => !_QUERY_STOP.has(w) && !stateWords.has(w))
     // a hyphenated token made entirely of filler ("per-state") is filler too
     .filter((w) => !w.split('-').every((p) => _QUERY_STOP.has(p) || stateWords.has(p) || p.length < 3));
-  const query = [...new Set(toks)].slice(0, 2).join(' ');
-  return { states: states.slice(0, 8), query };
+  // P2 gate prep: the tokens search SEPARATELY and union (the proven sponsor-sweep pattern —
+  // "china" + "surveillance" as one AND-ish string under-fetched both tracks). The dataset's
+  // (project, entity) identity dedups the union; `query` stays as the joined label for logs/refs.
+  const queries = [...new Set(toks)].slice(0, 2);
+  return { states: states.slice(0, 8), query: queries.join(' '), queries };
 }
 
 /** One landed sheet body — every result row cited with its LegiScan URL. Pure. */
@@ -157,33 +160,36 @@ async function enrich({ rows = [], dispatch, upsert, cap = 120, budgetMs = 15000
  * day's sheet already exists but the project holds no rows for the state (the first post-P2 run),
  * the search still runs for ROWS ONLY — a skipped sheet must never mean a starved dataset.
  */
-async function acquire({ states = [], query = '', dispatch, insertDocument, findExisting = () => false, landRows = null, hasRowsFor = () => true, now = Date.now(), log = () => {} } = {}) {
+async function acquire({ states = [], query = '', queries = null, dispatch, insertDocument, findExisting = () => false, landRows = null, hasRowsFor = () => true, now = Date.now(), log = () => {} } = {}) {
   const out = { landed: 0, skipped: 0, rows: 0 };
-  if (!states.length || !query || typeof dispatch !== 'function' || typeof insertDocument !== 'function') return out;
+  const qList = (Array.isArray(queries) && queries.length ? queries : (query ? [query] : [])).slice(0, 3);
+  if (!states.length || !qList.length || typeof dispatch !== 'function' || typeof insertDocument !== 'function') return out;
   const dateStr = new Date(now).toISOString().slice(0, 10);
   for (const state of states) {
-    const ref = `legiscan-search:${state.toLowerCase()}:${query.replace(/\s+/g, '-')}:${dateStr}`;
-    try {
-      const sheetHeld = findExisting(ref);
-      if (sheetHeld && (!landRows || hasRowsFor(state))) { out.skipped++; continue; }   // sheet AND rows already held
-      const r = await dispatch({ kind: 'do', name: 'legiscan_search', args: { state, query } });
-      if (!r || !r.ok || !r.text) continue;
-      let j = null; try { j = JSON.parse(r.text); } catch { continue; }
-      const results = Array.isArray(j.results) ? j.results : [];
-      if (!results.length) continue;                              // an honest empty is not a sheet
-      if (typeof landRows === 'function') {
-        try { const rows = resultsToRows({ state, query, results }); landRows(rows); out.rows += rows.length; } catch (e) { log(`[legis-acquire] ${state} row landing failed (${e && e.message}) — sheet path continues`); }
-      }
-      if (sheetHeld) { out.skipped++; continue; }                  // rows refreshed; today's sheet stands
-      const id = insertDocument({
-        title: `LegiScan sweep — ${query} bills: ${state} (${dateStr})`,
-        body: sheetBody({ state, query, results, total: j.total_results, dateStr }),
-        source: 'legislation', ref,
-        understanding: `Live LegiScan search results for "${query}" legislation in ${state} — bill numbers, statuses, dates, source URLs.`,
-        origin: `https://legiscan.com/${state}`,
-      });
-      if (id != null) { out.landed++; log(`[legis-acquire] ${state}: ${results.length} bill(s) → sheet landed`); }
-    } catch (e) { log(`[legis-acquire] ${state} failed (${e && e.message}) — moving on`); }
+    for (const q of qList) {
+      const ref = `legiscan-search:${state.toLowerCase()}:${q.replace(/\s+/g, '-')}:${dateStr}`;
+      try {
+        const sheetHeld = findExisting(ref);
+        if (sheetHeld && (!landRows || hasRowsFor(state, q))) { out.skipped++; continue; }   // sheet AND rows already held
+        const r = await dispatch({ kind: 'do', name: 'legiscan_search', args: { state, query: q } });
+        if (!r || !r.ok || !r.text) continue;
+        let j = null; try { j = JSON.parse(r.text); } catch { continue; }
+        const results = Array.isArray(j.results) ? j.results : [];
+        if (!results.length) continue;                              // an honest empty is not a sheet
+        if (typeof landRows === 'function') {
+          try { const rows = resultsToRows({ state, query: q, results }); landRows(rows); out.rows += rows.length; } catch (e) { log(`[legis-acquire] ${state} row landing failed (${e && e.message}) — sheet path continues`); }
+        }
+        if (sheetHeld) { out.skipped++; continue; }                  // rows refreshed; today's sheet stands
+        const id = insertDocument({
+          title: `LegiScan sweep — ${q} bills: ${state} (${dateStr})`,
+          body: sheetBody({ state, query: q, results, total: j.total_results, dateStr }),
+          source: 'legislation', ref,
+          understanding: `Live LegiScan search results for "${q}" legislation in ${state} — bill numbers, statuses, dates, source URLs.`,
+          origin: `https://legiscan.com/${state}`,
+        });
+        if (id != null) { out.landed++; log(`[legis-acquire] ${state} "${q}": ${results.length} bill(s) → sheet landed`); }
+      } catch (e) { log(`[legis-acquire] ${state} "${q}" failed (${e && e.message}) — moving on`); }
+    }
   }
   return out;
 }

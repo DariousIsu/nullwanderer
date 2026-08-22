@@ -110,7 +110,7 @@ ok(lrows[0].attrs.state === 'AZ' && lrows[0].attrs.tags[0] === 'surveillance' &&
     // --- 4. the wiring is pinned ---
     const main = read('main.js');
     ok(/landRows: \(rows\) => _ds\.upsertRows\(\{ slug, rows \}\)/.test(main), 'acquisition lands rows under the PROJECT slug');
-    ok(/hasRowsFor: \(state\) => _ds\.hasRows\(slug, \{ state \}\)/.test(main), 'the rows-refresh path is wired (a held sheet never starves the dataset)');
+    ok(/hasRowsFor: \(state, q\) => _ds\.rowsFor\(slug\)\.some/.test(main), 'the rows-refresh path is wired PER (state, query) — a held sheet never starves the dataset, query A never suppresses query B');
     ok(main.indexOf('resolveOrMint({ topic: t, kind: \'report\' })') < main.indexOf('const det = la.detect(t);'), 'the registry resolve is HOISTED above acquisition (rows need the slug)');
     ok(/if \(_dsSection\) md = `\$\{md\}\$\{_dsSection\}`/.test(main), 'the data section is CODE-authored and appended — save + canvas both carry it');
     ok(/NEVER state a count, total, percentage, or tally/.test(main), 'the compose rule forbids model-authored numbers when a dataset rides');

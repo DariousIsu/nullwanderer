@@ -6105,7 +6105,8 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
         insertDocument: (d) => db.insertDocument(d),
         findExisting: (ref) => { try { return !!db.getDb().prepare('SELECT 1 FROM documents WHERE ref = ? LIMIT 1').get(ref); } catch { return false; } },
         landRows: (rows) => _ds.upsertRows({ slug, rows }),
-        hasRowsFor: (state) => _ds.hasRows(slug, { state }),
+        // per (state, query): rows from query A must not suppress query B's search (the union)
+        hasRowsFor: (state, q) => _ds.rowsFor(slug).some((r) => r.attrs.state === state && Array.isArray(r.attrs.tags) && r.attrs.tags.includes(q)),
         log: (m) => console.log(m),
       });
       if (got.landed || got.skipped || got.rows) console.log(`[report-cmd] directed acquisition: ${got.landed} sheet(s) landed, ${got.skipped} held, ${got.rows} dataset row(s) (${det.states.join(',')} · "${det.query}")`);
