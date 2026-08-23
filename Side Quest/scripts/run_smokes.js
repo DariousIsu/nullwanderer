@@ -599,6 +599,9 @@ const smokes = [
   // CONTRACT AGENT slice 1: the wave loop under a scripted driver — decompose, cite-or-flag,
   // chain-guarded searches, question expiry → assumption, done-gating, budget stand-down.
   'smoke_contract_agent.js',
+  // CONTRACT AGENT slice 2: the surfacing voicer — outbox → one coalesced unprompted say at the
+  // next open boundary; number-invention guard + deterministic floor; lastWaveTs positive source.
+  'smoke_contract_voice.js',
   // BUILD 0 + BUILD 3 (2026-08-21): the browser-lane web_search floor (empty federation → her own
   // stealth lane) and the gap-plan approval surface (fillable/blocked/aggressive, cadence + fp gate).
   'smoke_gap_plan.js',

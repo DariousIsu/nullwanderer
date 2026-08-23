@@ -306,6 +306,10 @@ function waveLog(contractId) {
   }));
 }
 
+// Newest wave start across ALL contracts — the anti-fab gate's POSITIVE source: a real contract
+// wave IS a real agent run, so the invented-agent gate accepts it as evidence (spec §7).
+function lastWaveTs() { try { const r = _db().prepare('SELECT MAX(started_ts) AS m FROM wavelog').get(); return (r && r.m) || 0; } catch { return 0; } }
+
 // ── the boot resume read + the status-truth read ────────────────────────────────────────────────
 function counts(contractId) {
   const d = _db(), id = str(contractId);
@@ -334,6 +338,6 @@ module.exports = {
   postInbox, readInbox, markInboxConsumed, tombstoneInbox,
   postOutbox, unvoiced, markVoiced, OUTBOX_KINDS,
   openQuestion, getQuestion, openQuestions, answerQuestion, expireDueQuestions,
-  beginWave, endWave, waveLog,
+  beginWave, endWave, waveLog, lastWaveTs,
   counts, resumeOpenContracts,
 };

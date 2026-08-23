@@ -1466,6 +1466,41 @@ app.whenReady().then(() => {
     finally { markActivity('idle'); contractWaveRunning = false; }
   };
   setInterval(() => { maybeRunContractWave().catch(() => {}); }, CONTRACT_CHECK_MS).unref?.();
+  // ── CONTRACT AGENT slice 2 (spec §7): THE SURFACING VOICER — outbox → the unprompted channel.
+  // All surfacing kinds are PRIORITY (Lucas 08-22: findings, questions, judgment calls — the load
+  // the unprompted channel was meant for). Coalesced to ONE say per boundary; lull-gated like every
+  // unprompted door (v1 boundary = the lull; a true turn-boundary hook is a later refinement);
+  // away-held (items are durable). Voice = the replier model over the roadmap, deterministic floor,
+  // number-invention guard in lib/contract_voice.
+  const CONTRACT_VOICE_CHECK_MS = 30 * 1000;
+  let contractVoiceRunning = false;
+  const maybeVoiceContractSurfacings = async () => {
+    if (contractVoiceRunning || !currentSessionId) return;
+    contractVoiceRunning = true;
+    const _cvSid = currentSessionId;
+    try {
+      const cv = require('./lib/contract_voice');
+      const r = await cv.maybeVoice({
+        store: require('./lib/contract_store'),
+        conversationActive: () => { try { return _conversationActive(); } catch { return true; } },
+        isAway: () => { try { return require('./lib/availability').isAway(); } catch { return false; } },
+        complete: async (messages) => require('./lib/ollama').complete({
+          model: (() => { try { return db.getMeta('model.replier') || 'kimi-k2.6'; } catch { return 'kimi-k2.6'; } })(),
+          messages, think: false, options: { num_predict: 320, num_ctx: 8192 }, timeoutMs: 45000, lane: 'contract-voice',
+        }),
+        deliver: (text) => {
+          const row = db.insertTurn({ sessionId: _cvSid, speaker: 'ai_said', content: text, model: 'contract-agent', unprompted: 1 });
+          try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+          try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: text }); } catch {}
+          try { require('./lib/blackboard').append({ source: 'contract-agent', kind: 'utterance', refTable: 'turns', refId: row.id, content: text }); } catch {}
+          return row;
+        },
+      });
+      if (r.voiced) console.log(`[contract-agent] voiced ${r.voiced} surfacing(s) as one unprompted say (${r.rendered})`);
+    } catch (e) { console.error('[contract-agent] voice failed:', e.message); }
+    finally { contractVoiceRunning = false; }
+  };
+  setInterval(() => { maybeVoiceContractSurfacings().catch(() => {}); }, CONTRACT_VOICE_CHECK_MS).unref?.();
   // NIGHTLY FULL DEDUP SWEEP (2026-07-10): the GUARANTEED once-a-day net. The write-triggered dedup + the fast
   // apply tick catch the steady flow; this sweep guarantees the WHOLE graph is re-scanned and the anchored
   // queue drained toward empty each calendar day regardless of activity — AND it is the home for the SLOW
@@ -13439,7 +13474,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       const _wsv = _mc.verifyWorkStateClaims(sayOut, {
         gatherRanThisTurn: () => { if (!_fuAnchor) return true; try { return require('./lib/echo_suit').lastGatherTs() >= _fuAnchor; } catch { return true; } },
         pendingRecordFor: (anchors) => { try { return _wsLib.pendingRecordFor(anchors, _wsLib.snapshot()); } catch { return true; } },
-        agentRanRecently: () => { try { return require('./lib/echo_suit').lastAgentTs() >= Date.now() - 15 * 60e3; } catch { return true; } },
+        agentRanRecently: () => { try { return Math.max(require('./lib/echo_suit').lastAgentTs() || 0, require('./lib/contract_store').lastWaveTs() || 0) >= Date.now() - 15 * 60e3; } catch { return true; } },   // a real contract wave IS a real agent run (spec §7 positive source)
         evidence: String(resultText || ''),
       });
       if (!_wsv.ok) {
@@ -17722,7 +17757,7 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
       const wsv = _mc.verifyWorkStateClaims(out, {
         gatherRanThisTurn: () => { if (!turnStartTs) return true; try { return require('./lib/echo_suit').lastGatherTs() >= turnStartTs; } catch { return true; } },
         pendingRecordFor: (anchors) => { try { return ws.pendingRecordFor(anchors, ws.snapshot()); } catch { return true; } },
-        agentRanRecently: () => { try { return require('./lib/echo_suit').lastAgentTs() >= Date.now() - 15 * 60e3; } catch { return true; } },
+        agentRanRecently: () => { try { return Math.max(require('./lib/echo_suit').lastAgentTs() || 0, require('./lib/contract_store').lastWaveTs() || 0) >= Date.now() - 15 * 60e3; } catch { return true; } },   // a real contract wave IS a real agent run (spec §7 positive source)
         evidence,
       });
       if (!wsv.ok) {
@@ -18121,6 +18156,10 @@ async function _surfaceExplorationShare() {
     const sid = currentSessionId;
     if (!sid) return;
     if (_conversationActive()) return;   // a share waits for a lull like every unprompted surface
+    // THE PRIORITY INVERSION (spec §7, Lucas 08-22): substance owns the unprompted channel —
+    // pending contract surfacings (findings/questions/judgment calls) outrank a musing share.
+    // The share isn't lost; it takes the next quiet boundary after the surfacings voice.
+    try { if (require('./lib/contract_store').unvoiced().length) return; } catch {}
     const msg = require('./lib/self_explore').takeShare();
     if (!msg) return;
     const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'self-explore', unprompted: 1 });
