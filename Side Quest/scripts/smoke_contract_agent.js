@@ -1,0 +1,132 @@
+'use strict';
+/* smoke_contract_agent.js — CONTRACT AGENT slice 1 (docs/CONTRACT_AGENT_SPEC_2026-08-22.md §5-§6).
+ * The wave loop under a SCRIPTED driver: decompose, citation discipline (uncited fill → FLAGGED),
+ * chain guard (exact-repeat refused, replan note reaches the next prompt), question expiry → the
+ * assumption flag, done-gating (open slots refuse the done-claim), budget stand-down (one blocked
+ * surfacing, never a hammer), and parse-failure resilience. */
+const path = require('path'), os = require('os'), fs = require('fs');
+
+const dbDir = path.join(os.tmpdir(), `sq_cagent_${process.pid}`);
+fs.mkdirSync(dbDir, { recursive: true });
+process.env.CONTRACTS_DB_PATH = path.join(dbDir, 'contracts.db');
+const store = require('../lib/contract_store');
+const ca = require('../lib/contract_agent');
+
+let pass = 0, fail = 0;
+const ok = (cond, name) => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name}`); } };
+
+const prompts = [];           // every messages[] the driver saw
+const replies = [];           // queue of scripted driver replies
+const deps = {
+  store,
+  complete: async (messages) => { prompts.push(messages); return replies.length ? replies.shift() : '{"plan_summary":"idle","actions":[]}'; },
+  internalSearch: async (q) => (/delta forge|community benefits/i.test(q)
+    ? '[HELD-SOURCE CONTEXT: - canvas "Community Benefits: Meta & Applied Digital in Louisiana" (tab community_benefits_la — a doc on YOUR canvas): Meta Hyperion 7,500 construction jobs…]'
+    : null),
+  webSearch: async (q) => (/cleco/i.test(q) ? [{ title: 'KALB — Cleco filing', url: 'https://kalb.example/x', snippet: '756 MW turbine' }] : []),
+  quotaCheck: () => ({ allow: true, reason: 'test' }),
+  now: () => Date.now(),
+};
+
+(async () => {
+  // ── parseDriverReply tolerance ────────────────────────────────────────────────────────────────
+  ok(ca.parseDriverReply('Sure, here is my plan:\n{"plan_summary":"x","actions":[]}\nthanks').plan_summary === 'x', 'parse survives model preamble/postamble');
+  ok(ca.parseDriverReply('{"a":"he said \\"done\\" {ok}"}').a.includes('{ok}'), 'parse survives braces inside strings');
+  ok(ca.parseDriverReply('no json at all') === null, 'no JSON → null, no throw');
+
+  // ── contract A: the full arc ──────────────────────────────────────────────────────────────────
+  const A = store.openContract({ title: 'LA data-center benefits — 3 cells', askVerbatim: 'fill the three cells with sourced content', topicTokens: ['meta', 'applied', 'digital'] });
+  store.postInbox({ contractId: A.contractId, kind: 'steering', text: 'include ratepayer impacts' });
+
+  // wave 1: decompose + first search + a finding
+  replies.push(JSON.stringify({ plan_summary: 'decompose and sweep held stores', actions: [
+    { action: 'define_slots', slots: [{ slotId: 'richland-jobs', description: 'Richland jobs' }, { slotId: 'rapides-project', description: 'Rapides project' }, { slotId: 'water', description: 'water commitments' }] },
+    { action: 'internal_search', query: 'delta forge community benefits' },
+    { action: 'surface', kind: 'finding', text: 'the canvas already holds the compilation' },
+  ] }));
+  let r = await ca.runWave(A.contractId, deps);
+  ok(r.ok && r.waveN === 1 && !r.done, 'wave 1 runs');
+  ok(prompts[0][0].role === 'system' && /NEVER invent a figure/.test(prompts[0][0].content), 'the charter rides the system message');
+  ok(/NONE YET/.test(prompts[0][1].content), 'the empty slot set is named in the prompt');
+  ok(/include ratepayer impacts/.test(prompts[0][1].content), 'unapplied steering rides the prompt');
+  ok(store.slots(A.contractId).length === 3, 'decompose defined 3 slots');
+  ok(store.readInbox(A.contractId).length === 0, 'steering consumed by the wave');
+  {
+    const w = store.waveLog(A.contractId)[0];
+    ok(w.endedTs > 0 && w.actions.some((a) => /internal_search .*YOUR canvas/.test(a)), 'the wave committed with the search observation');
+    ok(store.unvoiced().some((o) => o.kind === 'finding'), 'the finding queued for the voicer');
+  }
+
+  // wave 2: repeat refused; cited fill lands; uncited fill FLAGS; question blocks its slot
+  replies.push(JSON.stringify({ plan_summary: 'fill from held material', actions: [
+    { action: 'internal_search', query: 'delta forge community benefits' },
+    { action: 'fill_slot', slotId: 'richland-jobs', content: '~7,500 construction jobs at peak', citations: [{ src: 'canvas community_benefits_la', date: 'held' }] },
+    { action: 'fill_slot', slotId: 'rapides-project', content: 'a number I remember from training' },
+    { action: 'open_question', slotId: 'water', text: 'is the company waterless-cooling claim enough for the water cell?', assumption: 'use it, labeled as a company claim', windowMs: 50 },
+  ] }));
+  r = await ca.runWave(A.contractId, deps);
+  ok(r.ok && r.waveN === 2, 'wave 2 runs');
+  {
+    const w = store.waveLog(A.contractId)[1];
+    ok(w.actions.some((a) => /REFUSED \(exact repeat\)/.test(a)), '⭐ CHAIN GUARD: the exact-repeat search is refused');
+    const s = store.slots(A.contractId);
+    ok(s.find((x) => x.slotId === 'richland-jobs').status === 'filled', 'the cited fill lands');
+    const rp = s.find((x) => x.slotId === 'rapides-project');
+    ok(rp.status === 'flagged' && rp.flags.some((f) => f.kind === 'uncited'), '⭐ CITE-OR-FLAG: the uncited fill is FLAGGED, never silently filled');
+    ok(s.find((x) => x.slotId === 'water').status === 'blocked_on_question', 'the question blocks its slot');
+    ok(store.unvoiced().some((o) => o.kind === 'question'), 'the question surfaced to the voicer');
+  }
+
+  // wave 3: done is REFUSED while a slot is blocked; the replan note (from the repeat) rides in
+  replies.push(JSON.stringify({ plan_summary: 'try to close', actions: [{ action: 'done' }] }));
+  await new Promise((res2) => setTimeout(res2, 60));   // let the question window lapse
+  r = await ca.runWave(A.contractId, deps);
+  ok(/ANALYZE & REPLAN/.test(prompts[2][1].content), '⭐ the replan note reaches the next wave\'s prompt');
+  {
+    // expiry ran at wave START, so the blocked slot became flagged-with-assumption BEFORE the plan
+    const w3 = store.waveLog(A.contractId)[2];
+    ok(w3.actions.some((a) => /expired questions folded/.test(a)), 'the overdue question folded to its assumption at wave start');
+    const water = store.slots(A.contractId).find((x) => x.slotId === 'water');
+    ok(water.status === 'flagged' && water.flags.some((f) => f.kind === 'assumption'), 'the assumption flag survives on the slot');
+    ok(r.done === true && store.getContract(A.contractId).status === 'closing', 'done accepted once every slot is filled/flagged → closing');
+    ok(store.unvoiced().some((o) => o.kind === 'milestone' && /honest holes/.test(o.text)), 'the milestone names the honest holes');
+  }
+  ok((await ca.runWave(A.contractId, deps)).ok === false, 'a closing contract runs no more waves');
+
+  // ── contract B: parse failure is a no-progress wave, not a crash ──────────────────────────────
+  const B = store.openContract({ title: 'B', askVerbatim: 'do b' });
+  replies.push('I believe the best approach would be to think about it.');
+  r = await ca.runWave(B.contractId, deps);
+  ok(r.ok && /unparsed/.test(r.outcome), 'an unparseable driver reply commits as an honest no-progress wave');
+  replies.push('{"plan_summary":"recover","actions":[]}');
+  r = await ca.runWave(B.contractId, deps);
+  ok(/ANALYZE & REPLAN/.test(prompts[prompts.length - 1][1].content), 'the parse failure feeds the replan note');
+
+  // ── contract C: budget stand-down, surfaced ONCE ──────────────────────────────────────────────
+  const C = store.openContract({ title: 'C', askVerbatim: 'do c', budget: { maxWaves: 1 } });
+  replies.push('{"plan_summary":"only wave","actions":[{"action":"define_slots","slots":[{"slotId":"s1","description":"one"}]}]}');
+  r = await ca.runWave(C.contractId, deps);
+  ok(r.ok && r.waveN === 1, 'contract C spends its one wave');
+  r = await ca.runWave(C.contractId, deps);
+  ok(!r.ok && /budget exhausted/.test(r.reason), 'the budget cap stands the loop down');
+  await ca.runWave(C.contractId, deps);
+  const blocked = store.unvoiced().filter((o) => o.contractId === C.contractId && o.kind === 'blocked');
+  ok(blocked.length === 1 && /keep going/.test(blocked[0].text), 'the stand-down surfaces ONCE, with the extend offer');
+
+  // ── unknown action + web_search observation shape ─────────────────────────────────────────────
+  const D = store.openContract({ title: 'D', askVerbatim: 'do d' });
+  replies.push(JSON.stringify({ plan_summary: 'mixed', actions: [
+    { action: 'web_search', query: 'cleco turbine' },
+    { action: 'launch_missiles' },
+  ] }));
+  r = await ca.runWave(D.contractId, deps);
+  {
+    const w = store.waveLog(D.contractId)[0];
+    ok(w.actions.some((a) => /web_search .*kalb\.example/.test(a)), 'web results ride the observations');
+    ok(w.actions.some((a) => /unknown action/.test(a)), 'an unknown action observes, never crashes');
+  }
+
+  try { store.close(); fs.rmSync(dbDir, { recursive: true, force: true }); } catch {}
+  console.log(`\nsmoke_contract_agent: ${pass} passed, ${fail} failed`);
+  if (fail) process.exitCode = 1;
+})().catch((e) => { console.error('SMOKE CRASHED:', e); process.exitCode = 1; });

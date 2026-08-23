@@ -596,6 +596,9 @@ const smokes = [
   // contract store (slots / inbox / outbox / questions-with-assumptions / wavelog, resume at the
   // last committed wave) — plus the canvas homecoming lives in smoke_collab (source 2b).
   'smoke_contract_store.js',
+  // CONTRACT AGENT slice 1: the wave loop under a scripted driver — decompose, cite-or-flag,
+  // chain-guarded searches, question expiry → assumption, done-gating, budget stand-down.
+  'smoke_contract_agent.js',
   // BUILD 0 + BUILD 3 (2026-08-21): the browser-lane web_search floor (empty federation → her own
   // stealth lane) and the gap-plan approval surface (fillable/blocked/aggressive, cadence + fp gate).
   'smoke_gap_plan.js',

@@ -1433,6 +1433,38 @@ app.whenReady().then(() => {
     finally { markActivity('idle'); kgApplyRunning = false; }
   };
   setInterval(() => { maybeRunAdjudicate().catch(() => {}); }, KGAPPLY_CHECK_MS).unref?.();
+  // ── CONTRACT AGENT (slice 1, docs/CONTRACT_AGENT_SPEC_2026-08-22.md §5-§6): the wave scheduler ──
+  // Contracts are USER-INITIATED deliverables worked off the turn clock (directed tier — never
+  // idle-gated, a user turn never blocks a wave). Each tick runs at most ONE wave of the stalest
+  // open contract; listOpen() every pass covers boot resume AND externally-seeded contracts. The
+  // loop itself (driver, chain guard, cite-or-flag, budget stand-down) lives in lib/contract_agent.
+  const CONTRACT_CHECK_MS = (parseFloat(process.env.ZOE_CONTRACT_CHECK_SEC) || 45) * 1000;
+  const CONTRACT_WAVE_GAP_MS = (parseFloat(process.env.ZOE_CONTRACT_WAVE_GAP_SEC) || 20) * 1000;
+  let contractWaveRunning = false;
+  try {
+    const _cs = require('./lib/contract_store');
+    const _resumed = _cs.resumeOpenContracts();
+    if (_resumed.length) console.log(`[contract] boot resume: ${_resumed.map((c) => `${c.contractId} @ wave ${c.interruptedWaveN || c.lastCompletedWaveN}${c.interruptedWaveN ? ' (interrupted)' : ''}`).join(', ')}`);
+  } catch (e) { console.error('[contract] boot resume read failed:', e.message); }
+  const maybeRunContractWave = async () => {
+    if (contractWaveRunning) return;
+    contractWaveRunning = true;
+    try {
+      const cs = require('./lib/contract_store');
+      const ca = require('./lib/contract_agent');
+      const open = cs.listOpen().filter((c) => c.status === 'open');
+      if (!open.length) return;
+      const c = open.sort((a, b) => ((a.agent.lastWaveTs || 0) - (b.agent.lastWaveTs || 0)))[0];
+      if ((c.agent.lastWaveTs || 0) > Date.now() - CONTRACT_WAVE_GAP_MS) return;
+      markActivity('contract-wave');
+      const r = await ca.runWave(c.contractId, ca.liveDeps());
+      // quiet refusals (budget stand-down, non-open status) would spam every tick — log real waves + real errors only
+      if (r.ok) console.log(`[contract] ${c.contractId} wave ${r.waveN} → ${r.outcome}${r.done ? ' (DONE → closing)' : ''}`);
+      else if (!/budget exhausted|status is/.test(String(r.reason))) console.log(`[contract] ${c.contractId} refused: ${r.reason}`);
+    } catch (e) { console.error('[contract] wave failed:', e.message); }
+    finally { markActivity('idle'); contractWaveRunning = false; }
+  };
+  setInterval(() => { maybeRunContractWave().catch(() => {}); }, CONTRACT_CHECK_MS).unref?.();
   // NIGHTLY FULL DEDUP SWEEP (2026-07-10): the GUARANTEED once-a-day net. The write-triggered dedup + the fast
   // apply tick catch the steady flow; this sweep guarantees the WHOLE graph is re-scanned and the anchored
   // queue drained toward empty each calendar day regardless of activity — AND it is the home for the SLOW
