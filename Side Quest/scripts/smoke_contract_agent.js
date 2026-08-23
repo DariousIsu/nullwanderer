@@ -148,6 +148,26 @@ const deps = {
     ok(/\$3\.6B/.test(p2) && p2.match(/FULL TEXT[\s\S]{800,}/), 'the read rides into the next wave\'s prompt at the big cap, not the 300-char trim');
   }
 
+  // ── contract F: the off-instance fill guard (boot_p118 wave 4, live catch) ────────────────────
+  const F = store.openContract({ title: 'Good Neighbor community punch list', askVerbatim: 'Louisiana facilities community benefits', topicTokens: ['louisiana', 'community'] });
+  store.upsertSlot({ contractId: F.contractId, slotId: 'regional', description: 'regional benefits, cited' });
+  deps.stateCodes = { louisiana: 'LA', 'north dakota': 'ND', texas: 'TX' };
+  replies.push(JSON.stringify({ plan_summary: 'fill from held', actions: [
+    { action: 'fill_slot', slotId: 'regional', content: 'Applied Digital funds workforce programs in Ellendale, North Dakota, plus Jamestown infrastructure.', citations: [{ src: 'notes/applied_digital_FINAL.md', date: 'held' }] },
+  ] }));
+  r = await ca.runWave(F.contractId, deps);
+  {
+    const s = store.slots(F.contractId).find((x) => x.slotId === 'regional');
+    ok(s.status === 'flagged' && s.flags.some((f) => f.kind === 'off-instance' && /north dakota/.test(f.text)), '⭐ OFF-INSTANCE GUARD: a cited NORTH DAKOTA fill on a LOUISIANA contract lands FLAGGED, never filled');
+    ok(store.waveLog(F.contractId)[0].actions.some((a2) => /REFUSED off-instance/.test(a2)), 'the refusal is observed for the next wave');
+  }
+  replies.push(JSON.stringify({ plan_summary: 'fill louisiana', actions: [
+    { action: 'fill_slot', slotId: 'regional', content: 'In Louisiana: Delta Community College workforce programs and parish road/water improvements.', citations: [{ src: 'canvas:community_benefits_la', date: 'held' }] },
+  ] }));
+  r = await ca.runWave(F.contractId, deps);
+  ok(store.slots(F.contractId).find((x) => x.slotId === 'regional').status === 'filled', 'the RIGHT-state fill lands normally');
+  delete deps.stateCodes;
+
   try { store.close(); fs.rmSync(dbDir, { recursive: true, force: true }); } catch {}
   console.log(`\nsmoke_contract_agent: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;

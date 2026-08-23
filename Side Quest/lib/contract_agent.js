@@ -106,6 +106,7 @@ HARD RULES:
 - A question to the operator MUST carry "assumption": the default you will proceed on if unanswered. Questions never stop your work.
 - Do not repeat a search you already ran — the harness refuses exact repeats. When lookups fail, change the approach, not the phrasing.
 - Company projections and single-source claims get labeled in the slot flags, never presented as independent fact.
+- Stay inside the contract's stated scope: material about the same company or subject in a DIFFERENT state, session, year, or campus does NOT fill a slot — flag the slot honestly instead.
 Reply with ONLY a JSON object: {"plan_summary":"<one line>","actions":[...]} — at most ${MAX_ACTIONS_PER_WAVE} actions.
 ACTIONS:
  {"action":"define_slots","slots":[{"slotId":"kebab-id","description":"..."}]}   (only while the slot set is empty or genuinely incomplete)
@@ -148,6 +149,25 @@ function buildPrompt(c, { store, replan = null }) {
   }
   if (replan) lines.push(replan);
   return [{ role: 'system', content: CHARTER }, { role: 'user', content: lines.join('\n') }];
+}
+
+// THE OFF-INSTANCE FILL GUARD (boot_p118 wave 4, live catch): the driver planned to fill the
+// LOUISIANA contract's regional slot from Applied Digital's NORTH DAKOTA record — same company,
+// wrong campus, with a perfectly real citation (cite-or-flag can't see instance; the geographic
+// twin of the bill-instance disease). If the contract anchors a state and the fill content names a
+// DIFFERENT state while never naming the contract's, the fill lands FLAGGED, not filled. Fails
+// open: no state anchor, no state in content, or a map error → no guard.
+function _offInstanceCheck(c, content, stateCodes = null) {
+  try {
+    const SC = stateCodes || require('./legis_acquire').STATE_CODES;
+    const hay = `${c.title} ${c.askVerbatim} ${(c.topicTokens || []).join(' ')}`.toLowerCase();
+    const want = Object.keys(SC).filter((nm) => hay.includes(String(nm).toLowerCase()));
+    if (!want.length) return null;
+    const cl = String(content || '').toLowerCase();
+    if (want.some((nm) => cl.includes(String(nm).toLowerCase()))) return null;
+    const found = Object.keys(SC).filter((nm) => !want.includes(nm) && new RegExp(`\\b${nm}\\b`, 'i').test(String(content || ''))).slice(0, 2);
+    return found.length ? { want: want.join('/'), found: found.join('/') } : null;
+  } catch { return null; }
 }
 
 // ── chain-guard state rides the contract's agent JSON across waves ──────────────────────────────
@@ -254,6 +274,10 @@ async function runWave(contractId, deps) {
           if (!cites.length) {
             store.upsertSlot({ contractId, slotId, description: s.description, status: 'flagged', contentRef: s.contentRef, citations: s.citations, flags: [...s.flags, { kind: 'uncited', text: _cap(String(a.content || ''), 200) }] });
             observations.push(`fill_slot ${slotId} REFUSED uncited → FLAGGED (cite it or leave it flagged)`);
+          } else if (_offInstanceCheck(c, String(a.content || ''), deps.stateCodes)) {
+            const off = _offInstanceCheck(c, String(a.content || ''), deps.stateCodes);
+            store.upsertSlot({ contractId, slotId, description: s.description, status: 'flagged', contentRef: s.contentRef, citations: s.citations, flags: [...s.flags, { kind: 'off-instance', text: `content anchors ${off.found} but the contract anchors ${off.want}` }] });
+            observations.push(`fill_slot ${slotId} REFUSED off-instance (${off.found} vs ${off.want}) → FLAGGED (wrong state/campus material never fills the slot)`);
           } else {
             store.upsertSlot({ contractId, slotId, description: s.description, status: 'filled', contentRef: `inline:${_cap(String(a.content || ''), 600)}`, citations: cites, flags: [...s.flags, ...flags] });
             observations.push(`fill_slot ${slotId} FILLED (${cites.length} citation(s))`);

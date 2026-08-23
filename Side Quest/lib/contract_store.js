@@ -194,7 +194,12 @@ function slots(contractId) {
 function addSlotFlag(contractId, slotId, flag) {
   const s = slots(contractId).find((x) => x.slotId === str(slotId));
   if (!s) return false;
-  return upsertSlot({ contractId, slotId, description: s.description, status: s.status === 'blocked_on_question' ? 'flagged' : s.status, contentRef: s.contentRef, citations: s.citations, flags: [...s.flags, flag] });
+  // A flag RESOLVES an unresolved slot (open/blocked → flagged: the honest hole) and merely LABELS a
+  // resolved one (filled stays filled). THE FLAG-DOESN'T-RESOLVE BUG (boot_p118 waves 6-9, live): an
+  // open slot kept status 'open' after flag_slot, so the driver's honest "can't fill this" never
+  // counted as resolved — done refused three waves straight against a slot it believed settled.
+  const next = (s.status === 'blocked_on_question' || s.status === 'open') ? 'flagged' : s.status;
+  return upsertSlot({ contractId, slotId, description: s.description, status: next, contentRef: s.contentRef, citations: s.citations, flags: [...s.flags, flag] });
 }
 
 // ── inbox (user → agent; the steering router writes here) ───────────────────────────────────────

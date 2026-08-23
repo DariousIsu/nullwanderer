@@ -77,6 +77,13 @@ ok(q2 && cs.expireDueQuestions(Date.now() + 10).length === 1, 'the due question 
 }
 ok(cs.openQuestion({ contractId: c.contractId, text: 'no assumption', assumption: '', windowMs: 1000 }) === null, 'a question without a default assumption is refused');
 
+// ── flags resolve, labels label (boot_p118 waves 6-9: the flag-doesn't-resolve bug) ─────────────
+ok(cs.upsertSlot({ contractId: c.contractId, slotId: 'unfillable', description: 'no source exists' }), 'an open slot to flag');
+ok(cs.addSlotFlag(c.contractId, 'unfillable', { kind: 'no-source', text: 'held material lacks it' }), 'flag_slot on the open slot');
+ok(cs.slots(c.contractId).find((x) => x.slotId === 'unfillable').status === 'flagged', '⭐ a flag RESOLVES an open slot (flagged counts toward done — never a dead-end loop)');
+ok(cs.addSlotFlag(c.contractId, 'richland-jobs', { kind: 'company-claim', text: 'label' }), 'flag on a filled slot');
+ok(cs.slots(c.contractId).find((x) => x.slotId === 'richland-jobs').status === 'filled', 'a flag on a FILLED slot only labels — never demotes');
+
 // ── outbox: surfacings queue for the voicer ─────────────────────────────────────────────────────
 const o1 = cs.postOutbox({ contractId: c.contractId, kind: 'finding', slotId: 'richland-jobs', text: 'Meta ~7,500 construction jobs at peak — the placeholder understated by 10x' });
 const o2 = cs.postOutbox({ contractId: c.contractId, kind: 'judgment_call', text: 'no Rapides tax figure published — framing as tax-base + taxpayer protection unless told otherwise' });
