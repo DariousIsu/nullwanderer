@@ -602,6 +602,9 @@ const smokes = [
   // CONTRACT AGENT slice 2: the surfacing voicer — outbox → one coalesced unprompted say at the
   // next open boundary; number-invention guard + deterministic floor; lastWaveTs positive source.
   'smoke_contract_voice.js',
+  // CONTRACT AGENT slice 3: the steering router (answer/steering/status/clarify/repair, echo-the-
+  // binding, converse pin) + the yea-misroute cure (affirmation-led turns route on their content).
+  'smoke_contract_router.js',
   // BUILD 0 + BUILD 3 (2026-08-21): the browser-lane web_search floor (empty federation → her own
   // stealth lane) and the gap-plan approval surface (fillable/blocked/aggressive, cadence + fp gate).
   'smoke_gap_plan.js',

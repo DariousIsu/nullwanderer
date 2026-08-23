@@ -8555,6 +8555,57 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       else console.log('[recall-reach] records-shaped question — no held documents matched');
     }
   } catch (e) { console.error('[recall-reach] door failed (turn proceeds):', e.message); }
+  // ── CONTRACT ROUTER (slice 3, spec §8): a user turn that belongs to a RUNNING contract binds to
+  // it — answer / steering / status / clarify / repair — the binding is ECHOED in the reply, the
+  // store write happens here, and the route pins converse below (the agent carries the work; the
+  // conversational lane acknowledges). Fail-open: any error → the turn proceeds unbound.
+  let contractBinding = null;
+  try {
+    const _crt = require('./lib/contract_router');
+    const _cst = require('./lib/contract_store');
+    const _liveCts = _cst.listOpen();
+    if (_liveCts.length) {
+      const _openQs = [];
+      for (const _c of _liveCts) { try { for (const _q of _cst.openQuestions(_c.contractId)) _openQs.push(_q); } catch {} }
+      const _lastB = (() => { try { const r = db.getMeta('contract.last_binding'); return r ? JSON.parse(r) : null; } catch { return null; } })();
+      const _v = _crt.verdict({ text: userMessage, contracts: _liveCts, openQuestions: _openQs, lastBinding: _lastB, now: Date.now() });
+      if (_v.kind === 'answer') {
+        _cst.answerQuestion(_v.questionId, { text: userMessage, turnRef: `session#${sessionId}` });
+        composedUserMessage += `\n\n[CONTRACT ANSWER BOUND — this message answers your open question "${String(_v.questionText || '').slice(0, 140)}" on the "${_v.title}" work. Acknowledge in one short line that you've got it and the work continues with their answer. Do NOT re-ask the question and do NOT start the work yourself — the contract agent carries it.]`;
+        console.log(`[contract-router] ANSWER → ${_v.questionId} on ${_v.contractId} (conf ${_v.confidence})`);
+        contractBinding = _v;
+      } else if (_v.kind === 'steering') {
+        const _ibId = _cst.postInbox({ contractId: _v.contractId, kind: 'steering', text: userMessage, bindingConfidence: _v.confidence });
+        try { db.setMeta('contract.last_binding', JSON.stringify({ inboxId: _ibId, contractId: _v.contractId, ts: Date.now() })); } catch {}
+        composedUserMessage += `\n\n[CONTRACT STEERING BOUND — this instruction is queued into the "${_v.title}" work; the running contract agent folds it into its next wave. ECHO THE BINDING in one short line (name the work — e.g. "adding that to the ${String(_v.title).slice(0, 60)} work"), then continue naturally. Do NOT start the research yourself, do NOT promise a separate deliverable, and do NOT claim it's already done.]`;
+        console.log(`[contract-router] STEERING → inbox#${_ibId} on ${_v.contractId} (conf ${_v.confidence})`);
+        contractBinding = _v;
+      } else if (_v.kind === 'status') {
+        const _k = _cst.counts(_v.contractId); const _c0 = _cst.getContract(_v.contractId);
+        const _sl = _cst.slots(_v.contractId).map((s) => `${s.slotId}=${s.status}`).join(', ');
+        const _age = _c0.agent && _c0.agent.lastWaveTs ? `${Math.round((Date.now() - _c0.agent.lastWaveTs) / 60000)} min ago` : 'not yet';
+        composedUserMessage += `\n\n[CONTRACT STATUS (measured — answer FROM this, never invent progress or ETAs): "${_c0.title}" status=${_c0.status}; waves done=${_k.wavesDone}, last wave ${_age}; slots → ${_sl || '(none yet)'}; open questions=${_k.questionsOpen}; steering pending=${_k.inboxPending}.]`;
+        console.log(`[contract-router] STATUS read → ${_v.contractId}`);
+        contractBinding = _v;
+      } else if (_v.kind === 'clarify') {
+        composedUserMessage += `\n\n[CONTRACT BINDING AMBIGUOUS — this could belong to ${_v.candidates.map((c) => `"${c.title}"`).join(' or ')}. Ask ONE short question about which they mean. Do not guess and do not start anything.]`;
+        console.log(`[contract-router] CLARIFY between ${_v.candidates.length} candidates (${_v.reason})`);
+        contractBinding = _v;
+      } else if (_v.kind === 'repair') {
+        if (_v.tombstoneId) _cst.tombstoneInbox(_v.tombstoneId, 0);
+        if (_v.contractId) {
+          const _nid = _cst.postInbox({ contractId: _v.contractId, kind: 'steering', text: userMessage });
+          try { db.setMeta('contract.last_binding', JSON.stringify({ inboxId: _nid, contractId: _v.contractId, ts: Date.now() })); } catch {}
+          composedUserMessage += `\n\n[CONTRACT REBIND — the previous instruction was routed to the wrong work and has been moved to "${_v.title}". Acknowledge the correction in one short line.]`;
+        } else {
+          try { db.setMeta('contract.last_binding', ''); } catch {}
+          composedUserMessage += `\n\n[CONTRACT UNBIND — the previous instruction was pulled back (it was routed to the wrong work). Ask ONE short question: which work it belongs to.]`;
+        }
+        console.log(`[contract-router] REPAIR (tombstone ${_v.tombstoneId || 'none'} → ${_v.contractId || 'ask'})`);
+        contractBinding = _v;
+      }
+    }
+  } catch (e) { console.error('[contract-router] door failed (turn proceeds unbound):', e.message); }
   // BILL-INSTANCE CENSUS (campaign §21a's second half, 08-22): a bill-number question that names
   // no state is AMBIGUOUS across held instances — p102/p103 confidently answered COLORADO's
   // SB25-200 for a bare "SB200" ask while Louisiana's 2026 SB200 sat in the stores. Census the
@@ -9238,18 +9289,31 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // bounded model call) to arbitrate; the clear majority stays on the cheap cascade. Gated by turn.router
   // (master) + turn.router.escalate (default on) so it's reversible; fail-open to the cheap decision.
   const _escalateRoute = (() => { try { return (db.getMeta('turn.router.escalate') || 'on').trim() !== 'off'; } catch { return true; } })();
+  // THE YEA-MISROUTE CURE (audit #3, 2026-08-19): an affirmation-LED turn ("Yea more details") routes
+  // on its CONTENT ("more details"), never on the affirmation token — live, "yea" drew a vocabulary
+  // tangent about the parliamentary yes. Bare affirmations pass through untouched (rest='') — the
+  // greenlight/offer arcs above own those.
+  const _affLead = (() => { try { return require('./lib/contract_router').affirmationLead(userMessage); } catch { return { lead: '', rest: '' }; } })();
+  if (_affLead.rest) console.log(`[turn-router] affirmation lead stripped for routing ("${_affLead.lead}" → routes on "${_affLead.rest.slice(0, 50)}")`);
   let turnRoute = await require('./lib/turn_router').resolveTurnRoute({
     socialTurn, activityQ, deliverableAggQ,
     factual: _factualR, personalFactQ, devQ, stateQ,
     isLiveInfo: _liveInfoR, isStatusReq: _isStatusReqR,
     hasDirectedFocus: _hasDirectedFocusR, isAssignment: _isDirectedTaskR, isContactsQuery: _contactsQ.isQuery
-  }, { text: userMessage, classify: require('./lib/route_judge').classifyRoute, escalate: routerOn && _escalateRoute });
+  }, { text: _affLead.rest || userMessage, classify: require('./lib/route_judge').classifyRoute, escalate: routerOn && _escalateRoute });
   if (routerOn) console.log(`[turn-router] route=${turnRoute.route} (${turnRoute.reason}, conf ${turnRoute.confidence})`);
   // The collaboration register outranks the cascade: a thinking-together turn is CONVERSE whatever
   // the task/lookup signals said (the blind-week misroutes: brainstorm→task, feedback→lookup).
   if (collabTurn && turnRoute.route !== 'converse') {
     console.log(`[collab] route override → converse (was ${turnRoute.route})`);
     turnRoute = { route: 'converse', reason: 'collab-register', confidence: 0.95 };
+  }
+  // A contract-bound turn is CONVERSE: the agent carries the work off-turn; the lane acknowledges
+  // the binding (slice 3). Without this, a steering instruction's task/lookup signals would spin a
+  // SECOND research run beside the contract — the double-work the contract lane exists to end.
+  if (contractBinding && turnRoute.route !== 'converse') {
+    console.log(`[contract-router] route override → converse (was ${turnRoute.route})`);
+    turnRoute = { route: 'converse', reason: 'contract-binding', confidence: 0.95 };
   }
   const routeAllows = (r) => !routerOn || turnRoute.route === r;
   const routeAllowsAny = (...rs) => !routerOn || rs.includes(turnRoute.route);
