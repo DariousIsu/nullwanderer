@@ -277,8 +277,18 @@ function _claimAnchors(s) {
   return out.slice(0, 6);
 }
 
+// Tab-name candidates in a sentence: backticked spans, and snake/kebab multi-part tokens — the shapes a
+// real tab key takes. A bare "it's on your canvas" yields none, so the strict this-turn probe still governs.
+function _canvasNameCands(s) {
+  const out = [];
+  const str2 = String(s || '');
+  for (const m of str2.matchAll(/`([^`]{3,64})`/g)) { const v = m[1].trim(); if (v && !out.includes(v)) out.push(v); }
+  for (const m of str2.matchAll(/\b([a-z0-9]+(?:[_-][a-z0-9]+){1,6})\b/g)) { const v = m[1]; if (!out.includes(v)) out.push(v); }
+  return out.slice(0, 6);
+}
+
 // Verify falsifiable artifact claims in `say` against reality. Returns { ok, violations:[{kind,claim}] }.
-function verifyArtifactClaims(say, { fileExists = null, canvasWroteThisTurn = null, canvasLandedText = null, imageGenThisTurn = null, dbWroteThisTurn = null } = {}) {
+function verifyArtifactClaims(say, { fileExists = null, canvasWroteThisTurn = null, canvasLandedText = null, imageGenThisTurn = null, dbWroteThisTurn = null, canvasTabExists = null } = {}) {
   const violations = [];
   const sentences = String(say || '').split(/(?<=[.!?])\s+|\n+/);
   const _imgCtx = typeof imageGenThisTurn === 'function' && _ART_IMG_CTX_RE.test(String(say || ''));
@@ -301,7 +311,20 @@ function verifyArtifactClaims(say, { fileExists = null, canvasWroteThisTurn = nu
     // CANVAS: an assertion that something is/was placed on the canvas with NO canvas write this turn.
     if (typeof canvasWroteThisTurn === 'function' && !pastRef && _ART_CANVAS_DONE_RE.test(s) && _ART_CANVAS_VERB_RE.test(s)) {
       let wrote = true; try { wrote = !!canvasWroteThisTurn(); } catch { wrote = true; }   // fail OPEN
-      if (!wrote) violations.push({ kind: 'canvas', claim: s.slice(0, 90) });
+      if (!wrote) {
+        // THE NAMED-TAB HOMECOMING (boot_p114 live catch, 2026-08-22): "We put the full compilation on
+        // your canvas under `community_benefits_la`" — a TRUE claim about a DURABLE existing doc — drew
+        // the correction, because this probe only accepts THIS-TURN writes and the F24 guard needs an
+        // explicit time adverbial a bare past-tense verb lacks. The false scold then poisoned the NEXT
+        // say ("I don't have them saved anywhere durable") and she offered to re-buy her own doc. Cure:
+        // a claim that NAMES a tab which really exists with content is grounded regardless of tense —
+        // existence lives in the registry, not on the turn clock. Nameless claims stay strictly gated.
+        let grounded = false;
+        if (typeof canvasTabExists === 'function') {
+          try { grounded = _canvasNameCands(s).some((c) => !!canvasTabExists(c)); } catch { grounded = false; }
+        }
+        if (!grounded) violations.push({ kind: 'canvas', claim: s.slice(0, 90) });
+      }
       // CONTENT-AWARE (2026-08-17, the #12338 wrong-doc): a write DID land — but does it MATCH the claim, or was
       // an unrelated doc mislabeled as it? If the claim names strong SUBJECT anchors (proper nouns) and the
       // LANDED doc shares NONE of them, the write is the wrong artifact. FAILS OPEN hard: no landed text, no

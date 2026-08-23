@@ -214,4 +214,20 @@ function docText(tabKey, cap = 12000) {
   } catch { return ''; }
 }
 
-module.exports = { init, _db, close, recordTab, recordBlock, clearTabBlocks, all, forget, prune, clear, lastWriteTs, lastWriteText, listDocs, docText, MAX_BLOCK_BYTES, KEEP_DOCS };
+// Does a tab with this name (tab_key exact, or a ≥6-char title substring) exist AND hold content?
+// The anti-fab named-tab check: a say referencing a real durable doc is grounded, whatever its tense.
+function tabExists(nameish, { requireBlocks = true } = {}) {
+  try {
+    const n = str(nameish).trim().toLowerCase();
+    if (n.length < 3) return false;
+    const d = _db();
+    const row = d.prepare(
+      `SELECT tab_key AS k FROM docs WHERE lower(tab_key) = ? OR (length(?) >= 6 AND instr(lower(coalesce(title,'')), ?) > 0) LIMIT 1`
+    ).get(n, n, n);
+    if (!row) return false;
+    if (!requireBlocks) return true;
+    return (((d.prepare(`SELECT COUNT(*) AS c FROM blocks WHERE tab_key = ?`).get(row.k)) || {}).c || 0) > 0;
+  } catch { return false; }
+}
+
+module.exports = { init, _db, close, recordTab, recordBlock, clearTabBlocks, all, forget, prune, clear, lastWriteTs, lastWriteText, listDocs, docText, tabExists, MAX_BLOCK_BYTES, KEEP_DOCS };

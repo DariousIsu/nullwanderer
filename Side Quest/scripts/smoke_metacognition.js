@@ -171,6 +171,21 @@ ok(m.verifyArtifactClaims('I put the Louisiana contacts on your canvas', { canva
   'canvas content: no landed-text probe → fail OPEN (unchanged behavior)');
 ok(m.verifyArtifactClaims('I put the list on your canvas', { canvasWroteThisTurn: CW_YES, canvasLandedText: () => 'some entirely unrelated doc content here' }).ok,
   'canvas content: claim has NO proper-noun anchor → no violation (never scold a generic claim)');
+// THE NAMED-TAB HOMECOMING (boot_p114 live catch, 2026-08-22): "We put the full compilation on your canvas
+// under `community_benefits_la`" — TRUE, the tab exists with content — drew the false correction (past-tense
+// verb, no F24 time adverbial), which then poisoned the next say ("I don't have them saved anywhere durable").
+// A claim NAMING a tab that really exists is grounded regardless of tense; nameless claims stay strictly gated.
+{
+  const TAB = (n) => String(n).toLowerCase() === 'community_benefits_la';
+  ok(m.verifyArtifactClaims('We put the full compilation on your canvas under `community_benefits_la`.', { canvasWroteThisTurn: CW_NO, canvasTabExists: TAB }).ok,
+    '⭐ LIVE CATCH (p114): a claim naming an EXISTING tab is grounded — no false correction, whatever the tense');
+  ok(m.verifyArtifactClaims('We put the roster on your canvas under community_benefits_la yesterday-ish.', { canvasWroteThisTurn: CW_NO, canvasTabExists: TAB }).ok,
+    'the unbackticked tab key grounds too (snake-token candidate)');
+  ok(m.verifyArtifactClaims('I put the roster on your canvas under `no_such_tab`.', { canvasWroteThisTurn: CW_NO, canvasTabExists: TAB }).violations.some((v) => v.kind === 'canvas'),
+    'a named tab that does NOT exist still trips the probe (fabrication stays caught)');
+  ok(m.verifyArtifactClaims("It's on your canvas now.", { canvasWroteThisTurn: CW_NO, canvasTabExists: TAB }).violations.some((v) => v.kind === 'canvas'),
+    'a NAMELESS canvas claim still gets the strict this-turn probe');
+}
 // FALSE-SCOLD FIXES (2026-08-17 adversarial): must NOT scold a real multi-doc / image delivery. Landed text
 // UNIONS every this-turn doc; the check ABSTAINS when an image rendered.
 ok(m.verifyArtifactClaims('The Cleco brief is on your canvas.', { canvasWroteThisTurn: CW_YES, canvasLandedText: () => 'Cleco — rate case brief. Entergy — merger brief.' }).ok,

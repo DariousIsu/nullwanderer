@@ -1444,8 +1444,8 @@ app.whenReady().then(() => {
   try {
     const _cs = require('./lib/contract_store');
     const _resumed = _cs.resumeOpenContracts();
-    if (_resumed.length) console.log(`[contract] boot resume: ${_resumed.map((c) => `${c.contractId} @ wave ${c.interruptedWaveN || c.lastCompletedWaveN}${c.interruptedWaveN ? ' (interrupted)' : ''}`).join(', ')}`);
-  } catch (e) { console.error('[contract] boot resume read failed:', e.message); }
+    if (_resumed.length) console.log(`[contract-agent] boot resume: ${_resumed.map((c) => `${c.contractId} @ wave ${c.interruptedWaveN || c.lastCompletedWaveN}${c.interruptedWaveN ? ' (interrupted)' : ''}`).join(', ')}`);
+  } catch (e) { console.error('[contract-agent] boot resume read failed:', e.message); }
   const maybeRunContractWave = async () => {
     if (contractWaveRunning) return;
     contractWaveRunning = true;
@@ -1459,9 +1459,10 @@ app.whenReady().then(() => {
       markActivity('contract-wave');
       const r = await ca.runWave(c.contractId, ca.liveDeps());
       // quiet refusals (budget stand-down, non-open status) would spam every tick — log real waves + real errors only
-      if (r.ok) console.log(`[contract] ${c.contractId} wave ${r.waveN} → ${r.outcome}${r.done ? ' (DONE → closing)' : ''}`);
-      else if (!/budget exhausted|status is/.test(String(r.reason))) console.log(`[contract] ${c.contractId} refused: ${r.reason}`);
-    } catch (e) { console.error('[contract] wave failed:', e.message); }
+      // ([contract-agent], NOT [contract] — that tag belongs to the directed-focus canvas backstop at ~18792)
+      if (r.ok) console.log(`[contract-agent] ${c.contractId} wave ${r.waveN} → ${r.outcome}${r.done ? ' (DONE → closing)' : ''}`);
+      else if (!/budget exhausted|status is/.test(String(r.reason))) console.log(`[contract-agent] ${c.contractId} refused: ${r.reason}`);
+    } catch (e) { console.error('[contract-agent] wave failed:', e.message); }
     finally { markActivity('idle'); contractWaveRunning = false; }
   };
   setInterval(() => { maybeRunContractWave().catch(() => {}); }, CONTRACT_CHECK_MS).unref?.();
@@ -13422,6 +13423,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       // WAS saved; 2026-08-18, the Cassidy report). Any hit = exists; fail OPEN so an error never false-scolds.
       fileExists: (p) => { try { const _p = require('path'), fs = require('fs'); if (_p.isAbsolute(p)) return fs.existsSync(p); const cands = []; try { cands.push(require('./lib/files').resolvePath(p)); } catch {} cands.push(_p.join(__dirname, p)); return cands.some((c) => { try { return fs.existsSync(c); } catch { return false; } }); } catch { return true; } },
         canvasWroteThisTurn: () => { if (!_fuAnchor) return true; try { return require('./lib/canvas_docs').lastWriteTs() >= _fuAnchor; } catch { return true; } },
+        canvasTabExists: (n) => { try { return require('./lib/canvas_docs').tabExists(n); } catch { return false; } },   // named-tab homecoming: existing durable docs ground past-tense claims
         canvasLandedText: () => { if (!_fuAnchor) return ''; try { return require('./lib/canvas_docs').lastWriteText(_fuAnchor); } catch { return ''; } },   // content-aware: RIGHT doc? (unions this-turn docs)
         imageGenThisTurn: () => !_fuAnchor || (lastImageGenTs || 0) >= _fuAnchor,
         dbWroteThisTurn: () => { if (!_fuAnchor) return true; try { return require('./lib/echo_suit').lastContactWriteTs() >= _fuAnchor; } catch { return true; } },
@@ -17664,6 +17666,7 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
       // WAS saved; 2026-08-18, the Cassidy report). Any hit = exists; fail OPEN so an error never false-scolds.
       fileExists: (p) => { try { const _p = require('path'), fs = require('fs'); if (_p.isAbsolute(p)) return fs.existsSync(p); const cands = []; try { cands.push(require('./lib/files').resolvePath(p)); } catch {} cands.push(_p.join(__dirname, p)); return cands.some((c) => { try { return fs.existsSync(c); } catch { return false; } }); } catch { return true; } },
       canvasWroteThisTurn: () => { try { return require('./lib/canvas_docs').lastWriteTs() >= (turnStartTs || 0); } catch { return true; } },
+      canvasTabExists: (n) => { try { return require('./lib/canvas_docs').tabExists(n); } catch { return false; } },   // named-tab homecoming: existing durable docs ground past-tense claims
       canvasLandedText: () => { try { return require('./lib/canvas_docs').lastWriteText(turnStartTs || 0); } catch { return ''; } },   // content-aware: RIGHT doc? (unions all this-turn docs)
       imageGenThisTurn: () => (lastImageGenTs || 0) >= (turnStartTs || 0),   // a real image rendered this turn?
       dbWroteThisTurn: () => { try { return require('./lib/echo_suit').lastContactWriteTs() >= (turnStartTs || 0); } catch { return true; } },   // a contact write that LANDED this turn?
