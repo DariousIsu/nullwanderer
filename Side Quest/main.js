@@ -8569,6 +8569,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       for (const _c of _liveCts) { try { for (const _q of _cst.openQuestions(_c.contractId)) _openQs.push(_q); } catch {} }
       const _lastB = (() => { try { const r = db.getMeta('contract.last_binding'); return r ? JSON.parse(r) : null; } catch { return null; } })();
       const _v = _crt.verdict({ text: userMessage, contracts: _liveCts, openQuestions: _openQs, lastBinding: _lastB, now: Date.now() });
+      // diagnostic (boot_p118 steer-drive silence): with live contracts present, EVERY verdict logs —
+      // a silent none is indistinguishable from a door that never ran, and that cost a gate leg.
+      console.log(`[contract-router] verdict=${_v.kind} (live=${_liveCts.map((c) => `${c.contractId}:${c.status}`).join(',')}) for: "${String(userMessage).slice(0, 60)}"`);
       if (_v.kind === 'answer') {
         _cst.answerQuestion(_v.questionId, { text: userMessage, turnRef: `session#${sessionId}` });
         composedUserMessage += `\n\n[CONTRACT ANSWER BOUND — this message answers your open question "${String(_v.questionText || '').slice(0, 140)}" on the "${_v.title}" work. Acknowledge in one short line that you've got it and the work continues with their answer. Do NOT re-ask the question and do NOT start the work yourself — the contract agent carries it.]`;
