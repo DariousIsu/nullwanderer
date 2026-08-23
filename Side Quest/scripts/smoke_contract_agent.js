@@ -126,6 +126,28 @@ const deps = {
     ok(w.actions.some((a) => /unknown action/.test(a)), 'an unknown action observes, never crashes');
   }
 
+  // ── contract E: read_held (the boot_p115 snippet limiter, cured live) ─────────────────────────
+  const E = store.openContract({ title: 'E', askVerbatim: 'read the held file' });
+  deps.readHeld = async (ref) => (ref === 'notes/final.md' ? ('FULL TEXT: $3.6B investment, 200 permanent jobs, mid-2027 opening, waterless cooling. ').repeat(30) : null);
+  replies.push(JSON.stringify({ plan_summary: 'read the named deliverable', actions: [
+    { action: 'read_held', ref: 'notes/final.md' },
+    { action: 'read_held', ref: 'notes/final.md' },
+    { action: 'read_held', ref: 'notes/missing.md' },
+  ] }));
+  r = await ca.runWave(E.contractId, deps);
+  {
+    const w = store.waveLog(E.contractId)[0];
+    ok(w.actions.some((a) => /read_held .*FULL TEXT.*\$3\.6B/.test(a)), '⭐ read_held streams the full document into the observations');
+    ok(w.actions.some((a) => /already read/.test(a)), 'a re-read of the same ref is refused (chain-guarded)');
+    ok(w.actions.some((a) => /EMPTY \(no such held item\)/.test(a)), 'a missing ref observes EMPTY honestly');
+    ok(w.actions.find((a) => /FULL TEXT/.test(a)).length > 900, 'the read observation gets the BIG cap — the snippet limiter is gone');
+    // and the big read survives into the NEXT prompt un-shrunk (the second half of the limiter)
+    replies.push('{"plan_summary":"idle","actions":[]}');
+    await ca.runWave(E.contractId, deps);
+    const p2 = prompts[prompts.length - 1][1].content;
+    ok(/\$3\.6B/.test(p2) && p2.match(/FULL TEXT[\s\S]{800,}/), 'the read rides into the next wave\'s prompt at the big cap, not the 300-char trim');
+  }
+
   try { store.close(); fs.rmSync(dbDir, { recursive: true, force: true }); } catch {}
   console.log(`\nsmoke_contract_agent: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;

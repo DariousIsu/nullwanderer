@@ -22,6 +22,8 @@ const MAX_ACTIONS_PER_WAVE = 5;
 const DEFAULT_MAX_WAVES = 12;
 const DEFAULT_QUESTION_WINDOW_MS = 30 * 60 * 1000;
 const OBS_CAP = 700;              // chars per observation carried into the next wave's prompt
+const READ_OBS_CAP = 2800;        // read_held gets a BIG window — the excerpt cap was the live limiter
+const MAX_READS_PER_WAVE = 2;     // bounds prompt growth: ≤2 big reads per wave ride forward
 const PROMPT_OBS_WAVES = 2;       // how many past waves' observations ride the prompt
 
 function driverModel() {
@@ -52,6 +54,24 @@ function liveDeps() {
         return (sr && Array.isArray(sr.results) ? sr.results : []).slice(0, 6)
           .map((r) => ({ title: r.title || '', url: r.url || '', snippet: r.snippet || '' }));
       } catch { return []; }
+    },
+    readHeld: async (ref) => {
+      try {
+        const r = String(ref || '').trim();
+        if (/^doc#\d+$/i.test(r)) {
+          const dbm = require('./db');
+          const row = dbm.getDb().prepare('SELECT title, body FROM documents WHERE id = ?').get(parseInt(r.slice(4), 10));
+          return row ? `${row.title}\n${String(row.body || '').slice(0, 6000)}` : null;
+        }
+        if (/^canvas:/i.test(r)) return require('./canvas_docs').docText(r.slice(7), 6000) || null;
+        const m = r.match(/^(?:notes\/)?([A-Za-z0-9._ -]+\.md)$/);   // no path separators — notes/ top level only
+        if (m) {
+          const p = require('path'), fs = require('fs');
+          const fp = p.join(require('./files').resolvePath('notes'), m[1]);
+          return fs.existsSync(fp) ? String(fs.readFileSync(fp, 'utf8')).slice(0, 6000) : null;
+        }
+        return require('./canvas_docs').docText(r, 6000) || null;    // bare tab-key fallback
+      } catch { return null; }
     },
     quotaCheck: () => ({ allow: true, reason: 'directed tier' }),   // floor wiring rides the live governor (F19)
     now: () => Date.now(),
@@ -90,6 +110,7 @@ Reply with ONLY a JSON object: {"plan_summary":"<one line>","actions":[...]} —
 ACTIONS:
  {"action":"define_slots","slots":[{"slotId":"kebab-id","description":"..."}]}   (only while the slot set is empty or genuinely incomplete)
  {"action":"internal_search","query":"..."}
+ {"action":"read_held","ref":"notes/<file>.md | canvas:<tab_key> | doc#<id>"}   (once a search NAMES a held deliverable, READ it — the search only shows a snippet window; the real figures live in the full text)
  {"action":"web_search","query":"..."}
  {"action":"fill_slot","slotId":"...","content":"...","citations":[{"src":"...","date":"..."}],"flags":[...optional...]}
  {"action":"flag_slot","slotId":"...","flag":{"kind":"...","text":"..."}}
@@ -118,7 +139,12 @@ function buildPrompt(c, { store, replan = null }) {
   if (inbox.length) lines.push(`OPERATOR STEERING (unapplied — fold these into this wave's plan): ${inbox.map((m) => `#${m.id} [${m.kind}] ${m.text}`).join(' | ')}`);
   for (const w of recent) {
     lines.push(`WAVE ${w.waveN} (${w.outcome || 'no outcome'}) observations:`);
-    for (const a of (w.actions || []).slice(0, MAX_ACTIONS_PER_WAVE + 1)) lines.push(`  · ${_cap(typeof a === 'string' ? a : JSON.stringify(a), 300)}`);
+    for (const a of (w.actions || []).slice(0, MAX_ACTIONS_PER_WAVE + 1)) {
+      const s2 = typeof a === 'string' ? a : JSON.stringify(a);
+      // read_held observations keep their big window into the next prompt — truncating them to the
+      // standard cap would recreate the snippet limiter the action exists to remove (boot_p115 wave 2/3)
+      lines.push(`  · ${_cap(s2, /^read_held /.test(s2) ? READ_OBS_CAP : 300)}`);
+    }
   }
   if (replan) lines.push(replan);
   return [{ role: 'system', content: CHARTER }, { role: 'user', content: lines.join('\n') }];
@@ -139,7 +165,7 @@ function _saveChain(store, contractId, st) {
 
 /** Run ONE wave of one contract. Returns {ok, waveN?, outcome?, done?, reason?}. */
 async function runWave(contractId, deps) {
-  const { store, complete, internalSearch, webSearch, quotaCheck, now } = deps;
+  const { store, complete, internalSearch, webSearch, readHeld, quotaCheck, now } = deps;
   const c = store.getContract(contractId);
   if (!c) return { ok: false, reason: 'no such contract' };
   if (c.status !== 'open') return { ok: false, reason: `status is ${c.status}` };
@@ -180,6 +206,7 @@ async function runWave(contractId, deps) {
     chain.noProgress += 1;
   } else {
     const slotsNow = () => store.slots(contractId);
+    let readsThisWave = 0;
     for (const a of reply.actions.slice(0, MAX_ACTIONS_PER_WAVE)) {
       const act = String((a && a.action) || '');
       try {
@@ -200,6 +227,24 @@ async function runWave(contractId, deps) {
           const empty = !res || (Array.isArray(res) && !res.length);
           chainGuard.evaluateHop(chain, { signature: sig, label: act, emptyThisHop: empty, retrieval: true });
           observations.push(`${act} "${_cap(query, 80)}" → ${empty ? 'EMPTY' : _cap(typeof res === 'string' ? res : JSON.stringify(res), OBS_CAP)}`);
+        } else if (act === 'read_held') {
+          // THE SNIPPET LIMITER (boot_p115 waves 2-3, live): the driver kept re-phrasing searches to
+          // "retrieve the notes" because search only returns an excerpt window — the figures it needed
+          // sat in the full text of a file the search had already NAMED. This verb reads it.
+          const ref = String(a.ref || '').trim();
+          if (!ref) { observations.push('read_held REFUSED: no ref'); continue; }
+          if (readsThisWave >= MAX_READS_PER_WAVE) { observations.push(`read_held ${_cap(ref, 60)} REFUSED: this wave's read budget is spent`); continue; }
+          const sig = chainGuard.tagSignature({ kind: 'do', name: 'read_held', args: { ref: ref.toLowerCase() } });
+          if (chain.seen.has(sig)) {
+            chainGuard.evaluateHop(chain, { signature: sig, label: 'read_held', emptyThisHop: true, retrieval: true });
+            observations.push(`read_held REFUSED (already read): ${_cap(ref, 80)}`);
+            continue;
+          }
+          const txt = typeof readHeld === 'function' ? await readHeld(ref) : null;
+          const empty = !txt;
+          chainGuard.evaluateHop(chain, { signature: sig, label: 'read_held', emptyThisHop: empty, retrieval: true });
+          readsThisWave++;
+          observations.push(`read_held ${_cap(ref, 80)} → ${empty ? 'EMPTY (no such held item)' : _cap(txt, READ_OBS_CAP)}`);
         } else if (act === 'fill_slot') {
           const slotId = String(a.slotId || '');
           const s = slotsNow().find((x) => x.slotId === slotId);
