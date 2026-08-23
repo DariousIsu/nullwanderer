@@ -8563,7 +8563,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     const _crt = require('./lib/contract_router');
     const _cst = require('./lib/contract_store');
-    const _liveCts = _cst.listOpen();
+    const _liveCts = _cst.listRecent();   // open + recently-closed: status asks read finished work too
     if (_liveCts.length) {
       const _openQs = [];
       for (const _c of _liveCts) { try { for (const _q of _cst.openQuestions(_c.contractId)) _openQs.push(_q); } catch {} }

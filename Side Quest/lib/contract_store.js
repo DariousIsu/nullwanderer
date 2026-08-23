@@ -154,6 +154,12 @@ function getContract(id) { return _row(_db().prepare(`SELECT * FROM contracts WH
 function listOpen() {
   return _db().prepare(`SELECT * FROM contracts WHERE status IN ('open','waiting_answer','closing') ORDER BY opened_ts ASC`).all().map(_row);
 }
+// Open + recently-touched closed contracts — the router's view: a STATUS ask about work that just
+// finished must read the store ("done — here's what landed"), not fall through to doc recall
+// (the p119 status-leg finding). Steering/answer binding stays live-only in the verdict.
+function listRecent({ sinceMs = 24 * 3600 * 1000 } = {}) {
+  return _db().prepare(`SELECT * FROM contracts WHERE status IN ('open','waiting_answer','closing') OR updated_ts >= ? ORDER BY updated_ts DESC LIMIT 12`).all(Date.now() - sinceMs).map(_row);
+}
 function setStatus(id, status) {
   const c = getContract(id);
   if (!c || !(_TRANSITIONS[c.status] || []).includes(status)) return false;
@@ -338,7 +344,7 @@ function resumeOpenContracts() {
 
 module.exports = {
   init, _db, close,
-  openContract, getContract, listOpen, setStatus, patchAgent,
+  openContract, getContract, listOpen, listRecent, setStatus, patchAgent,
   upsertSlot, slots, addSlotFlag, SLOT_STATUSES,
   postInbox, readInbox, markInboxConsumed, tombstoneInbox,
   postOutbox, unvoiced, markVoiced, OUTBOX_KINDS,

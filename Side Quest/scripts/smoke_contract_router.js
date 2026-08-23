@@ -64,7 +64,11 @@ ok(rt.verdict({ text: 'no that was for the china report', contracts: [A, B], ope
 
 // boundaries
 ok(rt.verdict({ text: 'add the taxes angle', contracts: [], openQuestions: [], now }).kind === 'none', 'no contracts → none');
-ok(rt.verdict({ text: 'add the meta louisiana angle', contracts: [{ ...A, status: 'closed' }], openQuestions: [], now }).kind === 'none', 'a closed contract never binds');
+ok(rt.verdict({ text: 'add the meta louisiana angle', contracts: [{ ...A, status: 'closed' }], openQuestions: [], now }).kind === 'none', 'a closed contract never binds STEERING');
+{
+  const v = rt.verdict({ text: 'where are we on the meta louisiana data-center work?', contracts: [{ ...A, status: 'closed' }], openQuestions: [], now });
+  ok(v.kind === 'status' && v.contractId === 'ct-a', '⭐ P119 FINDING: a status ask about JUST-CLOSED work reads the store ("done, here\'s what landed"), never falls to doc recall');
+}
 
 // ── wiring greps ────────────────────────────────────────────────────────────────────────────────
 {

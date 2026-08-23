@@ -55,9 +55,9 @@ function _contractToks(c) {
 function verdict({ text, contracts = [], openQuestions = [], lastBinding = null, now = Date.now() } = {}) {
   const s = String(text || '').trim();
   if (!s || !contracts.length) return { kind: 'none' };
+  // live may be EMPTY — status still reads closed contracts below; every other branch self-guards.
   const live = contracts.filter((c) => c.status === 'open' || c.status === 'waiting_answer');
-  if (!live.length) return { kind: 'none' };
-  const titleOf = (id) => { const c = live.find((x) => x.contractId === id); return c ? c.title : id; };
+  const titleOf = (id) => { const c = contracts.find((x) => x.contractId === id); return c ? c.title : id; };
 
   // 1. REPAIR — a correction inside the window pulls the last binding back; a named other contract rebinds.
   if (lastBinding && now - (lastBinding.ts || 0) <= REPAIR_WINDOW_MS && _REPAIR_RE.test(s)) {
@@ -98,9 +98,12 @@ function verdict({ text, contracts = [], openQuestions = [], lastBinding = null,
   const st = _toks(s);
   const scored = live.map((c) => ({ c, n: st.filter((t) => _contractToks(c).has(t)).length }));
 
-  // 3. STATUS — a progress ask reads the store; it is never steering and never invention.
+  // 3. STATUS — a progress ask reads the store; it is never steering and never invention. Unlike
+  // steering, status considers EVERY passed contract (closed included — "where are we" about work
+  // that just finished deserves "done, here's what landed", not a doc-recall fallback; p119 finding).
   if (_STATUS_RE.test(s)) {
-    const hits = scored.filter((x) => x.n >= 1).sort((a, b) => b.n - a.n);
+    const scoredAll = contracts.map((c) => ({ c, n: st.filter((t) => _contractToks(c).has(t)).length }));
+    const hits = scoredAll.filter((x) => x.n >= 1).sort((a, b) => b.n - a.n);
     if (hits.length === 1 || (hits.length > 1 && hits[0].n > hits[1].n)) return { kind: 'status', contractId: hits[0].c.contractId, title: hits[0].c.title, confidence: 0.8 };
     if (hits.length > 1) return { kind: 'clarify', candidates: hits.map((h) => ({ contractId: h.c.contractId, title: h.c.title })), reason: 'status-ambiguous', confidence: 0.5 };
     if (live.length === 1) return { kind: 'status', contractId: live[0].contractId, title: live[0].title, confidence: 0.6 };
