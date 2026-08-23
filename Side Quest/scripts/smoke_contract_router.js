@@ -45,6 +45,20 @@ ok(rt.verdict({ text: 'what should we add about rapides?', contracts: [A], openQ
   ok(v.kind === 'clarify' && v.candidates.length === 2, 'a tied two-contract bind CLARIFIES, never guesses');
 }
 
+// late answers (slice 4, §9): expired questions still bind — content only, scoped rework downstream
+const QX = { questionId: 'qx', contractId: 'ct-a', slotId: 'rapides-water', text: 'is the company waterless-cooling claim enough for the water cell?', assumption: 'use it, labeled as a company claim', askedTs: 50 };
+{
+  const v = rt.verdict({ text: 'Use the parish utility filings for the water cell, not the company claim', contracts: [A], openQuestions: [], expiredQuestions: [QX], now });
+  ok(v.kind === 'answer' && v.late === true && v.questionId === 'qx' && v.slotId === 'rapides-water', '⭐ SLICE 4: a content answer to an EXPIRED question binds late, carrying the slot for the scoped re-open');
+}
+ok(rt.verdict({ text: 'yes', contracts: [A], openQuestions: [], expiredQuestions: [QX], now }).kind !== 'answer', 'a bare "yes" NEVER binds an expired question (settled history)');
+{
+  const v = rt.verdict({ text: 'Yes, use the company claim but label it clearly', contracts: [A], openQuestions: [Q1], expiredQuestions: [QX], now });
+  ok(v.kind === 'answer' && !v.late && v.questionId === 'q1', 'an OPEN question outranks an expired twin');
+}
+ok(rt.verdict({ text: 'is the waterless cooling claim enough for the water cell?', contracts: [A], openQuestions: [], expiredQuestions: [QX], now }).kind !== 'answer', 'a question-shaped turn asks ABOUT the work — never a late answer');
+ok(rt.verdict({ text: 'where are we on the water cell claim?', contracts: [A], openQuestions: [], expiredQuestions: [QX], now }).kind === 'status', 'a status ask near an expired question stays status');
+
 // status
 {
   const v = rt.verdict({ text: 'where are we on the data-center benefits work?', contracts: [A, B], openQuestions: [], now });
@@ -79,6 +93,8 @@ ok(rt.verdict({ text: 'add the meta louisiana angle', contracts: [{ ...A, status
   ok(/CONTRACT STATUS \(measured/.test(src) && /never invent progress/.test(src), 'wiring: status asks answer from measured store state');
   ok(/contractBinding && turnRoute\.route !== 'converse'/.test(src), 'wiring: a bound turn pins converse — no second research run beside the contract');
   ok(/affirmation lead stripped for routing/.test(src) && /_affLead\.rest \|\| userMessage/.test(src), 'wiring: the route cascade + judge see the stripped text (the yea cure)');
+  ok(/CONTRACT LATE ANSWER BOUND/.test(src) && /reopenFromLateAnswer/.test(src), 'wiring: a late answer re-opens only the affected slot through the store primitive');
+  ok(/expiredQuestions: _expQs/.test(src), 'wiring: the router sees expired questions from the recent-contract sweep');
 }
 
 console.log(`\nsmoke_contract_router: ${pass} passed, ${fail} failed`);

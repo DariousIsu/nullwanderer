@@ -190,8 +190,14 @@ async function runWave(contractId, deps) {
   if (!c) return { ok: false, reason: 'no such contract' };
   if (c.status !== 'open') return { ok: false, reason: `status is ${c.status}` };
 
-  // Expiry first: an overdue question converts to its flagged assumption BEFORE planning.
+  // Expiry first: an overdue question converts to its flagged assumption BEFORE planning — and the
+  // expiry SURFACES as a judgment call (§9: the operator hears the window passed and what engages;
+  // the earlier 'question' outbox item, if still unvoiced, retires silently as stale). Note
+  // expireDueQuestions is global: each expired question posts to ITS OWN contract's outbox.
   const expired = store.expireDueQuestions(now());
+  for (const xq of expired) {
+    try { store.postOutbox({ contractId: xq.contractId, kind: 'judgment_call', slotId: xq.slotId || null, questionId: xq.questionId, text: `no answer within the window on "${xq.text}" — proceeding on the assumption: ${xq.assumption}` }); } catch {}
+  }
   const maxWaves = (c.budget && c.budget.maxWaves) || DEFAULT_MAX_WAVES;
   const doneWaves = store.counts(contractId).wavesDone;
   if (doneWaves >= maxWaves) {

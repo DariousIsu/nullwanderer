@@ -8565,14 +8565,25 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const _cst = require('./lib/contract_store');
     const _liveCts = _cst.listRecent();   // open + recently-closed: status asks read finished work too
     if (_liveCts.length) {
-      const _openQs = [];
-      for (const _c of _liveCts) { try { for (const _q of _cst.openQuestions(_c.contractId)) _openQs.push(_q); } catch {} }
+      const _openQs = [], _expQs = [];
+      for (const _c of _liveCts) { try { for (const _q of _cst.openQuestions(_c.contractId)) _openQs.push(_q); for (const _q2 of _cst.expiredQuestions(_c.contractId)) _expQs.push(_q2); } catch {} }
       const _lastB = (() => { try { const r = db.getMeta('contract.last_binding'); return r ? JSON.parse(r) : null; } catch { return null; } })();
-      const _v = _crt.verdict({ text: userMessage, contracts: _liveCts, openQuestions: _openQs, lastBinding: _lastB, now: Date.now() });
+      const _v = _crt.verdict({ text: userMessage, contracts: _liveCts, openQuestions: _openQs, expiredQuestions: _expQs, lastBinding: _lastB, now: Date.now() });
       // diagnostic (boot_p118 steer-drive silence): with live contracts present, EVERY verdict logs —
       // a silent none is indistinguishable from a door that never ran, and that cost a gate leg.
       console.log(`[contract-router] verdict=${_v.kind} (live=${_liveCts.map((c) => `${c.contractId}:${c.status}`).join(',')}) for: "${String(userMessage).slice(0, 60)}"`);
-      if (_v.kind === 'answer') {
+      if (_v.kind === 'answer' && _v.late) {
+        // THE LATE ANSWER (slice 4, §9): the question expired and the work proceeded (or shipped) on
+        // its assumption — the answer re-opens ONLY the affected slot for rework, never the whole job.
+        const _ro = _cst.reopenFromLateAnswer(_v.questionId, { text: userMessage, turnRef: `session#${sessionId}` });
+        if (_ro) {
+          composedUserMessage += `\n\n[CONTRACT LATE ANSWER BOUND — the question "${String(_v.questionText || '').slice(0, 140)}" on the "${_v.title}" work had EXPIRED and the work ${_ro.wasClosed ? 'already shipped' : 'proceeded'} on its stated assumption. Their answer just re-opened ONLY the affected slot${_ro.slotId ? ` ("${_ro.slotId}")` : ''} for rework — the rest of the work stands. Acknowledge in one short line: you've got it and just that piece is being reworked under their answer. Do NOT restart the whole job, do NOT re-ask the question, and do NOT claim the rework is already done.]`;
+          console.log(`[contract-router] LATE ANSWER → ${_v.questionId} reopens ${_ro.slotId || '(no slot)'} on ${_v.contractId}${_ro.wasClosed ? ' (contract was closed → reopened)' : ''} (conf ${_v.confidence})`);
+          contractBinding = _v;
+        } else {
+          console.log(`[contract-router] LATE ANSWER bind refused by store for ${_v.questionId} — turn proceeds unbound`);
+        }
+      } else if (_v.kind === 'answer') {
         _cst.answerQuestion(_v.questionId, { text: userMessage, turnRef: `session#${sessionId}` });
         composedUserMessage += `\n\n[CONTRACT ANSWER BOUND — this message answers your open question "${String(_v.questionText || '').slice(0, 140)}" on the "${_v.title}" work. Acknowledge in one short line that you've got it and the work continues with their answer. Do NOT re-ask the question and do NOT start the work yourself — the contract agent carries it.]`;
         console.log(`[contract-router] ANSWER → ${_v.questionId} on ${_v.contractId} (conf ${_v.confidence})`);

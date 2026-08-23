@@ -77,6 +77,35 @@ ok(q2 && cs.expireDueQuestions(Date.now() + 10).length === 1, 'the due question 
 }
 ok(cs.openQuestion({ contractId: c.contractId, text: 'no assumption', assumption: '', windowMs: 1000 }) === null, 'a question without a default assumption is refused');
 
+// ── the late-answer re-open (slice 4, §9): scoped rework, never a restart ───────────────────────
+ok(cs.expiredQuestions(c.contractId).some((x) => x.questionId === q2.questionId), 'expiredQuestions lists the expired question');
+ok(cs.reopenFromLateAnswer(q1.questionId, { text: 'nope' }) === null, 'a late-answer reopen on an ANSWERED question is refused');
+{
+  const r = cs.reopenFromLateAnswer(q2.questionId, { text: 'use the parish utility filings for the water cell, not the company claim', turnRef: 'turn#6001' });
+  ok(r && r.slotId === 'rapides-water' && !r.wasClosed, '⭐ a LATE ANSWER re-opens ONLY the affected slot');
+  const s = cs.slots(c.contractId).find((x) => x.slotId === 'rapides-water');
+  ok(s.status === 'open', 'the flagged slot is open again for rework');
+  ok(!s.flags.some((f) => f.kind === 'assumption' && f.questionId === q2.questionId) && s.flags.some((f) => f.kind === 'rework'), 'the superseded assumption flag is replaced by the rework note');
+  ok(cs.getQuestion(q2.questionId).status === 'answered_late' && /parish utility/.test(cs.getQuestion(q2.questionId).answer.text), 'the question records the late answer');
+  const ib = cs.readInbox(c.contractId).find((m) => m.kind === 'late_answer');
+  ok(ib && ib.id === r.inboxId && /superseded/.test(ib.text), 'the next wave learns WHY via the late_answer inbox message');
+  ok(cs.reopenFromLateAnswer(q2.questionId, { text: 'again' }) === null, 'a second late answer to the same question is refused');
+  ok(cs.expiredQuestions(c.contractId).every((x) => x.questionId !== q2.questionId), 'an answered_late question leaves the expired set (no double-binding)');
+}
+
+// ── the rework wave allowance: a spent budget gets bounded headroom, never a dead reopen ────────
+{
+  const c3 = cs.openContract({ title: 'budget-spent contract', askVerbatim: 'x', budget: { maxWaves: 1 } });
+  cs.upsertSlot({ contractId: c3.contractId, slotId: 's1', description: 'one' });
+  const w3 = cs.beginWave(c3.contractId, 'only wave'); cs.endWave(w3.waveId, { outcome: 'spent' });
+  const q4 = cs.openQuestion({ contractId: c3.contractId, slotId: 's1', text: 'which framing?', assumption: 'framing A', windowMs: 1 });
+  cs.expireDueQuestions(Date.now() + 10);
+  cs.reopenFromLateAnswer(q4.questionId, { text: 'framing B, cite the filings' });
+  const b = cs.getContract(c3.contractId);
+  ok(b.budget.maxWaves === 3 && b.agent.budgetBlockedPosted === false, 'a spent wave budget gets the bounded rework allowance (wavesDone+2) and the stand-down flag clears');
+  cs.setStatus(c3.contractId, 'abandoned');
+}
+
 // ── flags resolve, labels label (boot_p118 waves 6-9: the flag-doesn't-resolve bug) ─────────────
 ok(cs.upsertSlot({ contractId: c.contractId, slotId: 'unfillable', description: 'no source exists' }), 'an open slot to flag');
 ok(cs.addSlotFlag(c.contractId, 'unfillable', { kind: 'no-source', text: 'held material lacks it' }), 'flag_slot on the open slot');
@@ -92,12 +121,24 @@ ok(cs.postOutbox({ contractId: c.contractId, kind: 'chitchat', text: 'x' }) === 
 ok(cs.markVoiced(o1) && cs.unvoiced().length === 1 && cs.unvoiced()[0].id === o2, 'voiced surfacings drain in order');
 
 // ── status transitions ──────────────────────────────────────────────────────────────────────────
+// (q3 opens+expires NOW, late-answered after the close below — the shipped-contract rework path)
+const q3 = cs.openQuestion({ contractId: c.contractId, slotId: 'richland-taxes', text: 'ad valorem or ITEP framing for the tax cell?', assumption: 'ITEP framing', windowMs: 1 });
+cs.expireDueQuestions(Date.now() + 10);
 ok(!cs.setStatus(c.contractId, 'closed'), 'open → closed directly is refused (the audit gate is unreachable-by-construction)');
 ok(cs.setStatus(c.contractId, 'closing'), 'open → closing');
 ok(cs.setStatus(c.contractId, 'open'), 'closing → open (a failed audit reopens)');
 ok(cs.setStatus(c.contractId, 'closing') && cs.setStatus(c.contractId, 'closed'), 'closing → closed');
 ok(cs.getContract(c.contractId).closedTs > 0, 'closed_ts stamped');
 ok(!cs.setStatus(c.contractId, 'open'), 'closed is terminal');
+
+// ── a late answer AFTER close reopens the shipped contract for the scoped rework ────────────────
+{
+  const r = cs.reopenFromLateAnswer(q3.questionId, { text: 'ad valorem, with the exemption noted' });
+  ok(r && r.wasClosed === true && r.slotId === 'richland-taxes', '⭐ a late answer to SHIPPED work reopens the contract — closed→open exists ONLY through this door');
+  const cc = cs.getContract(c.contractId);
+  ok(cc.status === 'open' && cc.closedTs == null, 'the reopened contract is open again, closed_ts cleared');
+  ok(cs.setStatus(c.contractId, 'closing') && cs.setStatus(c.contractId, 'closed'), 'the rework closes back down through the normal gate');
+}
 
 // ── counts + resume read ────────────────────────────────────────────────────────────────────────
 const c2 = cs.openContract({ title: 'second contract', askVerbatim: 'do the thing', topicTokens: ['thing'] });

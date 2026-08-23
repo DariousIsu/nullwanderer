@@ -52,7 +52,7 @@ function _contractToks(c) {
   return set;
 }
 
-function verdict({ text, contracts = [], openQuestions = [], lastBinding = null, now = Date.now() } = {}) {
+function verdict({ text, contracts = [], openQuestions = [], expiredQuestions = [], lastBinding = null, now = Date.now() } = {}) {
   const s = String(text || '').trim();
   if (!s || !contracts.length) return { kind: 'none' };
   // live may be EMPTY — status still reads closed contracts below; every other branch self-guards.
@@ -92,6 +92,23 @@ function verdict({ text, contracts = [], openQuestions = [], lastBinding = null,
     }
     const need = aff.rest ? 1 : 2;   // an affirmation-led reply is already answer-shaped
     if (best && bestN >= need) return { kind: 'answer', questionId: best.questionId, contractId: best.contractId, title: titleOf(best.contractId), questionText: best.text, confidence: aff.rest ? 0.8 : 0.7 };
+  }
+
+  // 2b. LATE ANSWER (slice 4, §9): an expired question's answer still binds — the rework is scoped
+  // to what the answer changes, downstream via reopenFromLateAnswer. Only a CONTENT answer binds:
+  // a bare "yes"/"no" arriving after the window is settled history (the work already shipped on the
+  // assumption), and a question- or status-shaped turn is asking ABOUT the work, never reworking it
+  // — expired questions persist for the whole listRecent horizon, so the hijack guards are strict.
+  if (expiredQuestions.length && !bareAff && !bareNeg && !_QUESTION_SHAPE_RE.test(s) && !_STATUS_RE.test(s)) {
+    const bt = _toks(aff.rest || s);
+    let best = null, bestN = 0;
+    for (const q of expiredQuestions) {
+      const qt = new Set([..._toks(q.text), ..._toks((q.options || []).join(' ')), ..._toks(q.assumption || '')]);
+      const n = bt.filter((t) => qt.has(t)).length;
+      if (n > bestN || (n === bestN && n > 0 && best && (q.askedTs || 0) > (best.askedTs || 0))) { best = q; bestN = n; }
+    }
+    const need = aff.rest ? 1 : 2;
+    if (best && bestN >= need) return { kind: 'answer', late: true, questionId: best.questionId, contractId: best.contractId, slotId: best.slotId || null, title: titleOf(best.contractId), questionText: best.text, confidence: aff.rest ? 0.75 : 0.65 };
   }
 
   // Exact-token hits per contract.

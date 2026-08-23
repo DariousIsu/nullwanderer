@@ -292,6 +292,54 @@ function expireDueQuestions(nowTs = now()) {
   }
   return due;
 }
+function expiredQuestions(contractId) {
+  return _db().prepare(`SELECT question_id FROM questions WHERE contract_id = ? AND status = 'expired' ORDER BY asked_ts ASC`).all(str(contractId)).map((r) => getQuestion(r.question_id));
+}
+
+// ── THE LATE-ANSWER RE-OPEN (slice 4, §9) ───────────────────────────────────────────────────────
+// An answer that arrives AFTER its question expired reworks ONLY what the answer changes — never a
+// contract restart. The question becomes 'answered_late'; its slot re-opens for rework with THIS
+// question's assumption flag replaced by a rework note (a superseded assumption must not survive
+// into the reworked deliverable — the supersession history lives on the question row); the next
+// wave learns WHY via a 'late_answer' inbox message; and a contract that already shipped comes back
+// OPEN for the scoped rework. closed→open exists ONLY through this door — answerQuestion still
+// refuses non-open questions and setStatus still refuses closed→anything.
+const REWORK_WAVE_ALLOWANCE = 2;
+function reopenFromLateAnswer(qid, { text, turnRef = null } = {}) {
+  const q = getQuestion(qid);
+  if (!q || q.status !== 'expired' || !str(text)) return null;
+  const c = getContract(q.contractId);
+  if (!c || c.status === 'abandoned') return null;
+  _db().prepare(`UPDATE questions SET status = 'answered_late', answer = ? WHERE question_id = ?`)
+    .run(JSON.stringify({ text: str(text), ts: now(), turnRef }), str(qid));
+  let slotReopened = null;
+  if (q.slotId != null) {
+    const s = slots(q.contractId).find((x) => x.slotId === q.slotId);
+    if (s) {
+      const kept = s.flags.filter((f) => !(f && f.kind === 'assumption' && f.questionId === q.questionId));
+      kept.push({ kind: 'rework', text: `late answer supersedes the assumption "${str(q.assumption).slice(0, 120)}"`, questionId: q.questionId });
+      upsertSlot({ contractId: q.contractId, slotId: q.slotId, description: s.description, status: 'open', contentRef: s.contentRef, citations: s.citations, flags: kept });
+      slotReopened = q.slotId;
+    }
+  }
+  const wasClosed = c.status === 'closed';
+  if (c.status === 'closing' || c.status === 'waiting_answer') setStatus(c.contractId, 'open');
+  else if (wasClosed) _db().prepare(`UPDATE contracts SET status = 'open', closed_ts = NULL, updated_ts = ? WHERE contract_id = ?`).run(now(), c.contractId);
+  // A spent wave budget gets a bounded rework allowance — the scoped rework needs waves to run.
+  // (12 mirrors contract_agent.DEFAULT_MAX_WAVES — the agent's fallback when budget.maxWaves is unset.)
+  const k = counts(q.contractId);
+  const effMax = (c.budget && c.budget.maxWaves) || 12;
+  if (k.wavesDone >= effMax) {
+    _db().prepare(`UPDATE contracts SET budget = ? WHERE contract_id = ?`).run(JSON.stringify({ ...c.budget, maxWaves: k.wavesDone + REWORK_WAVE_ALLOWANCE }), c.contractId);
+  }
+  patchAgent(q.contractId, { budgetBlockedPosted: false });
+  const inboxId = postInbox({
+    contractId: q.contractId, kind: 'late_answer', slotId: q.slotId,
+    text: `LATE ANSWER to your expired question "${str(q.text).slice(0, 140)}": "${str(text).slice(0, 300)}". Rework ONLY ${q.slotId ? `slot ${q.slotId}` : 'what this answer changes'} under this answer — the assumption "${str(q.assumption).slice(0, 120)}" is superseded; everything else stands.`,
+  });
+  _touch(q.contractId);
+  return { contractId: q.contractId, slotId: slotReopened, wasClosed, inboxId };
+}
 
 // ── wavelog (append-only; the truth substrate — commits BEFORE anything surfaces) ───────────────
 // Idempotent resume: if an unfinished wave exists (a reboot mid-wave), beginWave returns IT with
@@ -349,6 +397,7 @@ module.exports = {
   postInbox, readInbox, markInboxConsumed, tombstoneInbox,
   postOutbox, unvoiced, markVoiced, OUTBOX_KINDS,
   openQuestion, getQuestion, openQuestions, answerQuestion, expireDueQuestions,
+  expiredQuestions, reopenFromLateAnswer,
   beginWave, endWave, waveLog, lastWaveTs,
   counts, resumeOpenContracts,
 };
