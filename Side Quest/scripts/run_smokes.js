@@ -592,6 +592,10 @@ const smokes = [
   // TOGETHER — converse route pinned, artifacts + bookings suppressed absent a named destination,
   // held material pulled as conversational grounding.
   'smoke_collab.js',
+  // CONTRACT AGENT slice 0 (2026-08-22, docs/CONTRACT_AGENT_SPEC_2026-08-22.md): the durable
+  // contract store (slots / inbox / outbox / questions-with-assumptions / wavelog, resume at the
+  // last committed wave) — plus the canvas homecoming lives in smoke_collab (source 2b).
+  'smoke_contract_store.js',
   // BUILD 0 + BUILD 3 (2026-08-21): the browser-lane web_search floor (empty federation → her own
   // stealth lane) and the gap-plan approval surface (fillable/blocked/aggressive, cadence + fp gate).
   'smoke_gap_plan.js',

@@ -5,6 +5,9 @@
  * harness artifact — instead of thinking with him. The verbatim live turns are the regressions. */
 const path = require('path'), os = require('os');
 process.env.SQ_DB_PATH = process.env.SQ_DB_PATH || path.join(os.tmpdir(), `sq_collab_${process.pid}`, 'sq.db');
+// Hermetic canvas store: groundingBlock's 2b source defaults to lib/canvas_docs — without this the
+// pre-existing cases would read the REAL data/canvas_docs.db and couple the smoke to live content.
+process.env.CANVAS_DOCS_DB_PATH = path.join(os.tmpdir(), `sq_collab_canvas_${process.pid}`, 'canvas.db');
 const cl = require('../lib/collab');
 
 let pass = 0, fail = 0;
@@ -82,6 +85,27 @@ ok(/IN THIS REPLY/.test(d) && /Do NOT create or edit any artifact/.test(d) && /l
   ok(hb && !/decoy/.test(hb), 'notes/_test_residue never rides (subdirectories excluded)');
   ok(hb && hb.indexOf('anti_china_2026_sponsors.md') < hb.indexOf(`doc#${sheet.id}`), 'the hand-built deliverable OUTRANKS doc-store matches');
   try { fs2.rmSync(ndir, { recursive: true, force: true }); } catch {}
+
+  // ── the canvas homecoming (contract-agent slice 0, 08-22): her canvas docs ground recall ──────
+  // Live-proven blindness: an external session searched "Delta Forge", honest-missed, and re-bought
+  // the research while the community_benefits_la compilation sat in canvas_docs.
+  const fakeCanvas = {
+    listDocs: () => [
+      { tabKey: 'creations', mode: 'ILLUSTRATIVE', title: 'Zoe art', updatedAt: 3 },
+      { tabKey: 'community_benefits_la', mode: 'DOC', title: 'Community Benefits: Meta & Applied Digital in Louisiana', updatedAt: 2 },
+      { tabKey: 'directed-9999', mode: 'RESEARCH', title: 'Directed research', updatedAt: 1 },
+    ],
+    docText: (k) => k === 'community_benefits_la'
+      ? 'META HYPERION RICHLAND PARISH: 7,500 construction jobs. Applied Digital Delta Forge in Rapides Parish, waterless cooling, Entergy and Cleco commitments.'
+      : (k === 'creations' ? 'delta forge applied digital painting sketch' : 'unrelated directed notes about turnpike tolls'),
+  };
+  const cnope = path.join(os.tmpdir(), `sq_collab_nonotes_${process.pid}`);
+  const cb = cl.groundingBlock({ sessionId: 0, text: 'what do we already have on the Delta Forge applied digital campus?', mode: 'recall', _canvasStore: fakeCanvas, _notesDir: cnope });
+  ok(cb && /community_benefits_la/.test(cb) && /Delta Forge/.test(cb), '⭐ THE CANVAS HOMECOMING: her canvas compilation grounds the recall (the external session honest-missed exactly this)');
+  ok(cb && /YOUR canvas/.test(cb), 'the canvas source is labeled as her own work');
+  ok(cb && !/painting sketch/.test(cb), 'ILLUSTRATIVE tabs never ground an answer');
+  const cb2 = cl.groundingBlock({ sessionId: 0, text: 'zzqx unmatchable qqzz terms', mode: 'recall', _canvasStore: fakeCanvas, _notesDir: cnope });
+  ok(cb2 === null, 'no term match → the canvas source stays silent (fail-empty)');
 }
 
 // ── wiring: the four gates exist in main.js ─────────────────────────────────────────────────────

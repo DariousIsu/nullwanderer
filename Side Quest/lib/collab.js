@@ -58,7 +58,7 @@ function _terms(text, max = 6) {
  *  the run-8 residual) frames for ANSWERING FROM the held documents — and because the injection
  *  rides the composed message, it also becomes the anti-fab verifier's evidence: the same pull
  *  that enables the right answer grounds the gate that checks it. */
-function groundingBlock({ sessionId, text = '', mode = 'collab', _notesDir = null } = {}) {
+function groundingBlock({ sessionId, text = '', mode = 'collab', _notesDir = null, _canvasStore = null } = {}) {
   try {
     const d = db();
     const parts = [];
@@ -119,6 +119,36 @@ function groundingBlock({ sessionId, text = '', mode = 'collab', _notesDir = nul
           const from = Math.max(0, at - 80);
           const ex = best.body.slice(from, from + 560).replace(/\s+/g, ' ').trim();
           parts.push(`- notes/${best.n} (a deliverable YOU built — often the answer itself): ${ex}…`);
+        }
+      } catch {}
+    }
+    // 2b. THE CANVAS HOMECOMING (contract-agent slice 0, 08-22): her canvas + directed-thread work
+    //     was store-invisible — live-proven when an external session searched "Delta Forge" and
+    //     honest-missed while the community_benefits_la compilation sat in canvas_docs. Same
+    //     discipline as 2a: term match over title+body (bill numbers exact-token, double-weighted),
+    //     excerpt cut AROUND the strongest match. ILLUSTRATIVE tabs (art) never ground an answer.
+    if (terms.length >= 2 && parts.length < 3) {
+      try {
+        const cs = _canvasStore || require('./canvas_docs');
+        let best = null, bestScore = 0;
+        for (const t3 of cs.listDocs({ limit: 60 })) {
+          if (String(t3.mode || '').toUpperCase() === 'ILLUSTRATIVE') continue;
+          const body = cs.docText(t3.tabKey);
+          if (!body) continue;
+          const hay = `${t3.title || ''}\n${body}`.toLowerCase();
+          let score = 0;
+          for (const t2 of otherToks) if (hay.includes(t2)) score++;
+          for (const bt of billToks) if (new RegExp(`\\b${bt}\\b`, 'i').test(hay)) score += 2;
+          if (score > bestScore) { bestScore = score; best = { tab: t3, body }; }
+        }
+        if (best && bestScore >= 2) {
+          const hayFull = `${best.tab.title || ''}\n${best.body}`;
+          let at = -1;
+          for (const bt of billToks) { const m2 = hayFull.match(new RegExp(`\\b${bt}\\b`, 'i')); if (m2) { at = m2.index; break; } }
+          if (at < 0) { const hayL = hayFull.toLowerCase(); for (const t2 of otherToks) { const i2 = hayL.indexOf(t2); if (i2 > -1) { at = i2; break; } } }
+          const from = Math.max(0, at - 80);
+          const ex = hayFull.slice(from, from + 560).replace(/\s+/g, ' ').trim();
+          parts.push(`- canvas "${String(best.tab.title || best.tab.tabKey).slice(0, 80)}" (tab ${best.tab.tabKey} — a doc on YOUR canvas): ${ex}…`);
         }
       } catch {}
     }

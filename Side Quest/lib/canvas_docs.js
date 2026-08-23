@@ -185,4 +185,33 @@ function lastWriteText(sinceTs = 0) {
   } catch { return ''; }
 }
 
-module.exports = { init, _db, close, recordTab, recordBlock, clearTabBlocks, all, forget, prune, clear, lastWriteTs, lastWriteText, MAX_BLOCK_BYTES, KEEP_DOCS };
+// ── the canvas-homecoming read surface (contract-agent slice 0, 08-22) ──────────────────────────
+// Live-proven blindness: an external session searched "Delta Forge" and honest-missed while the
+// community_benefits_la compilation sat right here. These two give collab/recall grounding (and the
+// contract agent's internal-first decompose wave) eyes on the canvas + directed-thread stores.
+
+// The searchable doc list, most recently touched first.
+function listDocs({ limit = 60 } = {}) {
+  try {
+    return _db().prepare(`SELECT tab_key AS tabKey, mode, title, updated_at AS updatedAt FROM docs ORDER BY updated_at DESC LIMIT ?`).all(Math.max(1, limit));
+  } catch { return []; }
+}
+// One doc's body text (its blocks in stream order), for term-matching + excerpt cuts. Fail-soft ''.
+function docText(tabKey, cap = 12000) {
+  try {
+    // length guard: a dropped image/PDF rides as a multi-MB data URI — parsing those on a recall
+    // turn would tax the conversational lane. Text blocks are small; scan only those.
+    const rows = _db().prepare(`SELECT data FROM blocks WHERE tab_key = ? AND length(data) <= 100000 ORDER BY position LIMIT 40`).all(str(tabKey));
+    let out = '';
+    for (const b of rows) {
+      if (out.length >= cap) break;
+      let body = '';
+      try { const j = JSON.parse(b.data); body = String(j.markdown || j.text || (Array.isArray(j.headers) ? [].concat(j.headers, ...((j.rows || []).slice(0, 40))).join(' ') : '') || ''); }
+      catch { body = String(b.data).slice(0, 500); }
+      if (body) out += ' ' + body;
+    }
+    return out.slice(0, cap).trim();
+  } catch { return ''; }
+}
+
+module.exports = { init, _db, close, recordTab, recordBlock, clearTabBlocks, all, forget, prune, clear, lastWriteTs, lastWriteText, listDocs, docText, MAX_BLOCK_BYTES, KEEP_DOCS };
