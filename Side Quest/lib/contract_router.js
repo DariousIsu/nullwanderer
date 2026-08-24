@@ -142,7 +142,10 @@ function verdict({ text, contracts = [], openQuestions = [], expiredQuestions = 
   // that just finished deserves "done, here's what landed", not a doc-recall fallback; p119 finding).
   if (_STATUS_RE.test(s)) {
     const scoredAll = contracts.map((c) => ({ c, n: st.filter((t) => _contractToks(c).has(t)).length }));
-    const hits = scoredAll.filter((x) => x.n >= 1).sort((a, b) => b.n - a.n);
+    // ≥2 hits (sprint catch #8, 08-24: "where does the china vs us grid deep dive stand" — NOT
+    // contract work — drew a 3-way clarify on single generic tokens ('china', 'grid'); the steering
+    // branch already demands ≥2, and a 1-hit status match belongs to the recall/product doors).
+    const hits = scoredAll.filter((x) => x.n >= 2).sort((a, b) => b.n - a.n);
     if (hits.length === 1 || (hits.length > 1 && hits[0].n > hits[1].n)) return { kind: 'status', contractId: hits[0].c.contractId, title: hits[0].c.title, confidence: 0.8 };
     if (hits.length > 1) return { kind: 'clarify', candidates: hits.map((h) => ({ contractId: h.c.contractId, title: h.c.title })), reason: 'status-ambiguous', confidence: 0.5 };
     if (live.length === 1) return { kind: 'status', contractId: live[0].contractId, title: live[0].title, confidence: 0.6 };

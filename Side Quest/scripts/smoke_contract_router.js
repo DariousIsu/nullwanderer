@@ -84,6 +84,7 @@ ok(rt.verdict({ text: 'check the waterless cooling claim numbers against the com
   const v = rt.verdict({ text: 'where are we on the data-center benefits work?', contracts: [A, B], openQuestions: [], now });
   ok(v.kind === 'status' && v.contractId === 'ct-a', 'a progress ask reads the store (status), never steers and never invents');
 }
+ok(rt.verdict({ text: 'where do we stand on the china grid deep dive?', contracts: [A, B], openQuestions: [], now }).kind === 'none', '⭐ SPRINT CATCH #8: a status ask about NON-contract work never clarify-hijacks on single-token hits (status candidates need ≥2, like steering)');
 
 // repair
 {
