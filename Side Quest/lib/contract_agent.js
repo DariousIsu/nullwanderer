@@ -80,6 +80,9 @@ function liveDeps() {
 
 const _cap = (s, n = OBS_CAP) => { s = String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s; };
 
+// Query tokens too generic to prove a search result relevant (the junk-fuel detector, catch R3a).
+const _QSTOP = new Set(['data', 'center', 'centers', 'about', 'with', 'from', 'this', 'that', 'what', 'announcement', 'announcements', 'news', 'update', 'updates', 'latest']);
+
 // Tolerant JSON: the reasoning models preamble — take the first balanced {...} block.
 function parseDriverReply(text) {
   const s = String(text || '');
@@ -201,13 +204,27 @@ async function runWave(contractId, deps) {
   const maxWaves = (c.budget && c.budget.maxWaves) || DEFAULT_MAX_WAVES;
   const doneWaves = store.counts(contractId).wavesDone;
   if (doneWaves >= maxWaves) {
-    // Budget spent, contract still open: surface it ONCE and stand down — abandoning is the
-    // operator's call (pursue-the-deliverable: a concrete state, never a silent stall).
-    if (!(c.agent && c.agent.budgetBlockedPosted)) {
-      store.postOutbox({ contractId, kind: 'blocked', text: `wave budget spent (${doneWaves}/${maxWaves}) with open slots remaining — say "keep going" to extend, or I can close it out flagged as-is` });
-      store.patchAgent(contractId, { budgetBlockedPosted: true });
+    // THE PROMISED EXTENSION DOOR (rematch catch R4, 08-24): the blocked message said "say
+    // 'keep going' to extend" — and NO code extended; the door was a dangling promise in the
+    // system's own words. Post-exhaustion operator steering IS the extension now (their
+    // engagement = direction; a "close it out" instruction reaches the driver next wave and
+    // lands done→closing under the extended budget).
+    const inboxNow = store.readInbox(contractId);
+    if ((c.agent && c.agent.budgetBlockedPosted) && inboxNow.length) {
+      const newMax = doneWaves + 6;
+      if (typeof store.patchBudget === 'function') store.patchBudget(contractId, { ...(c.budget || {}), maxWaves: newMax });
+      store.patchAgent(contractId, { budgetBlockedPosted: false });
+      store.postOutbox({ contractId, kind: 'milestone', text: `wave budget extended to ${newMax} on your direction — continuing` });
+      c.budget = { ...(c.budget || {}), maxWaves: newMax };
+    } else {
+      // Budget spent, contract still open: surface it ONCE and stand down — abandoning is the
+      // operator's call (pursue-the-deliverable: a concrete state, never a silent stall).
+      if (!(c.agent && c.agent.budgetBlockedPosted)) {
+        store.postOutbox({ contractId, kind: 'blocked', text: `wave budget spent (${doneWaves}/${maxWaves}) with open slots remaining — say "keep going" to extend, or I can close it out flagged as-is` });
+        store.patchAgent(contractId, { budgetBlockedPosted: true });
+      }
+      return { ok: false, reason: 'wave budget exhausted' };
     }
-    return { ok: false, reason: 'wave budget exhausted' };
   }
   const q = quotaCheck();
   if (!q.allow) return { ok: false, reason: `quota: ${q.reason}` };
@@ -233,6 +250,7 @@ async function runWave(contractId, deps) {
   } else {
     const slotsNow = () => store.slots(contractId);
     let readsThisWave = 0;
+    let progressed = false;   // slot/outbox motion this wave — the stall watchdog's signal (catch R3c)
     for (const a of reply.actions.slice(0, MAX_ACTIONS_PER_WAVE)) {
       const act = String((a && a.action) || '');
       try {
@@ -240,6 +258,7 @@ async function runWave(contractId, deps) {
           const defs = Array.isArray(a.slots) ? a.slots.filter((s) => s && s.slotId && s.description) : [];
           const fresh = defs.filter((s) => !slotsNow().some((x) => x.slotId === String(s.slotId)));
           for (const s of fresh) store.upsertSlot({ contractId, slotId: String(s.slotId), description: String(s.description) });
+          if (fresh.length) progressed = true;
           observations.push(`define_slots: ${fresh.length} defined [${fresh.map((s) => s.slotId).join(', ')}]`);
         } else if (act === 'internal_search' || act === 'web_search') {
           const query = String(a.query || '').trim();
@@ -250,9 +269,20 @@ async function runWave(contractId, deps) {
             continue;
           }
           const res = act === 'internal_search' ? await internalSearch(query) : await webSearch(query);
-          const empty = !res || (Array.isArray(res) && !res.length);
+          let empty = !res || (Array.isArray(res) && !res.length);
+          // THE JUNK-FUEL DETECTOR (rematch catch R3a, 08-24 live): Bing brand-junk ("Meta
+          // Richland Parish…" → meta.com/about; "Applied Digital…" → applied.com, the INDUSTRIAL
+          // company) is NON-empty, so 16 junk waves read as progress and the replan note never
+          // fired — the twice-proven brand-junk item's third proof. A result is relevant only if
+          // its text carries ≥2 distinct content tokens of the query (brand-nav hits carry
+          // exactly the brand token). Zero relevant = EMPTY for the guard, JUNK for the driver.
+          let junk = false;
+          if (act === 'web_search' && !empty && Array.isArray(res)) {
+            const qtoks = [...new Set(query.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 3 && !_QSTOP.has(t)))];
+            if (qtoks.length >= 2 && !res.some((r) => { const hay = `${r.title || ''} ${r.snippet || ''} ${r.url || ''}`.toLowerCase(); return qtoks.filter((t) => hay.includes(t)).length >= 2; })) { junk = true; empty = true; }
+          }
           chainGuard.evaluateHop(chain, { signature: sig, label: act, emptyThisHop: empty, retrieval: true });
-          observations.push(`${act} "${_cap(query, 80)}" → ${empty ? 'EMPTY' : _cap(typeof res === 'string' ? res : JSON.stringify(res), OBS_CAP)}`);
+          observations.push(`${act} "${_cap(query, 80)}" → ${junk ? `JUNK (brand-nav: ${res.length} results, none carry 2+ query terms — treat as EMPTY and change the approach, not the phrasing)` : empty ? 'EMPTY' : _cap(typeof res === 'string' ? res : JSON.stringify(res), OBS_CAP)}`);
         } else if (act === 'read_held') {
           // THE SNIPPET LIMITER (boot_p115 waves 2-3, live): the driver kept re-phrasing searches to
           // "retrieve the notes" because search only returns an excerpt window — the figures it needed
@@ -262,8 +292,22 @@ async function runWave(contractId, deps) {
           if (readsThisWave >= MAX_READS_PER_WAVE) { observations.push(`read_held ${_cap(ref, 60)} REFUSED: this wave's read budget is spent`); continue; }
           const sig = chainGuard.tagSignature({ kind: 'do', name: 'read_held', args: { ref: ref.toLowerCase() } });
           if (chain.seen.has(sig)) {
-            chainGuard.evaluateHop(chain, { signature: sig, label: 'read_held', emptyThisHop: true, retrieval: true });
-            observations.push(`read_held REFUSED (already read): ${_cap(ref, 80)}`);
+            // Serve the PRIOR read instead of refusing (rematch catch R3b, 08-24 live): the
+            // 2-wave prompt window had dropped the content, the driver re-planned the read, and
+            // the refusal made HELD material look unavailable — the loop starved beside a full
+            // pantry ("refused last wave — will try once more", waves 13-16).
+            let cached = null;
+            try {
+              for (const w2 of store.waveLog(contractId).slice().reverse()) {
+                for (const a2 of w2.actions || []) {
+                  if (typeof a2 === 'string' && a2.startsWith(`read_held ${_cap(ref, 80)} → `) && !a2.includes('EMPTY (no such held item)')) { cached = { text: a2, waveN: w2.waveN }; break; }
+                }
+                if (cached) break;
+              }
+            } catch {}
+            chainGuard.evaluateHop(chain, { signature: sig, label: 'read_held', emptyThisHop: !cached, retrieval: true });
+            if (cached) { readsThisWave++; observations.push(`${cached.text} [cached — this item was read in wave ${cached.waveN}; its content is above]`); }
+            else observations.push(`read_held REFUSED (already read, no cached copy): ${_cap(ref, 80)}`);
             continue;
           }
           const txt = typeof readHeld === 'function' ? await readHeld(ref) : null;
@@ -289,17 +333,20 @@ async function runWave(contractId, deps) {
             const mergedFlags = [...s.flags];
             for (const f2 of flags) if (f2 && !mergedFlags.some((g) => g && g.kind === f2.kind && String(g.text || '') === String(f2.text || ''))) mergedFlags.push(f2);
             store.upsertSlot({ contractId, slotId, description: s.description, status: 'filled', contentRef: `inline:${_cap(String(a.content || ''), 600)}`, citations: cites, flags: mergedFlags });
+            progressed = true;
             observations.push(`fill_slot ${slotId} FILLED (${cites.length} citation(s))`);
           }
         } else if (act === 'flag_slot') {
           const okf = store.addSlotFlag(contractId, String(a.slotId || ''), a.flag || { kind: 'note', text: '' });
+          if (okf) progressed = true;
           observations.push(`flag_slot ${a.slotId} → ${okf ? 'flagged' : 'REFUSED (unknown slot)'}`);
         } else if (act === 'open_question') {
           const qq = store.openQuestion({ contractId, slotId: a.slotId || null, text: String(a.text || ''), assumption: String(a.assumption || ''), windowMs: a.windowMs > 0 ? a.windowMs : DEFAULT_QUESTION_WINDOW_MS });
-          if (qq) { store.postOutbox({ contractId, kind: 'question', slotId: a.slotId || null, text: String(a.text || ''), questionId: qq.questionId }); observations.push(`open_question ${qq.questionId} (assumption: ${_cap(qq.assumption, 100)})`); }
+          if (qq) { progressed = true; store.postOutbox({ contractId, kind: 'question', slotId: a.slotId || null, text: String(a.text || ''), questionId: qq.questionId }); observations.push(`open_question ${qq.questionId} (assumption: ${_cap(qq.assumption, 100)})`); }
           else observations.push('open_question REFUSED (text + assumption are both required)');
         } else if (act === 'surface') {
           const oid = store.postOutbox({ contractId, kind: String(a.kind || ''), slotId: a.slotId || null, text: String(a.text || '') });
+          if (oid) progressed = true;
           observations.push(oid ? `surfaced ${a.kind}` : `surface REFUSED (kind "${a.kind}")`);
         } else if (act === 'done') {
           const all = slotsNow();
@@ -310,12 +357,23 @@ async function runWave(contractId, deps) {
           // Milestone wording: a clean sweep never says "0 flagged" — flags only appear when real.
           store.postOutbox({ contractId, kind: 'milestone', text: `all ${all.length} slots landed — ${flagged.length ? `${all.length - flagged.length} filled, ${flagged.length} flagged (honest holes: ${flagged.map((s) => s.slotId).join(', ')})` : `every slot filled and cited`} — heading to close-out` });
           observations.push('done → closing');
+          progressed = true;
           done = true;
         } else {
           observations.push(`unknown action "${_cap(act, 40)}"`);
         }
       } catch (e) { observations.push(`${act} errored: ${_cap(e.message, 150)}`); }
       if (done) break;
+    }
+    // THE STALL WATCHDOG (rematch catch R3c, 08-24 live): 16 waves, zero slot transitions, zero
+    // outbox posts — the operator heard NOTHING while the loop starved. Any slot/outbox motion
+    // resets the episode; 3+ consecutive no-progress hops surface ONE blocked post per episode.
+    if (progressed) {
+      if (c.agent && c.agent.stallBlockedPosted) store.patchAgent(contractId, { stallBlockedPosted: false });
+    } else if (chain.noProgress >= 3 && !(c.agent && c.agent.stallBlockedPosted)) {
+      store.postOutbox({ contractId, kind: 'blocked', text: `${chain.noProgress} lookups in a row came back empty or junk and no slot has moved — I need direction: a source I should read, a different angle, or the word to close it out flagged as-is` });
+      store.patchAgent(contractId, { stallBlockedPosted: true });
+      observations.push('stall watchdog: blocked surfaced to the operator');
     }
   }
 

@@ -168,6 +168,57 @@ const deps = {
   ok(store.slots(F.contractId).find((x) => x.slotId === 'regional').status === 'filled', 'the RIGHT-state fill lands normally');
   delete deps.stateCodes;
 
+  // ── contract R: THE LA REMATCH CURES (08-24 live: 16 waves, zero fills, zero surfacings) ──────
+  const R = store.openContract({ title: 'Rematch cures', askVerbatim: 'fill the cell', topicTokens: ['richland'], budget: { maxWaves: 20 } });
+  store.upsertSlot({ contractId: R.contractId, slotId: 'cell', description: 'the cell' });
+  const JUNK = [
+    { title: 'About Meta | Social Technology', url: 'https://www.meta.com/about/', snippet: 'Learn more about Meta and social technology' },
+    { title: 'Applied | Homepage', url: 'https://www.applied.com/', snippet: 'At Applied we are proud of our rich heritage' },
+  ];
+  const depsR = { ...deps, webSearch: async () => JUNK, internalSearch: async () => null, readHeld: async (ref) => (/^doc#7$/.test(ref) ? 'Meta Richland compilation\n7500 construction jobs, $43M sales-tax surge' : null) };
+  // R3a: junk results are EMPTY for the guard and labeled JUNK for the driver
+  replies.push(JSON.stringify({ plan_summary: 'search 1', actions: [{ action: 'web_search', query: 'Meta Richland Parish Louisiana community benefits' }] }));
+  r = await ca.runWave(R.contractId, depsR);
+  {
+    const w = store.waveLog(R.contractId).slice(-1)[0];
+    ok(w.actions.some((a2) => /JUNK \(brand-nav: 2 results, none carry 2\+ query terms/.test(a2)), '⭐ R3a: brand-nav junk is DETECTED and labeled — never read as progress');
+  }
+  // R3b: a repeat read serves the cached prior text instead of refusing
+  replies.push(JSON.stringify({ plan_summary: 'read', actions: [{ action: 'read_held', ref: 'doc#7' }] }));
+  await ca.runWave(R.contractId, depsR);
+  replies.push(JSON.stringify({ plan_summary: 'read again', actions: [{ action: 'read_held', ref: 'doc#7' }] }));
+  await ca.runWave(R.contractId, depsR);
+  {
+    const w = store.waveLog(R.contractId).slice(-1)[0];
+    ok(w.actions.some((a2) => /\[cached — this item was read in wave \d+/.test(a2) && /7500 construction jobs/.test(a2)), '⭐ R3b: an already-read item SERVES its cached text — held material never looks unavailable');
+  }
+  // R3c: three no-progress hops surface ONE blocked post (the read reset the streak; junk it back up)
+  replies.push(JSON.stringify({ plan_summary: 'search 2', actions: [{ action: 'web_search', query: 'Richland Parish Louisiana teacher bonuses meta' }] }));
+  await ca.runWave(R.contractId, depsR);
+  replies.push(JSON.stringify({ plan_summary: 'search 3', actions: [{ action: 'web_search', query: 'Rapides Parish Louisiana applied digital campus' }] }));
+  await ca.runWave(R.contractId, depsR);
+  replies.push(JSON.stringify({ plan_summary: 'search 4', actions: [{ action: 'web_search', query: 'Louisiana parish cleco entergy ratepayer meta' }] }));
+  await ca.runWave(R.contractId, depsR);
+  {
+    const blocked = store.unvoiced().filter((o) => o.contractId === R.contractId && o.kind === 'blocked');
+    ok(blocked.length === 1 && /no slot has moved/.test(blocked[0].text), '⭐ R3c: the stall watchdog surfaces ONE blocked post — a starving contract is never silent');
+    replies.push(JSON.stringify({ plan_summary: 'fill it', actions: [{ action: 'fill_slot', slotId: 'cell', content: 'Richland: 7500 construction jobs', citations: [{ src: 'doc#7', date: 'held' }] }] }));
+    await ca.runWave(R.contractId, depsR);
+    ok(store.getContract(R.contractId).agent.stallBlockedPosted === false, 'slot progress clears the stall episode');
+  }
+  // R4: the promised extension door — post-exhaustion steering extends the budget
+  const X = store.openContract({ title: 'Budget door', askVerbatim: 'one cell', topicTokens: ['door'], budget: { maxWaves: 1 } });
+  store.upsertSlot({ contractId: X.contractId, slotId: 'c1', description: 'c1' });
+  replies.push(JSON.stringify({ plan_summary: 'spend the budget', actions: [] }));
+  await ca.runWave(X.contractId, deps);
+  r = await ca.runWave(X.contractId, deps);
+  ok(!r.ok && /budget exhausted/.test(r.reason) && store.unvoiced().some((o) => o.contractId === X.contractId && o.kind === 'blocked' && /keep going/.test(o.text)), 'budget spent → ONE blocked post, stand down');
+  store.postInbox({ contractId: X.contractId, kind: 'steering', text: 'keep going' });
+  replies.push(JSON.stringify({ plan_summary: 'extended wave', actions: [] }));
+  r = await ca.runWave(X.contractId, deps);
+  ok(r.ok && r.waveN === 2, '⭐ R4: post-exhaustion steering EXTENDS the budget — the promised door is real');
+  ok(store.getContract(X.contractId).budget.maxWaves === 7 && store.unvoiced().some((o) => o.contractId === X.contractId && /budget extended to 7/.test(o.text)), 'the extension is stored and surfaced');
+
   try { store.close(); fs.rmSync(dbDir, { recursive: true, force: true }); } catch {}
   console.log(`\nsmoke_contract_agent: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;

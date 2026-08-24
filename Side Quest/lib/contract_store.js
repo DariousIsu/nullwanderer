@@ -167,6 +167,16 @@ function setStatus(id, status) {
     .run(status, now(), status, now(), str(id));
   return true;
 }
+// Budget updates (rematch catch R4, 08-24): the budget-blocked message promised "say 'keep
+// going' to extend" — this is the door that makes the promise real (the agent extends on
+// post-exhaustion operator steering).
+function patchBudget(id, budget = {}) {
+  const c = getContract(id);
+  if (!c) return false;
+  _db().prepare(`UPDATE contracts SET budget = ?, updated_ts = ? WHERE contract_id = ?`)
+    .run(JSON.stringify(budget || {}), now(), str(id));
+  return true;
+}
 function patchAgent(id, patch = {}) {
   const c = getContract(id);
   if (!c) return false;
@@ -395,7 +405,7 @@ function resumeOpenContracts() {
 
 module.exports = {
   init, _db, close,
-  openContract, getContract, listOpen, listRecent, setStatus, patchAgent,
+  openContract, getContract, listOpen, listRecent, setStatus, patchAgent, patchBudget,
   upsertSlot, slots, addSlotFlag, SLOT_STATUSES,
   postInbox, readInbox, markInboxConsumed, tombstoneInbox,
   postOutbox, unvoiced, markVoiced, OUTBOX_KINDS,
