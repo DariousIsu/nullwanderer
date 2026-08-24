@@ -52,6 +52,31 @@ ok(/Sponsors: Adam Lowe \(R\); Paul Rose \(R\)/.test(sp), 'renderRoster: sponsor
 ok(ds.renderReportData([]) === '' && ds.renderCounts([]) === '', 'empty dataset renders NOTHING (no fabricated structure)');
 ok(/### Counts \(deterministic/.test(ds.renderReportData(rows)) && /### The table/.test(ds.renderReportData(rows)) && /### Every row/.test(ds.renderReportData(rows)), 'renderReportData: counts + table + roster, one section');
 
+// --- 2c. the v10 roster catches (08-24): word-boundary trim · cap names its drops · balanced sample ---
+const longT = ds.renderRoster([{ entity: 'TN SB1', attrs: { title: `${'word '.repeat(40)}tail` } }]);
+ok(/ word…\*\*/.test(longT), 'roster titles trim at a WORD boundary with an ellipsis (never "relative to lob")');
+ok(/cap = 2000/.test(read('lib/dataset_store.js')), 'the roster cap is 2000 — a 355-row report renders EVERY row (200 dropped all of TX and UT)');
+{
+  const capped = ds.renderRoster([
+    { entity: 'AZ B1', attrs: { state: 'AZ' } }, { entity: 'TX B1', attrs: { state: 'TX' } },
+    { entity: 'TX B2', attrs: { state: 'TX' } }, { entity: 'UT B1', attrs: { state: 'UT' } },
+  ], { cap: 2 });
+  ok(/\(\+2 more rows not rendered: TX 1, UT 1\.\)/.test(capped), 'a capped roster NAMES what it cut, per state — never a bare count');
+}
+{
+  const pool = [
+    ...Array.from({ length: 6 }, (_, i) => ({ entity: `AZ P${i}`, attrs: { state: 'AZ' } })),
+    ...Array.from({ length: 3 }, (_, i) => ({ entity: `TX P${i}`, attrs: { state: 'TX' } })),
+    { entity: 'UT P0', attrs: { state: 'UT' } },
+  ];
+  const samp = ds.sampleBalanced(pool, 'state', 6);
+  const byState = (st) => samp.filter((r) => r.attrs.state === st).length;
+  ok(samp.length === 6 && byState('AZ') === 3 && byState('TX') === 2 && byState('UT') === 1, 'sampleBalanced: round-robin across states — every state present, none dominates');
+  ok(ds.sampleBalanced(pool, 'state', 99) === pool, 'under the cap → the rows ride untouched');
+  const rrd = ds.renderReportData(pool, {}, { rosterRows: samp, rosterNote: '_(prompt view: 6 of 10)_' });
+  ok(/_\(prompt view: 6 of 10\)_/.test(rrd) && /\*\*Total: 10\*\*/.test(rrd) && (rrd.match(/^- \*\*/gm) || []).length === 6, 'renderReportData prompt view: FULL counts + table, SAMPLED roster, labeled as a sample');
+}
+
 // --- 2b. the TREND render (P2's last open item, 08-22) ---
 const dated = (mo, i) => ({ entity: `UT B${mo}${i}`, attrs: { state: 'UT', lastActionDate: `${mo}-1${i % 9}` } });
 const trows = [dated('2026-01', 1), dated('2026-01', 2), dated('2026-03', 3), { entity: 'UT NODATE', attrs: { state: 'UT' } }];
@@ -138,6 +163,10 @@ ok(lrows[0].attrs.state === 'AZ' && lrows[0].attrs.tags[0] === 'surveillance' &&
     // battery-3 catch: the operator drove 8 redundant hops and voiced a wrong 32 against the exact 355.
     ok(/\[operator\] stood down — dataset-backed count ask/.test(main) && /!_dsCountAuthority && \(routeAllowsAny/.test(main),
       'the operator STANDS DOWN on a dataset-backed count ask (one predicate, three consumers)');
+    // the v10 compose-side catches (08-24): the token cap, the balanced prompt view, the truncation backstop
+    ok(/condenseComplete\(msgs, \{ numPredict: 8000 \}\)/.test(main) && !/numPredict: 2600/.test(main), 'the narrative window is sized to a 7-state corpus (2600 ran dry mid-Florida; TN never got a section)');
+    ok(/_dsSectionPrompt\.slice\(0, 30000\)/.test(main) && /sampleBalanced\(_dsRows, _rk, 90\)/.test(main), 'the compose prompt rides the state-BALANCED dataset view (the blind 20k slice starved TX/UT out of the narrative)');
+    ok(/no "## Open questions" tail/.test(main) && /Continue EXACTLY from where it left off/.test(main), 'the truncation backstop: a narrative missing its required Open-questions tail gets ONE continuation pass');
     ok(/la2\.enrich\(\{/.test(main) && main.indexOf('la2.enrich({') < main.indexOf('const _clean = t.replace'), 'enrichment runs in the compose door AFTER acquisition, BEFORE the gather/renders');
     ok(/renders proceed on held attrs/.test(main), 'enrichment is fail-soft — a miss never blocks the report');
     ok(/_ds\.trendBy\(_dsRows, _renderDims\.trendKey\)/.test(main) && /block_type: 'chart', data: chart/.test(main), 'the trend rides the canvas as a REAL chart block (code-authored monthly points)');

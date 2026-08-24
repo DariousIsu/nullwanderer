@@ -134,28 +134,65 @@ function renderTrend(rows, { dateKey = 'lastActionDate', cap = 24 } = {}) {
   return `${L.join('\n')}${notes.length ? `\n\n_(${notes.join('; ')}.)_` : ''}`;
 }
 
-/** Per-entity roster lines — title, status/action, sponsors when held, ALWAYS the source URL. */
-function renderRoster(rows, { cap = 200 } = {}) {
+/** Word-boundary trim: never cut mid-word (the v10 roster carried "relative to lob"); a cut is
+ *  always MARKED with an ellipsis so it reads as deliberate. */
+function _trim(s, n) {
+  s = String(s);
+  if (s.length <= n) return s;
+  const cut = s.slice(0, n);
+  const sp = cut.lastIndexOf(' ');
+  return `${(sp > n * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,;:—-]+$/, '')}…`;
+}
+
+/** Per-entity roster lines — title, status/action, sponsors when held, ALWAYS the source URL.
+ *  Cap 200 → 2000 (v10 catch, 08-24: the alphabetical 200-row cap dropped the ENTIRE Texas and
+ *  Utah rosters from a report titled for them). The file is the deliverable — it carries every
+ *  row; the cap is a pathological-dataset backstop, and a drop NAMES what it cut per group. */
+function renderRoster(rows, { cap = 2000 } = {}) {
   if (!rows.length) return '';
   const L = rows.slice(0, cap).map((r) => {
     const a = r.attrs || {};
-    const bits = [`- **${r.entity}${a.title ? ` — ${String(a.title).slice(0, 140)}` : ''}**`];
+    const bits = [`- **${r.entity}${a.title ? ` — ${_trim(a.title, 140)}` : ''}**`];
     if (a.state) bits.push(`[${a.state}]`);
     if (a.status) bits.push(`${a.status}.`);
-    if (a.lastAction) bits.push(`${String(a.lastAction).slice(0, 110)}${a.lastActionDate ? ` (${a.lastActionDate})` : ''}.`);
+    if (a.lastAction) bits.push(`${_trim(a.lastAction, 110)}${a.lastActionDate ? ` (${a.lastActionDate})` : ''}.`);
     if (Array.isArray(a.sponsors) && a.sponsors.length) bits.push(`Sponsors: ${a.sponsors.slice(0, 15).join('; ')}${a.sponsors.length > 15 ? ` +${a.sponsors.length - 15} more` : ''}.`);
     if (a.email || a.phone) bits.push([a.email, a.phone].filter(Boolean).join(' · '));   // contact rows: reachability IS the payload
     if (r.sourceUrl) bits.push(`Source: ${r.sourceUrl}`);
     return bits.join(' ');
   });
-  if (rows.length > cap) L.push(`(+${rows.length - cap} more rows in the dataset.)`);
+  if (rows.length > cap) {
+    const dropped = countsBy(rows.slice(cap), 'state').map(([v, n]) => `${v} ${n}`).join(', ');
+    L.push(`(+${rows.length - cap} more rows not rendered: ${dropped}.)`);
+  }
   return L.join('\n');
+}
+
+/** Round-robin sample across `key` groups, cap total — every group is represented before any
+ *  dominates, and the selected rows keep their original order. For PROMPT-sized views of a roster
+ *  too big to ride whole (v10 catch: a blind 20k char slice of the alphabetical roster fed the
+ *  composer AZ/FL rows only — two title states were invisible to the narrative). The rendered
+ *  FILE always carries every row; only the model's view samples. */
+function sampleBalanced(rows, key = 'state', cap = 120) {
+  if (rows.length <= cap) return rows;
+  const groups = new Map();
+  rows.forEach((r, i) => { const v = String((r.attrs || {})[key] || '(unknown)'); if (!groups.has(v)) groups.set(v, []); groups.get(v).push(i); });
+  const lists = [...groups.values()];
+  const picked = new Set();
+  for (let round = 0; picked.size < cap; round++) {
+    let any = false;
+    for (const g of lists) { if (round < g.length && picked.size < cap) { picked.add(g[round]); any = true; } }
+    if (!any) break;
+  }
+  return rows.filter((_, i) => picked.has(i));
 }
 
 /** The full deterministic data section for a report document. `dims` comes from the acquirer
  *  registry — each data shape names the dimensions it honestly supports (legislation:
- *  state × status; civic rosters: body × role). Omitted → the legislation defaults. */
-function renderReportData(rows, dims = {}) {
+ *  state × status; civic rosters: body × role). Omitted → the legislation defaults.
+ *  opts.rosterRows/rosterNote: a prompt-sized view keeps the COMPLETE counts/table/trend but
+ *  renders a sampled roster, labeled — the saved document never uses these. */
+function renderReportData(rows, dims = {}, { rosterRows = null, rosterNote = '' } = {}) {
   if (!rows.length) return '';
   const countKeys = dims.countKeys || ['state', 'status'];
   const rowKey = dims.rowKey || 'state', colKey = dims.colKey || 'status';
@@ -164,8 +201,8 @@ function renderReportData(rows, dims = {}) {
     `### Counts (deterministic — rendered from the dataset, ${rows.length} row(s))`, '', renderCounts(rows, countKeys), '',
     `### The table`, '', renderTable(rows, { rowKey, colKey }), '',
     ...(trend ? [`### The trend (by ${dims.trendKey}, monthly)`, '', trend, ''] : []),
-    `### Every row`, '', renderRoster(rows),
+    `### Every row`, '', ...(rosterNote ? [rosterNote, ''] : []), renderRoster(rosterRows || rows),
   ].join('\n');
 }
 
-module.exports = { ensure, upsertRows, rowsFor, countFor, hasRows, countsBy, renderCounts, renderTable, renderRoster, trendBy, renderTrend, renderReportData, _setDb };
+module.exports = { ensure, upsertRows, rowsFor, countFor, hasRows, countsBy, renderCounts, renderTable, renderRoster, sampleBalanced, trendBy, renderTrend, renderReportData, _setDb };

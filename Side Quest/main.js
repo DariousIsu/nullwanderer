@@ -6447,11 +6447,22 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   // rendered by CODE from the project's dataset rows and appended to the document at save time.
   // Even a wayward narrative cannot corrupt the numbers — they never pass through the model.
   // Empty dataset → no section, no rule (prose-only reports are unchanged).
-  let _dsSection = '', _dsChart = null;
+  let _dsSection = '', _dsSectionPrompt = '', _dsChart = null;
   try {
     const _ds = require('./lib/dataset_store');
     const _dsRows = _ds.rowsFor(slug);
     if (_dsRows.length) { _dsSection = `\n\n## The data (deterministic — ${_dsRows.length} row(s), rendered from the dataset)\n\n${_ds.renderReportData(_dsRows, _renderDims || {})}`; console.log(`[report-cmd] dataset section rendered: ${_dsRows.length} row(s) — the numbers are code-authored`); }
+    // THE PROMPT VIEW (v10 catch, 08-24: the blind 20k slice of an ALPHABETICAL roster fed the
+    // composer AZ/FL rows only — Texas and Utah, two TITLE states, were invisible, so their
+    // narrative starved). Counts/table/trend ride whole (small, complete); an oversized roster
+    // rides as a state-balanced sample, labeled. The saved FILE always carries every row.
+    _dsSectionPrompt = _dsSection;
+    if (_dsSection.length > 22000) {
+      const _rk = (_renderDims && _renderDims.rowKey) || 'state';
+      const _samp = _ds.sampleBalanced(_dsRows, _rk, 90);   // 90 × ~300ch worst-case ≈ 27KB — the 30k slice never cuts the sample's (alphabetical) tail
+      _dsSectionPrompt = `\n\n## The data (deterministic — ${_dsRows.length} row(s), rendered from the dataset)\n\n${_ds.renderReportData(_dsRows, _renderDims || {}, { rosterRows: _samp, rosterNote: `_(prompt view: ${_samp.length} of ${_dsRows.length} rows shown, balanced across ${_rk}; the document itself carries every row)_` })}`;
+      console.log(`[report-cmd] prompt dataset view: balanced roster sample ${_samp.length}/${_dsRows.length} (by ${_rk})`);
+    }
     // P2's last open render (08-22): when the dims carry a time dimension, the same monthly buckets
     // that render the markdown trend also ride the canvas as a REAL chart block — code-authored
     // points, the renderer draws the SVG. <2 dated months = no trend, no block.
@@ -6465,10 +6476,29 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   const _dsRule = _dsSection ? `\n• A DETERMINISTIC DATA section (counts, table, per-row roster) is appended to this document by the SYSTEM — you do not write it. NEVER state a count, total, percentage, or tally: refer the reader to the data section instead ("the data section below carries the exact counts"). Any specific bill/row you discuss must exist in the DATASET RENDERS provided.` : '';
   const msgs = [
     { role: 'system', content: `You are composing ONE finished, professional report from research documents the assistant ALREADY HOLDS. Rules — absolute:\n• Ground ONLY in the provided documents. Never add a fact, name, number, or URL that is not in them.\n• Every source annotation already present — "(source: …)" — stays attached to its claim. Never strip one, never invent one.\n• Structure: a title line, a 2-4 sentence executive summary, then "## " sections organized by what the material actually supports, then "## Open questions" naming what the documents do NOT answer.\n• A supplied document that is NOT about the report subject is to be IGNORED ENTIRELY — never cited, never summarized, and NEVER listed as an open question. Open questions concern the SUBJECT only.\n• Where the documents are thin or contradict each other, SAY SO in the text rather than papering over it. An honest gap is part of the report.${_dsRule}\nOutput Markdown only — no preamble, no "here is".` },
-    { role: 'user', content: `REPORT SUBJECT: ${t}\n\n${_dsSection ? `THE DATASET RENDERS (deterministic; the system appends these to the document — write the narrative AROUND them):\n"""${_dsSection.slice(0, 20000)}\n"""\n\n` : ''}THE DOCUMENTS YOU HOLD:\n"""\n${material.slice(0, 50000)}\n"""\n\nCompose the finished report on ${t} now.` },
+    { role: 'user', content: `REPORT SUBJECT: ${t}\n\n${_dsSectionPrompt ? `THE DATASET RENDERS (deterministic; the system appends these to the document — write the narrative AROUND them):\n"""${_dsSectionPrompt.slice(0, 30000)}\n"""\n\n` : ''}THE DOCUMENTS YOU HOLD:\n"""\n${material.slice(0, 50000)}\n"""\n\nCompose the finished report on ${t} now.` },
   ];
   let md = '';
-  try { md = await condenseComplete(msgs, { numPredict: 2600 }); } catch (e) { console.error('[report-cmd] compose call failed:', e.message); }
+  // numPredict 2600 → 8000 (v10 catch, 08-24: the narrative ran out of tokens mid-Florida —
+  // Tennessee, a 61-row title state, never got a section and the required "## Open questions"
+  // tail never got written; nothing noticed and the cut document shipped).
+  try { md = await condenseComplete(msgs, { numPredict: 8000 }); } catch (e) { console.error('[report-cmd] compose call failed:', e.message); }
+  // THE TRUNCATION BACKSTOP: the compose contract REQUIRES "## Open questions" as the closing
+  // section — its absence is the deterministic mark of a cut-off (or non-compliant) narrative.
+  // ONE continuation pass finishes the document; a dangling final fragment is trimmed first so
+  // the join never doubles a half-written sentence.
+  if (md && md.trim() && !/##\s*Open questions/i.test(md)) {
+    console.log(`[report-cmd] narrative INCOMPLETE (no "## Open questions" tail at ${md.length}ch) — one continuation pass`);
+    let _base = md.trim();
+    const _paras = _base.split(/\n\n+/);
+    const _lastP = (_paras[_paras.length - 1] || '').trim();
+    if (_paras.length > 1 && _lastP && !/[.!?:"”’)\]…|]$/.test(_lastP) && !/^#/.test(_lastP)) { _paras.pop(); _base = _paras.join('\n\n'); }
+    try {
+      const _more = await condenseComplete([...msgs, { role: 'assistant', content: _base }, { role: 'user', content: 'The report above stopped before it was finished. Continue EXACTLY from where it left off — add the remaining "## " sections the material supports and END with the required "## Open questions" section. Output ONLY the continuation markdown; never repeat what is already written.' }], { numPredict: 4000 });
+      if (_more && _more.trim() && !require('./lib/canvas_command').isNarration(_more)) { md = `${_base}\n\n${_more.trim()}`; console.log(`[report-cmd] continuation landed (+${_more.trim().length}ch)`); }
+      else console.log('[report-cmd] continuation empty/narration — the truncated narrative proceeds to the audit as-is');
+    } catch (e) { console.error('[report-cmd] continuation failed:', e.message); }
+  }
   if (!md || !md.trim()) {
     if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[You tried to compose the "${t}" report from ${rows.length} held document(s) but the composer returned nothing. Tell Lucas plainly that the compose step failed and the material is still there to retry — do NOT claim a document exists.]` });
     return { delivered: false, miss: 'compose-empty', topic: t };
