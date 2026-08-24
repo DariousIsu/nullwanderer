@@ -11579,6 +11579,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           // the PRIOR image thread — restating a false claim — before the new question): the newest
           // message owns the reply. Context is context; a voice-level line, not machinery.
           g.push('THE NEWEST MESSAGE IS THE ASK — answer what he JUST said. Earlier turns and the context above are background: never re-answer a previous ask or re-assert an earlier claim of yours unless the new message returns to it. If an open thread genuinely needs closing, one short clause AFTER the new answer, not before it.');
+          // THE LIVE-WINDOW AUTHORITY (sprint catch #7, 08-24: "what was my baton rouge budget?" was
+          // DENIED — "you didn't give me a number" — while $2,350 sat verbatim in the conversation
+          // turns, because retrieved old-session rows (including an adversarial test drive's
+          // "Hartfield Zorblat" order) outranked the live window in the writer's judgment.)
+          g.push('WHAT HE TOLD YOU THIS SESSION lives in the conversation turns of this request and OUTRANKS every retrieved memory row above: if a retrieved row contradicts or omits something the live turns state, the live turns win. Never tell him he did not say something without checking the conversation turns themselves first.');
           // ANTI-REPLAY (2026-08-13, measured 3× in one hour: the reply writer emitted the
           // qa-reread status, a tactics template, and an earlier identity musing VERBATIM as
           // replies). Sibling of the newest-message line; the deterministic stamp in insertTurn
