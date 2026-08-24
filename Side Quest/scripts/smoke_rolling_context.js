@@ -97,6 +97,7 @@ const turn = (id, sid, speaker, content) => ({ id, session_id: sid, speaker, con
     ok(/rollingCompactRunning/.test(src) && /maybeCompact\(deps, currentSessionId, \{ budget:/.test(src), 'wiring: the background compact tick is single-flighted, off the turn path, with the meta budget lever');
     ok(/context\.rolling\.budget/.test(src), 'wiring: the endurance budget override reads db meta');
     ok(/THE LIVE-WINDOW AUTHORITY/.test(src) && /the live turns win/.test(src), 'wiring: the grounding section asserts live-window authority over retrieved memory (sprint catch #7)');
+    ok((src.match(/NOT IN \('news','context-compact'\)/g) || []).length >= 2 && /Conversation window compact%/.test(src), 'wiring: compact transcripts are FIREWALLED out of the report material gather, both paths (sprint catch #9)');
     ok(/cloudMessages = \[_pkgSys, \.\.\._histTurns, \.\.\.\(_finalTurn \? \[_finalTurn\] : \[\]\)\]/.test(src), 'wiring: the composed final user turn rides UNCHANGED after the rolling prefix');
   }
 

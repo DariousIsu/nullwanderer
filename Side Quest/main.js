@@ -6366,11 +6366,16 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
     // mentions the topic is not evidence, and letting those fill the 8 slots starves the composer of
     // the actual dossiers (measured on Hartfield: 3 of 8 slots were transcripts of him ASKING for
     // the report). Rank research/dossier docs first, then longest — thin stubs last.
+    // 'context-compact' joins the exclusions (sprint catch #9, 08-24: the rolling window's landed
+    // compact transcript — doc#48942, "Conversation window compact — …" — slipped the 'Conversation —'
+    // title net and became a report's ONE source doc; a conversation about the topic is never
+    // evidence FOR it, whatever door landed it).
     rows = db.getDb().prepare(
       `SELECT id, title, body FROM documents
        WHERE (title LIKE ? OR body LIKE ? OR title LIKE ? OR body LIKE ?)
-         AND COALESCE(source,'') != 'news'
+         AND COALESCE(source,'') NOT IN ('news','context-compact')
          AND COALESCE(title,'') NOT LIKE 'Conversation —%'
+         AND COALESCE(title,'') NOT LIKE 'Conversation window compact%'
        ORDER BY (title LIKE ? OR title LIKE ?) DESC, LENGTH(COALESCE(body,'')) DESC LIMIT 8`
     ).all(like, like, likeAlt, likeAlt, like, likeAlt);
   } catch (e) { console.error('[report-cmd] doc query failed:', e.message); }
@@ -6390,7 +6395,7 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
         // dropped are logged so a starved gather is never silent.
         const _topicToks = _clean.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3);
         const _need = Math.min(2, _topicToks.length);
-        rows = hits.map((h) => db.getDb().prepare('SELECT id, title, body FROM documents WHERE id = ?').get(h.id)).filter(Boolean)
+        rows = hits.map((h) => db.getDb().prepare("SELECT id, title, body FROM documents WHERE id = ? AND COALESCE(source,'') NOT IN ('news','context-compact') AND COALESCE(title,'') NOT LIKE 'Conversation window compact%'").get(h.id)).filter(Boolean)
           .filter((r) => {
             const hay = `${r.title || ''} ${r.body || ''}`.toLowerCase();
             const got = _topicToks.filter((tk) => hay.includes(tk)).length;
