@@ -219,6 +219,41 @@ const deps = {
   ok(r.ok && r.waveN === 2, '⭐ R4: post-exhaustion steering EXTENDS the budget — the promised door is real');
   ok(store.getContract(X.contractId).budget.maxWaves === 7 && store.unvoiced().some((o) => o.contractId === X.contractId && /budget extended to 7/.test(o.text)), 'the extension is stored and surfaced');
 
+  // ── R7: the fuel verbs (news_search + web_read — the organs that carried the existence proof) ──
+  ok(/news_search for dated coverage/.test(ca.CHARTER) && /"action":"news_search"/.test(ca.CHARTER) && /"action":"web_read"/.test(ca.CHARTER), 'R7: the charter teaches the junk→news_search→web_read strategy');
+  const N = store.openContract({ title: 'Fuel verbs', askVerbatim: 'fill it', topicTokens: ['richland'], budget: { maxWaves: 20 } });
+  store.upsertSlot({ contractId: N.contractId, slotId: 'cell', description: 'the cell' });
+  const depsN = { ...deps,
+    newsSearch: async (q) => (/richland/i.test(q) ? '[{"title":"Meta breaks ground in Richland Parish","url":"https://kalb.example/meta","date":"2026-07-24"}]' : '[]'),
+    webRead: async (url) => (/kalb\.example/.test(url) ? 'KALB — Meta will fund 10 power plants; $43M sales-tax surge across NE Louisiana.' : null),
+  };
+  replies.push(JSON.stringify({ plan_summary: 'news then read', actions: [
+    { action: 'news_search', query: 'Meta Richland Parish' },
+    { action: 'web_read', url: 'https://kalb.example/meta' },
+  ] }));
+  await ca.runWave(N.contractId, depsN);
+  {
+    const w = store.waveLog(N.contractId).slice(-1)[0];
+    ok(w.actions.some((a2) => /news_search "Meta Richland Parish" → .*breaks ground/.test(a2)), '⭐ R7a: news_search rides the wave (the tool that carried the existence proof)');
+    ok(w.actions.some((a2) => /web_read https:\/\/kalb\.example\/meta → KALB — Meta will fund/.test(a2)), '⭐ R7b: web_read fetches the named page text');
+  }
+  replies.push(JSON.stringify({ plan_summary: 'empty news', actions: [{ action: 'news_search', query: 'nothing here' }] }));
+  await ca.runWave(N.contractId, depsN);
+  ok(store.waveLog(N.contractId).slice(-1)[0].actions.some((a2) => /news_search .*EMPTY \(try a simpler/.test(a2)), 'an empty news result is honestly EMPTY, with guidance');
+
+  // ── R8: the slot-motion watchdog (waves 17-22 live: successful reads, zero motion, silence) ────
+  const M = store.openContract({ title: 'Motion watchdog', askVerbatim: 'fill it', topicTokens: ['motion'], budget: { maxWaves: 20 } });
+  store.upsertSlot({ contractId: M.contractId, slotId: 'cell', description: 'the cell' });
+  const depsM = { ...deps, internalSearch: async () => 'HELD: some kin material (non-empty every time)' };
+  for (let i = 1; i <= 4; i++) {
+    replies.push(JSON.stringify({ plan_summary: `browse ${i}`, actions: [{ action: 'internal_search', query: `kin material angle ${i}` }] }));
+    await ca.runWave(M.contractId, depsM);
+  }
+  {
+    const blocked = store.unvoiced().filter((o) => o.contractId === M.contractId && o.kind === 'blocked');
+    ok(blocked.length === 1, '⭐ R8: 4 motionless waves surface blocked EVEN when every retrieval succeeds (motion is the signal, not emptiness)');
+  }
+
   try { store.close(); fs.rmSync(dbDir, { recursive: true, force: true }); } catch {}
   console.log(`\nsmoke_contract_agent: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;

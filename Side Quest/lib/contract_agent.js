@@ -73,6 +73,24 @@ function liveDeps() {
         return require('./canvas_docs').docText(r, 6000) || null;    // bare tab-key fallback
       } catch { return null; }
     },
+    // THE FUEL VERBS (rematch catch R7, 08-24): the existence proof was CARRIED by GDELT + direct
+    // page reads — organs the suite already holds (gdelt_article_search, web_extract) that the
+    // wave vocabulary never exposed. With Bing junk-detected and the vault honestly empty on the
+    // subject, the driver had NO working external door. Compose the organs; raw tool text rides
+    // the observation (the driver reads titles/urls/dates itself — no schema coupling).
+    newsSearch: async (q) => {
+      try {
+        const r = await require('./echo_suit').dispatch({ kind: 'do', name: 'gdelt_article_search', args: { query: q } });
+        return r && r.ok !== false && r.text ? String(r.text) : null;
+      } catch { return null; }
+    },
+    webRead: async (url) => {
+      try {
+        const r = await require('./echo_suit').dispatch({ kind: 'do', name: 'web_extract', args: { url } });
+        const t = r && r.ok !== false && r.text ? String(r.text) : '';
+        return t.trim().length > 80 ? t.slice(0, 6000) : null;   // 0-char extractions (JS-gated pages) are an honest miss
+      } catch { return null; }
+    },
     quotaCheck: () => ({ allow: true, reason: 'directed tier' }),   // floor wiring rides the live governor (F19)
     now: () => Date.now(),
   };
@@ -108,6 +126,7 @@ HARD RULES:
 - Prefer held material first (internal_search) — the operator's own store often already holds the answer. Cross to web_search only for what the store lacks.
 - A question to the operator MUST carry "assumption": the default you will proceed on if unanswered. Questions never stop your work.
 - Do not repeat a search you already ran — the harness refuses exact repeats. When lookups fail, change the approach, not the phrasing.
+- web_search can return brand-navigation JUNK (the harness labels it). When it does, switch tools: news_search for dated coverage (simple, quoted queries work best), then web_read the strongest hit's URL for the article text. Never re-phrase into the same junk.
 - Company projections and single-source claims get labeled in the slot flags, never presented as independent fact.
 - Stay inside the contract's stated scope: material about the same company or subject in a DIFFERENT state, session, year, or campus does NOT fill a slot — flag the slot honestly instead.
 Reply with ONLY a JSON object: {"plan_summary":"<one line>","actions":[...]} — at most ${MAX_ACTIONS_PER_WAVE} actions.
@@ -116,6 +135,8 @@ ACTIONS:
  {"action":"internal_search","query":"..."}
  {"action":"read_held","ref":"notes/<file>.md | canvas:<tab_key> | doc#<id>"}   (once a search NAMES a held deliverable, READ it — the search only shows a snippet window; the real figures live in the full text)
  {"action":"web_search","query":"..."}
+ {"action":"news_search","query":"..."}   (dated news-wire search — reliable where web_search returns brand junk; keep queries simple)
+ {"action":"web_read","url":"https://..."}   (fetch ONE page's article text — use on the strongest search/news hit; shares the per-wave read budget)
  {"action":"fill_slot","slotId":"...","content":"...","citations":[{"src":"...","date":"..."}],"flags":[...optional...]}
  {"action":"flag_slot","slotId":"...","flag":{"kind":"...","text":"..."}}
  {"action":"open_question","slotId":"... or null","text":"...","assumption":"...","windowMs":1800000}
@@ -283,6 +304,42 @@ async function runWave(contractId, deps) {
           }
           chainGuard.evaluateHop(chain, { signature: sig, label: act, emptyThisHop: empty, retrieval: true });
           observations.push(`${act} "${_cap(query, 80)}" → ${junk ? `JUNK (brand-nav: ${res.length} results, none carry 2+ query terms — treat as EMPTY and change the approach, not the phrasing)` : empty ? 'EMPTY' : _cap(typeof res === 'string' ? res : JSON.stringify(res), OBS_CAP)}`);
+        } else if (act === 'news_search') {
+          const query = String(a.query || '').trim();
+          const sig = chainGuard.tagSignature({ kind: 'do', name: 'news_search', args: { query: query.toLowerCase() } });
+          if (chain.seen.has(sig)) {
+            chainGuard.evaluateHop(chain, { signature: sig, label: 'news_search', emptyThisHop: true, retrieval: true });
+            observations.push(`news_search REFUSED (exact repeat): "${_cap(query, 80)}"`);
+            continue;
+          }
+          const nres = typeof deps.newsSearch === 'function' ? await deps.newsSearch(query) : null;
+          const nempty = !nres || !String(nres).trim() || /"count"\s*:\s*0|\[\s*\]/.test(String(nres).slice(0, 200));
+          chainGuard.evaluateHop(chain, { signature: sig, label: 'news_search', emptyThisHop: nempty, retrieval: true });
+          observations.push(`news_search "${_cap(query, 80)}" → ${nempty ? 'EMPTY (try a simpler or single-term query)' : _cap(nres, OBS_CAP)}`);
+        } else if (act === 'web_read') {
+          const url = String(a.url || '').trim();
+          if (!/^https?:\/\//i.test(url)) { observations.push('web_read REFUSED: a full http(s) URL is required'); continue; }
+          if (readsThisWave >= MAX_READS_PER_WAVE) { observations.push(`web_read ${_cap(url, 60)} REFUSED: this wave's read budget is spent`); continue; }
+          const sig = chainGuard.tagSignature({ kind: 'do', name: 'web_read', args: { url: url.toLowerCase() } });
+          if (chain.seen.has(sig)) {
+            let cached = null;
+            try {
+              for (const w2 of store.waveLog(contractId).slice().reverse()) {
+                for (const a2 of w2.actions || []) {
+                  if (typeof a2 === 'string' && a2.startsWith(`web_read ${_cap(url, 80)} → `) && !a2.includes('EMPTY')) { cached = { text: a2, waveN: w2.waveN }; break; }
+                }
+                if (cached) break;
+              }
+            } catch {}
+            chainGuard.evaluateHop(chain, { signature: sig, label: 'web_read', emptyThisHop: !cached, retrieval: true });
+            if (cached) { readsThisWave++; observations.push(`${cached.text} [cached — read in wave ${cached.waveN}]`); }
+            else observations.push(`web_read REFUSED (already read, no cached copy): ${_cap(url, 80)}`);
+            continue;
+          }
+          const page = typeof deps.webRead === 'function' ? await deps.webRead(url) : null;
+          chainGuard.evaluateHop(chain, { signature: sig, label: 'web_read', emptyThisHop: !page, retrieval: true });
+          readsThisWave++;
+          observations.push(`web_read ${_cap(url, 80)} → ${page ? _cap(page, READ_OBS_CAP) : 'EMPTY (page blocked or empty — try another source for the same fact)'}`);
         } else if (act === 'read_held') {
           // THE SNIPPET LIMITER (boot_p115 waves 2-3, live): the driver kept re-phrasing searches to
           // "retrieve the notes" because search only returns an excerpt window — the figures it needed
@@ -369,8 +426,11 @@ async function runWave(contractId, deps) {
     // outbox posts — the operator heard NOTHING while the loop starved. Any slot/outbox motion
     // resets the episode; 3+ consecutive no-progress hops surface ONE blocked post per episode.
     if (progressed) {
-      if (c.agent && c.agent.stallBlockedPosted) store.patchAgent(contractId, { stallBlockedPosted: false });
-    } else if (chain.noProgress >= 3 && !(c.agent && c.agent.stallBlockedPosted)) {
+      store.patchAgent(contractId, { lastSlotMotionWave: wave.waveN, ...(c.agent && c.agent.stallBlockedPosted ? { stallBlockedPosted: false } : {}) });
+    } else if ((chain.noProgress >= 3 || wave.waveN - ((c.agent && c.agent.lastSlotMotionWave) || 0) >= 4) && !(c.agent && c.agent.stallBlockedPosted)) {
+      // R8 (the watchdog's second leg, 08-24: waves 17-22 read docs SUCCESSFULLY — the emptiness
+      // streak kept resetting — while zero slots moved for 6 waves and the operator heard nothing):
+      // slot MOTION is the real signal; 4 motionless waves surface regardless of retrieval luck.
       store.postOutbox({ contractId, kind: 'blocked', text: `${chain.noProgress} lookups in a row came back empty or junk and no slot has moved — I need direction: a source I should read, a different angle, or the word to close it out flagged as-is` });
       store.patchAgent(contractId, { stallBlockedPosted: true });
       observations.push('stall watchdog: blocked surfaced to the operator');
