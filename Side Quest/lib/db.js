@@ -141,6 +141,13 @@ const MIGRATIONS = [
   // REAL finding is announced back into the chat that asked. NULL = the homecoming is still owed,
   // so a later tick-advanced finding still returns to the talk (§6 L1: the address rides the object).
   `ALTER TABLE inquiries ADD COLUMN dig_delivered_ts INTEGER`,
+  // CONTRACT LINKAGE (contract-agent slice 5, spec §9/§11 as-built): a question-back the operator
+  // NEVER answered graduates at close-out into her own background inquiry — the assumption she
+  // shipped on becomes a question she keeps working. One inquiry system, two askers; the columns'
+  // first (and only) writer is contract_closeout's graduation step.
+  `ALTER TABLE inquiries ADD COLUMN contract_id TEXT`,
+  `ALTER TABLE inquiries ADD COLUMN slot_id TEXT`,
+  `ALTER TABLE inquiries ADD COLUMN assumption TEXT`,
   // THE SKILL SHELF (O1, slice 5 — lib/skills.js). A REGISTRY over the three procedure systems
   // that already exist (flow recipes / crystallized procedures / instruction packs) — the trigger
   // surface (name + one ≤140-char line) is permanent and cheap; the body dereferences on pull

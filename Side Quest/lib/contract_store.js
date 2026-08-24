@@ -205,7 +205,10 @@ function addSlotFlag(contractId, slotId, flag) {
   // open slot kept status 'open' after flag_slot, so the driver's honest "can't fill this" never
   // counted as resolved — done refused three waves straight against a slot it believed settled.
   const next = (s.status === 'blocked_on_question' || s.status === 'open') ? 'flagged' : s.status;
-  return upsertSlot({ contractId, slotId, description: s.description, status: next, contentRef: s.contentRef, citations: s.citations, flags: [...s.flags, flag] });
+  // Flag-dedupe (slice-5 polish): a re-fill or re-flag never stacks an identical flag — one honest
+  // note per (kind, text); the deliverable's flags list stays readable.
+  const dup = s.flags.some((f) => f && flag && f.kind === flag.kind && String(f.text || '') === String((flag && flag.text) || ''));
+  return upsertSlot({ contractId, slotId, description: s.description, status: next, contentRef: s.contentRef, citations: s.citations, flags: dup ? s.flags : [...s.flags, flag] });
 }
 
 // ── inbox (user → agent; the steering router writes here) ───────────────────────────────────────

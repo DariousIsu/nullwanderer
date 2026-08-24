@@ -65,7 +65,10 @@ function questionOverlap(a, b) {
 const DUP_THRESHOLD = 0.6;
 
 // Open a line of inquiry. Over the cap, the stalest ACTIVE inquiry PARKS (resumable, never lost).
-function open({ question, bornFrom = null, deps = {}, nowMs = Date.now() } = {}) {
+// contractId/slotId/assumption (slice 5): a contract question-back the operator never answered
+// graduates into her own line — the linkage rides the row so the eventual answer can name the
+// slot it was shipped-flagged on. Optional; her own lines carry nulls.
+function open({ question, bornFrom = null, contractId = null, slotId = null, assumption = null, deps = {}, nowMs = Date.now() } = {}) {
   const q = str(question).replace(/\s+/g, ' ').trim();
   if (q.length < 15) return { id: null, reason: 'a real question is at least a sentence' };
   try {
@@ -98,8 +101,9 @@ function open({ question, bornFrom = null, deps = {}, nowMs = Date.now() } = {})
       const stalest = active[active.length - 1];
       d.prepare("UPDATE inquiries SET status = 'parked' WHERE id = ?").run(stalest.id);
     }
-    const info = d.prepare(`INSERT INTO inquiries (question, born_from, status, evidence, open_leads, expect_trail, created_ts, last_touched_ts)
-      VALUES (?, ?, 'active', '[]', '[]', '[]', ?, ?)`).run(q, str(bornFrom).slice(0, 160) || null, nowMs, nowMs);
+    const info = d.prepare(`INSERT INTO inquiries (question, born_from, status, evidence, open_leads, expect_trail, created_ts, last_touched_ts, contract_id, slot_id, assumption)
+      VALUES (?, ?, 'active', '[]', '[]', '[]', ?, ?, ?, ?, ?)`).run(q, str(bornFrom).slice(0, 160) || null, nowMs, nowMs,
+      contractId == null ? null : str(contractId), slotId == null ? null : str(slotId), assumption == null ? null : str(assumption).slice(0, 300));
     return { id: info.lastInsertRowid };
   } catch (e) { console.error('[inquiry] open failed:', e.message); return { id: null, reason: e.message }; }
 }

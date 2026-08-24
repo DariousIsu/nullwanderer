@@ -133,6 +133,8 @@ Ordered, all mandatory:
 5. The completion surfacing: what landed, what's flagged, what was excluded and why — the honest-flags list is part of done, not an apology after it.
 A contract whose audit fails or whose banking step is skipped is not closed; the done-claim is structurally unreachable (pre-announce audit pattern).
 
+**As built (slice 5, 2026-08-23, `lib/contract_closeout.js`):** the gate rides the contract tick — one closing contract drains per pass. Sweep failure and audit failure both REOPEN (closing→open) with an `audit_failure` inbox message carrying the violations verbatim, so the next wave reworks on the audit's own words. The render is deterministic (slots ARE the document; inline content + citations verbatim; flagged slots render as honest holes with their assumption flags). Banking = registry canonical in `notes/` (re-closes update in place) + findings doc via `doc_store.land` (ref `contract-<id>`) + every URL-shaped citation banked through Echo `save_source` (held refs never re-bank); a banking failure stays `closing` on a 5-min retry backoff and stands down loudly after 3 straight fails. The canvas display artifact is NOT part of the v0 gate (the notes canonical + registry row are the identity; canvas rendering remains the conversational lane's surface). Graduation: an expired question never late-answered, whose slot shipped flagged, opens as her own inquiry with `contract_id`/`slot_id`/`assumption` — the §9 linkage columns' first writer. The completion milestone is measured (counts from the store) and names the holes and the graduated questions.
+
 ## 12. Failure modes → guards
 
 | Failure | Guard |

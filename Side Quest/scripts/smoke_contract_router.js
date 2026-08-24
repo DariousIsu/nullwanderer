@@ -95,6 +95,7 @@ ok(rt.verdict({ text: 'add the meta louisiana angle', contracts: [{ ...A, status
   ok(/affirmation lead stripped for routing/.test(src) && /_affLead\.rest \|\| userMessage/.test(src), 'wiring: the route cascade + judge see the stripped text (the yea cure)');
   ok(/CONTRACT LATE ANSWER BOUND/.test(src) && /reopenFromLateAnswer/.test(src), 'wiring: a late answer re-opens only the affected slot through the store primitive');
   ok(/expiredQuestions: _expQs/.test(src), 'wiring: the router sees expired questions from the recent-contract sweep');
+  ok(/suppressed — turn is contract-bound/.test(src) && /focusLib\.isDirected\(f\) && contractBinding/.test(src), 'wiring: a contract-bound turn SUPPRESSES the correction net (the p118 scope-add competition)');
 }
 
 console.log(`\nsmoke_contract_router: ${pass} passed, ${fail} failed`);

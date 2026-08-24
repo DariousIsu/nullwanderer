@@ -605,6 +605,10 @@ const smokes = [
   // CONTRACT AGENT slice 3: the steering router (answer/steering/status/clarify/repair, echo-the-
   // binding, converse pin) + the yea-misroute cure (affirmation-led turns route on their content).
   'smoke_contract_router.js',
+  // CONTRACT AGENT slice 5: the close-out gate — sweep → deterministic render → delivery audit
+  // (failed audit REOPENS) → bank the harvest (registry canonical, findings doc, web sources,
+  // never-answered questions graduate to inquiries) → measured completion surfacing → closed.
+  'smoke_contract_closeout.js',
   // BUILD 0 + BUILD 3 (2026-08-21): the browser-lane web_search floor (empty federation → her own
   // stealth lane) and the gap-plan approval surface (fillable/blocked/aggressive, cadence + fp gate).
   'smoke_gap_plan.js',

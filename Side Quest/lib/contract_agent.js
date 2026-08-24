@@ -285,7 +285,10 @@ async function runWave(contractId, deps) {
             store.upsertSlot({ contractId, slotId, description: s.description, status: 'flagged', contentRef: s.contentRef, citations: s.citations, flags: [...s.flags, { kind: 'off-instance', text: `content anchors ${off.found} but the contract anchors ${off.want}` }] });
             observations.push(`fill_slot ${slotId} REFUSED off-instance (${off.found} vs ${off.want}) → FLAGGED (wrong state/campus material never fills the slot)`);
           } else {
-            store.upsertSlot({ contractId, slotId, description: s.description, status: 'filled', contentRef: `inline:${_cap(String(a.content || ''), 600)}`, citations: cites, flags: [...s.flags, ...flags] });
+            // flag-dedupe (slice-5 polish): a re-fill re-sending the same label never stacks it
+            const mergedFlags = [...s.flags];
+            for (const f2 of flags) if (f2 && !mergedFlags.some((g) => g && g.kind === f2.kind && String(g.text || '') === String(f2.text || ''))) mergedFlags.push(f2);
+            store.upsertSlot({ contractId, slotId, description: s.description, status: 'filled', contentRef: `inline:${_cap(String(a.content || ''), 600)}`, citations: cites, flags: mergedFlags });
             observations.push(`fill_slot ${slotId} FILLED (${cites.length} citation(s))`);
           }
         } else if (act === 'flag_slot') {
@@ -304,7 +307,8 @@ async function runWave(contractId, deps) {
           if (!all.length || open.length) { observations.push(`done REFUSED: ${all.length ? `open slots remain [${open.map((s) => s.slotId).join(', ')}]` : 'no slots defined'}`); continue; }
           const flagged = all.filter((s) => s.status === 'flagged');
           store.setStatus(contractId, 'closing');
-          store.postOutbox({ contractId, kind: 'milestone', text: `all ${all.length} slots landed — ${all.length - flagged.length} filled, ${flagged.length} flagged${flagged.length ? ` (honest holes: ${flagged.map((s) => s.slotId).join(', ')})` : ''} — heading to close-out` });
+          // Milestone wording: a clean sweep never says "0 flagged" — flags only appear when real.
+          store.postOutbox({ contractId, kind: 'milestone', text: `all ${all.length} slots landed — ${flagged.length ? `${all.length - flagged.length} filled, ${flagged.length} flagged (honest holes: ${flagged.map((s) => s.slotId).join(', ')})` : `every slot filled and cited`} — heading to close-out` });
           observations.push('done → closing');
           done = true;
         } else {

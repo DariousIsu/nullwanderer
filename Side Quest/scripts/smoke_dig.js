@@ -81,7 +81,8 @@ const mem = new Database(':memory:');
 mem.exec(`CREATE TABLE inquiries (id INTEGER PRIMARY KEY, question TEXT NOT NULL, born_from TEXT,
   status TEXT NOT NULL DEFAULT 'active', evidence TEXT, gist TEXT, open_leads TEXT, next_step TEXT,
   touches INTEGER NOT NULL DEFAULT 0, expect_trail TEXT, created_ts INTEGER NOT NULL,
-  last_touched_ts INTEGER, closed_ts INTEGER, answer TEXT, dig_delivered_ts INTEGER)`);
+  last_touched_ts INTEGER, closed_ts INTEGER, answer TEXT, dig_delivered_ts INTEGER,
+  contract_id TEXT, slot_id TEXT, assumption TEXT)`);
 const deps = { db: { getDb: () => mem } };
 const o = inquiry.open({ question: multi[0].question, bornFrom: dig.bornFrom(99, 'what changed in Fulton since the primary?'), deps, nowMs: 1000 });
 ok(!!o.id, 'a parsed dig question opens as a real inquiry');

@@ -1452,6 +1452,41 @@ app.whenReady().then(() => {
     try {
       const cs = require('./lib/contract_store');
       const ca = require('./lib/contract_agent');
+      // ── SLICE 5 (spec §11): drain ONE closing contract per tick through the close-out gate —
+      // sweep → audit → bank the harvest → surface → closed. An audit failure REOPENS the contract
+      // (the waves rework it on the violations' own words); a banking failure stays closing and
+      // retries on a 5-min backoff, standing down loudly after 3 straight fails.
+      const CLOSEOUT_RETRY_MS = 5 * 60 * 1000;
+      const closing = cs.listOpen().filter((x) => x.status === 'closing')
+        .filter((x) => ((x.agent && x.agent.closeoutAttemptTs) || 0) <= Date.now() - CLOSEOUT_RETRY_MS)
+        .sort((a2, b2) => (((a2.agent && a2.agent.closeoutAttemptTs) || 0) - ((b2.agent && b2.agent.closeoutAttemptTs) || 0)));
+      if (closing.length) {
+        const cc = closing[0];
+        cs.patchAgent(cc.contractId, { closeoutAttemptTs: Date.now() });
+        try {
+          const r2 = await require('./lib/contract_closeout').closeOut(cc.contractId, {
+            store: cs,
+            saveWebSource: async ({ url, title, contentMd, capturedAt }) => {
+              if (!echoSuit || !echoSuit.connected) { try { await echoSuit.connect(); } catch {} }
+              if (!echoSuit || !echoSuit.connected) throw new Error('Echo engine not connected');
+              await echoSuit.client().callTool('save_source', {
+                original_url: url, content_md: contentMd, citing_doc_ids: [],
+                frontmatter: { source: url, collection_date: capturedAt, title, domain: (() => { try { return new URL(url).hostname; } catch { return url; } })(), kind: 'web' },
+              });
+            },
+          });
+          if (r2.closed) console.log(`[contract-agent] CLOSED OUT ${cc.contractId} → ${r2.artifact.relPath} v${r2.artifact.version}${r2.graduated.length ? `, ${r2.graduated.length} question(s) graduated to inquiries` : ''}`);
+          else {
+            console.log(`[contract-agent] close-out of ${cc.contractId} refused: ${r2.reason}${r2.violations ? ` (${r2.violations.map((v) => v.check).join(',')})` : ''}`);
+            const fails = ((cc.agent && cc.agent.closeoutFails) || 0) + 1;
+            cs.patchAgent(cc.contractId, { closeoutFails: fails });
+            if (r2.reason === 'banking' && fails >= 3 && !(cc.agent && cc.agent.closeoutBlockedPosted)) {
+              cs.postOutbox({ contractId: cc.contractId, kind: 'blocked', text: `close-out is stuck banking the harvest (${fails} attempts) — the work is done but not certifiably stored; I'll keep retrying` });
+              cs.patchAgent(cc.contractId, { closeoutBlockedPosted: true });
+            }
+          }
+        } catch (e) { console.error(`[contract-agent] close-out of ${cc.contractId} errored:`, e.message); }
+      }
       const open = cs.listOpen().filter((c) => c.status === 'open');
       if (!open.length) return;
       const c = open.sort((a, b) => ((a.agent.lastWaveTs || 0) - (b.agent.lastWaveTs || 0)))[0];
@@ -8591,7 +8626,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       } else if (_v.kind === 'steering') {
         const _ibId = _cst.postInbox({ contractId: _v.contractId, kind: 'steering', text: userMessage, bindingConfidence: _v.confidence });
         try { db.setMeta('contract.last_binding', JSON.stringify({ inboxId: _ibId, contractId: _v.contractId, ts: Date.now() })); } catch {}
-        composedUserMessage += `\n\n[CONTRACT STEERING BOUND — this instruction is queued into the "${_v.title}" work; the running contract agent folds it into its next wave. ECHO THE BINDING in one short line (name the work — e.g. "adding that to the ${String(_v.title).slice(0, 60)} work"), then continue naturally. Do NOT start the research yourself, do NOT promise a separate deliverable, and do NOT claim it's already done.]`;
+        composedUserMessage += `\n\n[CONTRACT STEERING BOUND — this instruction is queued into the "${_v.title}" work; the running contract agent folds it into its next wave. ECHO THE BINDING in one short line (name the work — e.g. "adding that to the ${String(_v.title).slice(0, 60)} work"), then continue naturally. Do NOT start the research yourself, do NOT promise a separate deliverable, do NOT claim it's already done, and never use deflection filler like "let me get that going" — name the work concretely.]`;
         console.log(`[contract-router] STEERING → inbox#${_ibId} on ${_v.contractId} (conf ${_v.confidence})`);
         contractBinding = _v;
       } else if (_v.kind === 'status') {
@@ -10190,7 +10225,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const focusLib = require('./lib/focus');
     const f = (() => { try { return focusLib.getCurrent(); } catch { return null; } })();
     const opOnC = (() => { try { return (db.getMeta('operator.mode') || 'full').trim() !== 'off'; } catch { return true; } })();
-    if (opOnC && f && focusLib.isDirected(f) && !directedStopHandled && !expandHandled && !socialTurn && !followupFired && userMessage && userMessage.trim().length > 3) {
+    if (opOnC && f && focusLib.isDirected(f) && contractBinding) {
+      // THE SCOPE-ADD COMPETITION (boot_p118, campaign §23b): a turn BOUND to a running contract
+      // (steering/answer/status/clarify/repair) belongs to the contract — the correction net must
+      // not ALSO apply it as a facet edit to the active directed run (the p118 steer text mutated
+      // focus #4043 beside the inbox post — one turn, two applications). Deterministic suppression;
+      // the router's echo already names where the turn went.
+      console.log(`[correction] suppressed — turn is contract-bound (${contractBinding.kind}); focus #${f.id} untouched`);
+    } else if (opOnC && f && focusLib.isDirected(f) && !directedStopHandled && !expandHandled && !socialTurn && !followupFired && userMessage && userMessage.trim().length > 3) {
       const fid = f.id;
       const activeRun = {
         goal: String(f.content || ''),
