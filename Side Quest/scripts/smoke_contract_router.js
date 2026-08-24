@@ -46,6 +46,12 @@ ok(rt.verdict({ text: 'add milk to the grocery list', contracts: [A], openQuesti
   const v = rt.verdict({ text: 'We need all of these filled - the numbers on the old slide were placeholders, every one of the eight cells needs real content.', contracts: [SLIDE], openQuestions: [], now });
   ok(v.kind === 'steering' && v.contractId === 'ct-slide', '⭐ REMATCH R2: a requirement-statement correction ("We need all of these filled…") IS steering');
   ok(rt.verdict({ text: 'we need groceries and dog food this week', contracts: [SLIDE], openQuestions: [], now }).kind === 'none', 'the requirement family still respects the token gate (no topic hit → no hijack)');
+  // REMATCH catch R10 (08-24 live): the existence proof's corrections #4 and #5 VERBATIM —
+  // decision verbs ("go with", "move…into…called", "do…as a") carried no instruction lead.
+  const v4 = rt.verdict({ text: "For the Rapides tax cell go with the tax base plus taxpayers-protected angle and mirror Richland's sales-tax story. Move the Applied Digital CARES material into a new section called The Good Neighbor - community work from both sites.", contracts: [SLIDE], openQuestions: [], now });
+  ok(v4.kind === 'steering' && v4.contractId === 'ct-slide', '⭐ REMATCH R10: a decision handed down ("go with…", "move…into…") IS steering (T4 verbatim)');
+  const v5 = rt.verdict({ text: "Since the Applied Digital side isn't public yet, do The Good Neighbor as a unified punch list without assigning credit to which facility.", contracts: [{ ...SLIDE, topicTokens: [...SLIDE.topicTokens, 'neighbor'] }], openQuestions: [], now });
+  ok(v5.kind === 'steering', '⭐ REMATCH R10: "do X as a unified punch list" IS steering (T5 verbatim)');
 }
 ok(rt.verdict({ text: 'what should we add about rapides?', contracts: [A], openQuestions: [], now }).kind === 'none', 'a question is never steering (the recall doors own it)');
 {

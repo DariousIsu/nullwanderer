@@ -33,7 +33,11 @@ const _STATUS_RE = /\b(?:where (?:are we|do we stand)|status|progress|how'?s\b[^
 // filled — every one of the eight cells needs real content" — the existence proof's own
 // correction #2, verbatim — carried no imperative lead and fell to verdict=none while the
 // contract ran. A requirement stated as fact IS steering; the token gate still guards hijacks.
-const _INSTRUCTION_RE = /^\s*(?:add|include|drop|skip|cut|remove|swap|replace|use|focus|prioriti[sz]e|expand|widen|narrow|check|verify|double-?check|make sure|also|don'?t|do not|stop|hold off|instead|keep|extend|fold|weave|go (?:deeper|further)|dig (?:deeper|in)|more)\b|\b(?:add|include|also cover|make sure|instead of|rather than|focus on|don'?t forget|be sure to|fold (?:that|this|it) in)\b|\b(?:we|i)\s+(?:(?:will|'ll)\s+)?(?:need|want|require)\b|\b(?:needs?|has|have)\s+to\s+(?:be|have|cover|include|show|carry)\b|\bmust\s+(?:be|have|cover|include|show|carry)\b/i;
+// + the DECISION-VERB family (rematch catch R10, 08-24 live): T4 "For the Rapides tax cell GO
+// WITH the tax base angle … MOVE the CARES material INTO a new section CALLED The Good Neighbor"
+// and T5 "DO The Good Neighbor AS A unified punch list" — the existence proof's corrections #4
+// and #5 verbatim — both fell to none. A decision handed down IS steering.
+const _INSTRUCTION_RE = /^\s*(?:add|include|drop|skip|cut|remove|swap|replace|use|focus|prioriti[sz]e|expand|widen|narrow|check|verify|double-?check|make sure|also|don'?t|do not|stop|hold off|instead|keep|extend|fold|weave|go (?:deeper|further)|dig (?:deeper|in)|more)\b|\b(?:add|include|also cover|make sure|instead of|rather than|focus on|don'?t forget|be sure to|fold (?:that|this|it) in)\b|\b(?:we|i)\s+(?:(?:will|'ll)\s+)?(?:need|want|require)\b|\b(?:needs?|has|have)\s+to\s+(?:be|have|cover|include|show|carry)\b|\bmust\s+(?:be|have|cover|include|show|carry)\b|\bgo with\b|\bmove\b[^.!?\n]{0,80}\binto\b|\bcall(?:ed)? it\b|\bmirror\b|\bdo (?:the|this|that|it)\b[^.!?\n]{0,80}\bas an?\b/i;
 // A repair REFERENCES the misrouted binding ("no, THAT was for…") — the bare `no…for` alternative
 // also matched content answers ("no — use the school board minutes FOR the teacher cell"), eating a
 // genuine late answer inside the 5-min window (sprint H2 design review, 08-24). The negation must
