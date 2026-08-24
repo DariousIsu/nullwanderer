@@ -1563,7 +1563,9 @@ app.whenReady().then(() => {
         const rc = require('./lib/rolling_context');
         const deps = rollingCtxDeps();
         if (!rc.enabled(deps)) return;
-        const r = await rc.maybeCompact(deps, currentSessionId);
+        // context.rolling.budget (chars) overrides the default window budget — the endurance
+        // sprints' lever: a 20k budget forces compact cycles in hours instead of days. Unset = default.
+        const r = await rc.maybeCompact(deps, currentSessionId, { budget: parseInt(deps.getMeta('context.rolling.budget') || '', 10) || undefined });
         if (r.compacted) console.log(`[rolling-ctx] compacted ${r.turns} turn(s) (${r.fromId}–${r.toId}) → doc#${r.docId}, summary ${r.summaryChars}ch`);
       } catch (e) { console.error('[rolling-ctx] compact tick failed:', e.message); }
       finally { rollingCompactRunning = false; }

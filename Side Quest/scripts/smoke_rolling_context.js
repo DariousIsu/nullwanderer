@@ -94,7 +94,8 @@ const turn = (id, sid, speaker, content) => ({ id, session_id: sid, speaker, con
     const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
     ok(/const rollingCtxDeps = \(\) => \(/.test(src) && src.indexOf('const rollingCtxDeps') < src.indexOf('async function runChatTurn'), 'wiring: the deps helper is module-level, visible to runChatTurn');
     ok(/_rc\.assemble\(_rcd, currentSessionId/.test(src) && /_rc\.enabled\(_rcd\)/.test(src), 'wiring: the cloud assembly swaps in the rolling history behind the toggle');
-    ok(/rollingCompactRunning/.test(src) && /maybeCompact\(deps, currentSessionId\)/.test(src), 'wiring: the background compact tick is single-flighted and off the turn path');
+    ok(/rollingCompactRunning/.test(src) && /maybeCompact\(deps, currentSessionId, \{ budget:/.test(src), 'wiring: the background compact tick is single-flighted, off the turn path, with the meta budget lever');
+    ok(/context\.rolling\.budget/.test(src), 'wiring: the endurance budget override reads db meta');
     ok(/cloudMessages = \[_pkgSys, \.\.\._histTurns, \.\.\.\(_finalTurn \? \[_finalTurn\] : \[\]\)\]/.test(src), 'wiring: the composed final user turn rides UNCHANGED after the rolling prefix');
   }
 
