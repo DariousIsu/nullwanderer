@@ -29,7 +29,11 @@ function affirmationLead(text) {
 const _NEG_BARE_RE = /^\s*(?:no|nope|nah|negative)\b[\s.!,]*$/i;
 const _QUESTION_SHAPE_RE = /\?\s*$|^\s*(?:what|who|when|where|why|how|is|are|does|do|did|can|could|will|would)\b/i;
 const _STATUS_RE = /\b(?:where (?:are we|do we stand)|status|progress|how'?s\b[^.!?\n]*\b(?:going|coming(?: along)?)|any (?:update|movement)|how far along)\b/i;
-const _INSTRUCTION_RE = /^\s*(?:add|include|drop|skip|cut|remove|swap|replace|use|focus|prioriti[sz]e|expand|widen|narrow|check|verify|double-?check|make sure|also|don'?t|do not|stop|hold off|instead|keep|extend|fold|weave|go (?:deeper|further)|dig (?:deeper|in)|more)\b|\b(?:add|include|also cover|make sure|instead of|rather than|focus on|don'?t forget|be sure to|fold (?:that|this|it) in)\b/i;
+// + the REQUIREMENT-STATEMENT family (LA REMATCH catch R2, 08-24 live): "We need all of these
+// filled — every one of the eight cells needs real content" — the existence proof's own
+// correction #2, verbatim — carried no imperative lead and fell to verdict=none while the
+// contract ran. A requirement stated as fact IS steering; the token gate still guards hijacks.
+const _INSTRUCTION_RE = /^\s*(?:add|include|drop|skip|cut|remove|swap|replace|use|focus|prioriti[sz]e|expand|widen|narrow|check|verify|double-?check|make sure|also|don'?t|do not|stop|hold off|instead|keep|extend|fold|weave|go (?:deeper|further)|dig (?:deeper|in)|more)\b|\b(?:add|include|also cover|make sure|instead of|rather than|focus on|don'?t forget|be sure to|fold (?:that|this|it) in)\b|\b(?:we|i)\s+(?:(?:will|'ll)\s+)?(?:need|want|require)\b|\b(?:needs?|has|have)\s+to\s+(?:be|have|cover|include|show|carry)\b|\bmust\s+(?:be|have|cover|include|show|carry)\b/i;
 // A repair REFERENCES the misrouted binding ("no, THAT was for…") — the bare `no…for` alternative
 // also matched content answers ("no — use the school board minutes FOR the teacher cell"), eating a
 // genuine late answer inside the 5-min window (sprint H2 design review, 08-24). The negation must

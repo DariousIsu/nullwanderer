@@ -39,6 +39,14 @@ ok(rt.verdict({ text: 'nope', contracts: [A], openQuestions: [Q1], now }).kind =
   ok(v.kind === 'steering' && v.contractId === 'ct-a', '⭐ THE LIVE SHAPE: a zero-token scope-add binds via fresh context when ONE contract runs');
 }
 ok(rt.verdict({ text: 'add milk to the grocery list', contracts: [A], openQuestions: [], now }).kind === 'none', 'the grocery guard: zero signals never hijack the contract');
+{
+  // LA REMATCH catch R2 (08-24 live): the existence proof's correction #2 VERBATIM — a
+  // requirement stated as fact ("We need…") carried no imperative lead and fell to none.
+  const SLIDE = { contractId: 'ct-slide', status: 'open', title: 'Louisiana data-center community benefits — the 8-cell slide', topicTokens: ['louisiana', 'community', 'benefits', 'meta', 'applied', 'digital', 'richland', 'rapides', 'slide'] };
+  const v = rt.verdict({ text: 'We need all of these filled - the numbers on the old slide were placeholders, every one of the eight cells needs real content.', contracts: [SLIDE], openQuestions: [], now });
+  ok(v.kind === 'steering' && v.contractId === 'ct-slide', '⭐ REMATCH R2: a requirement-statement correction ("We need all of these filled…") IS steering');
+  ok(rt.verdict({ text: 'we need groceries and dog food this week', contracts: [SLIDE], openQuestions: [], now }).kind === 'none', 'the requirement family still respects the token gate (no topic hit → no hijack)');
+}
 ok(rt.verdict({ text: 'what should we add about rapides?', contracts: [A], openQuestions: [], now }).kind === 'none', 'a question is never steering (the recall doors own it)');
 {
   const v = rt.verdict({ text: 'fold the china surveillance angle into the meta louisiana work', contracts: [A, B], openQuestions: [], now });
