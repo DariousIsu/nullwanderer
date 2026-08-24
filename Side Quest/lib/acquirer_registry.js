@@ -20,7 +20,10 @@ const _CIVIC_SCOPE = /\b(?:parish(?:es)?|county|counties|municipal|city|town|vil
 const ACQUIRERS = [
   {
     name: 'legislation',
-    renderDims: { rowKey: 'state', colKey: 'status', countKeys: ['state', 'status', 'tags'], trendKey: 'lastActionDate' },
+    // classify: the v11 relevance pass (08-24) — rows the query matched but the subject doesn't
+    // (marijuana, PTSD, appropriations) render SPLIT from the substantive bills, so the data
+    // section carries the honest universe beside the raw acquisition count.
+    renderDims: { rowKey: 'state', colKey: 'status', countKeys: ['state', 'status', 'tags'], trendKey: 'lastActionDate', classify: (attrs) => la.isSubstantive(attrs) },
     detect(topic) {
       const d = la.detect(topic);
       return d.states.length && d.query ? d : null;

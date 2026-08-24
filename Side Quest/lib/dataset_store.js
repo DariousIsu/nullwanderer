@@ -197,11 +197,30 @@ function renderReportData(rows, dims = {}, { rosterRows = null, rosterNote = '' 
   const countKeys = dims.countKeys || ['state', 'status'];
   const rowKey = dims.rowKey || 'state', colKey = dims.colKey || 'status';
   const trend = dims.trendKey ? renderTrend(rows, { dateKey: dims.trendKey }) : '';
+  // The relevance split (v11 pass, 08-24): dims.classify(attrs) → true means the row's own
+  // content names the subject; false means it merely matched an acquisition search. The split
+  // renders BESIDE the raw total — both numbers are honest, neither hides the other.
+  const cls = typeof dims.classify === 'function' ? (r) => { try { return !!dims.classify(r.attrs || {}); } catch { return true; } } : null;
+  const clsLines = [];
+  const rr = rosterRows || rows;
+  let rosterLines;
+  if (cls) {
+    const nSub = rows.filter(cls).length;
+    clsLines.push(`Subject relevance (deterministic, classified from each row's own title): substantive ${nSub} · incidental ${rows.length - nSub}`, '');
+    const rrSub = rr.filter(cls), rrInc = rr.filter((r) => !cls(r));
+    rosterLines = [
+      `#### Substantive (${rrSub.length}${rosterRows ? ` of ${nSub}` : ''})`, '', renderRoster(rrSub),
+      ...(rrInc.length ? ['', `#### Incidental (${rrInc.length}${rosterRows ? ` of ${rows.length - nSub}` : ''}) — matched the acquisition searches; the row's own title does not name the report subject`, '', renderRoster(rrInc)] : []),
+    ];
+  } else {
+    rosterLines = [renderRoster(rr)];
+  }
   return [
     `### Counts (deterministic — rendered from the dataset, ${rows.length} row(s))`, '', renderCounts(rows, countKeys), '',
+    ...clsLines,
     `### The table`, '', renderTable(rows, { rowKey, colKey }), '',
     ...(trend ? [`### The trend (by ${dims.trendKey}, monthly)`, '', trend, ''] : []),
-    `### Every row`, '', ...(rosterNote ? [rosterNote, ''] : []), renderRoster(rosterRows || rows),
+    `### Every row`, '', ...(rosterNote ? [rosterNote, ''] : []), ...rosterLines,
   ].join('\n');
 }
 

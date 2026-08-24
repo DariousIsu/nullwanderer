@@ -3053,6 +3053,7 @@ app.whenReady().then(() => {
         });
         if (res && res.ok) {
           lastForecast = res;
+          lastForecast.computedTs = Date.now();   // the forecast-ask digest displays this (Eastern)
           const fx = res.work.fundamentals;
           const env = fx && fx.has_data ? ` · env ${fx.lean > 0 ? '+' : ''}${fx.lean} (${fx.favors})` : '';
           const mt = res.work.midterm ? ` · midterm ${res.work.midterm.delta > 0 ? '+' : ''}${res.work.midterm.delta}` : '';
@@ -8844,6 +8845,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     }
   } catch (e) { console.error('[dataset] count inject failed (reply proceeds):', e.message); }
+  // CATCH #6 CURE (sprint 2, 08-24): "whats our forecast on the midterms" drew two stacked
+  // "let me…" says and NO numbers — while the balance-of-power suite sat computed in
+  // lastForecast. A forecast-shaped ask injects the suite's CURRENT code-authored numbers, so
+  // the say answers from held work; no recompute yet this boot → the honest state, never a
+  // bare promise. Weather forecasts never enter this door (the detector excludes them).
+  try {
+    const _fa = require('./lib/forecast_answer');
+    if (_fa.isForecastAsk(userMessage)) {
+      const _fd = _fa.digest(lastForecast);
+      composedUserMessage = `${composedUserMessage}\n\n${_fd
+        ? `[FORECAST — EXACT, computed by the held balance-of-power suite (Monte-Carlo over the polled + lean-seeded 2026 slate). These numbers are FINAL: answer with them verbatim, never estimate, adjust, or add numbers of your own. If he is asking about the MODEL or its build rather than the numbers, answer that instead — the numbers stand ready here:\n${_fd}]`
+        : `[A forecast was asked for but the suite has NOT recomputed yet this boot (it runs ~2 minutes after start, then on a timer). Say that plainly and that fresh numbers arrive shortly — NEVER invent numbers, and never promise to "get it going" without this caveat.]`}`;
+      console.log(`[forecast] forecast ask → ${_fd ? 'suite numbers injected' : 'no recompute yet — honest state injected'}`);
+    }
+  } catch (e) { console.error('[forecast] answer inject failed (reply proceeds):', e.message); }
   // RETRIEVE-OR-ADMIT (anti-confabulation) — a personal-fact question ("what's my daughter's
   // name?") must be answered from real memory or honestly declined, never guessed. She once
   // fabricated a child's name AND a fake "you just mentioned it" justification. The directive

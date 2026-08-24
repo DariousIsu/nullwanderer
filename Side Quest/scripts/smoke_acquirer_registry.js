@@ -24,6 +24,7 @@ const dLeg = ar.detect('anti-China legislation state by state: Utah, Texas');
 ok(dLeg && dLeg.name === 'legislation' && dLeg.plan.states.sort().join(',') === 'TX,UT', 'a legislative topic → the legislation acquirer (states resolved)');
 ok(dLeg.renderDims.rowKey === 'state' && dLeg.renderDims.colKey === 'status', 'legislation renders state × status');
 ok(dLeg.renderDims.trendKey === 'lastActionDate', 'legislation dims carry the trend dimension (monthly by last action)');
+ok(typeof dLeg.renderDims.classify === 'function' && dLeg.renderDims.classify({ title: 'Foreign adversary land ban' }) === true && dLeg.renderDims.classify({ title: 'Marijuana producers; licensure' }) === false, 'legislation dims carry the relevance classifier (v11 pass: query-matched ≠ subject-named)');
 const dCiv = ar.detect('the Louisiana parish leadership contact table');
 ok(dCiv && dCiv.name === 'civic-roster' && dCiv.plan.state === 'LA', 'a civic contact/roster topic → the civic acquirer (state resolved)');
 ok(dCiv.renderDims.rowKey === 'body' && dCiv.renderDims.colKey === 'role', 'civic rosters render body × role');

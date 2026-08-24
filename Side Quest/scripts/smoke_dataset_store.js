@@ -77,6 +77,26 @@ ok(/cap = 2000/.test(read('lib/dataset_store.js')), 'the roster cap is 2000 — 
   ok(/_\(prompt view: 6 of 10\)_/.test(rrd) && /\*\*Total: 10\*\*/.test(rrd) && (rrd.match(/^- \*\*/gm) || []).length === 6, 'renderReportData prompt view: FULL counts + table, SAMPLED roster, labeled as a sample');
 }
 
+// --- 2d. the RELEVANCE SPLIT (v11 pass, 08-24): query-matched ≠ subject-named ---
+ok(la.isSubstantive({ title: 'Critical infrastructure; foreign adversaries; prohibition' }), 'isSubstantive: foreign-adversary bills are the subject');
+ok(la.isSubstantive({ title: 'Automated license plate readers' }) && la.isSubstantive({ title: 'Surveillance Camera Amendments' }), 'isSubstantive: surveillance-tech bills are the subject');
+ok(!la.isSubstantive({ title: 'Marijuana producers; licensure' }) && !la.isSubstantive({ title: 'Firefighter cancer registry' }), 'isSubstantive: marijuana / cancer-registry rows are INCIDENTAL (the v10 pollution)');
+ok(!la.isSubstantive({ title: 'General appropriations act; 2026-2027' }) && !la.isSubstantive({ title: 'First responders; post-traumatic stress disorder' }), 'isSubstantive: appropriations / PTSD rows are incidental');
+ok(!la.isSubstantive({}), 'no title → incidental, never assumed on-subject');
+{
+  const mix = [
+    { entity: 'AZ HB2134', attrs: { state: 'AZ', title: 'Critical infrastructure; foreign adversaries; prohibition' } },
+    { entity: 'AZ SB1138', attrs: { state: 'AZ', title: 'Automated license plate readers' } },
+    { entity: 'AZ SB1641', attrs: { state: 'AZ', title: 'Marijuana producers; licensure' } },
+  ];
+  const split = ds.renderReportData(mix, { classify: (a) => la.isSubstantive(a) });
+  ok(/Subject relevance \(deterministic, classified from each row's own title\): substantive 2 · incidental 1/.test(split), 'the counts carry the honest split BESIDE the raw total');
+  ok(/#### Substantive \(2\)/.test(split) && /#### Incidental \(1\).*does not name the report subject/.test(split), 'the roster renders SPLIT — substantive first, incidental named for what it is');
+  ok(split.indexOf('AZ HB2134') < split.indexOf('AZ SB1641'), 'substantive rows lead');
+  const noCls = ds.renderReportData(mix, {});
+  ok(!/Subject relevance/.test(noCls) && !/#### Substantive/.test(noCls), 'no classify dim → the render is unchanged (civic and other shapes untouched)');
+}
+
 // --- 2b. the TREND render (P2's last open item, 08-22) ---
 const dated = (mo, i) => ({ entity: `UT B${mo}${i}`, attrs: { state: 'UT', lastActionDate: `${mo}-1${i % 9}` } });
 const trows = [dated('2026-01', 1), dated('2026-01', 2), dated('2026-03', 3), { entity: 'UT NODATE', attrs: { state: 'UT' } }];

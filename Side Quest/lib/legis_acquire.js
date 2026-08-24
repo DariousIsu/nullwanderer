@@ -202,4 +202,27 @@ async function acquire({ states = [], query = '', queries = null, dispatch, inse
   return out;
 }
 
-module.exports = { detect, acquire, sheetBody, resultsToRows, billToAttrs, enrich, STATUS_MAP, STATE_CODES };
+// ── THE SUBSTANTIVE-SUBJECT CLASSIFIER (the v11 relevance pass, 08-24) ─────────────────────────
+// The corpus-pollution catch: LegiScan search results carry rows the QUERY matched but the
+// SUBJECT doesn't (marijuana licensure, PTSD, appropriations rode the anti-China/surveillance
+// dataset — the 355 headline overstated the real universe; the report's own open question #7
+// asked for this split). Deterministic title-term classification — code-authored, transparent,
+// graded at READ time (rows are never mutated; the tag on a row stays QUERY provenance).
+const SUBSTANTIVE_RE = new RegExp([
+  // anti-China / foreign-adversary leg
+  'china|chinese|ccp\\b|communis(?:m|t)|foreign adversar\\w*|foreign entit\\w*|foreign influence',
+  'foreign ownership|foreign land|hostile (?:entit\\w*|nation\\w*|foreign)|countr(?:y|ies) of concern',
+  'tiktok|bytedance|huawei|zte\\b|hikvision|dahua|dji\\b|confucius institute|sister cit\\w*',
+  // surveillance / monitoring-tech leg
+  'surveillan\\w*|biometric\\w*|facial recognition|license plate reader\\w*|alpr\\b|geolocation',
+  'cell.?site simulator|stingray|drones?\\b|unmanned aircraft|spyware|tracking devices?',
+  'electronic monitoring|genetic sequenc\\w*|genomic data|data broker\\w*|wiretap\\w*|pen register',
+].join('|'), 'i');
+
+/** true = the bill's own title/description names the report subject; false = it merely matched
+ *  an acquisition search. Pure; attrs are read, never written. */
+function isSubstantive(attrs = {}) {
+  return SUBSTANTIVE_RE.test(`${attrs.title || ''} ${attrs.description || ''}`);
+}
+
+module.exports = { detect, acquire, sheetBody, resultsToRows, billToAttrs, enrich, isSubstantive, STATUS_MAP, STATE_CODES };

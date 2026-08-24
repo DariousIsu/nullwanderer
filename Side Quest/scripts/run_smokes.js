@@ -420,6 +420,7 @@ const smokes = [
   'smoke_poll_538legacy.js',
   // Forecasting suite — Suite-B models (pure, offline-deterministic)
   'smoke_poll_average.js',
+  'smoke_forecast_answer.js',
   'smoke_forecast_service.js',
   'smoke_forecast_sim.js',
   'smoke_news_feed.js',
