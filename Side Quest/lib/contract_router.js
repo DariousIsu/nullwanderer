@@ -30,7 +30,11 @@ const _NEG_BARE_RE = /^\s*(?:no|nope|nah|negative)\b[\s.!,]*$/i;
 const _QUESTION_SHAPE_RE = /\?\s*$|^\s*(?:what|who|when|where|why|how|is|are|does|do|did|can|could|will|would)\b/i;
 const _STATUS_RE = /\b(?:where (?:are we|do we stand)|status|progress|how'?s\b[^.!?\n]*\b(?:going|coming(?: along)?)|any (?:update|movement)|how far along)\b/i;
 const _INSTRUCTION_RE = /^\s*(?:add|include|drop|skip|cut|remove|swap|replace|use|focus|prioriti[sz]e|expand|widen|narrow|check|verify|double-?check|make sure|also|don'?t|do not|stop|hold off|instead|keep|extend|fold|weave|go (?:deeper|further)|dig (?:deeper|in)|more)\b|\b(?:add|include|also cover|make sure|instead of|rather than|focus on|don'?t forget|be sure to|fold (?:that|this|it) in)\b/i;
-const _REPAIR_RE = /\b(?:no|nope|wrong|not that)\b[^.!?\n]*\bfor\b|\bthat (?:was|is) (?:for|meant for)\b|\bwrong (?:one|work|project|dig|contract)\b/i;
+// A repair REFERENCES the misrouted binding ("no, THAT was for…") — the bare `no…for` alternative
+// also matched content answers ("no — use the school board minutes FOR the teacher cell"), eating a
+// genuine late answer inside the 5-min window (sprint H2 design review, 08-24). The negation must
+// point at the binding (that/it) or name the wrongness outright.
+const _REPAIR_RE = /\b(?:no|nope|wrong|not that)\b[^.!?\n]*\b(?:that|it)\b[^.!?\n]*\bfor\b|\bthat (?:was|is) (?:for|meant for)\b|\bwrong (?:one|work|project|dig|contract)\b/i;
 const REPAIR_WINDOW_MS = 5 * 60 * 1000;
 const RECENT_BIND_MS = 30 * 60 * 1000;
 
@@ -100,13 +104,16 @@ function verdict({ text, contracts = [], openQuestions = [], expiredQuestions = 
   // assumption), and a question- or status-shaped turn is asking ABOUT the work, never reworking it
   // — expired questions persist for the whole listRecent horizon, so the hijack guards are strict.
   if (expiredQuestions.length && !bareAff && !bareNeg && !_QUESTION_SHAPE_RE.test(s) && !_STATUS_RE.test(s)) {
-    // THE ANCHOR REQUIREMENT (sprint H1 catch, 08-24 live: "check the parish office hours for the
-    // school board meeting" — an errand — bound as the late answer to "is the school board figure
-    // or the parish office figure the confirmation source?" on 4 generic topic-token hits and
-    // REOPENED the slot). Reopening shipped work is a high-cost bind: the turn must also hit the
-    // question's ANCHOR — its slot name or its offered options ("the teacher cell", "placeholders")
-    // — the tokens that mark the turn as addressing THIS question rather than its neighborhood.
-    // An anchorless question (no slot, no options) instead pays a raised overlap floor.
+    // THE ANCHOR + DECISION REQUIREMENT (sprint H1+H2 catches, 08-24 live). H1: "check the parish
+    // office hours for the school board meeting" — an errand — bound on 4 generic topic hits and
+    // REOPENED the slot. H2: "add the LCTCS workforce angle to the teacher bonus confirmation
+    // sweep" — pure scope-add STEERING — passed a slot-name anchor because the slot is named after
+    // the contract's own topic word. Reopening shipped work is a high-cost bind, so a late answer
+    // must BOTH address this question's anchor (its slot name or offered options — else a raised
+    // overlap floor for anchorless questions) AND engage its DECISION CONTENT: at least one token
+    // the question carries that the contract's own topic does NOT ("school board minutes" vs the
+    // ambient teacher/bonus vocabulary). Steering talks the contract's language; an answer talks
+    // the question's.
     const bt = _toks(aff.rest || s);
     let best = null, bestN = 0;
     for (const q of expiredQuestions) {
@@ -114,8 +121,10 @@ function verdict({ text, contracts = [], openQuestions = [], expiredQuestions = 
       const n = bt.filter((t) => qt.has(t)).length;
       if (!n) continue;
       const anchor = new Set([..._toks(String(q.slotId || '').replace(/-/g, ' ')), ..._toks((q.options || []).join(' '))]);
-      const qualifies = anchor.size ? bt.some((t) => anchor.has(t)) : n >= (aff.rest ? 2 : 3);
-      if (!qualifies) continue;
+      if (anchor.size ? !bt.some((t) => anchor.has(t)) : n < (aff.rest ? 2 : 3)) continue;
+      const qc = contracts.find((x) => x.contractId === q.contractId);
+      const ct = qc ? _contractToks(qc) : new Set();
+      if (![...qt].some((t) => !ct.has(t) && bt.includes(t))) continue;   // no decision-content hit → not an answer
       if (n > bestN || (n === bestN && best && (q.askedTs || 0) > (best.askedTs || 0))) { best = q; bestN = n; }
     }
     const need = aff.rest ? 1 : 2;

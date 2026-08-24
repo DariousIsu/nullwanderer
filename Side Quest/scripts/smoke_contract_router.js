@@ -60,6 +60,19 @@ ok(rt.verdict({ text: 'is the waterless cooling claim enough for the water cell?
 ok(rt.verdict({ text: 'where are we on the water cell claim?', contracts: [A], openQuestions: [], expiredQuestions: [QX], now }).kind === 'status', 'a status ask near an expired question stays status');
 ok(rt.verdict({ text: 'check the waterless cooling claim numbers against the company filings', contracts: [A], openQuestions: [], expiredQuestions: [QX], now }).kind !== 'answer', '⭐ SPRINT H1 CATCH: topic-token noise without the question\'s ANCHOR (slot/options) never reopens shipped work');
 {
+  // SPRINT H2 CATCH (live 08-24): the slot was NAMED after the contract's own topic word, so a pure
+  // scope-add steering turn passed the anchor. A late answer must also engage the question's
+  // DECISION CONTENT — tokens the question carries that the contract's topic does not.
+  const T = { contractId: 'ct-t', status: 'open', title: 'Teacher-bonus confirmation sweep', topicTokens: ['teacher', 'bonus', 'parish', 'confirmation'], entities: [] };
+  const QT = { questionId: 'qt1', contractId: 'ct-t', slotId: 'teacher-cell', text: 'should the parish office confirmation or the school board minutes be the source for the bonus figure?', assumption: 'the school board minutes, labeled unconfirmed', askedTs: 70 };
+  const vSteer = rt.verdict({ text: 'add the LCTCS workforce angle to the teacher bonus confirmation sweep', contracts: [T], openQuestions: [], expiredQuestions: [QT], now });
+  ok(vSteer.kind === 'steering' && vSteer.contractId === 'ct-t', '⭐ SPRINT H2 CATCH: a scope-add that talks the CONTRACT\'s language steers — never a late answer, even past the anchor');
+  const vAns = rt.verdict({ text: 'use the school board minutes for the teacher cell, not the parish office confirmation', contracts: [T], openQuestions: [], expiredQuestions: [QT], now });
+  ok(vAns.kind === 'answer' && vAns.late === true, 'a turn that talks the QUESTION\'s language (school board minutes) still binds late');
+  const vRep = rt.verdict({ text: 'no — use the school board minutes for the teacher cell, not the parish office confirmation', contracts: [T], openQuestions: [], expiredQuestions: [QT], lastBinding: { inboxId: 9, contractId: 'ct-t', ts: now - 60 * 1000 }, now });
+  ok(vRep.kind === 'answer' && vRep.late === true, '⭐ REPAIR TIGHTENED: a "no — use X for Y" CONTENT answer inside the 5-min window is an answer, never a repair (repairs must reference THAT binding)');
+}
+{
   const QNA = { questionId: 'qna', contractId: 'ct-a', slotId: null, text: 'is the company waterless-cooling claim enough for the water cell?', assumption: 'use it, labeled as a company claim', askedTs: 60 };
   ok(rt.verdict({ text: 'use the utility figure for that cell', contracts: [A], openQuestions: [], expiredQuestions: [QNA], now }).kind !== 'answer', 'an ANCHORLESS expired question pays a raised floor (2 hits refused plain)');
   const v = rt.verdict({ text: 'use the parish utility filings for the water cooling claim, not the company figure', contracts: [A], openQuestions: [], expiredQuestions: [QNA], now });
