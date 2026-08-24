@@ -8627,17 +8627,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       console.log(`[collab] collaboration register — thinking-together turn (artifacts ${collabArtifactsOk ? 'allowed by explicit destination' : 'suppressed'}${gb ? ', grounding pulled' : ', no grounding matched'})`);
     }
   } catch (e) { console.error('[collab] register door failed (turn proceeds ungated):', e.message); }
-  // HELD-SOURCE HOMECOMING (the run-8 residual — the reply path never touched the documents
-  // store, so answers living in held docs missed honestly: SB200/Selders). A records/shared-past
-  // question pulls the matching held documents INTO the turn; the injection rides _replyEvidence,
-  // so the anti-fab pairing check sees the same record the answer cites.
-  try {
-    if (!collabTurn && /\b(?:do we (?:have|hold)|what do we (?:have|hold|know)|per (?:your|our|the) records|in (?:your|our|the) records|what did we (?:land on|verify|conclude|find|establish|pin down)|which [a-z]+ did (?:we|our)|who did we|remind me\b[^.?!]{0,30}\b(?:what|which|who)\b|pull from what we'?ve verified|what'?s (?:the latest|our (?:picture|read|file)) on|we (?:verified|tracked down|pinned down|landed on)\b|where (?:are we|do we stand|did we (?:get to|land|stop|leave off)) (?:on|with)\b|how far did we get|what'?s left (?:on|to do on)\b|status of (?:the|our|that)\b)/i.test(userMessage)) {
-      const gb2 = require('./lib/collab').groundingBlock({ sessionId, text: userMessage, mode: 'recall' });
-      if (gb2) { composedUserMessage = `${composedUserMessage}\n\n${gb2}`; console.log('[recall-reach] held-source context injected'); }
-      else console.log('[recall-reach] records-shaped question — no held documents matched');
-    }
-  } catch (e) { console.error('[recall-reach] door failed (turn proceeds):', e.message); }
+  // (HELD-SOURCE HOMECOMING moved BELOW the contract router — sprint E1 catch, 08-24: it injected
+  // the OLD anti-China report project's material into a status-BOUND turn, and the say answered
+  // from the kin project instead of the measured contract state. The contract door now runs first;
+  // recall-reach fires only on unbound turns.)
   // ── CONTRACT ROUTER (slice 3, spec §8): a user turn that belongs to a RUNNING contract binds to
   // it — answer / steering / status / clarify / repair — the binding is ECHOED in the reply, the
   // store write happens here, and the route pins converse below (the agent carries the work; the
@@ -8681,7 +8674,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         const _k = _cst.counts(_v.contractId); const _c0 = _cst.getContract(_v.contractId);
         const _sl = _cst.slots(_v.contractId).map((s) => `${s.slotId}=${s.status}`).join(', ');
         const _age = _c0.agent && _c0.agent.lastWaveTs ? `${Math.round((Date.now() - _c0.agent.lastWaveTs) / 60000)} min ago` : 'not yet';
-        composedUserMessage += `\n\n[CONTRACT STATUS (measured — answer FROM this, never invent progress or ETAs): "${_c0.title}" status=${_c0.status}; waves done=${_k.wavesDone}, last wave ${_age}; slots → ${_sl || '(none yet)'}; open questions=${_k.questionsOpen}; steering pending=${_k.inboxPending}.]`;
+        composedUserMessage += `\n\n[CONTRACT STATUS (measured — answer FROM this, never invent progress or ETAs): "${_c0.title}" status=${_c0.status}; waves done=${_k.wavesDone}, last wave ${_age}; slots → ${_sl || '(none yet)'}; open questions=${_k.questionsOpen}; steering pending=${_k.inboxPending}. This measured state is for EXACTLY the work named here — similar-sounding projects or reports in your other material are DIFFERENT work; never substitute their state, artifacts, or scope for this one's.]`;
         console.log(`[contract-router] STATUS read → ${_v.contractId}`);
         contractBinding = _v;
       } else if (_v.kind === 'clarify') {
@@ -8703,6 +8696,19 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     }
   } catch (e) { console.error('[contract-router] door failed (turn proceeds unbound):', e.message); }
+  // HELD-SOURCE HOMECOMING (the run-8 residual — the reply path never touched the documents
+  // store, so answers living in held docs missed honestly: SB200/Selders). A records/shared-past
+  // question pulls the matching held documents INTO the turn; the injection rides _replyEvidence,
+  // so the anti-fab pairing check sees the same record the answer cites. GATED on the contract
+  // door (sprint E1 catch): a BOUND turn already carries its measured state — kin-project recall
+  // material beside it is exactly what the say substituted for the store truth.
+  try {
+    if (!collabTurn && !contractBinding && /\b(?:do we (?:have|hold)|what do we (?:have|hold|know)|per (?:your|our|the) records|in (?:your|our|the) records|what did we (?:land on|verify|conclude|find|establish|pin down)|which [a-z]+ did (?:we|our)|who did we|remind me\b[^.?!]{0,30}\b(?:what|which|who)\b|pull from what we'?ve verified|what'?s (?:the latest|our (?:picture|read|file)) on|we (?:verified|tracked down|pinned down|landed on)\b|where (?:are we|do we stand|did we (?:get to|land|stop|leave off)) (?:on|with)\b|how far did we get|what'?s left (?:on|to do on)\b|status of (?:the|our|that)\b)/i.test(userMessage)) {
+      const gb2 = require('./lib/collab').groundingBlock({ sessionId, text: userMessage, mode: 'recall' });
+      if (gb2) { composedUserMessage = `${composedUserMessage}\n\n${gb2}`; console.log('[recall-reach] held-source context injected'); }
+      else console.log('[recall-reach] records-shaped question — no held documents matched');
+    }
+  } catch (e) { console.error('[recall-reach] door failed (turn proceeds):', e.message); }
   // BILL-INSTANCE CENSUS (campaign §21a's second half, 08-22): a bill-number question that names
   // no state is AMBIGUOUS across held instances — p102/p103 confidently answered COLORADO's
   // SB25-200 for a bare "SB200" ask while Louisiana's 2026 SB200 sat in the stores. Census the

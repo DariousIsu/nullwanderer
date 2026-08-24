@@ -124,6 +124,11 @@ ok(rt.verdict({ text: 'add the meta louisiana angle', contracts: [{ ...A, status
   ok(/CONTRACT LATE ANSWER BOUND/.test(src) && /reopenFromLateAnswer/.test(src), 'wiring: a late answer re-opens only the affected slot through the store primitive');
   ok(/expiredQuestions: _expQs/.test(src), 'wiring: the router sees expired questions from the recent-contract sweep');
   ok(/suppressed — turn is contract-bound/.test(src) && /focusLib\.isDirected\(f\) && contractBinding/.test(src), 'wiring: a contract-bound turn SUPPRESSES the correction net (the p118 scope-add competition)');
+  // SPRINT E1 CATCH (08-24): the recall-reach ran BEFORE the contract door and fed a kin project's
+  // material into a status-bound turn — the say answered from the old report instead of the store.
+  ok(src.indexOf('CONTRACT ROUTER (slice 3, spec §8)') < src.indexOf("groundingBlock({ sessionId, text: userMessage, mode: 'recall' })"), 'wiring: the contract door runs BEFORE the recall-reach');
+  ok(/!collabTurn && !contractBinding && /.test(src), 'wiring: recall-reach fires only on UNBOUND turns');
+  ok(/never substitute their state, artifacts, or scope/.test(src), 'wiring: the status directive forbids kin-project substitution');
 }
 
 console.log(`\nsmoke_contract_router: ${pass} passed, ${fail} failed`);
