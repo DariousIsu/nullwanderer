@@ -8675,6 +8675,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         const _sl = _cst.slots(_v.contractId).map((s) => `${s.slotId}=${s.status}`).join(', ');
         const _age = _c0.agent && _c0.agent.lastWaveTs ? `${Math.round((Date.now() - _c0.agent.lastWaveTs) / 60000)} min ago` : 'not yet';
         composedUserMessage += `\n\n[CONTRACT STATUS (measured — answer FROM this, never invent progress or ETAs): "${_c0.title}" status=${_c0.status}; waves done=${_k.wavesDone}, last wave ${_age}; slots → ${_sl || '(none yet)'}; open questions=${_k.questionsOpen}; steering pending=${_k.inboxPending}. This measured state is for EXACTLY the work named here — similar-sounding projects or reports in your other material are DIFFERENT work; never substitute their state, artifacts, or scope for this one's.]`;
+        // WORK-INSTANCE DISCIPLINE (sprint E1, second leg 08-24: with recall-reach gated, the kin
+        // material arrived via the registry pull-up and her say DISMISSED the measured directive as
+        // "the pipeline status" while serving the finished report's v8 as the answer). The ask is
+        // genuinely ambiguous when a LIVE contract and a finished registry project share a subject —
+        // the bill-instance cure, applied to work items: present BOTH states as separate things or
+        // ask which he means; blending is the failure.
+        try {
+          const _reg = require('./lib/artifact_registry');
+          const _hit = _c0.status !== 'closed' ? _reg.matchAsk(userMessage) : null;
+          if (_hit) {
+            composedUserMessage += `\n\n[WORK-INSTANCE DISCIPLINE: this ask ALSO matches a separate FINISHED project in your registry — "${String(_hit.title).slice(0, 90)}" (${String(_hit.label).slice(0, 90)}). That finished project and the RUNNING work above are DIFFERENT items. Present the two states clearly as two separate things (the running work's measured state first), or ask which one he means. NEVER blend them, and never attribute one's artifacts, versions, or scope to the other.]`;
+            console.log(`[contract-router] status kin-project note: "${_hit.slug}" beside ${_v.contractId}`);
+          }
+        } catch {}
         console.log(`[contract-router] STATUS read → ${_v.contractId}`);
         contractBinding = _v;
       } else if (_v.kind === 'clarify') {

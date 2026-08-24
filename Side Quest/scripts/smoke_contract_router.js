@@ -129,6 +129,7 @@ ok(rt.verdict({ text: 'add the meta louisiana angle', contracts: [{ ...A, status
   ok(src.indexOf('CONTRACT ROUTER (slice 3, spec §8)') < src.indexOf("groundingBlock({ sessionId, text: userMessage, mode: 'recall' })"), 'wiring: the contract door runs BEFORE the recall-reach');
   ok(/!collabTurn && !contractBinding && /.test(src), 'wiring: recall-reach fires only on UNBOUND turns');
   ok(/never substitute their state, artifacts, or scope/.test(src), 'wiring: the status directive forbids kin-project substitution');
+  ok(/WORK-INSTANCE DISCIPLINE:/.test(src) && /_reg\.matchAsk\(userMessage\)/.test(src) && /status !== 'closed'/.test(src), 'wiring: a LIVE contract beside a kin registry project gets the two-instance directive (sprint E1, second leg)');
 }
 
 console.log(`\nsmoke_contract_router: ${pass} passed, ${fail} failed`);
