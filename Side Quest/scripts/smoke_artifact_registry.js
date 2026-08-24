@@ -77,6 +77,11 @@ ok(/Version \$\{_regVersion\}/.test(main), 'the saved file carries its version s
 ok(!/const slug = t\.toLowerCase\(\)/.test(main), 'the legacy raw-topic slug mint is gone from the compose path');
 ok((main.match(/artifact_registry'\)\.matchAsk\(/g) || []).length >= 2, 'BOTH pull-up doors ask the registry first');
 ok(/pull-up resolves through the registry/.test(main) && /ask resolves through the registry/.test(main), 'both doors log the registry resolution');
+// THE VACUOUS-TOPIC FLOOR (2026-08-24 live audit: recheck#2395 "from ground" → a Congress roster
+// composed + DELIVERED against a China-grid ask; <2 content tokens leaves every relevance gate
+// inert by construction). The floor sits BEFORE the registry mint.
+ok(/VACUOUS TOPIC refused/.test(main) && /miss: 'vacuous-topic'/.test(main), 'a topic with <2 content tokens refuses BEFORE the registry can mint (the from-ground cure)');
+ok(main.indexOf('VACUOUS TOPIC refused') < main.indexOf("_reg.resolveOrMint({ topic: t, kind: 'report' })"), 'the floor precedes the slug mint');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

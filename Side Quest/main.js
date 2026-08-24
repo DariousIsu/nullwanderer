@@ -6234,6 +6234,21 @@ async function buildSplitFromOrder({ io, channel, sessionId, labels }) {
 
 async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) {
   let t = String(topic || '').trim();
+  // THE VACUOUS-TOPIC FLOOR (2026-08-24 live audit: her own sentence "I'll pull the data from the
+  // ground up" was booked as recheck#2395 topic "from ground" → a 7KB Congress roster composed under
+  // it, registered, and announced DELIVERED into a thread that had asked for a China-grid deep dive).
+  // A topic with under 2 content tokens names NOTHING — the off-topic check needs ≥2 tokens and the
+  // subject-anchor needs a proper noun, so EVERY relevance gate goes inert by construction and the
+  // composer free-associates. Honest refuse at the choke point, before the registry can mint a slug;
+  // the birth-site net (fragment-born rechecks) is the antagonistic round's named target.
+  try {
+    const _vt = require('./lib/artifact_registry').tokensOf(t);
+    if (_vt.length < 2) {
+      console.log(`[report-cmd] VACUOUS TOPIC refused — "${t.slice(0, 60)}" carries ${_vt.length} content token(s); no subject, nothing composes`);
+      if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[A report was requested on "${t.slice(0, 60)}" — but that names no actual subject, so nothing was composed. If a report is genuinely wanted, ask ${userName} what it should cover. Never claim any document was produced.]` });
+      return { delivered: false, miss: 'vacuous-topic', topic: t };
+    }
+  } catch {}
   // ARTIFACT REGISTRY (Phase 0 #5, hoisted to the TOP for Phase 2): the topic resolves to its
   // PROJECT before anything else — a kin topic reuses the canonical file (version++), only a new
   // subject mints — and the DIRECTED ACQUISITION below lands its dataset ROWS under this slug.
