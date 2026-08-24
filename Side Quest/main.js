@@ -190,6 +190,19 @@ const DISPLAY_HISTORY_LIMIT = 50;
 
 let mainWindow = null;
 let currentSessionId = null;
+// THE ROLLING CONVERSATION WINDOW deps (lib/rolling_context; Lucas 08-23, cloud reply lane only,
+// toggle `context.rolling`) — module-level: runChatTurn's assembler and the background compact tick
+// share one wiring. All closures resolve db lazily; nothing runs at load time.
+const rollingCtxDeps = () => ({
+  getMeta: (k) => db.getMeta(k),
+  setMeta: (k, v) => db.setMeta(k, v),
+  getTurnsSince: (sid, afterId) => db.getDb().prepare('SELECT id, speaker, content FROM turns WHERE session_id = ? AND id > ? ORDER BY id ASC LIMIT 400').all(sid, afterId | 0),
+  landDoc: ({ title, body, source, ref }) => require('./lib/doc_store').land({ title, body, source, ref }),
+  complete: async (msgs) => require('./lib/ollama').complete({
+    model: (() => { try { return (db.getMeta('model.replier_fallback') || 'gemma4:31b-cloud').trim(); } catch { return 'gemma4:31b-cloud'; } })(),
+    messages: msgs, think: false, options: { num_predict: 500, num_ctx: 16384 }, timeoutMs: 60000, lane: 'context-compact',
+  }),
+});
 let currentSessionStartedAt = null;
 // Elastic memory E1b: which stale episodes she has already offered to refresh THIS session, so the
 // "that was a while back — want me to pull the latest?" offer fires at most once per topic per session
@@ -1536,6 +1549,26 @@ app.whenReady().then(() => {
     finally { contractVoiceRunning = false; }
   };
   setInterval(() => { maybeVoiceContractSurfacings().catch(() => {}); }, CONTRACT_VOICE_CHECK_MS).unref?.();
+  // ── THE ROLLING CONVERSATION WINDOW (Lucas 08-23, cloud reply lane only, toggle `context.rolling`):
+  // the background compact tick — off the turn path by construction. At 75% of the window budget the
+  // oldest half of the running transcript LANDS VERBATIM as a store doc, then summarizes into a
+  // compact block the assembler serves with a [dN] recall handle. lib/rolling_context owns the logic;
+  // rollingCtxDeps is module-level (runChatTurn's assembler shares it).
+  let rollingCompactRunning = false;
+  setInterval(() => {
+    (async () => {
+      if (rollingCompactRunning || !currentSessionId) return;
+      rollingCompactRunning = true;
+      try {
+        const rc = require('./lib/rolling_context');
+        const deps = rollingCtxDeps();
+        if (!rc.enabled(deps)) return;
+        const r = await rc.maybeCompact(deps, currentSessionId);
+        if (r.compacted) console.log(`[rolling-ctx] compacted ${r.turns} turn(s) (${r.fromId}–${r.toId}) → doc#${r.docId}, summary ${r.summaryChars}ch`);
+      } catch (e) { console.error('[rolling-ctx] compact tick failed:', e.message); }
+      finally { rollingCompactRunning = false; }
+    })().catch(() => {});
+  }, 60 * 1000).unref?.();
   // NIGHTLY FULL DEDUP SWEEP (2026-07-10): the GUARANTEED once-a-day net. The write-triggered dedup + the fast
   // apply tick catch the steady flow; this sweep guarantees the WHOLE graph is re-scanned and the anchored
   // queue drained toward empty each calendar day regardless of activity — AND it is the home for the SLOW
@@ -11538,8 +11571,23 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // append the real conversation turns so the latest user message is actually present.
         const _pkgSys = (built.messages && built.messages[0]) || { role: 'system', content: '' };
         const _convoTurns = (messages || []).filter((m) => m && m.role && m.role !== 'system');
-        cloudMessages = [_pkgSys, ..._convoTurns];
-        console.log(`[package] ${pkg.describe(built.report)} + ${_convoTurns.length} convo turn(s)`);
+        // THE ROLLING WINDOW (cloud lane only, toggle `context.rolling`): the history prefix comes
+        // from the per-session running transcript — verbatim tail + compact blocks carrying [dN]
+        // recall handles — while the final COMPOSED user turn rides unchanged (its directives are
+        // the turn's machinery). Toggle off, empty, or any failure → the legacy 28-turn rebuild.
+        let _histTurns = _convoTurns.slice(0, -1);
+        const _finalTurn = _convoTurns.length ? _convoTurns[_convoTurns.length - 1] : null;
+        try {
+          const _rc = require('./lib/rolling_context');
+          const _rcd = rollingCtxDeps();
+          if (_finalTurn && _finalTurn.role === 'user' && _rc.enabled(_rcd)) {
+            const _asm = _rc.assemble(_rcd, currentSessionId, { excludeId: userTurnRow && userTurnRow.id });
+            _histTurns = _asm.messages;
+            console.log(`[rolling-ctx] window: ${_asm.tailTurns} verbatim turn(s) (${Math.round(_asm.sizeChars / 1000)}k chars) + ${_asm.messages.length - _asm.tailTurns} compact block(s)`);
+          }
+        } catch (e) { console.error('[rolling-ctx] assemble failed — legacy history rides:', e.message); }
+        cloudMessages = [_pkgSys, ..._histTurns, ...(_finalTurn ? [_finalTurn] : [])];
+        console.log(`[package] ${pkg.describe(built.report)} + ${_histTurns.length + (_finalTurn ? 1 : 0)} convo turn(s)`);
       } catch (e) { console.error('[main] package build failed — sending the plain prompt:', e.message); }
       let _cloudChunks = 0;
       const _cloudOpts = {

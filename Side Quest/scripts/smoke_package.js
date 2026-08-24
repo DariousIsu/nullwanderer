@@ -269,7 +269,9 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
   // ROOT FIX 2026-08-03: built.messages is ONE system message; sent alone, ollama.com had no user
   // turn to answer (done_reason:"load", empty output — the true cause of CLOUD wrote=0). The package
   // now rides as the SYSTEM prompt with the real conversation turns appended after it.
-  ok(/cloudMessages = \[_pkgSys, \.\.\._convoTurns\]/.test(src), 'the built package rides as the system prompt + the real convo turns');
+  // (updated for the rolling window, 2026-08-24: history may come from lib/rolling_context, but the
+  // package still rides as the SYSTEM prompt and the final composed USER turn is always present.)
+  ok(/cloudMessages = \[_pkgSys, \.\.\._histTurns, \.\.\.\(_finalTurn \? \[_finalTurn\] : \[\]\)\]/.test(src), 'the built package rides as the system prompt + the real convo turns');
 }
 
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);

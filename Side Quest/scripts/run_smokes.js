@@ -609,6 +609,10 @@ const smokes = [
   // (failed audit REOPENS) → bank the harvest (registry canonical, findings doc, web sources,
   // never-answered questions graduate to inquiries) → measured completion surfacing → closed.
   'smoke_contract_closeout.js',
+  // THE ROLLING CONVERSATION WINDOW (Lucas 08-23, cloud reply lane only, toggle context.rolling):
+  // running transcript + 75% background compact — land-then-summarize, [dN] recall handles,
+  // deterministic digest floor, per-session isolation, block overflow collapse.
+  'smoke_rolling_context.js',
   // BUILD 0 + BUILD 3 (2026-08-21): the browser-lane web_search floor (empty federation → her own
   // stealth lane) and the gap-plan approval surface (fillable/blocked/aggressive, cadence + fp gate).
   'smoke_gap_plan.js',
