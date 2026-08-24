@@ -63,14 +63,16 @@ function verdict({ text, contracts = [], openQuestions = [], expiredQuestions = 
   const live = contracts.filter((c) => c.status === 'open' || c.status === 'waiting_answer');
   const titleOf = (id) => { const c = contracts.find((x) => x.contractId === id); return c ? c.title : id; };
 
-  // 1. REPAIR — a correction inside the window pulls the last binding back; a named other contract rebinds.
+  // 1. REPAIR — a correction inside the window pulls the last binding back; a named other contract
+  // rebinds. THE REBIND LEADER RULE (sprint C3 catch, 08-24 live): "no, that was for the
+  // surveillance sweep" fell to ask because a 1-hit generic ('sweep' in a second title) tied
+  // against the 2-hit named target — the rebind now uses the steering discipline: a clear token
+  // leader binds; a true tie still asks.
   if (lastBinding && now - (lastBinding.ts || 0) <= REPAIR_WINDOW_MS && _REPAIR_RE.test(s)) {
-    let target = null;
-    for (const c of live) {
-      if (c.contractId === lastBinding.contractId) continue;
-      if (_toks(s).filter((t) => _contractToks(c).has(t)).length >= 1) target = target ? 'AMBIG' : c;
-    }
-    if (target === 'AMBIG') target = null;
+    const rs = live.filter((c) => c.contractId !== lastBinding.contractId)
+      .map((c) => ({ c, n: _toks(s).filter((t) => _contractToks(c).has(t)).length }))
+      .filter((x) => x.n >= 1).sort((x, y) => y.n - x.n);
+    const target = rs.length && (rs.length === 1 || rs[0].n > rs[1].n) ? rs[0].c : null;
     return { kind: 'repair', tombstoneId: lastBinding.inboxId || null, contractId: target ? target.contractId : null, title: target ? target.title : null, confidence: 0.8 };
   }
 

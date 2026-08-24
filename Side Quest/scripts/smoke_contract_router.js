@@ -95,6 +95,14 @@ ok(rt.verdict({ text: 'check the waterless cooling claim numbers against the com
   ok(v.kind === 'repair' && v.contractId === null, 'an unnamed repair unbinds and asks');
 }
 ok(rt.verdict({ text: 'no that was for the china report', contracts: [A, B], openQuestions: [], lastBinding: { inboxId: 7, contractId: 'ct-a', ts: now - 6 * 60 * 1000 }, now }).kind !== 'repair', 'the repair window closes at 5 min (an old binding is settled history)');
+{
+  // SPRINT C3 CATCH (live 08-24): a 1-hit generic ('sweep' shared across titles) tied against the
+  // 2-hit named target and the rebind fell to ask. The leader rule: a clear token leader rebinds.
+  const G = { contractId: 'ct-g', status: 'open', title: 'Teacher sweep', topicTokens: ['teacher', 'sweep'], entities: [] };
+  const S2 = { contractId: 'ct-s', status: 'open', title: 'Surveillance bill sweep', topicTokens: ['surveillance', 'sweep', 'sponsors'], entities: [] };
+  const v = rt.verdict({ text: 'no, that was for the surveillance sweep', contracts: [G, S2, B], openQuestions: [], lastBinding: { inboxId: 11, contractId: 'ct-b', ts: now - 60 * 1000 }, now });
+  ok(v.kind === 'repair' && v.contractId === 'ct-s', '⭐ SPRINT C3 CATCH: the rebind LEADER RULE — a 2-hit named target beats a 1-hit generic tie, rebinding instead of asking');
+}
 
 // boundaries
 ok(rt.verdict({ text: 'add the taxes angle', contracts: [], openQuestions: [], now }).kind === 'none', 'no contracts → none');
