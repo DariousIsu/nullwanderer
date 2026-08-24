@@ -142,7 +142,7 @@ async function closeOut(contractId, deps = {}) {
   const flagged = slots.filter((s) => s.status === 'flagged');
   store.postOutbox({
     contractId, kind: 'milestone',
-    text: `closed out "${c.title}" — ${filled.length} filled, ${flagged.length} flagged of ${slots.length}. Artifact: ${banked.relPath} (v${banked.version}, doc#${banked.docId || '?'})${banked.webSources ? `; ${banked.webSources} web source(s) banked` : ''}${flagged.length ? `. Honest holes: ${flagged.map((s) => `${s.slotId} (${(s.flags[0] && s.flags[0].kind) || 'flagged'})`).join(', ')}` : ''}${graduated.length ? `. I'm keeping ${graduated.length} unanswered question(s) as my own open inquiries` : ''}.`,
+    text: `closed out "${c.title}" — ${flagged.length ? `${filled.length} filled, ${flagged.length} flagged of ${slots.length}` : `all ${slots.length} slots filled and cited`}. Artifact: ${banked.relPath} (v${banked.version}, doc#${banked.docId || '?'})${banked.webSources ? `; ${banked.webSources} web source(s) banked` : ''}${flagged.length ? `. Honest holes: ${flagged.map((s) => `${s.slotId} (${(s.flags[0] && s.flags[0].kind) || 'flagged'})`).join(', ')}` : ''}${graduated.length ? `. I'm keeping ${graduated.length} unanswered question(s) as my own open inquiries` : ''}.`,
   });
   store.setStatus(contractId, 'closed');
   return { closed: true, artifact: banked, graduated };
