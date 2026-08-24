@@ -43,7 +43,7 @@ const _STOP = new Set(('a an the and or of on in at to for by with about from in
   'state states statewide report reports reporting bill bills legislation doc docs document documents note notes ' +
   'new current latest full final complete updated fresh quick short compact simple brief ' +
   'list lists summary overview recap rundown breakdown sheet sheets table tables ' +
-  'that this it his her my your our their them ' +
+  'that this it his her my your our their them you she him they ' +
   'make build write draft compose put drop place post knock give pull need want').split(' '));
 function tokensOf(text) {
   const out = [];

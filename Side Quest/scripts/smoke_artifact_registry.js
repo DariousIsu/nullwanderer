@@ -82,6 +82,10 @@ ok(/pull-up resolves through the registry/.test(main) && /ask resolves through t
 // inert by construction). The floor sits BEFORE the registry mint.
 ok(/VACUOUS TOPIC refused/.test(main) && /miss: 'vacuous-topic'/.test(main), 'a topic with <2 content tokens refuses BEFORE the registry can mint (the from-ground cure)');
 ok(main.indexOf('VACUOUS TOPIC refused') < main.indexOf("_reg.resolveOrMint({ topic: t, kind: 'report' })"), 'the floor precedes the slug mint');
+// SPRINT CATCH #5 (08-24): "give you highlights" — a fragment of HER OWN promise sentence — passed
+// the 2-token floor because 'you' counted as content. Pronouns never distinguish projects.
+ok(JSON.stringify(reg.tokensOf('give you highlights')) === '["highlights"]', 'bare pronouns are stop tokens ("give you highlights" → 1 content token)');
+ok(/mis-extracted-fragment/.test(main) && /is a say-fragment/.test(main), 'the promise birth-site retires a fragment topic (<3 tokens, no proper noun) — nothing composes');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

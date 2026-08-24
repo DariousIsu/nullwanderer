@@ -18276,6 +18276,21 @@ async function _surfaceOpenPromise() {
     const topic = String(d.topic || '').trim();
     const say = String(d.say || '');
     const t = topic || what;
+    // THE FRAGMENT BIRTH-SITE GUARD (sprint catch #5, 08-24: TWO promise bookings in one night were
+    // FRAGMENTS OF SAY SENTENCES — "from ground" ("I'll pull the data from the ground up") and
+    // "give you highlights" ("let me give you the highlights") — and each composed a wrong artifact
+    // + registry row + metabolism questions before the choke-point floor could see a 2-token topic.
+    // A promise-born topic must NAME A SUBJECT: ≥3 content tokens, or a capitalized token (a proper
+    // noun). A verb-led lowercase fragment is a mis-extraction — retire it honestly, compose nothing.
+    try {
+      const _ftoks = require('./lib/artifact_registry').tokensOf(t);
+      const _hasProper = /(?<![A-Za-z])[A-Z][a-z]{2,}/.test(t);
+      if (_ftoks.length < 3 && !_hasProper) {
+        rq.complete(it.id, { outcome: 'mis-extracted-fragment' });
+        console.log(`[delivery] promise#${it.id} topic "${t.slice(0, 60)}" is a say-fragment (${_ftoks.length} content token(s), no proper noun) — retired, nothing composes`);
+        return;
+      }
+    } catch {}
     const uname = (() => { try { return require('./lib/interlocutor').liveName('Lucas'); } catch { return 'Lucas'; } })();
 
     // COMPOSE the deliverable (self-work) via the SAME builders a live "build the report/roster" order uses.
