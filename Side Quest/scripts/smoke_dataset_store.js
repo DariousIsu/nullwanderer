@@ -83,6 +83,7 @@ ok(la.isSubstantive({ title: 'Automated license plate readers' }) && la.isSubsta
 ok(!la.isSubstantive({ title: 'Marijuana producers; licensure' }) && !la.isSubstantive({ title: 'Firefighter cancer registry' }), 'isSubstantive: marijuana / cancer-registry rows are INCIDENTAL (the v10 pollution)');
 ok(!la.isSubstantive({ title: 'General appropriations act; 2026-2027' }) && !la.isSubstantive({ title: 'First responders; post-traumatic stress disorder' }), 'isSubstantive: appropriations / PTSD rows are incidental');
 ok(!la.isSubstantive({}), 'no title → incidental, never assumed on-subject');
+ok(la.isSubstantive({ title: 'Security and Land Restriction Amendments' }) && la.isSubstantive({ title: 'Transnational Repression Amendments' }) && la.isSubstantive({ title: 'AN ACT relative to foreign actors.' }), 'v12 live-audit false negatives cured: the flagship UT land-restriction bill + transnational repression + foreign actors classify substantive');
 {
   const mix = [
     { entity: 'AZ HB2134', attrs: { state: 'AZ', title: 'Critical infrastructure; foreign adversaries; prohibition' } },

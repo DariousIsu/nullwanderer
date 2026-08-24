@@ -37,6 +37,8 @@ ok(ac.ttlFor('news') < ac.ttlFor('bill') && ac.ttlFor('bill') < ac.ttlFor('perso
 
 // ── excluded shapes never classify (the cache can never own these turns) ────────────────────────
 ok(ac.classifyKind('what did you learn tonight?') === null, 'a self question is excluded (“you”)');
+ok(ac.classifyKind('whats our forecast on the midterms') === null && ac.classifyKind('what are the odds the House flips this election?') === null, 'FORECAST STAND-DOWN (catch #6 leg 2): forecast asks never cache — the suite recomputes on a timer, a cached say = stale probabilities');
+ok(ac.classifyKind("what's the weather forecast for Tampa?") !== undefined, 'a weather forecast is NOT the stand-down (wrong door — classifies on its own merits without throwing)');
 ok(ac.classifyKind('status report') === null, 'status is excluded (measured state)');
 ok(ac.classifyKind("what's my daughter's name?") === null, 'a personal fact about the user is excluded');
 ok(ac.classifyKind('where were we?') === null, 'resume phrasing is excluded (the resume block owns it)');

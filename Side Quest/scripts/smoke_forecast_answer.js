@@ -47,6 +47,8 @@ ok(/_fa\.isForecastAsk\(userMessage\)/.test(main) && /FORECAST — EXACT, comput
 ok(/NOT recomputed yet this boot/.test(main) && /NEVER invent numbers/.test(main), 'wiring: no recompute yet → the honest state rides, never invented numbers');
 ok(/lastForecast\.computedTs = Date\.now\(\)/.test(main), 'wiring: the recompute stamps its time for the digest');
 ok(main.indexOf('_fa.isForecastAsk') > main.indexOf('[DATASET COUNTS — EXACT'), 'wiring: the forecast inject rides beside the proven injection block');
+const ac = fs.readFileSync(path.join(__dirname, '..', 'lib', 'answer_cache.js'), 'utf8');
+ok(/require\('\.\/forecast_answer'\)\.isForecastAsk\(s\)/.test(ac), 'wiring: the answer cache STANDS DOWN on forecast asks via the SAME predicate (store and serve both — one detector, never disagreeing)');
 
 console.log(`\nsmoke_forecast_answer: ${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;

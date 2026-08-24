@@ -74,6 +74,11 @@ const _QUESTION_SHAPE_RE = /\?\s*$|^(?:who|what|when|where|which|how (?:many|muc
 
 function classifyKind(q) {
   const s = String(q || '');
+  // THE FORECAST STAND-DOWN (catch #6 second leg, 08-24): the balance-of-power suite recomputes
+  // on a timer — a cached forecast say would replay STALE probabilities verbatim (the P3
+  // stale-count disease, forecast face; the first live retest's answer got STORED (general)).
+  // One predicate (lib/forecast_answer) so the cache and the injection can never disagree.
+  try { if (require('./forecast_answer').isForecastAsk(s)) return null; } catch {}
   // Shape-test the NORMALIZED form (boot_p57 retest miss: "hey, who's cleo fields again" failed the
   // raw-text shape gate — no "?" and a greeting lead — so the warm variant never reached lookup).
   const n = normalize(s);

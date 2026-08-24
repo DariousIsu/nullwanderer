@@ -210,8 +210,11 @@ async function acquire({ states = [], query = '', queries = null, dispatch, inse
 // graded at READ time (rows are never mutated; the tag on a row stays QUERY provenance).
 const SUBSTANTIVE_RE = new RegExp([
   // anti-China / foreign-adversary leg
-  'china|chinese|ccp\\b|communis(?:m|t)|foreign adversar\\w*|foreign entit\\w*|foreign influence',
+  'china|chinese|ccp\\b|communis(?:m|t)|foreign adversar\\w*|foreign entit\\w*|foreign influence|foreign actors?',
   'foreign ownership|foreign land|hostile (?:entit\\w*|nation\\w*|foreign)|countr(?:y|ies) of concern',
+  // v12 live-audit false negatives (08-24): UT HB0291 "Security and Land Restriction Amendments"
+  // (THE flagship, 38 co-sponsors) + UT HB0547 + the TN "foreign actors" pair classified incidental
+  'land restriction\\w*|transnational repression',
   'tiktok|bytedance|huawei|zte\\b|hikvision|dahua|dji\\b|confucius institute|sister cit\\w*',
   // surveillance / monitoring-tech leg
   'surveillan\\w*|biometric\\w*|facial recognition|license plate reader\\w*|alpr\\b|geolocation',
