@@ -100,12 +100,23 @@ function verdict({ text, contracts = [], openQuestions = [], expiredQuestions = 
   // assumption), and a question- or status-shaped turn is asking ABOUT the work, never reworking it
   // — expired questions persist for the whole listRecent horizon, so the hijack guards are strict.
   if (expiredQuestions.length && !bareAff && !bareNeg && !_QUESTION_SHAPE_RE.test(s) && !_STATUS_RE.test(s)) {
+    // THE ANCHOR REQUIREMENT (sprint H1 catch, 08-24 live: "check the parish office hours for the
+    // school board meeting" — an errand — bound as the late answer to "is the school board figure
+    // or the parish office figure the confirmation source?" on 4 generic topic-token hits and
+    // REOPENED the slot). Reopening shipped work is a high-cost bind: the turn must also hit the
+    // question's ANCHOR — its slot name or its offered options ("the teacher cell", "placeholders")
+    // — the tokens that mark the turn as addressing THIS question rather than its neighborhood.
+    // An anchorless question (no slot, no options) instead pays a raised overlap floor.
     const bt = _toks(aff.rest || s);
     let best = null, bestN = 0;
     for (const q of expiredQuestions) {
       const qt = new Set([..._toks(q.text), ..._toks((q.options || []).join(' ')), ..._toks(q.assumption || '')]);
       const n = bt.filter((t) => qt.has(t)).length;
-      if (n > bestN || (n === bestN && n > 0 && best && (q.askedTs || 0) > (best.askedTs || 0))) { best = q; bestN = n; }
+      if (!n) continue;
+      const anchor = new Set([..._toks(String(q.slotId || '').replace(/-/g, ' ')), ..._toks((q.options || []).join(' '))]);
+      const qualifies = anchor.size ? bt.some((t) => anchor.has(t)) : n >= (aff.rest ? 2 : 3);
+      if (!qualifies) continue;
+      if (n > bestN || (n === bestN && best && (q.askedTs || 0) > (best.askedTs || 0))) { best = q; bestN = n; }
     }
     const need = aff.rest ? 1 : 2;
     if (best && bestN >= need) return { kind: 'answer', late: true, questionId: best.questionId, contractId: best.contractId, slotId: best.slotId || null, title: titleOf(best.contractId), questionText: best.text, confidence: aff.rest ? 0.75 : 0.65 };

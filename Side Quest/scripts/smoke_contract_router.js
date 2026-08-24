@@ -58,6 +58,13 @@ ok(rt.verdict({ text: 'yes', contracts: [A], openQuestions: [], expiredQuestions
 }
 ok(rt.verdict({ text: 'is the waterless cooling claim enough for the water cell?', contracts: [A], openQuestions: [], expiredQuestions: [QX], now }).kind !== 'answer', 'a question-shaped turn asks ABOUT the work — never a late answer');
 ok(rt.verdict({ text: 'where are we on the water cell claim?', contracts: [A], openQuestions: [], expiredQuestions: [QX], now }).kind === 'status', 'a status ask near an expired question stays status');
+ok(rt.verdict({ text: 'check the waterless cooling claim numbers against the company filings', contracts: [A], openQuestions: [], expiredQuestions: [QX], now }).kind !== 'answer', '⭐ SPRINT H1 CATCH: topic-token noise without the question\'s ANCHOR (slot/options) never reopens shipped work');
+{
+  const QNA = { questionId: 'qna', contractId: 'ct-a', slotId: null, text: 'is the company waterless-cooling claim enough for the water cell?', assumption: 'use it, labeled as a company claim', askedTs: 60 };
+  ok(rt.verdict({ text: 'use the utility figure for that cell', contracts: [A], openQuestions: [], expiredQuestions: [QNA], now }).kind !== 'answer', 'an ANCHORLESS expired question pays a raised floor (2 hits refused plain)');
+  const v = rt.verdict({ text: 'use the parish utility filings for the water cooling claim, not the company figure', contracts: [A], openQuestions: [], expiredQuestions: [QNA], now });
+  ok(v.kind === 'answer' && v.late === true, 'an anchorless question still binds at the raised floor (≥3 hits)');
+}
 
 // status
 {
