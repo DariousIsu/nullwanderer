@@ -61,6 +61,8 @@ ok(rt.verdict({ text: 'add milk to the grocery list', contracts: [A], openQuesti
   const FQ = { questionId: 'q-f1', contractId: 'ct-f', slotId: null, text: 'The held store contains no 2026 midterm forecasting work — only an AI arms race oped. Should I flag both slots or substitute external sources?', assumption: 'flag both slots as unfillable', options: [] };
   const FC = { contractId: 'ct-f', status: 'open', title: 'Midterm balance-of-power brief', topicTokens: ['midterm', 'balance', 'power', 'house', 'senate', 'forecast'] };
   const DC = { contractId: 'ct-d', status: 'open', title: 'Louisiana governor race field check', topicTokens: ['louisiana', 'governor', 'race', 'field', 'candidates'] };
+  const vFC = rt.verdict({ text: 'on the utah sponsor spotlight - flag hb0606 and sb0183 as unreachable, the pages are js-walled, and close it out', contracts: [{ contractId: 'ct-u', status: 'open', title: 'Utah bill sponsor spotlight — three named bills', topicTokens: ['utah', 'sponsor', 'spotlight', 'hb0291', 'sb0183', 'hb0606'] }], openQuestions: [], now });
+  ok(vFC.kind === 'steering' && vFC.contractId === 'ct-u', '⭐ the FLAG/CLOSE family: "flag X as unreachable … close it out" IS steering (08-25 evening verbatim)');
   const vB1 = rt.verdict({ text: 'on the governor race field check - drop anyone who has publicly declined, declared and likely only', contracts: [DC, FC], openQuestions: [FQ], now });
   ok(vB1.kind === 'steering' && vB1.contractId === 'ct-d', '⭐ BULK B1: an instruction that steers ANOTHER contract better never binds as a weak-overlap answer');
   const vAns = rt.verdict({ text: 'flag both slots as unfillable and move on', contracts: [DC, FC], openQuestions: [FQ], now });

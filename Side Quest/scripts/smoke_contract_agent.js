@@ -322,6 +322,10 @@ const deps = {
     await ca.runWave(FZ.contractId, depsZ);
     const wz = store.waveLog(FZ.contractId).slice(-1)[0];
     ok(wz.actions.some((a2) => /LINT: your plan NAMES a find term but no action carried/.test(a2)), '⭐ FORTIFY/lint: narrated-find-without-the-field is named in the observations (narration does not execute)');
+    // the FLAG face of the lint
+    replies.push(JSON.stringify({ plan_summary: 'flag remaining gaps honestly and wrap up', actions: [{ action: 'internal_search', query: 'one more angle' }] }));
+    await ca.runWave(FZ.contractId, depsZ);
+    ok(store.waveLog(FZ.contractId).slice(-1)[0].actions.some((a2) => /LINT: your plan says FLAG but no \{"action":"flag_slot"\}/.test(a2)), '⭐ FORTIFY/lint-flag: narrated-flag-without-the-action draws the same lint (A said it three waves running)');
     const cz = store.slots(FZ.contractId).find((x) => x.slotId === 'cell');
     ok(cz.status === 'filled' && cz.citations.length === 1 && /Pierucci/.test(cz.contentRef), '⭐ FORTIFY/extraction: the sub-step filled the slot FROM the wave read text, cited');
     ok(wz.actions.some((a2) => /extraction sub-step: cell FILLED/.test(a2)), 'the extraction lands in the observations');

@@ -499,6 +499,12 @@ async function runWave(contractId, deps) {
         !reply.actions.some((a3) => a3 && String(a3.find || '').trim())) {
       observations.push('LINT: your plan NAMES a find term but no action carried a "find" field — narration does not execute. Re-issue the read as {"action":"read_held"|"web_read", ..., "find":"<the term>"}.');
     }
+    // …and the FLAG face (08-25 evening: A's plans said "flag remaining gaps honestly" THREE
+    // waves running and never emitted flag_slot — the same narrate-vs-act, different verb).
+    if (reply && /\bflag(?:ging)? (?:remaining|the|both|those|these|gaps|it|them|honestly)/i.test(String(reply.plan_summary || '')) &&
+        !reply.actions.some((a3) => a3 && (String(a3.action) === 'flag_slot' || String(a3.action) === 'fill_slot' || String(a3.action) === 'done'))) {
+      observations.push('LINT: your plan says FLAG but no {"action":"flag_slot"} was emitted — narration does not execute. Flag each unreachable slot NOW: {"action":"flag_slot","slotId":"...","flag":{"kind":"unreachable","text":"<why>"}} — then done.');
+    }
     // THE CITE-EXTRACTION SUB-STEP (fortification, 08-25 — "go all the way"): planning and
     // extraction are different cognitive acts. When this wave READ material but filled nothing,
     // a laser single-slot prompt (same main model) extracts a cited fill or an honest cannot —
