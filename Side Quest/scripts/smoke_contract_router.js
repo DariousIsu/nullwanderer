@@ -53,6 +53,19 @@ ok(rt.verdict({ text: 'add milk to the grocery list', contracts: [A], openQuesti
   const v5 = rt.verdict({ text: "Since the Applied Digital side isn't public yet, do The Good Neighbor as a unified punch list without assigning credit to which facility.", contracts: [{ ...SLIDE, topicTokens: [...SLIDE.topicTokens, 'neighbor'] }], openQuestions: [], now });
   ok(v5.kind === 'steering', '⭐ REMATCH R10: "do X as a unified punch list" IS steering (T5 verbatim)');
 }
+{
+  // BULK catch B1 (08-24 live): a steering correction for the GOVERNOR contract bound as a
+  // content ANSWER to the MIDTERM contract's open question on two generic tokens ("arms race"
+  // / "only") — and reopened shipped work. Cross-competition: instruction-shaped + a better
+  // steering score elsewhere → the steering leg wins.
+  const FQ = { questionId: 'q-f1', contractId: 'ct-f', slotId: null, text: 'The held store contains no 2026 midterm forecasting work — only an AI arms race oped. Should I flag both slots or substitute external sources?', assumption: 'flag both slots as unfillable', options: [] };
+  const FC = { contractId: 'ct-f', status: 'open', title: 'Midterm balance-of-power brief', topicTokens: ['midterm', 'balance', 'power', 'house', 'senate', 'forecast'] };
+  const DC = { contractId: 'ct-d', status: 'open', title: 'Louisiana governor race field check', topicTokens: ['louisiana', 'governor', 'race', 'field', 'candidates'] };
+  const vB1 = rt.verdict({ text: 'on the governor race field check - drop anyone who has publicly declined, declared and likely only', contracts: [DC, FC], openQuestions: [FQ], now });
+  ok(vB1.kind === 'steering' && vB1.contractId === 'ct-d', '⭐ BULK B1: an instruction that steers ANOTHER contract better never binds as a weak-overlap answer');
+  const vAns = rt.verdict({ text: 'flag both slots as unfillable and move on', contracts: [DC, FC], openQuestions: [FQ], now });
+  ok(vAns.kind === 'answer' && vAns.questionId === 'q-f1', 'a REAL content answer to the open question still binds (the cross-check never eats legitimate answers)');
+}
 ok(rt.verdict({ text: 'what should we add about rapides?', contracts: [A], openQuestions: [], now }).kind === 'none', 'a question is never steering (the recall doors own it)');
 {
   const v = rt.verdict({ text: 'fold the china surveillance angle into the meta louisiana work', contracts: [A, B], openQuestions: [], now });

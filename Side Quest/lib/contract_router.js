@@ -37,7 +37,7 @@ const _STATUS_RE = /\b(?:where (?:are we|do we stand)|status|progress|how'?s\b[^
 // WITH the tax base angle … MOVE the CARES material INTO a new section CALLED The Good Neighbor"
 // and T5 "DO The Good Neighbor AS A unified punch list" — the existence proof's corrections #4
 // and #5 verbatim — both fell to none. A decision handed down IS steering.
-const _INSTRUCTION_RE = /^\s*(?:add|include|drop|skip|cut|remove|swap|replace|use|focus|prioriti[sz]e|expand|widen|narrow|check|verify|double-?check|make sure|also|don'?t|do not|stop|hold off|instead|keep|extend|fold|weave|go (?:deeper|further)|dig (?:deeper|in)|more)\b|\b(?:add|include|also cover|make sure|instead of|rather than|focus on|don'?t forget|be sure to|fold (?:that|this|it) in)\b|\b(?:we|i)\s+(?:(?:will|'ll)\s+)?(?:need|want|require)\b|\b(?:needs?|has|have)\s+to\s+(?:be|have|cover|include|show|carry)\b|\bmust\s+(?:be|have|cover|include|show|carry)\b|\bgo with\b|\bmove\b[^.!?\n]{0,80}\binto\b|\bcall(?:ed)? it\b|\bmirror\b|\bdo (?:the|this|that|it)\b[^.!?\n]{0,80}\bas an?\b/i;
+const _INSTRUCTION_RE = /^\s*(?:add|include|drop|skip|cut|remove|swap|replace|use|focus|prioriti[sz]e|expand|widen|narrow|check|verify|double-?check|make sure|also|don'?t|do not|stop|hold off|instead|keep|extend|fold|weave|go (?:deeper|further)|dig (?:deeper|in)|more)\b|\b(?:add|include|also cover|make sure|instead of|rather than|focus on|don'?t forget|be sure to|fold (?:that|this|it) in|(?:drop|cut|skip|swap|remove|exclude)\s+(?:the|that|those|any(?:one|thing|body)?|it|them|everyone|him|her))\b|\b(?:we|i)\s+(?:(?:will|'ll)\s+)?(?:need|want|require)\b|\b(?:needs?|has|have)\s+to\s+(?:be|have|cover|include|show|carry)\b|\bmust\s+(?:be|have|cover|include|show|carry)\b|\bgo with\b|\bmove\b[^.!?\n]{0,80}\binto\b|\bcall(?:ed)? it\b|\bmirror\b|\bdo (?:the|this|that|it)\b[^.!?\n]{0,80}\bas an?\b/i;
 // A repair REFERENCES the misrouted binding ("no, THAT was for…") — the bare `no…for` alternative
 // also matched content answers ("no — use the school board minutes FOR the teacher cell"), eating a
 // genuine late answer inside the 5-min window (sprint H2 design review, 08-24). The negation must
@@ -105,7 +105,16 @@ function verdict({ text, contracts = [], openQuestions = [], expiredQuestions = 
       if (n > bestN || (n === bestN && n > 0 && best && (q.askedTs || 0) > (best.askedTs || 0))) { best = q; bestN = n; }
     }
     const need = aff.rest ? 1 : 2;   // an affirmation-led reply is already answer-shaped
-    if (best && bestN >= need) return { kind: 'answer', questionId: best.questionId, contractId: best.contractId, title: titleOf(best.contractId), questionText: best.text, confidence: aff.rest ? 0.8 : 0.7 };
+    if (best && bestN >= need) {
+      // B1 (bulk battery, 08-24 live): "on the governor race field check - drop anyone who has
+      // publicly declined…" — a STEERING correction for the governor contract — bound as a
+      // content ANSWER to the midterm contract's open question on two generic tokens ("arms
+      // race" / "only") and REOPENED shipped work. An instruction-shaped turn that scores
+      // strictly better as steering to a DIFFERENT live contract belongs to the steering leg.
+      const _instr = _INSTRUCTION_RE.test(aff.rest || s);
+      const _steerBeats = _instr && live.some((c) => c.contractId !== best.contractId && bt.filter((t) => _contractToks(c).has(t)).length > bestN);
+      if (!_steerBeats) return { kind: 'answer', questionId: best.questionId, contractId: best.contractId, title: titleOf(best.contractId), questionText: best.text, confidence: aff.rest ? 0.8 : 0.7 };
+    }
   }
 
   // 2b. LATE ANSWER (slice 4, §9): an expired question's answer still binds — the rework is scoped
