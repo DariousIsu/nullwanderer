@@ -1502,14 +1502,21 @@ app.whenReady().then(() => {
       }
       const open = cs.listOpen().filter((c) => c.status === 'open');
       if (!open.length) return;
-      const c = open.sort((a, b) => ((a.agent.lastWaveTs || 0) - (b.agent.lastWaveTs || 0)))[0];
-      if ((c.agent.lastWaveTs || 0) > Date.now() - CONTRACT_WAVE_GAP_MS) return;
-      markActivity('contract-wave');
-      const r = await ca.runWave(c.contractId, ca.liveDeps());
-      // quiet refusals (budget stand-down, non-open status) would spam every tick — log real waves + real errors only
-      // ([contract-agent], NOT [contract] — that tag belongs to the directed-focus canvas backstop at ~18792)
-      if (r.ok) console.log(`[contract-agent] ${c.contractId} wave ${r.waveN} → ${r.outcome}${r.done ? ' (DONE → closing)' : ''}`);
-      else if (!/budget exhausted|status is/.test(String(r.reason))) console.log(`[contract-agent] ${c.contractId} refused: ${r.reason}`);
+      // P1 — THE HEAD-OF-LINE BLOCKADE (schedule Phase 1, 08-25 live): a budget-refused contract
+      // never advances its lastWaveTs, so it stays STALEST forever and eats every tick — the
+      // whole fleet froze behind one blocked contract while others held un-fired extensions.
+      // Walk the stalest-first list; the first contract that actually RUNS (or fails for a real
+      // reason) ends the pass; budget-refusals yield the pick to the next-stalest.
+      const sorted = open.sort((a, b) => ((a.agent.lastWaveTs || 0) - (b.agent.lastWaveTs || 0)));
+      for (const c of sorted) {
+        if ((c.agent.lastWaveTs || 0) > Date.now() - CONTRACT_WAVE_GAP_MS) continue;
+        markActivity('contract-wave');
+        const r = await ca.runWave(c.contractId, ca.liveDeps());
+        // quiet refusals (budget stand-down, non-open status) would spam every tick — log real waves + real errors only
+        // ([contract-agent], NOT [contract] — that tag belongs to the directed-focus canvas backstop at ~18792)
+        if (r.ok) { console.log(`[contract-agent] ${c.contractId} wave ${r.waveN} → ${r.outcome}${r.done ? ' (DONE → closing)' : ''}`); break; }
+        if (!/budget exhausted|status is/.test(String(r.reason))) { console.log(`[contract-agent] ${c.contractId} refused: ${r.reason}`); break; }
+      }
     } catch (e) { console.error('[contract-agent] wave failed:', e.message); }
     finally { markActivity('idle'); contractWaveRunning = false; }
   };

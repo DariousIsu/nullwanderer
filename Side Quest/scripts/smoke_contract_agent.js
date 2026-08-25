@@ -290,6 +290,12 @@ const deps = {
     ok(/EVERY SLOT IS LANDED \(filled or flagged\)\. If nothing more can improve them, act \{"action":"done"\} NOW/.test(pm[1].content), '⭐ the done-nudge: all-landed slots tell the driver to close instead of idling to budget death');
   }
 
+  // P1 — the head-of-line blockade wiring pin (08-25 live: one budget-refused contract froze the fleet)
+  {
+    const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+    ok(/THE HEAD-OF-LINE BLOCKADE/.test(main) && /for \(const c of sorted\)/.test(main) && /budget-refusals yield the pick/.test(main), '⭐ P1: a budget-refused contract yields the tick to the next-stalest — one blocked contract never freezes the fleet');
+  }
+
   try { store.close(); fs.rmSync(dbDir, { recursive: true, force: true }); } catch {}
   console.log(`\nsmoke_contract_agent: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;
