@@ -143,9 +143,9 @@ const DAY = 86400000;
   // ── BUILD 0: the browser-lane web_search floor ────────────────────────────────────────────────
   console.log('_webSearchFloor:');
   const emptyFed = { ok: true, isError: false, text: JSON.stringify({ query: 'q', results: [], providers_skipped: { exa: 'no_key_or_error' } }) };
-  const fullFed = { ok: true, isError: false, text: JSON.stringify({ query: 'q', results: [{ title: 'hit', url: 'https://x.example' }] }) };
+  const fullFed = { ok: true, isError: false, text: JSON.stringify({ query: 'louisiana sb200', results: [{ title: 'Louisiana SB200 hearing docket', url: 'https://legis.example/louisiana-sb200' }] }) };
   const errRes = { ok: false, isError: true, text: 'transport failed' };
-  const laneHits = { results: [{ title: 'Lane Hit', url: 'https://lane.example/a', snippet: 's' }] };
+  const laneHits = { results: [{ title: 'Louisiana SB200 — Lane Hit', url: 'https://lane.example/a', snippet: 's' }] };   // relevant to the query — the 08-25 junk rule judges lane results too
   const webTag = { kind: 'do', name: 'web_search', args: { query: 'louisiana sb200' } };
   let laneCalls = 0;
   const fakeSearch = async () => { laneCalls++; return laneHits; };
@@ -167,6 +167,13 @@ const DAY = 86400000;
     'lane ALSO empty → the honest empty stands (no fabricated results)');
   ok((await suit._webSearchFloor(webTag, emptyFed, { search: async () => { throw new Error('lane died'); } })) === emptyFed,
     'a lane crash returns the original result — fail-soft');
+  // the RELEVANCE floor (bulk battery 08-25): a junk-full federation floors to the lane
+  const junkFed = { ok: true, isError: false, text: JSON.stringify({ query: 'louisiana sb200', results: [{ title: 'About Meta', url: 'https://meta.com/about' }, { title: 'Applied | Homepage', url: 'https://applied.com' }] }) };
+  const jf = await suit._webSearchFloor(webTag, junkFed, { search: fakeSearch });
+  ok(JSON.parse(jf.text).results[0].source === 'browser-lane' && /brand-nav junk/.test(JSON.parse(jf.text).note), '⭐ a JUNK-full federation (no result carries 2+ query terms) floors to the lane');
+  ok((await suit._webSearchFloor(webTag, junkFed, { search: async () => ({ results: [{ title: 'About Meta', url: 'https://meta.com/x' }] }) })) === junkFed, 'lane junk never replaces federation junk — the original stands, callers detect');
+  // LANE-PRIMARY junk = a MISS (Lucas 08-25: stealth stays primary; its own junk falls through)
+  ok((await suit._webSearchLanePrimary(webTag, { search: async () => ({ results: [{ title: 'About Meta', url: 'https://meta.com/about' }] }) })) === null, '⭐ lane-PRIMARY brand junk is a MISS — the federation gets its fallback shot');
 
   // ── BUILD 0b: the stealth lane is the PRIMARY search ──────────────────────────────────────────
   console.log('_webSearchLanePrimary:');

@@ -55,22 +55,34 @@ function liveDeps() {
           .map((r) => ({ title: r.title || '', url: r.url || '', snippet: r.snippet || '' }));
       } catch { return []; }
     },
-    readHeld: async (ref) => {
+    // B2 (bulk battery, 08-25): the head-only 6000-char slice made LARGE held artifacts
+    // unreadable past their head — A-held burned 12 reads beside a 128KB report whose roster it
+    // could never reach. `find` returns the window AROUND the first match instead of the head;
+    // a find-miss reports itself (with the head) instead of masquerading as a missing doc.
+    readHeld: async (ref, find = null) => {
       try {
         const r = String(ref || '').trim();
+        let full = null;
         if (/^doc#\d+$/i.test(r)) {
           const dbm = require('./db');
           const row = dbm.getDb().prepare('SELECT title, body FROM documents WHERE id = ?').get(parseInt(r.slice(4), 10));
-          return row ? `${row.title}\n${String(row.body || '').slice(0, 6000)}` : null;
+          full = row ? `${row.title}\n${String(row.body || '')}` : null;
+        } else if (/^canvas:/i.test(r)) full = require('./canvas_docs').docText(r.slice(7), 200000) || null;
+        else {
+          const m = r.match(/^(?:notes\/)?([A-Za-z0-9._ -]+\.md)$/);   // no path separators — notes/ top level only
+          if (m) {
+            const p = require('path'), fs = require('fs');
+            const fp = p.join(require('./files').resolvePath('notes'), m[1]);
+            full = fs.existsSync(fp) ? String(fs.readFileSync(fp, 'utf8')) : null;
+          } else full = require('./canvas_docs').docText(r, 200000) || null;    // bare tab-key fallback
         }
-        if (/^canvas:/i.test(r)) return require('./canvas_docs').docText(r.slice(7), 6000) || null;
-        const m = r.match(/^(?:notes\/)?([A-Za-z0-9._ -]+\.md)$/);   // no path separators — notes/ top level only
-        if (m) {
-          const p = require('path'), fs = require('fs');
-          const fp = p.join(require('./files').resolvePath('notes'), m[1]);
-          return fs.existsSync(fp) ? String(fs.readFileSync(fp, 'utf8')).slice(0, 6000) : null;
-        }
-        return require('./canvas_docs').docText(r, 6000) || null;    // bare tab-key fallback
+        if (full == null) return null;
+        const f = String(find || '').trim();
+        if (!f) return full.slice(0, 6000);
+        const i = full.toLowerCase().indexOf(f.toLowerCase());
+        if (i < 0) return `FIND-MISS: "${f}" does not appear in ${r} (${full.length} chars total). The head follows:\n${full.slice(0, 1500)}`;
+        const start = Math.max(0, i - 1500);
+        return `${start > 0 ? '…' : ''}${full.slice(start, start + 6000)}${start + 6000 < full.length ? '…' : ''}`;
       } catch { return null; }
     },
     // THE FUEL VERBS (rematch catch R7, 08-24): the existence proof was CARRIED by GDELT + direct
@@ -88,7 +100,19 @@ function liveDeps() {
       try {
         const r = await require('./echo_suit').dispatch({ kind: 'do', name: 'web_extract', args: { url } });
         const t = r && r.ok !== false && r.text ? String(r.text) : '';
-        return t.trim().length > 80 ? t.slice(0, 6000) : null;   // 0-char extractions (JS-gated pages) are an honest miss
+        if (t.trim().length <= 80) return null;   // 0-char extractions (JS-gated pages) are an honest miss
+        // STORE AS WE GO (Lucas 08-25: "we should be scraping and storing as we go") — a fetched
+        // page banks as a source AT FETCH TIME, not only at close-out; fire-and-forget, fail-soft.
+        (async () => {
+          try {
+            await require('./echo_suit').dispatch({ kind: 'do', name: 'save_source', args: {
+              original_url: url, content_md: t.slice(0, 60000), citing_doc_ids: [],
+              frontmatter: { source: url, collection_date: new Date().toISOString().slice(0, 10), title: url, domain: (() => { try { return new URL(url).hostname; } catch { return url; } })(), kind: 'web' },
+            } });
+            console.log(`[contract-agent] store-as-we-go: banked ${url.slice(0, 70)}`);
+          } catch {}
+        })();
+        return t.slice(0, 6000);
       } catch { return null; }
     },
     quotaCheck: () => ({ allow: true, reason: 'directed tier' }),   // floor wiring rides the live governor (F19)
@@ -144,7 +168,7 @@ Reply with ONLY a JSON object: {"plan_summary":"<one line>","actions":[...]} —
 ACTIONS:
  {"action":"define_slots","slots":[{"slotId":"kebab-id","description":"..."}]}   (only while the slot set is empty or genuinely incomplete)
  {"action":"internal_search","query":"..."}
- {"action":"read_held","ref":"notes/<file>.md | canvas:<tab_key> | doc#<id>"}   (once a search NAMES a held deliverable, READ it — the search only shows a snippet window; the real figures live in the full text)
+ {"action":"read_held","ref":"notes/<file>.md | canvas:<tab_key> | doc#<id>","find":"optional term"}   (once a search NAMES a held deliverable, READ it. For a LARGE document pass "find" — a distinctive term near what you need (a bill number, a name) — to get the window AROUND its first match instead of the head; different find terms are different reads)
  {"action":"web_search","query":"..."}
  {"action":"news_search","query":"..."}   (dated news-wire search — reliable where web_search returns brand junk. GDELT collapses on compound queries: use ONE or TWO distinctive terms — a town, a project codename — never a keyword pile)
  {"action":"web_read","url":"https://..."}   (fetch ONE page's article text — use on the strongest search/news hit; shares the per-wave read budget)
@@ -172,6 +196,8 @@ function buildPrompt(c, { store, replan = null }) {
     lines.push(`  - [${s.status}] ${s.slotId}: ${s.description}${cites}${flags}`);
   }
   if (openQs.length) lines.push(`OPEN QUESTIONS (proceed on the assumption if unanswered): ${openQs.map((q) => `"${q.text}" → assumption: ${q.assumption}`).join(' | ')}`);
+  // the done-nudge (bulk battery: D reached all-flagged and idled to budget death without done)
+  if (slots.length && slots.every((s2) => s2.status === 'filled' || s2.status === 'flagged')) lines.push('EVERY SLOT IS LANDED (filled or flagged). If nothing more can improve them, act {"action":"done"} NOW - an idle wave here only burns budget.');
   if (inbox.length) lines.push(`OPERATOR STEERING (unapplied — fold these into this wave's plan): ${inbox.map((m) => `#${m.id} [${m.kind}] ${m.text}`).join(' | ')}`);
   for (const w of recent) {
     lines.push(`WAVE ${w.waveN} (${w.outcome || 'no outcome'}) observations:`);
@@ -358,9 +384,10 @@ async function runWave(contractId, deps) {
           // "retrieve the notes" because search only returns an excerpt window — the figures it needed
           // sat in the full text of a file the search had already NAMED. This verb reads it.
           const ref = String(a.ref || '').trim();
+          const find = String(a.find || '').trim() || null;
           if (!ref) { observations.push('read_held REFUSED: no ref'); continue; }
           if (readsThisWave >= MAX_READS_PER_WAVE) { observations.push(`read_held ${_cap(ref, 60)} REFUSED: this wave's read budget is spent`); continue; }
-          const sig = chainGuard.tagSignature({ kind: 'do', name: 'read_held', args: { ref: ref.toLowerCase() } });
+          const sig = chainGuard.tagSignature({ kind: 'do', name: 'read_held', args: { ref: ref.toLowerCase(), find: (find || '').toLowerCase() } });
           if (chain.seen.has(sig)) {
             // Serve the PRIOR read instead of refusing (rematch catch R3b, 08-24 live): the
             // 2-wave prompt window had dropped the content, the driver re-planned the read, and
@@ -380,11 +407,11 @@ async function runWave(contractId, deps) {
             else observations.push(`read_held REFUSED (already read, no cached copy): ${_cap(ref, 80)}`);
             continue;
           }
-          const txt = typeof readHeld === 'function' ? await readHeld(ref) : null;
+          const txt = typeof readHeld === 'function' ? await readHeld(ref, find) : null;
           const empty = !txt;
           chainGuard.evaluateHop(chain, { signature: sig, label: 'read_held', emptyThisHop: empty, retrieval: true });
           readsThisWave++;
-          observations.push(`read_held ${_cap(ref, 80)} → ${empty ? 'EMPTY (no such held item)' : _cap(txt, READ_OBS_CAP)}`);
+          observations.push(`read_held ${_cap(ref, 80)}${find ? ` find:"${_cap(find, 40)}"` : ''} → ${empty ? 'EMPTY (no such held item)' : _cap(txt, READ_OBS_CAP)}`);
         } else if (act === 'fill_slot') {
           const slotId = String(a.slotId || '');
           const s = slotsNow().find((x) => x.slotId === slotId);

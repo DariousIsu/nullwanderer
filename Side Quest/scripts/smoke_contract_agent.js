@@ -265,6 +265,31 @@ const deps = {
     ok(blocked.length === 1, '⭐ R8: 4 motionless waves surface blocked EVEN when every retrieval succeeds (motion is the signal, not emptiness)');
   }
 
+  // ── B2: find-term deep reads + the done-nudge (bulk battery, 08-25) ───────────────────────────
+  ok(/"find":"optional term"/.test(ca.CHARTER) && /window AROUND its first match/.test(ca.CHARTER), 'B2: the charter teaches find-term reads for large documents');
+  {
+    const finds = [];
+    const depsF = { ...deps, readHeld: async (ref, find) => { finds.push(find); return find ? `…roster window: Candice Pierucci (R-HD-49)…` : 'head text'; } };
+    const P = store.openContract({ title: 'Deep read probe', askVerbatim: 'read deep', topicTokens: ['probe'], budget: { maxWaves: 10 } });
+    store.upsertSlot({ contractId: P.contractId, slotId: 'c', description: 'c' });
+    replies.push(JSON.stringify({ plan_summary: 'deep read', actions: [
+      { action: 'read_held', ref: 'notes/big.md', find: 'HB0291' },
+      { action: 'read_held', ref: 'notes/big.md', find: 'SB0183' },
+    ] }));
+    await ca.runWave(P.contractId, depsF);
+    const w = store.waveLog(P.contractId).slice(-1)[0];
+    ok(finds[0] === 'HB0291' && finds[1] === 'SB0183', '⭐ B2: the find term reaches the read dep — a 128KB report is reachable past its head');
+    ok(w.actions.some((a2) => /read_held notes\/big\.md find:"HB0291" → .*Pierucci/.test(a2)), 'B2: the windowed read rides the observation, labeled with its find');
+    ok(!w.actions.some((a2) => /REFUSED \(already read/.test(a2)), 'B2: different find terms are DIFFERENT reads, never exact-repeats');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'contract_agent.js'), 'utf8');
+    ok(/FIND-MISS: "\$\{f\}" does not appear/.test(src) && /full\.slice\(start, start \+ 6000\)/.test(src), 'B2: liveDeps windows around the match; a find-miss reports itself with the head');
+    ok(/store-as-we-go: banked/.test(src) && /name: 'save_source'/.test(src), "⭐ STORE-AS-WE-GO (Lucas 08-25): a web_read page banks as a source at fetch time");
+    // the done-nudge
+    store.upsertSlot({ contractId: P.contractId, slotId: 'c', status: 'filled', contentRef: 'inline:x', citations: [{ src: 'y', date: 'held' }] });
+    const pm = ca.buildPrompt(store.getContract(P.contractId), { store });
+    ok(/EVERY SLOT IS LANDED \(filled or flagged\)\. If nothing more can improve them, act \{"action":"done"\} NOW/.test(pm[1].content), '⭐ the done-nudge: all-landed slots tell the driver to close instead of idling to budget death');
+  }
+
   try { store.close(); fs.rmSync(dbDir, { recursive: true, force: true }); } catch {}
   console.log(`\nsmoke_contract_agent: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;

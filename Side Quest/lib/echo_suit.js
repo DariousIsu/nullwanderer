@@ -1902,6 +1902,15 @@ async function _webSearchLanePrimary(tag, deps = {}) {
       .map((r) => ({ title: r.title || '', url: r.url || '', snippet: r.snippet || null, source: 'browser-lane' }))
       .filter((r) => r.url);
     if (!results.length) return null;
+    // LANE JUNK = A MISS (Lucas 08-25: the stealth lane stays PRIMARY — but its own Bing brand-nav
+    // junk, the bulk battery's fleet-wide finding, must never early-return as an answer. Zero
+    // results carrying >=2 distinct query content tokens -> treat as a lane miss; the keyless
+    // federation gets its fallback shot, and whatever IT returns rides honestly to the caller.)
+    const _qt = [...new Set(q.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 3 && !_FLOOR_QSTOP.has(t)))];
+    if (_qt.length >= 2 && !results.some((r) => { const hay = `${r.title || ''} ${r.snippet || ''} ${r.url || ''}`.toLowerCase(); return _qt.filter((t) => hay.includes(t)).length >= 2; })) {
+      console.log(`[echo-suit] stealth lane PRIMARY returned brand-nav JUNK for "${q.slice(0, 60)}" — treated as a miss, federation fallback`);
+      return null;
+    }
     console.log(`[echo-suit] web_search → stealth lane PRIMARY served ${results.length} result(s) for "${q.slice(0, 60)}"`);
     return { ok: true, isError: false, text: JSON.stringify({
       query: q, results,
@@ -1924,6 +1933,7 @@ async function _webSearchLanePrimary(tag, deps = {}) {
 // parses it unchanged. The lane call is bounded (25s) so a hung browser can't stall a dispatch
 // that already beat the tool timeout. deps.search is a test seam.
 const _FLOOR_LANE_TIMEOUT_MS = 25000;
+const _FLOOR_QSTOP = new Set(['data', 'center', 'centers', 'about', 'with', 'from', 'this', 'that', 'what', 'announcement', 'announcements', 'news', 'update', 'updates', 'latest']);
 async function _webSearchFloor(tag, res, deps = {}) {
   try {
     if (!tag || tag.kind !== 'do' || tag.name !== 'web_search') return res;
@@ -1932,7 +1942,19 @@ async function _webSearchFloor(tag, res, deps = {}) {
     if (!res || !res.text || res.isError) return res;   // transport failure is its own signal — don't mask it
     let parsed = null;
     try { parsed = JSON.parse(res.text); } catch { return res; }
-    if (parsed && Array.isArray(parsed.results) && parsed.results.length) return res;   // the federation answered
+    let junkFed = false;
+    if (parsed && Array.isArray(parsed.results) && parsed.results.length) {
+      // THE RELEVANCE FLOOR (bulk battery, 08-25 — the search-quality track's 4th proof): a
+      // NON-empty federation of brand-nav junk ("Applied Digital Rapides" -> applied.com, the
+      // INDUSTRIAL company) is worse than empty: it reads as answered and no fallback fires.
+      // A result is relevant only if its text carries >=2 distinct content tokens of the query;
+      // zero relevant -> fall to the lane. Short queries (<2 content tokens) are unjudgeable.
+      const qt = [...new Set(q.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 3 && !_FLOOR_QSTOP.has(t)))];
+      const anyRelevant = qt.length < 2 || parsed.results.some((r) => { const hay = `${r.title || ''} ${r.snippet || ''} ${r.url || ''}`.toLowerCase(); return qt.filter((t) => hay.includes(t)).length >= 2; });
+      if (anyRelevant) return res;   // the federation genuinely answered
+      junkFed = true;
+      console.log(`[echo-suit] web_search federation returned JUNK (no result carries 2+ query terms) -> browser-lane floor for "${q.slice(0, 60)}"`);
+    }
     const searchFn = deps.search || require('./web_search').search;
     const sr = await Promise.race([
       searchFn(q),
@@ -1941,13 +1963,18 @@ async function _webSearchFloor(tag, res, deps = {}) {
     const results = (sr && Array.isArray(sr.results) ? sr.results : [])
       .map((r) => ({ title: r.title || '', url: r.url || '', snippet: r.snippet || null, source: 'browser-lane' }))
       .filter((r) => r.url);
+    // the lane's own junk never replaces the federation's (same Bing underneath) — judge it too
+    if (results.length && junkFed) {
+      const qt2 = [...new Set(q.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 3 && !_FLOOR_QSTOP.has(t)))];
+      if (qt2.length >= 2 && !results.some((r) => { const hay = `${r.title || ''} ${r.snippet || ''} ${r.url || ''}`.toLowerCase(); return qt2.filter((t) => hay.includes(t)).length >= 2; })) return res;
+    }
     if (!results.length) return res;   // the lane also found nothing — the honest empty stands
     console.log(`[echo-suit] web_search federation empty (providers unkeyed/dead) → browser-lane floor served ${results.length} result(s) for "${q.slice(0, 60)}"`);
     return { ok: true, isError: false, text: JSON.stringify({
       query: q, results,
       providers_used: ['browser-lane'],
-      providers_skipped: (parsed && parsed.providers_skipped) || { federation: 'empty' },
-      note: 'engine federation returned nothing; served by the app browser search lane',
+      providers_skipped: (parsed && parsed.providers_skipped) || { federation: junkFed ? 'junk' : 'empty' },
+      note: junkFed ? 'engine federation returned brand-nav junk; served by the app browser search lane' : 'engine federation returned nothing; served by the app browser search lane',
     }) };
   } catch { return res; }
 }
