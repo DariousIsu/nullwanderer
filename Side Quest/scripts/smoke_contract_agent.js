@@ -290,6 +290,23 @@ const deps = {
     ok(/EVERY SLOT IS LANDED \(filled or flagged\)\. If nothing more can improve them, act \{"action":"done"\} NOW/.test(pm[1].content), '⭐ the done-nudge: all-landed slots tell the driver to close instead of idling to budget death');
   }
 
+  // P2 — web_read gains the find window (08-25 live: drivers PLANNED find on web re-reads; A/H burned 10 waves)
+  {
+    const wfinds = [];
+    const depsW2 = { ...deps, webRead: async (url, find) => { wfinds.push(find); return find ? 'window: bonuses reached $51,000 per teacher, funded by the sales-tax surge' : 'head only'; } };
+    const W2 = store.openContract({ title: 'Web find probe', askVerbatim: 'probe', topicTokens: ['wfp'], budget: { maxWaves: 10 } });
+    store.upsertSlot({ contractId: W2.contractId, slotId: 'c', description: 'c' });
+    replies.push(JSON.stringify({ plan_summary: 'web find', actions: [
+      { action: 'web_read', url: 'https://twitchy.example/meta-teacher-pay' },
+      { action: 'web_read', url: 'https://twitchy.example/meta-teacher-pay', find: '$51' },
+    ] }));
+    await ca.runWave(W2.contractId, depsW2);
+    const w = store.waveLog(W2.contractId).slice(-1)[0];
+    ok(wfinds.length === 2 && wfinds[1] === '$51', '⭐ P2: a web RE-read with a find term is a DIFFERENT read — the truncated-head trap is gone');
+    ok(w.actions.some((a2) => /web_read .* find:"\$51" → .*\$51,000 per teacher/.test(a2)), 'P2: the windowed web read rides the observation, labeled with its find');
+    ok(/"action":"web_read","url":"https:\/\/\.\.\.","find":"optional term"/.test(ca.CHARTER), 'P2: the charter teaches web-read find');
+  }
+
   // P1 — the head-of-line blockade wiring pin (08-25 live: one budget-refused contract froze the fleet)
   {
     const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
