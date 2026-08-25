@@ -217,7 +217,9 @@ function addSlotFlag(contractId, slotId, flag) {
   const next = (s.status === 'blocked_on_question' || s.status === 'open') ? 'flagged' : s.status;
   // Flag-dedupe (slice-5 polish): a re-fill or re-flag never stacks an identical flag — one honest
   // note per (kind, text); the deliverable's flags list stays readable.
-  const dup = s.flags.some((f) => f && flag && f.kind === flag.kind && String(f.text || '') === String((flag && flag.text) || ''));
+  // near-dupe (08-25, schedule 2.1): PREFIX-equal (120ch) counts as the same — truncation-
+  // differing copies of one flag stacked 3× on the rematch's rapides-jobs render.
+  const dup = s.flags.some((f) => f && flag && f.kind === flag.kind && String(f.text || '').slice(0, 120) === String((flag && flag.text) || '').slice(0, 120));
   return upsertSlot({ contractId, slotId, description: s.description, status: next, contentRef: s.contentRef, citations: s.citations, flags: dup ? s.flags : [...s.flags, flag] });
 }
 

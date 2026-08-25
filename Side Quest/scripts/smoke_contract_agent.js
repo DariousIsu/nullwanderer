@@ -307,6 +307,53 @@ const deps = {
     ok(/"action":"web_read","url":"https:\/\/\.\.\.","find":"optional term"/.test(ca.CHARTER), 'P2: the charter teaches web-read find');
   }
 
+  // ── THE FORTIFICATION WAVE (Lucas 08-25: driver = the main model; go all the way on the harness) ──
+  {
+    ok(/THE DRIVER IS THE MAIN MODEL BY DESIGN/.test(fs.readFileSync(path.join(__dirname, '..', 'lib', 'contract_agent.js'), 'utf8')), 'the driver tracks model.replier by DESIGN (upgrades ride the main model)');
+    const FZ = store.openContract({ title: 'Fortify probe', askVerbatim: 'probe', topicTokens: ['fz'], budget: { maxWaves: 12 } });
+    store.upsertSlot({ contractId: FZ.contractId, slotId: 'cell', description: 'the sponsor of HB0291, cited' });
+    // LINT: the plan narrates find, no action carries it
+    replies.push(JSON.stringify({ plan_summary: 're-read the report with a targeted find term for HB0291', actions: [
+      { action: 'web_read', url: 'https://le.example/hb0291' },
+    ] }));
+    // this wave READ text + filled nothing → the extraction sub-step fires; its complete() reply:
+    replies.push(JSON.stringify({ content: 'HB0291 is sponsored by Rep. Candice Pierucci (R-HD-49).', citation: { src: 'le.example/hb0291', date: '2026-03-24' } }));
+    const depsZ = { ...deps, webRead: async () => 'Utah HB0291 — chief sponsor Rep. Candice Pierucci (R-HD-49), floor sponsor Sen. Mike McKell.' };
+    await ca.runWave(FZ.contractId, depsZ);
+    const wz = store.waveLog(FZ.contractId).slice(-1)[0];
+    ok(wz.actions.some((a2) => /LINT: your plan NAMES a find term but no action carried/.test(a2)), '⭐ FORTIFY/lint: narrated-find-without-the-field is named in the observations (narration does not execute)');
+    const cz = store.slots(FZ.contractId).find((x) => x.slotId === 'cell');
+    ok(cz.status === 'filled' && cz.citations.length === 1 && /Pierucci/.test(cz.contentRef), '⭐ FORTIFY/extraction: the sub-step filled the slot FROM the wave read text, cited');
+    ok(wz.actions.some((a2) => /extraction sub-step: cell FILLED/.test(a2)), 'the extraction lands in the observations');
+    // extraction honesty: cannot → slot stays open
+    const FY = store.openContract({ title: 'Fortify cannot', askVerbatim: 'probe2', topicTokens: ['fy'], budget: { maxWaves: 12 } });
+    store.upsertSlot({ contractId: FY.contractId, slotId: 'c2', description: 'the vote count, cited' });
+    replies.push(JSON.stringify({ plan_summary: 'read', actions: [{ action: 'web_read', url: 'https://le.example/other' }] }));
+    replies.push(JSON.stringify({ cannot: true, why: 'the text has no vote count' }));
+    await ca.runWave(FY.contractId, depsZ);
+    ok(store.slots(FY.contractId)[0].status === 'open' && store.waveLog(FY.contractId).slice(-1)[0].actions.some((a2) => /extraction c2: cannot — the text has no vote count/.test(a2)), 'FORTIFY/extraction honesty: an unsupported slot stays open with the why');
+    // extract-first prompt force + scope-add nudge
+    const pm2 = ca.buildPrompt(store.getContract(FY.contractId), { store });
+    ok(/YOU HOLD READ TEXT/.test(pm2[1].content), 'FORTIFY/prompt: read text in hand + open slots → extract-first rides the prompt');
+    store.postInbox({ contractId: FY.contractId, kind: 'steering', text: 'move the CARES material into a new section called The Good Neighbor' });
+    ok(/NEW deliverable structure/.test(ca.buildPrompt(store.getContract(FY.contractId), { store })[1].content), 'FORTIFY/scope-add: steering naming a new section draws the define_slots nudge (rematch T4 class)');
+    // news cap
+    const FX = store.openContract({ title: 'News cap', askVerbatim: 'probe3', topicTokens: ['fx'], budget: { maxWaves: 12 } });
+    store.upsertSlot({ contractId: FX.contractId, slotId: 'c3', description: 'c3' });
+    replies.push(JSON.stringify({ plan_summary: 'burst', actions: [
+      { action: 'news_search', query: 'alpha one' }, { action: 'news_search', query: 'beta two' }, { action: 'news_search', query: 'gamma three' },
+    ] }));
+    await ca.runWave(FX.contractId, { ...deps, newsSearch: async () => '[]' });
+    ok(store.waveLog(FX.contractId).slice(-1)[0].actions.filter((a2) => /news budget \(2\) is spent/.test(a2)).length === 1, 'FORTIFY/news-cap: the third news_search in one wave is refused (GDELT burst throttle, schedule 2.5)');
+    // near-dupe flags
+    const FW = store.openContract({ title: 'Dupe flags', askVerbatim: 'probe4', topicTokens: ['fw'] });
+    store.upsertSlot({ contractId: FW.contractId, slotId: 'c4', description: 'c4' });
+    const LONG = 'Unable to locate specific cited figures for the thing from held documents or accessible news sources. '.repeat(3);
+    store.upsertSlot({ contractId: FW.contractId, slotId: 'c4', status: 'flagged', flags: [{ kind: 'uncited', text: LONG.slice(0, 180) }] });
+    store.addSlotFlag(FW.contractId, 'c4', { kind: 'uncited', text: LONG.slice(0, 250) });
+    ok(store.slots(FW.contractId)[0].flags.length === 1, 'FORTIFY/near-dupe: prefix-equal flags never stack (the rematch 3× rapides-jobs class)');
+  }
+
   // P1 — the head-of-line blockade wiring pin (08-25 live: one budget-refused contract froze the fleet)
   {
     const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');

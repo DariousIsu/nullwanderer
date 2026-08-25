@@ -26,6 +26,11 @@ const READ_OBS_CAP = 2800;        // read_held gets a BIG window — the excerpt
 const MAX_READS_PER_WAVE = 2;     // bounds prompt growth: ≤2 big reads per wave ride forward
 const PROMPT_OBS_WAVES = 2;       // how many past waves' observations ride the prompt
 
+// THE DRIVER IS THE MAIN MODEL BY DESIGN (Lucas 08-25: "make it whatever the main model is
+// — the newest glm right now — but go all the way with fortification"): the driver tracks
+// model.replier so a main-model upgrade upgrades the waves with it; model.contract_driver
+// stays only as an emergency override lever. The capability strategy is the HARNESS
+// fortification below (action-lint · extraction sub-step · extract-first prompt), not a tier.
 function driverModel() {
   try {
     const db = require('./db');
@@ -207,6 +212,15 @@ function buildPrompt(c, { store, replan = null }) {
   if (openQs.length) lines.push(`OPEN QUESTIONS (proceed on the assumption if unanswered): ${openQs.map((q) => `"${q.text}" → assumption: ${q.assumption}`).join(' | ')}`);
   // the done-nudge (bulk battery: D reached all-flagged and idled to budget death without done)
   if (slots.length && slots.every((s2) => s2.status === 'filled' || s2.status === 'flagged')) lines.push('EVERY SLOT IS LANDED (filled or flagged). If nothing more can improve them, act {"action":"done"} NOW - an idle wave here only burns budget.');
+  // EXTRACT FIRST (fortification, 08-25): read text in hand + open slots = fill before any new lookup
+  const _lastW = recent[recent.length - 1];
+  if (_lastW && (_lastW.actions || []).some((a4) => /^(read_held|web_read) .* → /.test(String(a4)) && !/EMPTY|REFUSED|FIND-MISS/.test(String(a4))) && slots.some((s4) => s4.status === 'open')) {
+    lines.push('YOU HOLD READ TEXT (the observations above). FILL open slots FROM IT this wave — quote and cite, or flag with why — BEFORE running any new lookup. Lookups you already ran do not fill slots; fill_slot does.');
+  }
+  // the scope-add nudge (rematch: T4 steered a NEW section and the driver never define_slots'd it)
+  if (inbox.some((m2) => /new (?:section|slot|cell)|section called|add an? .{0,30}(?:section|cell|slot)/i.test(String(m2.text || '')))) {
+    lines.push('The steering above names NEW deliverable structure — if it is not in the slot list yet, {"action":"define_slots"} for it THIS wave.');
+  }
   if (inbox.length) lines.push(`OPERATOR STEERING (unapplied — fold these into this wave's plan): ${inbox.map((m) => `#${m.id} [${m.kind}] ${m.text}`).join(' | ')}`);
   for (const w of recent) {
     lines.push(`WAVE ${w.waveN} (${w.outcome || 'no outcome'}) observations:`);
@@ -317,6 +331,7 @@ async function runWave(contractId, deps) {
   } else {
     const slotsNow = () => store.slots(contractId);
     let readsThisWave = 0;
+    let newsThisWave = 0;     // GDELT throttles bursts (schedule 2.5): ≤2 news_search per wave
     let progressed = false;   // slot/outbox motion this wave — the stall watchdog's signal (catch R3c)
     for (const a of reply.actions.slice(0, MAX_ACTIONS_PER_WAVE)) {
       const act = String((a && a.action) || '');
@@ -352,6 +367,8 @@ async function runWave(contractId, deps) {
           observations.push(`${act} "${_cap(query, 80)}" → ${junk ? `JUNK (brand-nav: ${res.length} results, none carry 2+ query terms — treat as EMPTY and change the approach, not the phrasing)` : empty ? 'EMPTY' : _cap(typeof res === 'string' ? res : JSON.stringify(res), OBS_CAP)}`);
         } else if (act === 'news_search') {
           const query = String(a.query || '').trim();
+          if (newsThisWave >= 2) { observations.push(`news_search "${_cap(query, 60)}" REFUSED: this wave's news budget (2) is spent — GDELT throttles bursts, spread queries across waves`); continue; }
+          newsThisWave++;
           const sig = chainGuard.tagSignature({ kind: 'do', name: 'news_search', args: { query: query.toLowerCase() } });
           if (chain.seen.has(sig)) {
             chainGuard.evaluateHop(chain, { signature: sig, label: 'news_search', emptyThisHop: true, retrieval: true });
@@ -436,9 +453,11 @@ async function runWave(contractId, deps) {
             store.upsertSlot({ contractId, slotId, description: s.description, status: 'flagged', contentRef: s.contentRef, citations: s.citations, flags: [...s.flags, { kind: 'off-instance', text: `content anchors ${off.found} but the contract anchors ${off.want}` }] });
             observations.push(`fill_slot ${slotId} REFUSED off-instance (${off.found} vs ${off.want}) → FLAGGED (wrong state/campus material never fills the slot)`);
           } else {
-            // flag-dedupe (slice-5 polish): a re-fill re-sending the same label never stacks it
+            // flag-dedupe (slice-5 polish, near-dupe 08-25): a re-fill re-sending the same label
+            // never stacks it — PREFIX-equal (120ch) counts as the same (truncation-differing
+            // copies of one flag stacked 3× on the rematch's rapides-jobs).
             const mergedFlags = [...s.flags];
-            for (const f2 of flags) if (f2 && !mergedFlags.some((g) => g && g.kind === f2.kind && String(g.text || '') === String(f2.text || ''))) mergedFlags.push(f2);
+            for (const f2 of flags) if (f2 && !mergedFlags.some((g) => g && g.kind === f2.kind && String(g.text || '').slice(0, 120) === String(f2.text || '').slice(0, 120))) mergedFlags.push(f2);
             store.upsertSlot({ contractId, slotId, description: s.description, status: 'filled', contentRef: `inline:${_cap(String(a.content || ''), 600)}`, citations: cites, flags: mergedFlags });
             progressed = true;
             observations.push(`fill_slot ${slotId} FILLED (${cites.length} citation(s))`);
@@ -471,6 +490,44 @@ async function runWave(contractId, deps) {
         }
       } catch (e) { observations.push(`${act} errored: ${_cap(e.message, 150)}`); }
       if (done) break;
+    }
+    // THE FIND-UPTAKE ACTION-LINT (fortification, 08-25: A spent 22 waves NARRATING "with a
+    // targeted find term" while emitting actions WITHOUT the field — narrate-vs-act at the
+    // action level). A plan that talks find while no action carried one gets told, in the
+    // observations the next prompt reads, that narration does not execute.
+    if (reply && /\bfind(?:\s+term|s? for|:)/i.test(String(reply.plan_summary || '')) &&
+        !reply.actions.some((a3) => a3 && String(a3.find || '').trim())) {
+      observations.push('LINT: your plan NAMES a find term but no action carried a "find" field — narration does not execute. Re-issue the read as {"action":"read_held"|"web_read", ..., "find":"<the term>"}.');
+    }
+    // THE CITE-EXTRACTION SUB-STEP (fortification, 08-25 — "go all the way"): planning and
+    // extraction are different cognitive acts. When this wave READ material but filled nothing,
+    // a laser single-slot prompt (same main model) extracts a cited fill or an honest cannot —
+    // landing through the SAME cite-or-flag + off-instance discipline as any driver fill.
+    if (reply && !done && !progressed) {
+      const readObs = observations.filter((o) => /^(read_held|web_read) .* → /.test(o) && !/EMPTY|REFUSED|FIND-MISS/.test(o));
+      const openSlots = store.slots(contractId).filter((s3) => s3.status === 'open').slice(0, 2);
+      if (readObs.length && openSlots.length && typeof complete === 'function') {
+        for (const sl of openSlots) {
+          try {
+            const exRaw = await complete([
+              { role: 'system', content: 'You extract ONE slot fill from supplied text. Reply ONLY JSON: {"content":"<1-3 sentences>","citation":{"src":"<outlet/site/doc ref from the text>","date":"YYYY-MM-DD or held"}} when the text SUPPORTS the slot, or {"cannot":true,"why":"<one line>"} when it does not. NEVER invent a figure or name not in the text.' },
+              { role: 'user', content: `SLOT: ${sl.slotId} — ${sl.description}\n\nTEXT (read this wave):\n${readObs.join('\n').slice(0, 9000)}` },
+            ]);
+            const ex = parseDriverReply(exRaw);
+            if (ex && !ex.cannot && ex.content && ex.citation && ex.citation.src) {
+              if (_offInstanceCheck(c, String(ex.content), deps.stateCodes)) {
+                observations.push(`extraction ${sl.slotId}: off-instance content refused`);
+              } else {
+                store.upsertSlot({ contractId, slotId: sl.slotId, description: sl.description, status: 'filled', contentRef: `inline:${_cap(String(ex.content), 600)}`, citations: [ex.citation], flags: sl.flags });
+                progressed = true;
+                observations.push(`extraction sub-step: ${sl.slotId} FILLED from this wave's reads (cited: ${_cap(String(ex.citation.src), 60)})`);
+              }
+            } else if (ex && ex.cannot) {
+              observations.push(`extraction ${sl.slotId}: cannot — ${_cap(String(ex.why || ''), 100)}`);
+            }
+          } catch (e2) { observations.push(`extraction ${sl.slotId} errored: ${_cap(e2.message, 80)}`); }
+        }
+      }
     }
     // THE STALL WATCHDOG (rematch catch R3c, 08-24 live): 16 waves, zero slot transitions, zero
     // outbox posts — the operator heard NOTHING while the loop starved. Any slot/outbox motion
