@@ -13796,6 +13796,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       const _wsv = _mc.verifyWorkStateClaims(sayOut, {
         gatherRanThisTurn: () => { if (!_fuAnchor) return true; try { return require('./lib/echo_suit').lastGatherTs() >= _fuAnchor; } catch { return true; } },
         pendingRecordFor: (anchors) => { try { return _wsLib.pendingRecordFor(anchors, _wsLib.snapshot()); } catch { return true; } },
+        reminderExists: (id) => { try { const r = db.getDb().prepare('SELECT status FROM scheduled_tasks WHERE id = ?').get(id); return !!(r && r.status === 'pending'); } catch { return true; } },   // a cited reminder # must exist (round-3 catch)
         agentRanRecently: () => { try { return Math.max(require('./lib/echo_suit').lastAgentTs() || 0, require('./lib/contract_store').lastWaveTs() || 0) >= Date.now() - 15 * 60e3; } catch { return true; } },   // a real contract wave IS a real agent run (spec §7 positive source)
         evidence: String(resultText || ''),
       });
@@ -18089,6 +18090,7 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
       const wsv = _mc.verifyWorkStateClaims(out, {
         gatherRanThisTurn: () => { if (!turnStartTs) return true; try { return require('./lib/echo_suit').lastGatherTs() >= turnStartTs; } catch { return true; } },
         pendingRecordFor: (anchors) => { try { return ws.pendingRecordFor(anchors, ws.snapshot()); } catch { return true; } },
+        reminderExists: (id) => { try { const r = db.getDb().prepare('SELECT status FROM scheduled_tasks WHERE id = ?').get(id); return !!(r && r.status === 'pending'); } catch { return true; } },   // a cited reminder # must exist (round-3 catch)
         agentRanRecently: () => { try { return Math.max(require('./lib/echo_suit').lastAgentTs() || 0, require('./lib/contract_store').lastWaveTs() || 0) >= Date.now() - 15 * 60e3; } catch { return true; } },   // a real contract wave IS a real agent run (spec §7 positive source)
         evidence,
       });

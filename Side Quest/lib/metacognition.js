@@ -415,8 +415,12 @@ const _WS_ETA_NUM_RE = /\b(?:\d{1,4}|a few|a couple(?: of)?|five|ten|fifteen|twe
 // booked, registered, queued, logged, tracked — when none is. Scoped to her own work-tracking objects
 // so an EXTERNAL "the bill is registered in the state system" (caught by _WS_EXTERNAL_RE) never fires.
 const _WS_REGISTERED_RE = /\b(?:pivot|task|order|focus|request|reminder|scope[- ]?add|steer|item|note)\b[^.!?\n]{0,40}\b(?:is|'s|are|has been|have been|now)\b[^.!?\n]{0,24}\b(?:registered|booked|queued|logged|filed|recorded|set up|on file|in the (?:queue|system)|tracked)\b|\bI(?:'ve| have)\s+(?:registered|booked|queued|logged|filed|recorded|set up|tracked)\b[^.!?\n]{0,40}\b(?:pivot|task|order|focus|request|reminder|scope[- ]?add|steer|it|that)\b/i;
+// The PASSIVE noun-first shape (round-3 catch 08-26: "the 143 unknown-parish contacts are logged as
+// tracked work for later" — subject outside the work-noun list, so _WS_REGISTERED_RE never fired).
+// "…as tracked work" is itself the work-record claim, whatever the subject.
+const _WS_TRACKED_AS_RE = /\b(?:is|are|'s|has been|have been|been|now)\s+(?:now\s+)?(?:logged|registered|booked|queued|filed|recorded|noted)\s+as\s+tracked\s+work\b/i;
 
-function verifyWorkStateClaims(say, { gatherRanThisTurn = null, pendingRecordFor = null, agentRanRecently = null, evidence = '' } = {}) {
+function verifyWorkStateClaims(say, { gatherRanThisTurn = null, pendingRecordFor = null, agentRanRecently = null, reminderExists = null, evidence = '' } = {}) {
   const violations = [];
   const ev = String(evidence || '').toLowerCase();
   const sentences = String(say || '').split(/(?<=[.!?])\s+|\n+/);
@@ -462,11 +466,21 @@ function verifyWorkStateClaims(say, { gatherRanThisTurn = null, pendingRecordFor
     }
     // REGISTRATION/BOOKING: "the pivot's registered" needs a measured record (an open promise/focus)
     // just like a pending claim — the SAME probe answers it (a registered pivot IS a pending record).
-    if (!violations.some((v) => v.kind === 'registration') && _WS_REGISTERED_RE.test(s) && !_WS_EXTERNAL_RE.test(s)) {
+    if (!violations.some((v) => v.kind === 'registration') && (_WS_REGISTERED_RE.test(s) || _WS_TRACKED_AS_RE.test(s)) && !_WS_EXTERNAL_RE.test(s)) {
       const anchors = _wsAnchors(s);
       if (anchors.length && typeof pendingRecordFor === 'function') {
         let backed = true; try { backed = !!pendingRecordFor(anchors); } catch { backed = true; }   // fail OPEN
         if (!backed) violations.push({ kind: 'registration', claim: s.slice(0, 110), anchors });
+      }
+    }
+    // CLAIMED REMINDER/TASK ID (round-3 catch 08-26: "reminder #94 on my clock" while NO row #94
+    // existed — the id was lifted from the rolling context). A cited id is a hard checkable fact,
+    // like an email address: it must exist as a pending scheduled task or the claim corrects.
+    if (!violations.some((v) => v.kind === 'reminder-id') && typeof reminderExists === 'function') {
+      const mId = s.match(/\b(?:reminder|task)\s*#\s*(\d+)\b(?![^.!?\n]{0,30}\b(?:deleted|removed|cleared|cancelled|canceled)\b)/i);
+      if (mId) {
+        let there = true; try { there = !!reminderExists(Number(mId[1])); } catch { there = true; }   // fail OPEN
+        if (!there) violations.push({ kind: 'reminder-id', claim: s.slice(0, 110), id: Number(mId[1]) });
       }
     }
     prev = s;
@@ -482,6 +496,7 @@ function workStateCorrection(violations = []) {
   if (violations.some((v) => v.kind === 'agent')) parts.push(`I described an agent working on this (or gave a completion estimate), but no agent run is actually recorded — that status was invented, don't wait on it`);
   if (violations.some((v) => v.kind === 'pending')) parts.push(`I called that pending work with a deadline, but I hold no record of it as open work — don't trust that status until I've actually checked`);
   if (violations.some((v) => v.kind === 'registration')) parts.push(`I said that's registered/booked, but I hold no record of it as tracked work — treat it as not yet booked`);
+  if (violations.some((v) => v.kind === 'reminder-id')) parts.push(`I cited a reminder number that does not exist on my clock — nothing is actually booked under it; treat that hold as NOT saved`);
   if (!parts.length) return '';
   return `\n\n[Correction — ${parts.join('; ')}.]`;
 }

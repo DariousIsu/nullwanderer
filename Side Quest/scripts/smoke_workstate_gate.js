@@ -156,5 +156,19 @@ ok(!has("I've already composed the sheet and landed it."), 'FP: a done-claim is 
   ok(mc.verifyWorkStateClaims('I\'ve booked the Hartfield roster pull as a task.', { pendingRecordFor: () => false }).violations.some((v) => v.kind === 'registration'), 'R11: "I\'ve booked X as a task" with no record → flagged');
 }
 
+// ── R11b (round-3 catch 08-26): the PASSIVE registration shape + the claimed reminder id ──
+{
+  // the live evasion verbatim: subject outside the work-noun list + an appositive reminder claim
+  const evade = 'Noted — the 143 unknown-parish contacts are logged as tracked work for later, reminder #94 on my clock.';
+  const rP = mc.verifyWorkStateClaims(evade, { pendingRecordFor: () => false, reminderExists: () => false });
+  ok(!rP.ok && rP.violations.some((v) => v.kind === 'registration' || v.kind === 'reminder-id'), 'R11b: the passive "are logged as tracked work" + stale reminder # is caught (the R3-2 evasion verbatim)');
+  const rId = mc.verifyWorkStateClaims('Your levee check is set — reminder #212 on my clock will surface it Tuesday.', { reminderExists: (id) => id !== 212 });
+  ok(!rId.ok && rId.violations.some((v) => v.kind === 'reminder-id' && v.id === 212), 'R11b: a cited reminder # with no pending row behind it → flagged');
+  ok(/reminder number that does not exist on my clock/.test(mc.workStateCorrection(rId.violations)), 'R11b: the honest correction names the phantom reminder');
+  ok(mc.verifyWorkStateClaims('Your levee check is set — reminder #212 on my clock will surface it Tuesday.', { reminderExists: () => true }).ok, 'R11b: the SAME claim with a real pending row → clean');
+  ok(mc.verifyWorkStateClaims('I deleted the stale hold — task #94 removed from the clock.', { reminderExists: () => false }).ok, 'R11b FP: talking about a DELETED task id is not a live-hold claim');
+  ok(mc.verifyWorkStateClaims(evade, {}).ok, 'R11b fail-open: no reminderExists hook and no pendingRecordFor → no scold (probe stays optional)');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
