@@ -1921,6 +1921,57 @@ async function _webSearchLanePrimary(tag, deps = {}) {
   } catch { return null; }
 }
 
+// ── THE BROWSER-LANE PAGE READ (the fuel wall, 2026-08-25) ──────────────────────────────────────
+// web_extract's `simple` depth is a STATIC fetch — a JS-RENDERED page (the billsintro SPA, React
+// civic portals, quotes.toscrape.com/js — all 0 chars via trafilatura) is invisible to it, and the
+// `js` depth is stubbed on this box ("routes through browser.py, not yet implemented"). So a page
+// whose body the driver could SEE in a browser was an honest-but-permanent miss — the bulk battery's
+// ONE fuel wall left (A flagged hb0606/sb0183 unreachable on exactly this). This composes HER OWN
+// headless stealth browser (the same lane web_search rides): open → navigate(networkidle) → extract
+// body → close. Proven live 08-25: quotes.toscrape.com/js returned all 10 rendered quotes where
+// web_extract simple returned 0. Bounded per step and ALWAYS-close (a hung browser can't leak a
+// session). A bot-wall / interstitial body (F5 "support ID", Cloudflare "just a moment", a captcha
+// gate — le.utah.gov rejects even the browser) is sniffed and returned as an honest miss, never
+// masqueraded as page content. Returns the rendered body text (>80 chars) or null. deps.dispatch is
+// a test seam.
+const _BROWSER_READ_NAV_MS = 30000;
+const _BOT_WALL_RE = /the requested url was rejected|your support id is|request rejected|access denied|attention required|just a moment|please (?:enable|turn on) (?:cookies|javascript)|verify (?:you are|your identity)|are you a human|recaptcha|cf-browser-verification|ddos protection by|checking your browser before/i;
+async function browserRead(url, { navMs = _BROWSER_READ_NAV_MS, dispatch = null } = {}) {
+  const u = String(url || '').trim();
+  if (!/^https?:\/\//i.test(u)) return null;
+  const d = dispatch || (liveReady() ? (tag) => _live.dispatch(tag) : null);
+  if (!d) return null;
+  // dispatch normalizes the MCP result to {ok, text}; browser_extract's `text` is the tool's JSON
+  // payload {"ok":true,"text":"<body>"} — unwrap to the inner body. (web_extract may hand back plain
+  // text, so fall through to the raw string when it isn't a {text:…} envelope.)
+  const _txt = (r) => {
+    if (!r || r.ok === false) return '';
+    let s = typeof r.text === 'string' ? r.text : (typeof r === 'string' ? r : '');
+    s = s.trim();
+    if (s.startsWith('{')) { try { const j = JSON.parse(s); if (j && typeof j.text === 'string') return j.text; } catch { /* not an envelope — use as-is */ } }
+    return s;
+  };
+  let sid = null;
+  try {
+    const open = await _raceTimeout(d({ kind: 'do', name: 'browser_open_session', args: { headless: true, stealth: true } }), 15000, 'browser_open_session');
+    let oj = null; try { oj = JSON.parse((open && open.text) || '{}'); } catch { oj = (open && typeof open === 'object') ? open : {}; }
+    sid = (oj && (oj.session_id || (oj.result && oj.result.session_id))) || null;
+    // The Echo-side confirm gate returns {status:'confirmation_required', approval_id}. On this
+    // single-operator box the browser lane is operator-authorized (open returns a session_id
+    // outright, live 08-25). If it DID pause instead, honor the pause: this runs unattended, so a
+    // held confirmation is an honest miss — never self-approve.
+    if (!sid) { console.log(`[echo-suit] browserRead: no session for ${u.slice(0, 60)} (${(oj && oj.status) || 'open failed'})`); return null; }
+    await _raceTimeout(d({ kind: 'do', name: 'browser_navigate', args: { session_id: sid, url: u, wait_until: 'networkidle' } }), navMs, 'browser_navigate');
+    const ext = await _raceTimeout(d({ kind: 'do', name: 'browser_extract', args: { session_id: sid } }), 15000, 'browser_extract');
+    const t = _txt(ext).trim();
+    if (t.length <= 80) return null;   // blank/near-blank render = an honest miss (same floor as web_extract)
+    if (_BOT_WALL_RE.test(t.slice(0, 800))) { console.log(`[echo-suit] browserRead: bot-wall on ${u.slice(0, 60)} — honest miss`); return null; }
+    console.log(`[echo-suit] browserRead: rendered ${t.length} chars from ${u.slice(0, 60)}`);
+    return t;
+  } catch (e) { console.log(`[echo-suit] browserRead error on ${u.slice(0, 60)}: ${e && e.message}`); return null; }
+  finally { if (sid) { try { await d({ kind: 'do', name: 'browser_close_session', args: { session_id: sid } }); } catch {} } }
+}
+
 // ── BUILD 0 (2026-08-21): the browser-lane search floor ─────────────────────────────────────────
 // The engine's federated web_search is key-gated (exa/jina/tavily/brave) and its zero-key floors
 // can die on this box (DDG null-routed the IP; raw Bing can meet a JS wall) — so background and
@@ -2053,7 +2104,7 @@ function routeCacheStats() {
 }
 
 module.exports = {
-  routeCacheStats, _raceTimeout, lastContactWriteTs, lastAgentTs, lastGatherTs, lastExternalGatherTs, markGather, _webSearchFloor, _webSearchLanePrimary,
+  routeCacheStats, _raceTimeout, lastContactWriteTs, lastAgentTs, lastGatherTs, lastExternalGatherTs, markGather, _webSearchFloor, _webSearchLanePrimary, browserRead, _BOT_WALL_RE,
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
   placeholderComplaint, sanitizeFtsQuery, prepareDoArgs, recipeMisrouteHint, templateArgs,
   setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates, _salienceDominant

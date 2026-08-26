@@ -106,9 +106,21 @@ function liveDeps() {
     // repeat-guard served the same truncated head and A/H burned 10 waves. The web face of B2.
     webRead: async (url, find = null) => {
       try {
-        const r = await require('./echo_suit').dispatch({ kind: 'do', name: 'web_extract', args: { url } });
-        const t = r && r.ok !== false && r.text ? String(r.text) : '';
-        if (t.trim().length <= 80) return null;   // 0-char extractions (JS-gated pages) are an honest miss
+        const es = require('./echo_suit');
+        const r = await es.dispatch({ kind: 'do', name: 'web_extract', args: { url } });
+        let t = r && r.ok !== false && r.text ? String(r.text) : '';
+        // THE FUEL WALL (08-25): web_extract's static fetch returns 0 chars on a JS-RENDERED page
+        // (the billsintro SPA, React civic portals) and its `js` depth is stubbed on this box. When
+        // the static read is empty, escalate to HER OWN headless stealth browser, which renders the
+        // page the extractor can't (proven live: quotes.toscrape.com/js). A bot-wall (le.utah.gov's
+        // F5 "support ID") is sniffed INSIDE browserRead and returns null — an honest, permanent miss
+        // the driver flags, exactly as A did on hb0606/sb0183. The store-as-we-go + find tail below
+        // banks and windows whichever text won.
+        if (t.trim().length <= 80) {
+          const rendered = await es.browserRead(url);
+          if (rendered && rendered.trim().length > 80) t = rendered;
+        }
+        if (t.trim().length <= 80) return null;   // static extract AND browser render both came up empty
         // STORE AS WE GO (Lucas 08-25: "we should be scraping and storing as we go") — a fetched
         // page banks as a source AT FETCH TIME, not only at close-out; fire-and-forget, fail-soft.
         (async () => {

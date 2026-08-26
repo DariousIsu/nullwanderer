@@ -317,6 +317,56 @@ function mockClient(overrides = {}) {
     ok('template: query tool with EMPTY need → null (never dispatch a blank query)', S.templateArgs('search', '   ') === null);
   }
 
+  // --- THE BROWSER-LANE PAGE READ (the fuel wall, 2026-08-25) -----------------------------------
+  // web_extract's static fetch is 0 chars on a JS-rendered page and its `js` depth is stubbed on this
+  // box; browserRead composes her own headless stealth browser to render it. dispatch is a test seam;
+  // the mock mirrors the REAL normalized shapes (open → {session_id}, extract → {"text":<body>} JSON).
+  {
+    console.log('\nbrowserRead — the browser-lane page read (fuel wall):');
+    const mkDisp = (opts = {}) => {
+      const calls = [];
+      const disp = async (tag) => {
+        calls.push(tag.name);
+        if (tag.name === 'browser_open_session') {
+          if (opts.openStatus) return { ok: true, text: JSON.stringify({ status: opts.openStatus }) };
+          if (opts.openTimeout) return { ok: false, isError: true, timedOut: true, text: 'Tool timed out after 15s and was abandoned.' };
+          return { ok: true, text: JSON.stringify({ ok: true, session_id: 'sid1' }) };
+        }
+        if (tag.name === 'browser_navigate') return { ok: true, text: JSON.stringify({ ok: true, title: 't' }) };
+        if (tag.name === 'browser_extract') return { ok: true, text: JSON.stringify({ ok: true, text: opts.body == null ? '' : opts.body }) };
+        if (tag.name === 'browser_close_session') return { ok: true, text: JSON.stringify({ ok: true }) };
+        return { ok: true, text: '{}' };
+      };
+      return { calls, disp };
+    };
+
+    const body = 'Quotes to Scrape\n' + '“It is our choices that show what we truly are.” by J.K. Rowling '.repeat(4) + '\nby Albert Einstein';
+    const m1 = mkDisp({ body });
+    const t1 = await S.browserRead('https://quotes.toscrape.com/js/', { dispatch: m1.disp });
+    ok('⭐ renders a JS page → the inner body, unwrapped from the {text:…} envelope', t1 === body);
+    ok('drives open → navigate → extract → close, in order', m1.calls.join(',') === 'browser_open_session,browser_navigate,browser_extract,browser_close_session');
+
+    const m2 = mkDisp({ body: 'The requested URL was rejected. Please consult with your administrator. Your support ID is: 3305068709 [Go Back]' });
+    ok('⭐ a bot-wall body (F5 "support ID", le.utah.gov) is an honest miss → null', (await S.browserRead('https://le.utah.gov/x', { dispatch: m2.disp })) === null);
+    ok('…and the session is STILL closed after a bot-wall miss', m2.calls.includes('browser_close_session'));
+
+    ok('a blank/near-blank render (≤80 chars) → null', (await S.browserRead('https://x.example/', { dispatch: mkDisp({ body: 'tiny render' }).disp })) === null);
+
+    const m4 = mkDisp({ openStatus: 'confirmation_required' });
+    ok('⭐ a held confirmation (no session_id) → honest miss, never self-approved', (await S.browserRead('https://x.example/', { dispatch: m4.disp })) === null);
+    ok('…and no navigate/extract fired without a session', !m4.calls.includes('browser_navigate') && !m4.calls.includes('browser_extract'));
+
+    ok('an open-session soft-error (timeout, non-JSON text) → null', (await S.browserRead('https://x.example/', { dispatch: mkDisp({ openTimeout: true }).disp })) === null);
+
+    const m6 = mkDisp({ body });
+    ok('a non-http(s) url is refused before ANY dispatch (SSRF floor)', (await S.browserRead('file:///etc/passwd', { dispatch: m6.disp })) === null && m6.calls.length === 0);
+    ok('a null/blank url → null, no dispatch', (await S.browserRead('', { dispatch: m6.disp })) === null && m6.calls.length === 0);
+
+    ok('_BOT_WALL_RE matches Cloudflare "just a moment / checking your browser"', S._BOT_WALL_RE.test('Just a moment... Checking your browser before accessing the site.'));
+    ok('_BOT_WALL_RE matches a captcha gate', S._BOT_WALL_RE.test('Please complete the reCAPTCHA to continue.'));
+    ok('_BOT_WALL_RE does NOT match a real bill page', !S._BOT_WALL_RE.test('HB0606 Sponsor: Rep. Jane Doe. Title: Public Education Amendments. Status: enrolled.'));
+  }
+
   console.log('\n' + (fail === 0 ? 'ALL PASS' : 'FAILURES') + ` - ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
