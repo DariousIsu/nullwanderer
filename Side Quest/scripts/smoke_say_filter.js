@@ -75,5 +75,24 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
   ok(/AFIDA/i.test(subj), `booked topic still names the real subject (got: "${subj}")`);
 }
 
+// ── R5: the "let me get that going" deflection filler never reaches the say (banned every path) ──
+{
+  const a = sf.filterSay('Folding the teacher bonuses into the Good Neighbor work. On it — let me get that going.\n\nOne thing worth pulling on: the LCTCS angle.');
+  ok(!/let me get that going/i.test(a), 'R5: the deflection filler is stripped from the say');
+  ok(/On it\./.test(a) && !/—\s*$/m.test(a) && /LCTCS/.test(a), 'R5: the real ack keeps its period + substance survives, no dangling connector ("On it.")');
+  ok(sf.filterSay('let me get this going').trim() === '', 'R5: a bare deflection phrase strips to empty (the model was told never to send it alone)');
+  ok(/Pulling the AFIDA numbers now\./.test(sf.filterSay('Pulling the AFIDA numbers now.')), 'R5: a concrete starting ack is untouched');
+}
+
+// ── say-splice (main.js wiring): the paper announce quotes a bounded title + conditions the cite claim ──
+{
+  const fs = require('fs'), path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/SAY-TRUTH \(say-splice/.test(src) && /the finished paper on "\$\{_paperTitle\}"/.test(src),
+    '⭐ say-splice: the announce quotes a bounded title (a raw order fragment can no longer garble the grammar)');
+  ok(/r\.sourceCount > 0[\s\S]{0,140}every inline citation resolving[\s\S]{0,120}synthesized from held material/.test(src),
+    '⭐ say-splice: the "citations resolving" claim is conditioned on sourceCount>0 (0 sources says so plainly, no contradiction)');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

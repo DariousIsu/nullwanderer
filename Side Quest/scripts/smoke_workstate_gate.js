@@ -141,5 +141,20 @@ ok(!has("I've already composed the sheet and landed it."), 'FP: a done-claim is 
   ok(r7.ok, 'a true pairing holds even across the SB-200/SB200 spacing difference');
 }
 
+// ── R11: the registration/booking claim (LA rematch: "pivot's registered" with NO door booking) ──
+{
+  const reg = "The Rapides tax pivot's registered.";
+  const rNo = mc.verifyWorkStateClaims(reg, { pendingRecordFor: () => false });
+  ok(!rNo.ok && rNo.violations.some((v) => v.kind === 'registration'), 'R11: "pivot\'s registered" with NO measured record → flagged registration');
+  ok(mc.verifyWorkStateClaims("The tax pivot's registered, and I'll fold it into the next wave.", { pendingRecordFor: () => false }).ok, 'R11 fail-open: a registration claim sharing a sentence with future intent ("I\'ll fold it") is NOT scolded (offers/intents stay safe)');
+  ok(/registered\/booked, but I hold no record/.test(mc.workStateCorrection(rNo.violations)), 'R11: the honest correction names the unbooked claim');
+  const rYes = mc.verifyWorkStateClaims(reg, { pendingRecordFor: () => true });
+  ok(rYes.ok, 'R11: the SAME claim WITH a measured record backing it → clean (no false scold)');
+  // FP guards
+  ok(mc.verifyWorkStateClaims('The bill is registered in the state legislative system.', { pendingRecordFor: () => false }).ok, 'R11 FP: an EXTERNAL "registered in the state system" is not her work-state → not flagged');
+  ok(mc.verifyWorkStateClaims("That's registered.", { pendingRecordFor: () => false }).ok, 'R11 FP: a bare "that\'s registered" with no anchors draws nothing (anchor-gated)');
+  ok(mc.verifyWorkStateClaims('I\'ve booked the Hartfield roster pull as a task.', { pendingRecordFor: () => false }).violations.some((v) => v.kind === 'registration'), 'R11: "I\'ve booked X as a task" with no record → flagged');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

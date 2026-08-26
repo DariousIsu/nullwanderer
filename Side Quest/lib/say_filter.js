@@ -110,12 +110,23 @@ function stripToolJson(text) {
   return out;
 }
 
+// ── R5: "let me get that going" is deflection filler — banned in every directive; a say-layer
+// backstop strips it if a model emits it anyway, so the real ack and the substance survive while the
+// empty phrase does not (live #13812: "On it — let me get that going." → "On it.").
+const _DEFLECTION_RES = [
+  // led by a connector: strip the phrase, KEEP the sentence's trailing punctuation ("On it." survives)
+  /\s*[—–:;,-]\s*\blet me get (?:that|this|it) going\b(?=[.!?]|\s|$)/gi,
+  // a standalone deflection sentence (at the start, or after a sentence end): strip it and its punctuation
+  /(?:^|(?<=[.!?])\s+)\blet me get (?:that|this|it) going\b[.!?]*\s*/gi,
+];
+
 // ── the composite: what every user-facing say path runs ───────────────────────────────────────
 function filterSay(text) {
   let s = cleanStars(text);
   s = stripToolJson(s);
   s = stripSteeringVocab(s);
-  return s.replace(/[ \t]{2,}/g, ' ').replace(/ +([,.!?])/g, '$1').trim();
+  for (const re of _DEFLECTION_RES) s = s.replace(re, '');
+  return s.replace(/[ \t]{2,}/g, ' ').replace(/ +([,.!?])/g, '$1').replace(/\s+—\s*$/gm, '').trim();
 }
 
 module.exports = { cleanStars, stripSteeringVocab, stripToolJson, filterSay, _isStageDirection };

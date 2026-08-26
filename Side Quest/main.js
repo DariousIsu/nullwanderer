@@ -6705,7 +6705,18 @@ async function runPaperFinalize({ sessionId, topic, focusId }) {
     } else console.log('[paper] no current focus to land on — the files stand');
   } catch (e) { console.error('[paper] canvas landing failed:', e.message); }
   console.log(`[paper] DONE — ${r.sections} sections, ${r.sourceCount} sources → ${r.path}`);
-  _say(`It's done — the finished ${topic} paper is on your canvas now${docxPath ? ' (styled .docx saved beside the canonical file)' : ''}: ${r.sections} sections, ${r.sourceCount} sources, every inline citation resolving in the source list.`);
+  // SAY-TRUTH (say-splice ×2, #14099/#14103 from the ERCOT demo): the RAW order string was stitched
+  // verbatim into the announce — "the finished the Chinese electrical grid infrustrture. We had fact
+  // checked paper" — and the citation claim contradicted a 0-source count ("0 sources, every inline
+  // citation resolving"). Bound the title in quotes (cutting a run-on at the first sentence break) so a
+  // messy order fragment can't garble the grammar, and only claim resolving citations when a source
+  // list exists — a 0-source synthesis says so plainly.
+  const _paperTitle = String(topic || 'the research').replace(/\s+/g, ' ').trim()
+    .split(/(?<=[a-z])\.\s+[A-Z]/)[0].replace(/[\s:;,.\-]+$/, '').trim().slice(0, 90) || 'the research';
+  const _citeClause = r.sourceCount > 0
+    ? `${r.sections} sections, ${r.sourceCount} sources, every inline citation resolving in the source list`
+    : `${r.sections} sections, synthesized from held material (no external sources cited)`;
+  _say(`It's done — the finished paper on "${_paperTitle}" is on your canvas now${docxPath ? ' (styled .docx saved beside the canonical file)' : ''}: ${_citeClause}.`);
 }
 
 async function canvasUpsertBlock({ focusId, blockId, title, tabMode = 'DOC', blockType = 'paragraph', data }) {
@@ -11186,7 +11197,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let _artifactAckAppended = false;
   if (_artifactVerdictEarly && _artifactVerdictEarly.intent && _artifactVerdictEarly.intent !== 'none'
     && !followupFired && !statusHandled && !directedStopHandled && !expandHandled && !correctionHandled && (!_discoverAssignment || _rosterOwns || _canvasOwns)) {
-    composedUserMessage = `${composedUserMessage}\n\n[A deterministic door (${_artifactVerdictEarly.intent}) is handling this order and will report its own outcome — landed, rejected, or failed — in a separate message. Your reply: ONE short sentence acknowledging you're on it — phrased as STARTING ("on it", "let me get that going"), NEVER as the action already underway or finished (no "splitting/building/done" — live 2026-08-12: "split and building" preceded a split that did not happen). Do NOT describe steps or sources, do NOT promise specifics, and do NOT claim anything landed — the door's report is the only truth about the outcome.]`;
+    composedUserMessage = `${composedUserMessage}\n\n[A deterministic door (${_artifactVerdictEarly.intent}) is handling this order and will report its own outcome — landed, rejected, or failed — in a separate message. Your reply: ONE short sentence acknowledging you're on it — phrased as STARTING and naming the work ("on it — the <thing>", "picking up the <thing> now"), NEVER as the action already underway or finished (no "splitting/building/done" — live 2026-08-12: "split and building" preceded a split that did not happen). Never use the deflection filler "let me get that going" (banned every path, R5). Do NOT describe steps or sources, do NOT promise specifics, and do NOT claim anything landed — the door's report is the only truth about the outcome.]`;
     _artifactAckAppended = true;
     // LANE-AGNOSTIC false-non-delivery guard (2026-08-18): a deterministic door OWNS this turn and will
     // report its own outcome, so a pre-emptive cognition searched-miss / calibration hedge draft is moot —

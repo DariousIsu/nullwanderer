@@ -410,6 +410,11 @@ function _wsAnchors(s) {
 // scold (the F18/F24 lesson).
 const _WS_AGENT_RE = /\b(?:agents?|delegates?)\b[^.!?\n]{0,60}\b(?:is|are|'s)\b[^.!?\n]{0,40}\b(?:running|working|wrapping(?: up)?|finishing|processing|crunching|almost (?:done|there)|about to|on it)\b|\b(?:spun up|kicked off|launched|dispatched)\b[^.!?\n]{0,40}\b(?:agents?|delegates?)\b/i;
 const _WS_ETA_NUM_RE = /\b(?:\d{1,4}|a few|a couple(?: of)?|five|ten|fifteen|twenty|thirty|forty-?five|sixty|ninety)\s*(?:more\s+)?(?:seconds?|secs?|minutes?|mins?)\b/i;
+// REGISTRATION/BOOKING claim (R11, LA rematch live: "pivot's registered" with verdict=none and NO
+// door booking): she claims an INTERNAL work record was created — a pivot/task/order/focus/scope-add
+// booked, registered, queued, logged, tracked — when none is. Scoped to her own work-tracking objects
+// so an EXTERNAL "the bill is registered in the state system" (caught by _WS_EXTERNAL_RE) never fires.
+const _WS_REGISTERED_RE = /\b(?:pivot|task|order|focus|request|reminder|scope[- ]?add|steer|item|note)\b[^.!?\n]{0,40}\b(?:is|'s|are|has been|have been|now)\b[^.!?\n]{0,24}\b(?:registered|booked|queued|logged|filed|recorded|set up|on file|in the (?:queue|system)|tracked)\b|\bI(?:'ve| have)\s+(?:registered|booked|queued|logged|filed|recorded|set up|tracked)\b[^.!?\n]{0,40}\b(?:pivot|task|order|focus|request|reminder|scope[- ]?add|steer|it|that)\b/i;
 
 function verifyWorkStateClaims(say, { gatherRanThisTurn = null, pendingRecordFor = null, agentRanRecently = null, evidence = '' } = {}) {
   const violations = [];
@@ -455,6 +460,15 @@ function verifyWorkStateClaims(say, { gatherRanThisTurn = null, pendingRecordFor
         if (!backed) violations.push({ kind: 'pending', claim: s.slice(0, 110), anchors });
       }
     }
+    // REGISTRATION/BOOKING: "the pivot's registered" needs a measured record (an open promise/focus)
+    // just like a pending claim — the SAME probe answers it (a registered pivot IS a pending record).
+    if (!violations.some((v) => v.kind === 'registration') && _WS_REGISTERED_RE.test(s) && !_WS_EXTERNAL_RE.test(s)) {
+      const anchors = _wsAnchors(s);
+      if (anchors.length && typeof pendingRecordFor === 'function') {
+        let backed = true; try { backed = !!pendingRecordFor(anchors); } catch { backed = true; }   // fail OPEN
+        if (!backed) violations.push({ kind: 'registration', claim: s.slice(0, 110), anchors });
+      }
+    }
     prev = s;
   }
   return { ok: violations.length === 0, violations };
@@ -467,6 +481,7 @@ function workStateCorrection(violations = []) {
   if (violations.some((v) => v.kind === 'records-mismatch')) parts.push(`I said my records show that, but what I actually retrieved this turn doesn't contain it — treat it as unverified`);
   if (violations.some((v) => v.kind === 'agent')) parts.push(`I described an agent working on this (or gave a completion estimate), but no agent run is actually recorded — that status was invented, don't wait on it`);
   if (violations.some((v) => v.kind === 'pending')) parts.push(`I called that pending work with a deadline, but I hold no record of it as open work — don't trust that status until I've actually checked`);
+  if (violations.some((v) => v.kind === 'registration')) parts.push(`I said that's registered/booked, but I hold no record of it as tracked work — treat it as not yet booked`);
   if (!parts.length) return '';
   return `\n\n[Correction — ${parts.join('; ')}.]`;
 }
