@@ -192,8 +192,33 @@ function sampleBalanced(rows, key = 'state', cap = 120) {
  *  state × status; civic rosters: body × role). Omitted → the legislation defaults.
  *  opts.rosterRows/rosterNote: a prompt-sized view keeps the COMPLETE counts/table/trend but
  *  renders a sampled roster, labeled — the saved document never uses these. */
+// THE NATIONAL CENSUS (Phase-4, 08-26): the anti-China report reads as a national picture, but its
+// 355 rows cover only the states actually ACQUIRED (7: TX/TN/AZ/FL/LA/IA/UT) — 43 states were never
+// pulled. A count without its national denominator ("355 bills") silently implies coverage that
+// isn't there; the census renders WHICH states are in and which are still missing, so the scope is
+// honest on the face of the report. Pure: derives the coverage from the rows' own `state` field.
+const _US_STATES = ['AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'];
+function stateCensus(rows) {
+  const counts = {};
+  for (const r of rows || []) {
+    const s = String((r.attrs && r.attrs.state) || '').toUpperCase().trim();
+    if (_US_STATES.includes(s)) counts[s] = (counts[s] || 0) + 1;
+  }
+  const acquired = Object.keys(counts);
+  if (!acquired.length) return null;   // not a state-keyed dataset — no census to render
+  acquired.sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
+  const notAcquired = _US_STATES.filter((s) => !counts[s]);
+  return { counts, acquired, acquiredCount: acquired.length, notAcquired, total: _US_STATES.length };
+}
+
 function renderReportData(rows, dims = {}, { rosterRows = null, rosterNote = '' } = {}) {
   if (!rows.length) return '';
+  const _census = stateCensus(rows);
+  const censusLines = _census ? [
+    `### State coverage (national census — ${_census.acquiredCount} of ${_census.total} states acquired)`, '',
+    `Acquired (${_census.acquiredCount}): ${_census.acquired.map((s) => `${s} (${_census.counts[s]})`).join(' · ')}`, '',
+    `Not yet acquired (${_census.notAcquired.length}): ${_census.notAcquired.join(', ')}`, '',
+  ] : [];
   const countKeys = dims.countKeys || ['state', 'status'];
   const rowKey = dims.rowKey || 'state', colKey = dims.colKey || 'status';
   const trend = dims.trendKey ? renderTrend(rows, { dateKey: dims.trendKey }) : '';
@@ -206,7 +231,7 @@ function renderReportData(rows, dims = {}, { rosterRows = null, rosterNote = '' 
   let rosterLines;
   if (cls) {
     const nSub = rows.filter(cls).length;
-    clsLines.push(`Subject relevance (deterministic, classified from each row's own title): substantive ${nSub} · incidental ${rows.length - nSub}`, '');
+    clsLines.push(`Subject relevance (deterministic, classified from each row's own title): substantive ${nSub} · incidental ${rows.length - nSub}${_census ? ` — across ${_census.acquiredCount} of ${_census.total} states, not a national sweep` : ''}`, '');
     const rrSub = rr.filter(cls), rrInc = rr.filter((r) => !cls(r));
     rosterLines = [
       `#### Substantive (${rrSub.length}${rosterRows ? ` of ${nSub}` : ''})`, '', renderRoster(rrSub),
@@ -217,6 +242,7 @@ function renderReportData(rows, dims = {}, { rosterRows = null, rosterNote = '' 
   }
   return [
     `### Counts (deterministic — rendered from the dataset, ${rows.length} row(s))`, '', renderCounts(rows, countKeys), '',
+    ...censusLines,
     ...clsLines,
     `### The table`, '', renderTable(rows, { rowKey, colKey }), '',
     ...(trend ? [`### The trend (by ${dims.trendKey}, monthly)`, '', trend, ''] : []),
@@ -224,4 +250,4 @@ function renderReportData(rows, dims = {}, { rosterRows = null, rosterNote = '' 
   ].join('\n');
 }
 
-module.exports = { ensure, upsertRows, rowsFor, countFor, hasRows, countsBy, renderCounts, renderTable, renderRoster, sampleBalanced, trendBy, renderTrend, renderReportData, _setDb };
+module.exports = { ensure, upsertRows, rowsFor, countFor, hasRows, countsBy, renderCounts, renderTable, renderRoster, sampleBalanced, trendBy, renderTrend, renderReportData, stateCensus, _setDb };

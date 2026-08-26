@@ -94,6 +94,22 @@ ok(la.isSubstantive({ title: 'Security and Land Restriction Amendments' }) && la
   ok(/Subject relevance \(deterministic, classified from each row's own title\): substantive 2 · incidental 1/.test(split), 'the counts carry the honest split BESIDE the raw total');
   ok(/#### Substantive \(2\)/.test(split) && /#### Incidental \(1\).*does not name the report subject/.test(split), 'the roster renders SPLIT — substantive first, incidental named for what it is');
   ok(split.indexOf('AZ HB2134') < split.indexOf('AZ SB1641'), 'substantive rows lead');
+  // ── THE NATIONAL CENSUS (Phase-4, 08-26): the report's row-count is honest only WITH its denominator ──
+  {
+    const multi = [
+      { entity: 'TX A', attrs: { state: 'TX', title: 'a' } }, { entity: 'TX B', attrs: { state: 'TX', title: 'b' } },
+      { entity: 'UT A', attrs: { state: 'UT', title: 'c' } }, { entity: 'CA A', attrs: { state: 'CA', title: 'd' } },
+    ];
+    const c = ds.stateCensus(multi);
+    ok(c.acquiredCount === 3 && c.total === 50, 'census: 3 distinct states acquired of 50');
+    ok(c.acquired[0] === 'TX' && c.counts.TX === 2, 'census: acquired states ranked by count (TX leads with 2)');
+    ok(c.notAcquired.length === 47 && c.notAcquired.includes('NY') && !c.notAcquired.includes('TX'), 'census: not-acquired = 47, names a missing state, excludes an acquired one');
+    const rep = ds.renderReportData(multi, { classify: () => true });
+    ok(/### State coverage \(national census — 3 of 50 states acquired\)/.test(rep), '⭐ the report renders the national-census section');
+    ok(/Not yet acquired \(47\):[^\n]*\bNY\b/.test(rep), '⭐ the report NAMES the states not yet acquired (the honest denominator)');
+    ok(/across 3 of 50 states, not a national sweep/.test(rep), 'the substantive line carries the honest national scope');
+    ok(ds.stateCensus([{ entity: 'x', attrs: { name: 'Jane Doe' } }]) === null, 'a non-state-keyed dataset (contacts) gets NO census (null) — the section is state-scoped');
+  }
   const noCls = ds.renderReportData(mix, {});
   ok(!/Subject relevance/.test(noCls) && !/#### Substantive/.test(noCls), 'no classify dim → the render is unchanged (civic and other shapes untouched)');
 }
