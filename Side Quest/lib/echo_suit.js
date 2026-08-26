@@ -1946,9 +1946,14 @@ async function browserRead(url, { navMs = _BROWSER_READ_NAV_MS, dispatch = null 
   // text, so fall through to the raw string when it isn't a {text:…} envelope.)
   const _txt = (r) => {
     if (!r || r.ok === false) return '';
-    let s = typeof r.text === 'string' ? r.text : (typeof r === 'string' ? r : '');
-    s = s.trim();
-    if (s.startsWith('{')) { try { const j = JSON.parse(s); if (j && typeof j.text === 'string') return j.text; } catch { /* not an envelope — use as-is */ } }
+    let s = (typeof r.text === 'string' ? r.text : (typeof r === 'string' ? r : '')).trim();
+    // Peel up to 3 {ok?, text:"<string>"} transport wrappers to the real body — the app's MCP dispatch
+    // can double-wrap (r.text = {"ok":true,"text":"<inner>"}); one unwrap would leave a JSON string.
+    for (let depth = 0; depth < 3 && s.startsWith('{'); depth++) {
+      let j; try { j = JSON.parse(s); } catch { break; }
+      if (j && typeof j.text === 'string') { s = j.text.trim(); continue; }
+      break;
+    }
     return s;
   };
   let sid = null;

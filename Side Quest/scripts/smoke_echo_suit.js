@@ -333,7 +333,8 @@ function mockClient(overrides = {}) {
           return { ok: true, text: JSON.stringify({ ok: true, session_id: 'sid1' }) };
         }
         if (tag.name === 'browser_navigate') return { ok: true, text: JSON.stringify({ ok: true, title: 't' }) };
-        if (tag.name === 'browser_extract') return { ok: true, text: JSON.stringify({ ok: true, text: opts.body == null ? '' : opts.body }) };
+        // browser_extract: the app double-wraps — r.text = {"ok":true,"text":"{\"ok\":true,\"text\":\"<body>\"}"}.
+        if (tag.name === 'browser_extract') return { ok: true, text: JSON.stringify({ ok: true, text: JSON.stringify({ ok: true, text: opts.body == null ? '' : opts.body }) }) };
         if (tag.name === 'browser_close_session') return { ok: true, text: JSON.stringify({ ok: true }) };
         return { ok: true, text: '{}' };
       };

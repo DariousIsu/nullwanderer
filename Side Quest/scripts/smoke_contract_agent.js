@@ -375,6 +375,15 @@ const deps = {
     ok(e0.chars === 0 && e0.body === '', '⭐ a JS-empty envelope (text_chars:0) → chars 0 — the browser-lane escalation FIRES (was masked by the >80 envelope string)');
     ok(jsEmpty.length > 80, '   (regression pin: the envelope STRING itself is >80 chars — the exact trap)');
 
+    // ⭐⭐ THE APP-WRAP CATCH (live 08-25, p145): the app's MCP dispatch DOUBLE-wraps — r.text is
+    // {"ok":true,"text":"<flat envelope json>"}. One unwrap left the 259-char envelope STRING as
+    // "body" (>80 → no escalation, banked the envelope). The peel loop must reach the real envelope.
+    const appWrapped = JSON.stringify({ ok: true, text: jsEmpty });
+    ok(ca._webExtractBody(appWrapped).chars === 0 && ca._webExtractBody(appWrapped).body === '', '⭐⭐ the app-wrapped {ok,text:<envelope>} → chars 0 — escalation FIRES (this exact wrapper broke p145)');
+    ok(ca._webExtractBody(JSON.stringify({ ok: true, text: appWrapped })).chars === 0, 'a double transport wrap still peels to the envelope → chars 0');
+    const popWrapped = JSON.stringify({ ok: true, text: JSON.stringify({ title: 't', text_preview: 'Real body content well past the eighty character floor for a populated page here.', text_chars: 210 }) });
+    ok(/Real body content/.test(ca._webExtractBody(popWrapped).body) && !/text_preview|"ok":true/.test(ca._webExtractBody(popWrapped).body), 'an app-wrapped POPULATED envelope → clean text_preview body, not the wrapper JSON');
+
     const pop = JSON.stringify({ url: 'https://x/a', title: 't', text_preview: 'The first quotation is credited to Albert Einstein. '.repeat(4), text_chars: 208, text_truncated: false });
     const e1 = ca._webExtractBody(pop);
     ok(e1.chars === 208 && /Albert Einstein/.test(e1.body) && !/text_preview|extractor|"url"/.test(e1.body), 'a populated envelope → text_preview as clean body (never the JSON envelope), chars = text_chars');

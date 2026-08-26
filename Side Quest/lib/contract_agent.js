@@ -46,17 +46,21 @@ function driverModel() {
 // driver text_preview (the full text when !text_truncated), never the envelope. A plain-text result
 // (some web_extract builds return body text directly) passes straight through. Pure + exported for smoke.
 function _webExtractBody(rawText) {
-  const s = String(rawText == null ? '' : rawText).trim();
-  if (s.startsWith('{')) {
-    try {
-      const j = JSON.parse(s);
-      if (j && (typeof j.text_chars === 'number' || 'text_preview' in j)) {
-        const body = (typeof j.text === 'string' && j.text) ? j.text : String(j.text_preview || '');
-        const chars = typeof j.text_chars === 'number' ? j.text_chars : body.trim().length;
-        return { body, chars };
-      }
-      if (j && typeof j.text === 'string') return { body: j.text, chars: j.text.trim().length };
-    } catch { /* not an envelope — treat as plain body */ }
+  let s = String(rawText == null ? '' : rawText).trim();
+  // Unwrap up to 3 transport wrappers to reach the web_extract ENVELOPE. The app's MCP dispatch
+  // DOUBLE-wraps (live catch 08-25): r.text = {"ok":true,"text":"<envelope json>"}, so one unwrap
+  // still leaves the envelope STRING masquerading as body (259 chars > 80 → escalation never fires).
+  // At each layer: an envelope (has text_chars/text_preview) yields body+true-length; a bare
+  // {…,text:"<string>"} wrapper is peeled and re-checked; anything else is the plain body.
+  for (let depth = 0; depth < 3 && s.startsWith('{'); depth++) {
+    let j; try { j = JSON.parse(s); } catch { break; }
+    if (j && (typeof j.text_chars === 'number' || 'text_preview' in j)) {
+      const body = (typeof j.text === 'string' && j.text) ? j.text : String(j.text_preview || '');
+      const chars = typeof j.text_chars === 'number' ? j.text_chars : body.trim().length;
+      return { body, chars };
+    }
+    if (j && typeof j.text === 'string') { s = j.text.trim(); continue; }   // transport wrapper — peel and re-check
+    break;
   }
   return { body: s, chars: s.trim().length };
 }
@@ -141,6 +145,7 @@ function liveDeps() {
         // flags, exactly as A did on hb0606/sb0183. The store-as-we-go + find tail banks/windows the winner.
         if (chars <= 80) {
           const rendered = await es.browserRead(url);
+          console.log(`[contract-agent] web_read ${url.slice(0, 60)} extract=${chars}c → browser-lane=${rendered ? rendered.trim().length + 'c' : 'null'}`);
           if (rendered && rendered.trim().length > 80) { t = rendered; chars = t.trim().length; }
         }
         if (chars <= 80) return null;   // static extract AND browser render both came up empty
