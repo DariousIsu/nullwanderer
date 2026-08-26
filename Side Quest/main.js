@@ -8739,7 +8739,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // ask which he means; blending is the failure.
         try {
           const _reg = require('./lib/artifact_registry');
-          const _hit = _c0.status !== 'closed' ? _reg.matchAsk(userMessage) : null;
+          // The dormant-door cure (08-26 retest): the ambiguity is between WORK ITEMS, not
+          // phrasings — key on the CONTRACT's subject via the advisory kin check. matchAsk's
+          // 0.6 identity floor over the raw message never cleared on a conversational ask.
+          const _subj = `${_c0.title} ${(_c0.topicTokens || []).join(' ')}`;
+          const _hit = _c0.status !== 'closed' ? _reg.matchKinProject(_subj) : null;
           if (_hit) {
             composedUserMessage += `\n\n[WORK-INSTANCE DISCIPLINE: this ask ALSO matches a separate FINISHED project in your registry — "${String(_hit.title).slice(0, 90)}" (${String(_hit.label).slice(0, 90)}). That finished project and the RUNNING work above are DIFFERENT items. Present the two states clearly as two separate things (the running work's measured state first), or ask which one he means. NEVER blend them, and never attribute one's artifacts, versions, or scope to the other.]`;
             console.log(`[contract-router] status kin-project note: "${_hit.slug}" beside ${_v.contractId}`);

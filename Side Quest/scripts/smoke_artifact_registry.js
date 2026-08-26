@@ -67,6 +67,23 @@ ok(reg.matchAsk('') === null, 'empty ask → null');
 ok(reg.tokensOf('the anti-China bills report').join(',') === reg.tokensOf('anti-china legislation').join(',').replace('legislation', 'bills') || true, 'tokensOf drops deliverable nouns');
 ok(!reg.tokensOf('make a fresh scratch document listing things').includes('make'), 'imperative verbs are not identity');
 
+// --- 6b. KIND-SCOPED REUSE (08-26 catch: contract ct-mtalbwh2-2's close-out kin-captured the
+// compose-born parish canonical and overwrote its 802-row render with a 768b close-out note) ---
+const c1 = reg.resolveOrMint({ topic: 'anti-China and surveillance bills with sponsors: Utah, Arizona, Texas', kind: 'contract' });
+ok(!c1.existing && /^contract-/.test(c1.slug), 'a contract close-out NEVER captures a compose-born canonical — it mints under its own prefix');
+reg.record({ slug: c1.slug, relPath: c1.relPath, title: 'Anti-China bills check', topic: 'anti-China and surveillance bills with sponsors: Utah, Arizona, Texas' });
+const c2 = reg.resolveOrMint({ topic: 'anti china surveillance bills sponsors utah', kind: 'contract' });
+ok(c2.existing && c2.slug === c1.slug, 'a re-run contract reuses ITS OWN contract-born canonical (update in place)');
+const r8 = reg.resolveOrMint({ topic: kin[0] });
+ok(r8.existing && r8.slug === m1.slug, 'the report compose still reuses the report project — contract-born rows never shadow it');
+
+// --- 6c. the ADVISORY kin check (the work-instance door; E1-v2 dormant-door cure 08-26) ---
+const k1 = reg.matchKinProject('Foreign-adversary surveillance bill tally surveillance bills tally sponsors adversary');
+ok(k1 && k1.slug === m1.slug && k1.shared >= 2, 'a contract subject sharing 2 content tokens HITS the finished report (the 0.6 ratio floor never cleared here)');
+ok(/canonical, v/.test(k1.label) && k1.kind === 'note', 'the advisory hit is shaped like the read-side hit (label names the version)');
+ok(reg.matchKinProject('surveillance cameras retail stores') === null, 'one shared token never fires the advisory check (absolute floor 2)');
+ok(reg.matchKinProject('anti china surveillance bills sponsors utah').slug === m1.slug, 'the advisory check sees only report-born projects — a kin contract-* row is never "a separate finished project"');
+
 console.log = _log;
 
 // --- 7. the wiring is pinned in main.js ---
@@ -86,6 +103,7 @@ ok(main.indexOf('VACUOUS TOPIC refused') < main.indexOf("_reg.resolveOrMint({ to
 // the 2-token floor because 'you' counted as content. Pronouns never distinguish projects.
 ok(JSON.stringify(reg.tokensOf('give you highlights')) === '["highlights"]', 'bare pronouns are stop tokens ("give you highlights" → 1 content token)');
 ok(/mis-extracted-fragment/.test(main) && /is a say-fragment/.test(main), 'the promise birth-site retires a fragment topic (<3 tokens, no proper noun) — nothing composes');
+ok(/_reg\.matchKinProject\(_subj\)/.test(main) && !/_reg\.matchAsk\(userMessage\)/.test(main), 'the work-instance door keys on the contract subject via the advisory kin check (E1-v2 cure)');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

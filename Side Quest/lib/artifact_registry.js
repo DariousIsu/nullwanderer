@@ -73,12 +73,14 @@ function _rows() {
 }
 
 /** Best registered project for a topic/ask, or null. Matches against each row's topic AND slug
- *  tokens (the slug holds the minting topic's content words even if topic drifted). */
-function _bestMatch(text) {
+ *  tokens (the slug holds the minting topic's content words even if topic drifted). kindPrefix
+ *  restricts candidates to one birth-kind (slugs carry their minting kind as the prefix). */
+function _bestMatch(text, kindPrefix = null) {
   const toks = tokensOf(text);
   if (!toks.length) return null;
   let best = null, bestScore = 0;
   for (const r of _rows()) {
+    if (kindPrefix && !String(r.slug).startsWith(kindPrefix)) continue;
     const score = Math.max(_overlap(toks, tokensOf(r.topic)), _overlap(toks, tokensOf(String(r.slug).replace(/-/g, ' '))));
     if (score >= KIN_FLOOR && score > bestScore) { best = r; bestScore = score; }
   }
@@ -86,10 +88,13 @@ function _bestMatch(text) {
 }
 
 /** COMPOSE SIDE. A kin topic reuses its project (same slug, same canonical file, version+1 on
- *  record); a new subject mints a stable content-token slug. Never writes — record() does. */
+ *  record); a new subject mints a stable content-token slug. Never writes — record() does.
+ *  Reuse is KIND-SCOPED (08-26 catch: a contract close-out's title kin-captured the compose-born
+ *  parish report and overwrote its canonical with the close-out note) — a compose reuses only
+ *  projects its own kind minted; a kin subject of another kind mints fresh under its own prefix. */
 function resolveOrMint({ topic, kind = 'report' } = {}) {
   const t = String(topic || '').trim();
-  const hit = _bestMatch(t);
+  const hit = _bestMatch(t, kind + '-');
   if (hit) {
     console.log(`[artifact-registry] topic resolves to project "${hit.slug}" (overlap ${hit.score.toFixed(2)}) — canonical ${hit.rel_path} updates in place (v${hit.version} → v${hit.version + 1})`);
     return { slug: hit.slug, relPath: hit.rel_path, nextVersion: hit.version + 1, existing: true };
@@ -131,6 +136,34 @@ function matchAsk(subject) {
   };
 }
 
+/** ADVISORY kin check for the work-instance door: does this WORK SUBJECT sit near a finished
+ *  project of the given kind? Absolute intersection ≥2 content tokens, no ratio floor — a
+ *  contract subject never clears 0.6 of a wide report topic, and a false hit here costs one
+ *  extra directive line (unlike resolveOrMint, where it would merge projects). */
+function matchKinProject(text, { kind = 'report', minShared = 2 } = {}) {
+  const toks = new Set(tokensOf(text));
+  if (toks.size < minShared) return null;
+  let best = null, bestN = 0;
+  for (const r of _rows()) {
+    if (!String(r.slug).startsWith(kind + '-')) continue;
+    const rToks = new Set([...tokensOf(r.topic), ...tokensOf(String(r.slug).replace(/-/g, ' '))]);
+    let n = 0;
+    for (const w of rToks) if (toks.has(w)) n++;
+    if (n >= minShared && n > bestN) { best = r; bestN = n; }   // ties keep the first = newest (rows sort updated_ts DESC)
+  }
+  if (!best) return null;
+  return {
+    kind: 'note',
+    path: best.rel_path,
+    title: String(best.title || best.slug),
+    ts: best.updated_ts || best.created_ts || Date.now(),
+    label: `${best.title || best.slug} (canonical, v${best.version})`,
+    slug: best.slug,
+    version: best.version,
+    shared: bestN,
+  };
+}
+
 function get(slug) { ensure(); try { return _handle().prepare('SELECT * FROM artifact_registry WHERE slug = ?').get(slug) || null; } catch { return null; } }
 function list() { return _rows(); }
 
@@ -138,4 +171,4 @@ function list() { return _rows(); }
  *  registry and deliverable_projects can never drift apart on what counts as "the same subject". */
 function kinScore(aText, bText) { return _overlap(tokensOf(aText), tokensOf(bText)); }
 
-module.exports = { resolveOrMint, record, matchAsk, get, list, tokensOf, kinScore, ensure, _setDb, KIN_FLOOR };
+module.exports = { resolveOrMint, record, matchAsk, matchKinProject, get, list, tokensOf, kinScore, ensure, _setDb, KIN_FLOOR };
