@@ -38,6 +38,29 @@ function driverModel() {
   } catch { return 'kimi-k2.6'; }
 }
 
+// web_extract returns an ENVELOPE, not raw body: {url, extractor, title, …, text_preview, text_chars,
+// text_truncated}. Even a 0-char extraction (a JS-rendered page) yields a ~300-char envelope STRING,
+// so keying the browser-lane escalation on the envelope's length masks every JS-empty page (live catch
+// 08-25: quotes.toscrape.com/js banked its envelope, the driver read text_chars:0 and fell back to the
+// static page — the browser lane never fired). Read the TRUE body length from text_chars and hand the
+// driver text_preview (the full text when !text_truncated), never the envelope. A plain-text result
+// (some web_extract builds return body text directly) passes straight through. Pure + exported for smoke.
+function _webExtractBody(rawText) {
+  const s = String(rawText == null ? '' : rawText).trim();
+  if (s.startsWith('{')) {
+    try {
+      const j = JSON.parse(s);
+      if (j && (typeof j.text_chars === 'number' || 'text_preview' in j)) {
+        const body = (typeof j.text === 'string' && j.text) ? j.text : String(j.text_preview || '');
+        const chars = typeof j.text_chars === 'number' ? j.text_chars : body.trim().length;
+        return { body, chars };
+      }
+      if (j && typeof j.text === 'string') return { body: j.text, chars: j.text.trim().length };
+    } catch { /* not an envelope — treat as plain body */ }
+  }
+  return { body: s, chars: s.trim().length };
+}
+
 function liveDeps() {
   const store = require('./contract_store');
   const ollama = require('./ollama');
@@ -108,19 +131,19 @@ function liveDeps() {
       try {
         const es = require('./echo_suit');
         const r = await es.dispatch({ kind: 'do', name: 'web_extract', args: { url } });
-        let t = r && r.ok !== false && r.text ? String(r.text) : '';
-        // THE FUEL WALL (08-25): web_extract's static fetch returns 0 chars on a JS-RENDERED page
-        // (the billsintro SPA, React civic portals) and its `js` depth is stubbed on this box. When
-        // the static read is empty, escalate to HER OWN headless stealth browser, which renders the
-        // page the extractor can't (proven live: quotes.toscrape.com/js). A bot-wall (le.utah.gov's
-        // F5 "support ID") is sniffed INSIDE browserRead and returns null — an honest, permanent miss
-        // the driver flags, exactly as A did on hb0606/sb0183. The store-as-we-go + find tail below
-        // banks and windows whichever text won.
-        if (t.trim().length <= 80) {
+        // The TRUE body + its char count from web_extract's envelope (never the envelope string itself).
+        let { body: t, chars } = _webExtractBody(r && r.ok !== false ? r.text : '');
+        // THE FUEL WALL (08-25): web_extract's static fetch returns text_chars:0 on a JS-RENDERED page
+        // (the billsintro SPA, React civic portals) and its `js` depth is stubbed on this box. When the
+        // static read is empty, escalate to HER OWN headless stealth browser, which renders the page the
+        // extractor can't (proven live: quotes.toscrape.com/js). A bot-wall (le.utah.gov's F5 "support
+        // ID") is sniffed INSIDE browserRead and returns null — an honest, permanent miss the driver
+        // flags, exactly as A did on hb0606/sb0183. The store-as-we-go + find tail banks/windows the winner.
+        if (chars <= 80) {
           const rendered = await es.browserRead(url);
-          if (rendered && rendered.trim().length > 80) t = rendered;
+          if (rendered && rendered.trim().length > 80) { t = rendered; chars = t.trim().length; }
         }
-        if (t.trim().length <= 80) return null;   // static extract AND browser render both came up empty
+        if (chars <= 80) return null;   // static extract AND browser render both came up empty
         // STORE AS WE GO (Lucas 08-25: "we should be scraping and storing as we go") — a fetched
         // page banks as a source AT FETCH TIME, not only at close-out; fire-and-forget, fail-soft.
         (async () => {
@@ -570,4 +593,4 @@ async function runWave(contractId, deps) {
   return { ok: true, waveN: wave.waveN, outcome: planSummary, done };
 }
 
-module.exports = { runWave, liveDeps, driverModel, parseDriverReply, buildPrompt, _stripFirewall, CHARTER, MAX_ACTIONS_PER_WAVE, DEFAULT_MAX_WAVES };
+module.exports = { runWave, liveDeps, driverModel, parseDriverReply, buildPrompt, _stripFirewall, _webExtractBody, CHARTER, MAX_ACTIONS_PER_WAVE, DEFAULT_MAX_WAVES };

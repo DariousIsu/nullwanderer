@@ -364,6 +364,30 @@ const deps = {
     ok(/THE HEAD-OF-LINE BLOCKADE/.test(main) && /for \(const c of sorted\)/.test(main) && /budget-refusals yield the pick/.test(main), '⭐ P1: a budget-refused contract yields the tick to the next-stalest — one blocked contract never freezes the fleet');
   }
 
+  // ⭐ THE FUEL-WALL ESCALATION TRIGGER (live catch 08-25): web_extract returns an ENVELOPE, not raw
+  // body — a 0-char JS-page extraction still yields a ~300-char envelope STRING. Keying escalation on
+  // the envelope length masked every JS-empty page (the browser lane never fired; the driver read
+  // text_chars:0 and gave up). _webExtractBody reads the TRUE body length from text_chars and hands
+  // back text_preview, never the envelope.
+  {
+    const jsEmpty = JSON.stringify({ url: 'https://x/js', extractor: 'trafilatura', title: 'Quotes to Scrape', text_preview: '', text_chars: 0, text_truncated: false });
+    const e0 = ca._webExtractBody(jsEmpty);
+    ok(e0.chars === 0 && e0.body === '', '⭐ a JS-empty envelope (text_chars:0) → chars 0 — the browser-lane escalation FIRES (was masked by the >80 envelope string)');
+    ok(jsEmpty.length > 80, '   (regression pin: the envelope STRING itself is >80 chars — the exact trap)');
+
+    const pop = JSON.stringify({ url: 'https://x/a', title: 't', text_preview: 'The first quotation is credited to Albert Einstein. '.repeat(4), text_chars: 208, text_truncated: false });
+    const e1 = ca._webExtractBody(pop);
+    ok(e1.chars === 208 && /Albert Einstein/.test(e1.body) && !/text_preview|extractor|"url"/.test(e1.body), 'a populated envelope → text_preview as clean body (never the JSON envelope), chars = text_chars');
+
+    const full = JSON.stringify({ text: 'FULL BODY here beyond any preview cap — the whole page.', text_preview: 'FULL BODY here…', text_chars: 54 });
+    ok(ca._webExtractBody(full).body === 'FULL BODY here beyond any preview cap — the whole page.', 'when the envelope carries a full `text` field, it wins over the truncated preview');
+
+    ok(ca._webExtractBody('Just raw article text, no envelope at all, well over the eighty character floor here.').body.startsWith('Just raw article text'), 'a plain-text result (no envelope) passes straight through');
+    const tiny = JSON.stringify({ title: '404 Page Not Found', text_preview: '404 Page Not Found', text_chars: 18, text_truncated: false });
+    ok(ca._webExtractBody(tiny).chars === 18, 'a tiny real page (404, text_chars:18) → chars 18 (≤80 → escalates, and the browser render decides)');
+    ok(ca._webExtractBody('').chars === 0 && ca._webExtractBody(null).chars === 0, 'empty/null → chars 0, no throw');
+  }
+
   try { store.close(); fs.rmSync(dbDir, { recursive: true, force: true }); } catch {}
   console.log(`\nsmoke_contract_agent: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;
