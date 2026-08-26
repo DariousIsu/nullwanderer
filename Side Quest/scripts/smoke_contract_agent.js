@@ -384,6 +384,16 @@ const deps = {
     const popWrapped = JSON.stringify({ ok: true, text: JSON.stringify({ title: 't', text_preview: 'Real body content well past the eighty character floor for a populated page here.', text_chars: 210 }) });
     ok(/Real body content/.test(ca._webExtractBody(popWrapped).body) && !/text_preview|"ok":true/.test(ca._webExtractBody(popWrapped).body), 'an app-wrapped POPULATED envelope → clean text_preview body, not the wrapper JSON');
 
+    // ⭐⭐⭐ THE FIREWALL-ARMOR CATCH (live 08-25, p146): dispatch wraps external results in ⟦EXTERNAL …⟧
+    // armor, so the raw r.text does NOT start with '{' — the envelope was never reached and the whole
+    // armored string counted as body (>80 → escalation never fired). The observation only looked clean
+    // because runWave strips the armor for DISPLAY. _webExtractBody must strip the SAME armor first.
+    const cf = require('../lib/content_firewall');
+    const armEmpty = cf.frame(JSON.stringify({ url: 'https://x/js', text_preview: '', text_chars: 0, text_truncated: false }), { url: 'https://x/js', kind: 'web' }).text;
+    ok(!armEmpty.startsWith('{') && ca._webExtractBody(armEmpty).chars === 0, '⭐⭐⭐ a FIREWALL-ARMORED empty envelope → chars 0 — escalation FIRES (the armor prefix is what blinded p146)');
+    const armPop = cf.frame(JSON.stringify({ title: 't', text_preview: 'The first quote is credited to Albert Einstein, well past eighty characters in all here.', text_chars: 205 }), { url: 'https://x/a', kind: 'web' }).text;
+    ok(/Albert Einstein/.test(ca._webExtractBody(armPop).body) && !/EXTERNAL|DATA you are READING/.test(ca._webExtractBody(armPop).body), 'a FIREWALL-ARMORED populated envelope → clean body, armor stripped, no ⟦EXTERNAL⟧ leakage');
+
     const pop = JSON.stringify({ url: 'https://x/a', title: 't', text_preview: 'The first quotation is credited to Albert Einstein. '.repeat(4), text_chars: 208, text_truncated: false });
     const e1 = ca._webExtractBody(pop);
     ok(e1.chars === 208 && /Albert Einstein/.test(e1.body) && !/text_preview|extractor|"url"/.test(e1.body), 'a populated envelope → text_preview as clean body (never the JSON envelope), chars = text_chars');

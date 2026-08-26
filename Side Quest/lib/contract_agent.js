@@ -46,7 +46,11 @@ function driverModel() {
 // driver text_preview (the full text when !text_truncated), never the envelope. A plain-text result
 // (some web_extract builds return body text directly) passes straight through. Pure + exported for smoke.
 function _webExtractBody(rawText) {
-  let s = String(rawText == null ? '' : rawText).trim();
+  // ⚠ STRIP THE FIREWALL FIRST (live catch 08-25, p146): dispatch returns external results wrapped in
+  // ⟦EXTERNAL …⟧ armor, so the raw r.text does NOT start with '{' — the envelope parse was skipped and
+  // the whole armored string counted as body (>80 → escalation never fired; the observation only looked
+  // clean because runWave strips the armor for DISPLAY). Strip it here so the envelope is reachable.
+  let s = _stripFirewall(rawText).trim();
   // Unwrap up to 3 transport wrappers to reach the web_extract ENVELOPE. The app's MCP dispatch
   // DOUBLE-wraps (live catch 08-25): r.text = {"ok":true,"text":"<envelope json>"}, so one unwrap
   // still leaves the envelope STRING masquerading as body (259 chars > 80 → escalation never fires).
