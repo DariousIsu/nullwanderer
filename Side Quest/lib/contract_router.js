@@ -38,6 +38,14 @@ const _STATUS_RE = /\b(?:where (?:are we|do we stand)|status|progress|how'?s\b[^
 // and T5 "DO The Good Neighbor AS A unified punch list" — the existence proof's corrections #4
 // and #5 verbatim — both fell to none. A decision handed down IS steering.
 const _INSTRUCTION_RE = /^\s*(?:add|include|drop|skip|cut|remove|swap|replace|use|focus|prioriti[sz]e|expand|widen|narrow|check|verify|double-?check|make sure|also|don'?t|do not|stop|hold off|instead|keep|extend|fold|weave|go (?:deeper|further)|dig (?:deeper|in)|more)\b|\b(?:add|include|also cover|make sure|instead of|rather than|focus on|don'?t forget|be sure to|fold (?:that|this|it) in|(?:drop|cut|skip|swap|remove|exclude)\s+(?:the|that|those|any(?:one|thing|body)?|it|them|everyone|him|her))\b|\b(?:we|i)\s+(?:(?:will|'ll)\s+)?(?:need|want|require)\b|\b(?:needs?|has|have)\s+to\s+(?:be|have|cover|include|show|carry)\b|\bmust\s+(?:be|have|cover|include|show|carry)\b|\bgo with\b|\bmove\b[^.!?\n]{0,80}\binto\b|\bcall(?:ed)? it\b|\bmirror\b|\bdo (?:the|this|that|it)\b[^.!?\n]{0,80}\bas an?\b|\bflag\b[^.!?\n]{0,60}\bas\b|\bclose (?:it|this|that|the [^.!?\n]{0,30}) out\b|\bwrap (?:it|this|that) up\b/i;
+// A steer often NAMES the contract first, then gives the order — "for the ercot coverage, PRIORITIZE a
+// 2026 item" — putting the instruction verb mid-sentence, where the anchored-only verbs (prioriti[sz]e,
+// use, focus, expand, widen, narrow, check, verify, keep, extend, …) never fire (Phase-3 catch 08-26
+// live: steer→PD fell to none). Stripping a leading "for/on/re the <phrase>," preamble lets the order be
+// re-tested at the front. Binding still scores the FULL text, so the named tokens keep carrying the bind.
+const _LEAD_PREAMBLE_RE = /^\s*(?:for|on|re|about|regarding|as for|with|in)\b[^,.!?\n]{0,70},\s*/i;
+const _stripLead = (t) => String(t || '').replace(_LEAD_PREAMBLE_RE, '');
+const _instructionShaped = (t) => _INSTRUCTION_RE.test(t) || _INSTRUCTION_RE.test(_stripLead(t));
 // A repair REFERENCES the misrouted binding ("no, THAT was for…") — the bare `no…for` alternative
 // also matched content answers ("no — use the school board minutes FOR the teacher cell"), eating a
 // genuine late answer inside the 5-min window (sprint H2 design review, 08-24). The negation must
@@ -111,7 +119,7 @@ function verdict({ text, contracts = [], openQuestions = [], expiredQuestions = 
       // content ANSWER to the midterm contract's open question on two generic tokens ("arms
       // race" / "only") and REOPENED shipped work. An instruction-shaped turn that scores
       // strictly better as steering to a DIFFERENT live contract belongs to the steering leg.
-      const _instr = _INSTRUCTION_RE.test(aff.rest || s);
+      const _instr = _instructionShaped(aff.rest || s);
       const _steerBeats = _instr && live.some((c) => c.contractId !== best.contractId && bt.filter((t) => _contractToks(c).has(t)).length > bestN);
       if (!_steerBeats) return { kind: 'answer', questionId: best.questionId, contractId: best.contractId, title: titleOf(best.contractId), questionText: best.text, confidence: aff.rest ? 0.8 : 0.7 };
     }
@@ -170,7 +178,7 @@ function verdict({ text, contracts = [], openQuestions = [], expiredQuestions = 
   }
 
   // 4. STEERING — instruction shape only; a question belongs to the recall/answer doors.
-  if (_QUESTION_SHAPE_RE.test(s) || !_INSTRUCTION_RE.test((aff.rest || s))) return { kind: 'none' };
+  if (_QUESTION_SHAPE_RE.test(s) || !_instructionShaped(aff.rest || s)) return { kind: 'none' };
   const recentBind = lastBinding && now - (lastBinding.ts || 0) <= RECENT_BIND_MS ? lastBinding.contractId : null;
   if (live.length === 1) {
     // one live contract: a token hit OR fresh binding context carries it — but never zero signals,

@@ -142,6 +142,20 @@ ok(rt.verdict({ text: 'add the meta louisiana angle', contracts: [{ ...A, status
   ok(v.kind === 'status' && v.contractId === 'ct-a', '⭐ P119 FINDING: a status ask about JUST-CLOSED work reads the store ("done, here\'s what landed"), never falls to doc recall');
 }
 
+// ── THE PREAMBLE-STEER CURE (Phase-3 catch, 08-26 live) ─────────────────────────────────────────
+// A steer that NAMES the contract first, then gives the order — "for the <X>, PRIORITIZE …" — put the
+// instruction verb mid-sentence, where the anchored-only verbs (prioritize/use/focus/expand/check/keep)
+// never fired: steer→PD fell to `none`, an operator order silently dropped. Stripping a leading
+// "for/on/re the <phrase>," preamble re-tests the order at the front; binding still scores the full text.
+{
+  const steerA = rt.verdict({ text: 'for the applied digital richland table, prioritize the water-use figures', contracts: [A, B], openQuestions: [] });
+  ok(steerA.kind === 'steering' && steerA.contractId === 'ct-a', '⭐ Phase-3: "for the <A>, prioritize …" now binds (mid-sentence anchored verb after a naming preamble)');
+  const useB = rt.verdict({ text: 'on the surveillance report, use the procurement filings for the sourcing', contracts: [A, B], openQuestions: [] });
+  ok(useB.kind === 'steering' && useB.contractId === 'ct-b', '"on the <B>, use …" binds to B — the preamble strip is general, not A-specific');
+  ok(rt.verdict({ text: 'on the whole, prioritize sleep tonight', contracts: [A, B], openQuestions: [] }).kind === 'none', 'FP guard: a preamble + instruction with NO contract tokens still binds nothing');
+  ok(rt.verdict({ text: 'prioritize the applied digital water figures', contracts: [A, B], openQuestions: [] }).kind === 'steering', 'regression: a front-anchored instruction still steers (cure is additive)');
+}
+
 // ── wiring greps ────────────────────────────────────────────────────────────────────────────────
 {
   const fs = require('fs'), path = require('path');
