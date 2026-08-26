@@ -192,6 +192,12 @@ ok(lrows[0].attrs.state === 'AZ' && lrows[0].attrs.tags[0] === 'surveillance' &&
     ok(/if \(_dsSection\) md = `\$\{md\}\$\{_dsSection\}`/.test(main), 'the data section is CODE-authored and appended — save + canvas both carry it');
     ok(/NEVER state a count, total, percentage, or tally/.test(main), 'the compose rule forbids model-authored numbers when a dataset rides');
     ok(/DATASET COUNTS — EXACT/.test(main) && /renderCounts\(_rows2/.test(main), '"how many" injects exact SELECT-COUNT numbers into the reply context');
+    // C1 catch (08-26): the say answered with the store-wide manifest total beside an injected 802,
+    // and the wrong answer got CACHED at the followup store site.
+    ok(/NEVER substitute a total from any other store/.test(main) && /_dsCountInjected = \{ slug: _proj\.slug, total: _rows2\.length \}/.test(main), 'C1: the injected block bans cross-store totals and stamps the count authority');
+    ok(/store stood down — dataset-backed count answer never caches/.test(main) && /followup store stood down — dataset-backed count answer never caches/.test(main), 'C1b: BOTH answer-cache store sites stand down on a dataset-backed count turn');
+    ok((main.match(/\{ countAuthority: _dsCountInjected \}/g) || []).length >= 2, 'C1: the say-layer count backstop rides BOTH say paths');
+    ok(/_keys2 = \['state', 'status', 'tags', 'place', 'role', 'body'\]\.filter/.test(main), 'C1: the injected count keys follow the DATA (civic datasets render place/role, not empty legislation dims)');
     ok(/if \(_dsCountAuthority\) \{/.test(main) && /how many\|how much\|totals\?\|counts\?\|breakdown\|by state/.test(main),
       'the count injection is gated on the ONE shared authority predicate (ask-shape family + project + rows)');
     // P3 gate catch #2: the answer cache replayed a STALE count after the dataset landed.

@@ -94,5 +94,15 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     '⭐ say-splice: the "citations resolving" claim is conditioned on sourceCount>0 (0 sources says so plainly, no contradiction)');
 }
 
+// ── C1 (08-26): the count-authority uptake backstop — injected exact counts bind the say's total ──
+{
+  const ca = { slug: 'report-louisiana-parish-leadership-contact', total: 802 };
+  const w = sf.filterSay('We hold 274,224 government contacts in the dataset. As for parish leadership — let me pull that count.', { countAuthority: ca });
+  ok(/Correction — the governing dataset count for .* is 802/.test(w) && /274,224 figure describes a different store/.test(w), 'C1: a wrong TOTAL claim beside an injected count gains the correction');
+  ok(!/Correction/.test(sf.filterSay('The dataset holds 802 rows across 64 parishes.', { countAuthority: ca })), 'C1: a say carrying the true total is untouched');
+  ok(!/Correction/.test(sf.filterSay('Lafourche Parish has 37 rows, De Soto 22 — the top of the table.', { countAuthority: ca })), 'C1: breakdown numbers never trigger (only total-shaped claims)');
+  ok(!/Correction/.test(sf.filterSay('We hold 274,224 government contacts in the dataset.')), 'C1: no count authority on the turn → no correction (injection-gated backstop)');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

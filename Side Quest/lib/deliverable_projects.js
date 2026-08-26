@@ -148,8 +148,17 @@ function noteCompose({ topic, artifactSlug, now = Date.now() } = {}) {
   ensure();
   const hit = findProject(topic);
   if (!hit) return null;
+  const _next = String(artifactSlug || '');
+  // THE POINTER GUARD (C1c catch 08-26): a kin-band compose (spine 0.5 ≤ score < registry 0.6)
+  // minted a SIBLING artifact and this UPDATE repointed the project's canonical at it — the spine
+  // lost its truth to a fragment-born near-dupe. An established pointer never moves to a DIFFERENT
+  // slug from a mere compose landing; re-renders of the canonical keep the same slug.
+  if (hit.artifact_slug && _next && hit.artifact_slug !== _next) {
+    console.log(`[projects] compose-link REFUSED — project "${hit.slug}" keeps canonical "${hit.artifact_slug}"; landed artifact "${_next}" is a sibling (registry/spine drift)`);
+    return { slug: hit.slug, drift: true };
+  }
   _handle().prepare(`UPDATE deliverable_projects SET artifact_slug = ?, status = 'delivered', updated_ts = ? WHERE slug = ?`)
-    .run(String(artifactSlug || ''), now, hit.slug);
+    .run(_next, now, hit.slug);
   return { slug: hit.slug };
 }
 

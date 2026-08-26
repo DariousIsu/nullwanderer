@@ -104,6 +104,11 @@ ok(main.indexOf('VACUOUS TOPIC refused') < main.indexOf("_reg.resolveOrMint({ to
 ok(JSON.stringify(reg.tokensOf('give you highlights')) === '["highlights"]', 'bare pronouns are stop tokens ("give you highlights" → 1 content token)');
 ok(/mis-extracted-fragment/.test(main) && /is a say-fragment/.test(main), 'the promise birth-site retires a fragment topic (<3 tokens, no proper noun) — nothing composes');
 ok(/_reg\.matchKinProject\(_subj\)/.test(main) && !/_reg\.matchAsk\(userMessage\)/.test(main), 'the work-instance door keys on the contract subject via the advisory kin check (E1-v2 cure)');
+// 08-26 cure wave — the four doors that now consult the registry's advisory matcher:
+ok(/history-door\] project history injected/.test(main) && /never say "no evidence" while the header says otherwise/.test(main), 'C3 cure: a history-shaped ask injects the registry row + the canonical header');
+ok(/registry-first: canonical "\$\{h\.slug\}"/.test(main) && /Read it before any other store/.test(main), 'operator registry-first: the canonical address rides the operator brief');
+ok(/pursuit topic kin-rebound → project/.test(main) && /sibling mint prevented/.test(main), 'C1c/d cure: a pursued promise composes THE PROJECT, never a fragment sibling');
+ok(/hold REFUSED as vague/.test(main) && /IN THE NOTE'S OWN WORDS/.test(main), 'D2 cure: a vague hold asks instead of booking; a booked hold echoes the note verbatim');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

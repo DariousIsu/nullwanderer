@@ -8342,6 +8342,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // ask — that class ends here. A "recheck/fresh" rider bypasses; excluded shapes (self, status,
   // orders, recall, personal) never reach the cache by construction (lib/answer_cache).
   let _dsCountAuthority = false;   // dataset-backed count ask — set in the cache block, reused by the injection + the operator stand-down
+  let _dsCountInjected = null;     // {slug, total} once the exact counts ride the turn — the say-layer uptake backstop + the cache store guards read this (C1 catch 08-26)
   try {
     const _ac = require('./lib/answer_cache');
     // P3 GATE CATCH #2 (2026-08-22): a DATASET-BACKED question must never serve from the cache —
@@ -8783,6 +8784,23 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       else console.log('[recall-reach] records-shaped question — no held documents matched');
     }
   } catch (e) { console.error('[recall-reach] door failed (turn proceeds):', e.message); }
+  // PROJECT-HISTORY DOOR (C3 catch 08-26): "did the parish report get corrupted? what happened
+  // with it" drew an honest sweep that MISSED the canonical's own provenance header documenting
+  // the v2 overwrite — the answer lived in the doc's first lines. A history-shaped ask about a
+  // registered project injects the registry row + the canonical's header as MEASURED context.
+  try {
+    if (!contractBinding && /\b(?:what happened (?:to|with)|what'?s the (?:story|history) (?:of|with|on)|did .{0,80}\b(?:get|got|been|be)\s+(?:corrupt|overwritten|clobbered|damaged|lost|wiped)|\b(?:corrupt|overwritten|clobbered|damaged|wiped)\w*\b.{0,50}\b(?:report|file|doc|canonical))/i.test(userMessage)) {
+      const _regH = require('./lib/artifact_registry');
+      const _hh = _regH.matchKinProject(userMessage);
+      if (_hh) {
+        const _rowH = _regH.get(_hh.slug);
+        let _head = '';
+        try { _head = require('fs').readFileSync(require('path').join(require('./lib/files').resolvePath('notes'), require('path').basename(_hh.path)), 'utf8').split('\n').slice(0, 6).join('\n'); } catch {}
+        composedUserMessage += `\n\n[PROJECT HISTORY (measured — answer FROM this): the registry holds "${_rowH ? _rowH.title : _hh.title}" at v${_hh.version}${_rowH && _rowH.updated_ts ? `, updated ${new Date(_rowH.updated_ts).toISOString().slice(0, 10)}` : ''}. The canonical file's own header:\n${_head || '(unreadable)'}\nIf these lines document an incident (an overwrite, a restore, a version note), THAT is the answer to what happened — never say "no evidence" while the header says otherwise.]`;
+        console.log(`[history-door] project history injected → ${_hh.slug} (v${_hh.version})`);
+      }
+    }
+  } catch (e) { console.error('[history-door] failed (turn proceeds):', e.message); }
   // BILL-INSTANCE CENSUS (campaign §21a's second half, 08-22): a bill-number question that names
   // no state is AMBIGUOUS across held instances — p102/p103 confidently answered COLORADO's
   // SB25-200 for a bare "SB200" ask while Louisiana's 2026 SB200 sat in the stores. Census the
@@ -8861,7 +8879,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         const _ds2 = require('./lib/dataset_store');
         const _rows2 = _ds2.rowsFor(_proj.artifact_slug || _proj.slug);
         if (_rows2.length) {
-          composedUserMessage = `${composedUserMessage}\n\n[DATASET COUNTS — EXACT, computed by the system from the "${_proj.slug}" project's dataset. These numbers are FINAL: answer with them verbatim, never estimate, never adjust, never add counts of your own:\n${_ds2.renderCounts(_rows2, ['state', 'status', 'tags'])}]`;
+          // Count keys follow the DATA (C1 catch 08-26: the legislation keys rendered a thin block
+          // for the civic dataset and the say answered with the store-wide manifest total instead).
+          const _keys2 = ['state', 'status', 'tags', 'place', 'role', 'body'].filter((k) => _rows2.some((r) => r.attrs && r.attrs[k] != null)).slice(0, 3);
+          composedUserMessage = `${composedUserMessage}\n\n[DATASET COUNTS — EXACT, computed by the system from the "${_proj.slug}" project's dataset — THIS is the dataset the question names, and its Total (${_rows2.length}) IS the answer to "how many". These numbers are FINAL: answer with them verbatim, never estimate, never adjust, never add counts of your own, and NEVER substitute a total from any other store — inventory or manifest figures describe different scopes and are the wrong answer here:\n${_ds2.renderCounts(_rows2, _keys2.length ? _keys2 : ['state', 'status', 'tags'])}]`;
+          _dsCountInjected = { slug: _proj.slug, total: _rows2.length };
           console.log(`[dataset] count ask → project "${_proj.slug}" — exact counts injected (${_rows2.length} row(s))`);
         }
       }
@@ -10246,11 +10268,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       let ag = null;
       try { const c = await require('./lib/cloud_logic').ask(uw.buildAgendaAsk(userMessage, _agCtx)); if (c && c.defer === true) ag = c; } catch {}
       if (ag && ag.item) {
-        const days = Math.max(0.1, Math.min(60, Number(ag.days) || 7));
-        const fireAt = Date.now() + Math.round(days * 86400e3);
-        const st = db.insertScheduledTask({ kind: 'once', note: `AGENDA (Lucas asked to hold this): ${ag.item}${ag.whenText ? ` — for: ${ag.whenText}` : ''}`.slice(0, 400), fireAt, source: 'agenda-capture' });
-        composedUserMessage += `\n\n[${userName} asked you to HOLD something for later: "${ag.item}" (${ag.whenText || `in ~${Math.round(days)} day(s)`}). This IS registered: reminder #${st.id} on your own clock will surface it then. Confirm plainly what is held and for when — do NOT claim any other saving happened.]`;
-        console.log(`[agenda] deferred item registered → task #${st.id} fires ${new Date(fireAt).toISOString().slice(0, 10)} — "${String(ag.item).slice(0, 60)}"`);
+        // THE VAGUE-HOLD GATE + VERBATIM ECHO (D2 catch 08-26: "note that other thing down" booked
+        // task #94 holding the literal fragment while the say asserted "the vetoed bills are
+        // logged" — a say-authored referent the record never held). No concrete subject → ask,
+        // never book; a booked hold is described in the NOTE's own words.
+        const _agToks = (() => { try { return require('./lib/artifact_registry').tokensOf(ag.item).filter((w) => !/^(?:thing|things|stuff|item|items|other|later|down|tracked|work)$/.test(w)); } catch { return null; } })();
+        if (_agToks && _agToks.length < 2) {
+          composedUserMessage += `\n\n[VAGUE HOLD — ${userName} asked you to hold "${ag.item}", but it names no concrete item. NOTHING was registered. Ask ONE short question: which thing they mean. Do NOT claim anything is saved, booked, or logged.]`;
+          console.log(`[agenda] hold REFUSED as vague ("${String(ag.item).slice(0, 60)}") — asking instead of booking`);
+        } else {
+          const days = Math.max(0.1, Math.min(60, Number(ag.days) || 7));
+          const fireAt = Date.now() + Math.round(days * 86400e3);
+          const st = db.insertScheduledTask({ kind: 'once', note: `AGENDA (Lucas asked to hold this): ${ag.item}${ag.whenText ? ` — for: ${ag.whenText}` : ''}`.slice(0, 400), fireAt, source: 'agenda-capture' });
+          composedUserMessage += `\n\n[${userName} asked you to HOLD something for later: "${ag.item}" (${ag.whenText || `in ~${Math.round(days)} day(s)`}). This IS registered: reminder #${st.id} on your own clock will surface it then. Confirm plainly what is held IN THE NOTE'S OWN WORDS ("${ag.item}") and for when — never resolve a vague reference into a specific topic of your own; if you believe you know what it refers to, ask to confirm instead of asserting. Do NOT claim any other saving happened.]`;
+          console.log(`[agenda] deferred item registered → task #${st.id} fires ${new Date(fireAt).toISOString().slice(0, 10)} — "${String(ag.item).slice(0, 60)}"`);
+        }
       }
     }
   } catch (e) { console.error('[main] agenda capture failed:', e.message); }
@@ -12182,7 +12214,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // ONE-VOICE FILTER (run-2 D-batch): stage directions go but emphasis WORDS stay (F15 — the old
   // stripper here ate "*plummeting*" with its word), leaked tool-call JSON goes (F23), and internal
   // steering vocabulary goes (F5b: "facet corrected to…", run-id UUIDs, "Need:" fragments).
-  sayStripped = require('./lib/say_filter').filterSay(sayStripped);
+  sayStripped = require('./lib/say_filter').filterSay(sayStripped, { countAuthority: _dsCountInjected });
   // Strip any open-thread status tags that leaked into say (defense in depth)
   sayStripped = openThreadsLib.stripStatusTags(sayStripped);
   // Strip any browser tags that leaked into say
@@ -12272,7 +12304,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // 'explore' included (boot_p56 retest miss): "who is Cleo Fields?" routed lookup, then intake
     // re-stamped it explore ("topic discussed, not commanded") BEFORE this point — still grounded
     // Q&A; store()'s own guards do the truth filtering.
-    if (turnRoute && ['lookup', 'explore'].includes(turnRoute.route) && finalSaid !== '…') {
+    // C1b catch (08-26): the serve stood down for dataset-backed asks but the STORE didn't — the
+    // wrong-scope count answer got cached. Dataset-backed answers never cache (counts go stale too).
+    if (_dsCountAuthority) console.log('[answer-cache] store stood down — dataset-backed count answer never caches');
+    else if (turnRoute && ['lookup', 'explore'].includes(turnRoute.route) && finalSaid !== '…') {
       const st = _ac.store({ question: userMessage, answer: finalSaid });
       if (st.stored) console.log(`[answer-cache] STORED (${st.kind}) ← "${String(userMessage).replace(/\s+/g, ' ').slice(0, 60)}"`);
     }
@@ -13723,7 +13758,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     let sayOut = require('./lib/say_filter').filterSay((say || '')
       .replace(/<\/?(think|say)>/gi, '')
       .replace(/[ \t]+/g, ' ')
-      .trim());
+      .trim(), { countAuthority: _dsCountInjected });
     sayOut = screenLib.stripTags(filesLib.stripTags(browserLib.stripTags(sayOut)));
     sayOut = echoSuitLib.stripEchoTags(sayOut);
     sayOut = sayOut.replace(/<[^>]+>/g, '').trim();
@@ -13815,11 +13850,16 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
         if (_terminalHop && prompted && sayOut && sayOut !== '…') {
           try {
             const _ac = require('./lib/answer_cache');
-            const _lastU = db.getDb().prepare("SELECT content FROM turns WHERE session_id = ? AND speaker = 'user' ORDER BY id DESC LIMIT 1").get(sessionId);
-            if (_lastU && _lastU.content) {
-              const st = _ac.store({ question: _lastU.content, answer: sayOut });
-              if (st.stored) console.log(`[answer-cache] STORED (${st.kind}) ← followup: "${String(_lastU.content).replace(/\s+/g, ' ').slice(0, 60)}"`);
-              _ac.noteExchange({ sessionId, userText: _lastU.content, sayText: sayOut });
+            // C1b catch (08-26): THIS is the site that cached the wrong-scope parish count — the
+            // followup store never checked the count authority. Dataset-backed answers never cache.
+            if (_dsCountAuthority) console.log('[answer-cache] followup store stood down — dataset-backed count answer never caches');
+            else {
+              const _lastU = db.getDb().prepare("SELECT content FROM turns WHERE session_id = ? AND speaker = 'user' ORDER BY id DESC LIMIT 1").get(sessionId);
+              if (_lastU && _lastU.content) {
+                const st = _ac.store({ question: _lastU.content, answer: sayOut });
+                if (st.stored) console.log(`[answer-cache] STORED (${st.kind}) ← followup: "${String(_lastU.content).replace(/\s+/g, ' ').slice(0, 60)}"`);
+                _ac.noteExchange({ sessionId, userText: _lastU.content, sayText: sayOut });
+              }
             }
           } catch (e) { console.error('[answer-cache] followup capture failed:', e.message); }
         }
@@ -14438,7 +14478,12 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
       // civic_memberships already holds; gathering collapses into verification.
       userMessage, context: (context || '') + taskNote
         + (() => { try { return require('./lib/work_coords').coordBlock(userMessage); } catch { return ''; } })()
-        + (() => { try { const b = require('./lib/work_coords').heldDataBlock(userMessage); if (b) console.log(`[operator] held-data pre-injection: ${b.length} chars of verified rows ride the brief`); return b; } catch { return ''; } })(),
+        + (() => { try { const b = require('./lib/work_coords').heldDataBlock(userMessage); if (b) console.log(`[operator] held-data pre-injection: ${b.length} chars of verified rows ride the brief`); return b; } catch { return ''; } })()
+        // OPERATOR REGISTRY-FIRST (§35b residue, 08-26: the operator dug up the July research
+        // dossier while the RESTORED canonical sat registered — registry-first lived only in the
+        // artifact-router doors). The canonical's address rides the brief; advisory floor (≥2
+        // shared tokens, immune to conversational filler).
+        + (() => { try { const h = require('./lib/artifact_registry').matchKinProject(userMessage); if (!h) return ''; console.log(`[operator] registry-first: canonical "${h.slug}" v${h.version} rides the brief`); return `\n[CANONICAL ARTIFACT — retrieval starts HERE: the registered current artifact for this subject is "${h.title}" (${h.path}, v${h.version}). Read it before any other store; older dossiers or research plans on this subject are source material, not the answer.]\n`; } catch { return ''; } })(),
       deps: { complete: operator._operatorComplete, tools },
       maxSteps: _maxSteps,
       maxMs: _maxMs,
@@ -18395,7 +18440,21 @@ async function _surfaceOpenPromise() {
       } else if (/roster/i.test(what) || /roster/i.test(topic)) {
         outcome = await buildLocalRosterDeliverable({ io: null, channel: 'chat', sessionId: sid, userName: uname, subject: t });
       } else {
-        outcome = await buildReportFromHeld({ io: null, channel: 'chat', sessionId: sid, userName: uname, topic: t });
+        // THE PURSUIT REBIND (C1c/C1d catch 08-26): a promise-fragment topic ("parish leadership
+        // specifically count from") sat in the kin band (advisory ≥2 shared, under the registry's
+        // 0.6) and the compose MINTED A SIBLING of the canonical with a fresh muddy acquisition.
+        // A pursued promise about a registered project's material composes THE PROJECT (its own
+        // registered topic → resolveOrMint reuses, update in place) — never a sibling.
+        let _pt = t;
+        try {
+          const _reg2 = require('./lib/artifact_registry');
+          const _kin2 = _reg2.matchKinProject(t);
+          if (_kin2) {
+            const _row2 = _reg2.get(_kin2.slug);
+            if (_row2 && _row2.topic) { _pt = _row2.topic; console.log(`[delivery] pursuit topic kin-rebound → project "${_kin2.slug}" (sibling mint prevented)`); }
+          }
+        } catch {}
+        outcome = await buildReportFromHeld({ io: null, channel: 'chat', sessionId: sid, userName: uname, topic: _pt });
       }
     } catch (e) { console.error('[delivery] pursue-delivery build threw:', e.message); }
     // F27: a failed TARGETED edit re-books ONCE (chain-guard principle: one more try, never a

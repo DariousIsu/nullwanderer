@@ -52,6 +52,12 @@ ok(rr.existing && rr.slug === b1.slug, 'the registry resolves the day-2 compose 
 const nc = dp.noteCompose({ topic: 'anti-China and surveillance bills state by state: Utah, Arizona, Texas', artifactSlug: rr.slug, now: 3000 });
 ok(nc && nc.slug === b1.slug, 'noteCompose finds the kin project');
 ok(dp.get(b1.slug).status === 'delivered' && dp.get(b1.slug).artifact_slug === rr.slug, 'the project is delivered-current and points at its canonical artifact');
+// --- 4b. THE POINTER GUARD (C1c catch 08-26): a kin-band compose landed a fragment-born SIBLING
+// and the old noteCompose repointed the project's canonical at it — the spine lost its truth.
+const ncd = dp.noteCompose({ topic: 'anti-China and surveillance bills state by state: Utah, Arizona, Texas', artifactSlug: 'report-some-fragment-sibling', now: 3100 });
+ok(ncd && ncd.drift === true && dp.get(b1.slug).artifact_slug === rr.slug, 'noteCompose REFUSES to repoint an established canonical at a sibling (drift flagged, pointer kept)');
+const nc2 = dp.noteCompose({ topic: 'anti-China and surveillance bills state by state: Utah, Arizona, Texas', artifactSlug: rr.slug, now: 3200 });
+ok(nc2 && !nc2.drift && dp.get(b1.slug).artifact_slug === rr.slug, 'a re-render landing the SAME canonical slug still links clean');
 
 // --- 5. an unrelated order NEVER merges; listings filter ---
 const b3 = dp.bindOrder({ text: 'build a brief on the Hartfield Foundation', topic: 'Hartfield Foundation', now: 4000 });

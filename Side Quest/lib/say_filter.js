@@ -120,13 +120,39 @@ const _DEFLECTION_RES = [
   /(?:^|(?<=[.!?])\s+)\blet me get (?:that|this|it) going\b[.!?]*\s*/gi,
 ];
 
+// ── C1 (08-26): the count-authority uptake backstop — the turn carried EXACT dataset counts and
+// the say answered with a different store's total ("We hold 274,224 … contacts" beside an injected
+// 802). A stated TOTAL claim contradicting the injected total gains a correction; a say already
+// carrying the true total is untouched, and breakdown numbers ("Lafourche has 37") never trigger —
+// only total-shaped claims ("we hold N", "total of N", "N … in the dataset") are checked.
+const _COUNT_TOTAL_CLAIM_RES = [
+  /\b(?:we (?:hold|have)|total(?:s)?(?:\s*(?:of|is|:))?|in total|altogether|overall)\s+(?:about |around |roughly |~)?([\d][\d,]{2,})\b/gi,
+  /\b([\d][\d,]{2,})\s+(?:\w+\s+){0,2}(?:contacts?|rows?|bills?|records?|entries)\s+in the dataset\b/gi,
+];
+function _fmtThousands(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+function _countAuthorityCheck(s, ca) {
+  if (!ca || !ca.total || !s) return s;
+  const tot = String(ca.total), totFmt = _fmtThousands(ca.total);
+  if (s.includes(tot) || s.includes(totFmt)) return s;
+  let wrong = null;
+  for (const src of _COUNT_TOTAL_CLAIM_RES) {
+    const re = new RegExp(src.source, 'gi');
+    let m;
+    while ((m = re.exec(s))) { if (m[1].replace(/,/g, '') !== tot) { wrong = m[1]; break; } }
+    if (wrong) break;
+  }
+  if (!wrong) return s;
+  return `${s.replace(/\s+$/, '')}\n\nCorrection — the governing dataset count for "${ca.slug}" is ${totFmt}; the ${wrong} figure describes a different store's scope, not this dataset.`;
+}
+
 // ── the composite: what every user-facing say path runs ───────────────────────────────────────
-function filterSay(text) {
+function filterSay(text, ctx = {}) {
   let s = cleanStars(text);
   s = stripToolJson(s);
   s = stripSteeringVocab(s);
   for (const re of _DEFLECTION_RES) s = s.replace(re, '');
-  return s.replace(/[ \t]{2,}/g, ' ').replace(/ +([,.!?])/g, '$1').replace(/\s+—\s*$/gm, '').trim();
+  s = s.replace(/[ \t]{2,}/g, ' ').replace(/ +([,.!?])/g, '$1').replace(/\s+—\s*$/gm, '').trim();
+  return _countAuthorityCheck(s, ctx && ctx.countAuthority);
 }
 
-module.exports = { cleanStars, stripSteeringVocab, stripToolJson, filterSay, _isStageDirection };
+module.exports = { cleanStars, stripSteeringVocab, stripToolJson, filterSay, _isStageDirection, _countAuthorityCheck };
