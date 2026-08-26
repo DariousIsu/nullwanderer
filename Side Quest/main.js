@@ -12945,9 +12945,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // operator's "I don't have it," which is the wrong resolution; when the operator missed, let the
             // pull-up try (its title-match gate is high-precision). On suppress, set followupFired so no OTHER net
             // fires a different second emission (true single voice). report/canvas_create are unaffected.
-            const _pullupSuppressed = verdict.intent === 'pullup' && !!operatorAnswer
+            // ACK-THEN-SUPPRESSED (08-26 liveproof catch): when the one-voice ack directive already rode the
+            // reply ("on it — pulling X now"), the SAY is the ack, not the operator's answer — suppressing here
+            // strands the promise (nothing ever arrives). The promise outranks the dedup: an acked pull-up serves.
+            const _pullupSuppressed = verdict.intent === 'pullup' && !!operatorAnswer && !_artifactAckAppended
               && !(() => { try { return require('./lib/delivery').claimsNonDelivery(operatorAnswer); } catch { return false; } })();
             if (_pullupSuppressed) { followupFired = true; console.log('[artifact-router] pull-up suppressed — operator gave a substantive answer this turn (single voice)'); }
+            else if (verdict.intent === 'pullup' && operatorAnswer && _artifactAckAppended) console.log('[artifact-router] pull-up NOT suppressed — the reply already acked it; the promise outranks the dedup (ack-then-suppressed cure)');
             // COLLAB GATE (the blind-week hijack: "I need ideas" → canvas_edit on the hottest doc):
             // a collab turn with no named destination never reaches an artifact operation. The
             // deictic rewrite of a thinking turn into a doc edit was the register's worst leak.

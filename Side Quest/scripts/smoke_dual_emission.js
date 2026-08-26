@@ -48,5 +48,13 @@ const u1 = db.insertTurn({ sessionId: S, speaker: 'user', content: LONG });
 const u2 = db.insertTurn({ sessionId: S, speaker: 'user', content: LONG });
 ok('identical user turns both insert', u2.id !== u1.id && !u2.deduped);
 
+// ACK-THEN-SUPPRESSED (08-26 liveproof catch): the artifact-router's dual-emission guard keyed on
+// operatorAnswer while the one-voice ack had already promised the pull-up IN THE SAY — the serve
+// was suppressed and the promise stranded ("on it — pulling it now", then nothing). The wiring:
+// an acked pull-up never suppresses; the promise outranks the dedup.
+const _src = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+ok('the pull-up suppression requires the ack NOT to have ridden the reply', /_pullupSuppressed = verdict\.intent === 'pullup' && !!operatorAnswer && !_artifactAckAppended/.test(_src));
+ok('the acked-pull-up path logs that the promise outranks the dedup', /pull-up NOT suppressed — the reply already acked it/.test(_src));
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
