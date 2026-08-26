@@ -100,17 +100,38 @@ function groundingBlock({ sessionId, text = '', mode = 'collab', _notesDir = nul
       try {
         const fs2 = require('fs'), p2 = require('path');
         const dir = _notesDir || require('./files').resolvePath('notes');
-        const names = fs2.existsSync(dir) ? fs2.readdirSync(dir).filter((n) => n.endsWith('.md')).slice(0, 300) : [];
-        let best = null, bestScore = 0;
+        // contract-*.md are contract OUTPUTS, not sources — a subject re-run must never cite its own
+        // prior (sometimes flagged) artifact over the primary research; they stay reachable via 2c.
+        const names = fs2.existsSync(dir) ? fs2.readdirSync(dir).filter((n) => n.endsWith('.md') && !/^contract-/i.test(n)) : [];
+        // THE NOTES-SCAN CAP (Phase-3 finding, 08-26 live): the notes dir grew to 2400+ files; the old
+        // slice(0,300) left ~87% of held deliverables — the richest directed-research / report notes
+        // among them — UNSCANNED, so recall surfaced whatever early-alphabetical file matched a term
+        // and the driver flagged "no held paper exists" of a doc she HOLDS (PB, Chinese-grid). Consider
+        // ALL filenames cheaply (one stat each for size+mtime); the READ set is the filename-matchers
+        // (descriptive names like the_chinese_electrical_grid…) UNION the newest N by mtime (opaque-but-
+        // recent deliverables like directed-4079-dossier) — bounded, so the cost stays flat as the dir
+        // grows and reads FEWER bodies than the old 300-floor did.
+        const RECENT_N = 200, READ_CAP = 260;
+        const _fnScore = (nl) => { let s = 0; for (const t2 of otherToks) if (nl.includes(t2)) s++; for (const bt of billToks) if (new RegExp(`\\b${bt}\\b`, 'i').test(nl)) s += 2; return s; };
+        const meta = [];
         for (const n of names) {
-          const fp = p2.join(dir, n);
+          try { const st = fs2.statSync(p2.join(dir, n)); if (!st.isFile() || st.size > 300 * 1024) continue; meta.push({ n, mt: st.mtimeMs, fn: _fnScore(n.toLowerCase()) }); } catch { /* skip */ }
+        }
+        const recent = meta.slice().sort((a, b) => b.mt - a.mt).slice(0, RECENT_N);
+        const readSet = [...new Map([...meta.filter((e) => e.fn > 0), ...recent].map((e) => [e.n, e])).values()].slice(0, READ_CAP);
+        let best = null, bestScore = 0, bestFn = -1, bestMt = -1;
+        for (const e of readSet) {
           let body = '';
-          try { if (!fs2.statSync(fp).isFile() || fs2.statSync(fp).size > 300 * 1024) continue; body = fs2.readFileSync(fp, 'utf8'); } catch { continue; }
-          const hay = `${n}\n${body}`.toLowerCase();
+          try { body = fs2.readFileSync(p2.join(dir, e.n), 'utf8'); } catch { continue; }
+          const hay = `${e.n}\n${body}`.toLowerCase();
           let score = 0;
           for (const t2 of otherToks) if (hay.includes(t2)) score++;
           for (const bt of billToks) if (new RegExp(`\\b${bt}\\b`, 'i').test(hay)) score += 2;
-          if (score > bestScore) { bestScore = score; best = { n, body }; }
+          // On a body-score TIE, prefer the more on-topic FILENAME, then the newer file — so the exact
+          // recent target (directed-4079-dossier) wins over an older sibling that ties on generic terms.
+          if (score > bestScore || (score === bestScore && score > 0 && (e.fn > bestFn || (e.fn === bestFn && e.mt > bestMt)))) {
+            bestScore = score; bestFn = e.fn; bestMt = e.mt; best = { n: e.n, body };
+          }
         }
         if (best && bestScore >= 2) {
           let at = -1;

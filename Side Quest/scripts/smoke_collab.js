@@ -86,6 +86,27 @@ ok(/IN THIS REPLY/.test(d) && /Do NOT create or edit any artifact/.test(d) && /l
   ok(hb && hb.indexOf('anti_china_2026_sponsors.md') < hb.indexOf(`doc#${sheet.id}`), 'the hand-built deliverable OUTRANKS doc-store matches');
   try { fs2.rmSync(ndir, { recursive: true, force: true }); } catch {}
 
+  // ── THE NOTES-SCAN CAP CURE (Phase-3 finding, 08-26 live) ──────────────────────────────────────
+  // The notes dir grew to 2400+ files; the old slice(0,300) left ~87% of held deliverables UNSCANNED,
+  // so recall surfaced whatever early-alphabetical file matched and the driver flagged "no held paper
+  // exists" of a doc she HOLDS. The read set is now filename-matchers ∪ the newest-N — reachable at any
+  // position, bounded cost. contract-*.md OUTPUTS are excluded so a re-run never cites its own artifact.
+  const bigdir = path.join(os.tmpdir(), `sq_collab_big_${process.pid}`);
+  fs2.mkdirSync(bigdir, { recursive: true });
+  // Target A: descriptive filename, written FIRST (oldest → NOT in newest-N) + alphabetically LAST →
+  // only the filename-hit path (all filenames considered) can reach it.
+  fs2.writeFileSync(path.join(bigdir, 'zzz_sasquatch_habitat_survey.md'), '# Sasquatch Habitat Survey\nField notes on sasquatch habitat ranges across the Cascade bioregion, 2026.');
+  for (let i = 1; i <= 315; i++) fs2.writeFileSync(path.join(bigdir, `decoy_${String(i).padStart(4, '0')}.md`), `filler note ${i} about turnpike tolls and zoning variances`);
+  fs2.writeFileSync(path.join(bigdir, 'contract-sasquatch-summary.md'), '# contract\nsasquatch habitat survey cascade — a contract OUTPUT, must never outrank the source');
+  // Target B: opaque filename, written LAST (newest) → only the newest-N path can reach it.
+  fs2.writeFileSync(path.join(bigdir, 'misc_0007.md'), 'a distinctive flibbertigibbet protocol governing zangief calibration cycles');
+  const capA = cl.groundingBlock({ sessionId: 0, text: 'sasquatch habitat survey cascade', mode: 'recall', _notesDir: bigdir });
+  ok(capA && /zzz_sasquatch_habitat_survey/.test(capA), '⭐ THE CAP CURE: a descriptive source beyond the old 300-file window is surfaced (all filenames considered)');
+  ok(capA && !/contract-sasquatch/.test(capA), 'a contract-*.md OUTPUT is excluded — a re-run never cites its own artifact over the source');
+  const capB = cl.groundingBlock({ sessionId: 0, text: 'flibbertigibbet zangief protocol', mode: 'recall', _notesDir: bigdir });
+  ok(capB && /misc_0007/.test(capB), 'an opaque-named but RECENT source is surfaced via the newest-N read set');
+  try { fs2.rmSync(bigdir, { recursive: true, force: true }); } catch {}
+
   // ── the canvas homecoming (contract-agent slice 0, 08-22): her canvas docs ground recall ──────
   // Live-proven blindness: an external session searched "Delta Forge", honest-missed, and re-bought
   // the research while the community_benefits_la compilation sat in canvas_docs.
