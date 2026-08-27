@@ -149,6 +149,9 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
       'main.js: the start block carries the OWNERSHIP RAIL (live catch #1: the agent loop ran its own ad-hoc crawl and claimed completion)');
     ok(/never claim "no crawl state exists"/.test(main), 'main.js: the ledger-row-is-the-state rail (live catch #1: false absence claim over an existing sweep row)');
     ok(/THERE IS NO QUEUE/.test(main), 'main.js: the busy block never promises a queue that does not exist (live catch #3: my own rail text said "starts when X finishes")');
+    ok(/sweep_status: async \(\)/.test(main), 'main.js: the sweep_status operator tool exists (live catch #4: verification had no door that could see the walker, so the antifab reflex denied a live sweep)');
+    ok(/THE STORE BOUNDARY/.test(main) && /CANNOT see it; their emptiness proves NOTHING/.test(main),
+      'main.js: the store boundary is named in the start block (Echo/KG/vault emptiness must never become "no sweep exists")');
     ok(/isSweptHost\(_swHost\)/.test(main), 'main.js: _docLeashOk carries the swept-host bypass');
     ok(/isSweptHost\(_swHost2\)/.test(main), 'main.js: the download-ingest leash carries the swept-host bypass');
     const ws = fs.readFileSync(path.join(ROOT, 'lib', 'work_state.js'), 'utf8');

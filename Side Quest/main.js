@@ -9440,8 +9440,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       let _swBlock = null;
       if (_om.kind === 'start') {
         const _st = _sc.startSweep(_om.target, { reason: `order: ${String(userMessage).slice(0, 140)}`, requestedBy: 'user-order' });
-        if (_st.ok) _swBlock = `THE SWEEP ORGAN OWNS THIS ORDER — a background walker was JUST armed (measured: sweep ledger row created for host ${_st.host}, seeded from ${_st.seed}). The work is NOT yours to do in this turn: do NOT search, fetch, enumerate the sitemap, or run any crawl of your own for this order — the organ redoes none of your ad-hoc work and your ad-hoc work double-spends the site. The sweep ledger row IS the crawl state; never claim "no crawl state exists". The walker bootstraps on the next background pass (robots + sitemap + the seed page), then works the frontier a few pages at a time; ${userName} gets a progress line at each quarter and an honest completion report. Your ENTIRE reply: the sweep of ${_st.host} is started and runs in the background, with progress reports to follow. Do NOT claim any pages are captured, discovered, or counted yet — the walker has not run.`;
-        else if (_st.already) _swBlock = `A SWEEP OF ${_st.already.host} IS ALREADY RUNNING — this order matches it, and the sweep organ owns the work. Do NOT crawl, search, or fetch for this order yourself. Measured standing: ${_sc.standingLine() || 'bootstrapping'}. Say that plainly; do not start-claim a second sweep.`;
+        if (_st.ok) _swBlock = `THE SWEEP ORGAN OWNS THIS ORDER — a background walker was JUST armed (measured: sweep ledger row created for host ${_st.host}, seeded from ${_st.seed}). The work is NOT yours to do in this turn: do NOT search, fetch, enumerate the sitemap, or run any crawl of your own for this order — the organ redoes none of your ad-hoc work and your ad-hoc work double-spends the site. The sweep ledger row IS the crawl state; never claim "no crawl state exists". The walker bootstraps on the next background pass (robots + sitemap + the seed page), then works the frontier a few pages at a time; ${userName} gets a progress line at each quarter and an honest completion report. Your ENTIRE reply: the sweep of ${_st.host} is started and runs in the background, with progress reports to follow. Do NOT claim any pages are captured, discovered, or counted yet — the walker has not run. THE STORE BOUNDARY: the sweep ledger lives in THIS app's own database — Echo, the knowledge graph, the vault, and your search tools CANNOT see it; their emptiness proves NOTHING and must never be reported as "no sweep exists". This block IS the measured readout of that ledger, taken as your turn began; to verify, call the sweep_status tool — nothing else can see the walker.`;
+        else if (_st.already) _swBlock = `A SWEEP OF ${_st.already.host} IS ALREADY RUNNING — this order matches it, and the sweep organ owns the work. Do NOT crawl, search, or fetch for this order yourself. Measured standing: ${_sc.standingLine() || 'bootstrapping'}. Say that plainly; do not start-claim a second sweep. This standing IS the ledger readout — Echo/KG/vault cannot see the sweep ledger and their emptiness proves nothing; verify only via the sweep_status tool.`;
         else if (_st.busy) _swBlock = `ONE SWEEP AT A TIME: ${_st.busy.host} is still active — ${_sc.standingLine() || 'in progress'}. The sweep organ owns crawl work; do NOT run one yourself. Tell ${userName} plainly: THERE IS NO QUEUE — the new order must be re-given once ${_st.busy.host} finishes (never say it is "queued" or will start automatically), or say "stop the sweep" to switch now. Do not claim the new sweep started.`;
         else _swBlock = `THE SWEEP COULD NOT START: ${_st.error}. Say exactly that — do not claim it is running.`;
       } else if (_om.kind === 'stop') {
@@ -9452,7 +9452,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         _swBlock = `${userName} ordered a whole-site crawl but no site is nameable from the message. Ask WHICH site (a URL or domain) — echo their own words back, do not guess a target, and do not claim anything started.`;
       } else {
         const _sl9 = _sc.standingLine();
-        _swBlock = _sl9 ? `THE SITE-SWEEP ORGAN'S MEASURED STANDING (answer sweep questions FROM this, never compose): ${_sl9}. If the message is not actually about a site sweep, ignore this note.`
+        _swBlock = _sl9 ? `THE SITE-SWEEP ORGAN'S MEASURED STANDING (answer sweep questions FROM this, never compose — Echo/KG/vault cannot see the sweep ledger, their emptiness proves nothing; the sweep_status tool is the only other readout): ${_sl9}. If the message is not actually about a site sweep, ignore this note.`
           : `THE SITE-SWEEP ORGAN'S MEASURED STANDING: no sweep has ever been run. If asked about a crawl/sweep, say that plainly. If the message is not about a site sweep, ignore this note.`;
       }
       if (_swBlock) {
@@ -14354,6 +14354,19 @@ const operatorTools = {
   echo: async ({ need } = {}) => {
     try { if (!echoSuit) return 'Echo is not available right now.'; const r = await echoSuit.routeNeed(String(need || '')); return (r && r.text) || 'no result from Echo'; }
     catch (e) { return 'ERROR: ' + e.message; }
+  },
+  // THE WALKER'S OWN STATUS DOOR (live catch #4, 08-27): the sweep ledger lives in THIS app's
+  // sq.db — Echo/KG/vault tools CANNOT see it, so an honest verification hunt through them
+  // "proved" a running sweep didn't exist and the antifab reflex overrode the injected standing
+  // (she denied a live sweep row and offered to re-crawl by hand). Verification must be able to
+  // SUCCEED: this tool is the measured readout of the site-sweep walker.
+  sweep_status: async () => {
+    try {
+      const sc = require('./lib/site_crawler');
+      const line = sc.standingLine();
+      return line ? `MEASURED from site_sweeps (this app's own ledger — no other tool can see it): ${line}`
+        : `MEASURED from site_sweeps (this app's own ledger — no other tool can see it): no sweep has ever been run.`;
+    } catch (e) { return 'ERROR: ' + e.message; }
   },
   browser_read: async () => {
     try { const r = await webLib.read(); return (r && r.ok && r.text) || 'no page open in your browser'; }
