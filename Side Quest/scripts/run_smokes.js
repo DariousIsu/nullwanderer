@@ -373,6 +373,7 @@ const smokes = [
   'smoke_table_extract.js',
   'smoke_held_roster.js',
   'smoke_capability_need.js',
+  'smoke_diag_cures.js',
   'smoke_ner.js',
   'smoke_mention.js',
   'smoke_cognition.js',

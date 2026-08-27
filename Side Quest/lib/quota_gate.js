@@ -95,13 +95,31 @@ function allow(lane, { estimate = 0, now = Date.now(), quiet = false } = {}) {
       console.log(`[quota] ${lane} DEFERRED — ${r.reason}`);
       console.log(`[quota] ${quota.describe(st)}`);
     }
+    _noteClosure(lane, r.allow, now);
     return r;
   } catch (e) {
     return { allow: true, reason: `quota gate failed open: ${e.message}` };
   }
 }
 
+// CLOSURE STREAKS (census wire 6b, 2026-08-27): every deferral used to vanish into a rate-limited
+// log line — a one-hour and a two-week lane closure rendered IDENTICALLY ("idle lane closed"), and
+// nothing could say "idle has been starved for 40 hours". Persist only the TRANSITIONS (first deny
+// stamps closed-since; first allow clears it) — zero cost on the hot path's steady state.
+function _noteClosure(lane, allowed, now = Date.now()) {
+  try {
+    const db = require('./db');
+    const key = `quota.closed_since.${String(lane)}`;
+    const cur = db.getMeta(key);
+    if (!allowed && !cur) db.setMeta(key, String(now));
+    else if (allowed && cur) { db.setMeta(key, ''); console.log(`[quota] ${lane} lane REOPENED after ${Math.max(1, Math.round((now - (parseInt(cur, 10) || now)) / 60000))}m closed`); }
+  } catch { /* streak accounting must never break the gate */ }
+}
+function closedSince(lane) {
+  try { const v = require('./db').getMeta(`quota.closed_since.${String(lane)}`); const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : null; } catch { return null; }
+}
+
 /** One line for boot / status. */
 function describe(now = Date.now()) { return quota.describe(state(now)); }
 
-module.exports = { allow, state, describe, spentLastHour };
+module.exports = { allow, state, describe, spentLastHour, closedSince, _noteClosure };

@@ -168,6 +168,10 @@ const CURATED = [
   // M2.5.2 un-blacklist: obs_events IS answer-bearing when the question is about HERSELF —
   // "why did I go quiet / what did self-watch flag" is answered from this stream and nowhere else.
   ['obs_events', 'her self-watch stream — lane events + anomalies about her OWN behavior (also reachable via obs_query)'],
+  // 2026-08-27 (census C5): the route drain distills 2.6M route_obs rows into this small per-tool
+  // health table — and its reader count was ZERO; it competed for fill slots by row count and lost.
+  // Pinned: "which of my tools keep failing/missing" is answered here and nowhere else.
+  ['route_health', 'per-Echo-tool health — calls, errors, misses, latency (distilled from the raw route exhaust)'],
 ];
 // Accumulating logs. Real data, but nothing a question is ever answered FROM — listing them spends
 // the manifest's scarcest bytes telling her about her own exhaust. (obs_events left this list

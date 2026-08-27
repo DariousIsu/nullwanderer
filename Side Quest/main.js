@@ -777,7 +777,7 @@ app.whenReady().then(() => {
   // Curator: deterministic hygiene at session start — age long-stalled threads to
   // 'abandoned', and aggressively prune spiral/prude/junk thoughts + search-junk readings
   // so they can't re-seed the idle loop on boot.
-  try { curatorLib.curateThreads(); curatorLib.curateGaps(); curatorLib.curateNeeds(); curatorLib.curateMonologue(); } catch (e) { console.error('[main] curator failed:', e.message); }
+  try { curatorLib.curateThreads(); curatorLib.curateGaps(); curatorLib.curateNeeds(); curatorLib.retireQuietRepairs(); curatorLib.curateMonologue(); } catch (e) { console.error('[main] curator failed:', e.message); }
   // Keep pruning spiral/junk during long sessions (write-time guard catches most; this
   // sweeps anything that slips through, e.g. junk readings from tool output).
   setInterval(() => { markActivity('curate-monologue'); try { curatorLib.curateMonologue(); } catch (e) { console.error('[main] periodic curateMonologue failed:', e.message); } finally { markActivity('idle'); } }, 20 * 60 * 1000).unref?.();
@@ -1093,6 +1093,15 @@ app.whenReady().then(() => {
       const _auditLeashMs = (parseFloat(process.env.ZOE_KG_JUDGE_TIMEOUT_MIN) || 15) * 60 * 1000;
       const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_integrity_audit', args: {} }, { timeoutMs: _auditLeashMs });
       let rep = null; try { rep = JSON.parse(ar && ar.text); } catch {}
+      // DURABLE RESULT + BAD-NEWS VISIBILITY (census wire 6, 2026-08-27): this handler parsed the
+      // report only to build a console string and wrote a monologue row only on the SUCCESS branch —
+      // "NOT converged, autopilot disarmed" left zero durable trace, and a successful pass reporting
+      // bad news could never reach self_watch (info-level). Every real report persists; bad news is
+      // console.error (anomaly-classified → mintable at 3x/24h).
+      if (rep && !(rep.skipped === 'unchanged')) { try { db.setMeta('audit.last_report', JSON.stringify({ ts: Date.now(), ...rep })); } catch {} }
+      if (rep && (rep.halted || rep.auto_killed || (rep.converged === false && !rep.skipped))) {
+        console.error(`[audit] BAD NEWS from a completed pass: ${rep.halted ? `HALTED(${rep.halted}) ` : ''}${rep.auto_killed ? 'AUTOPILOT-DISARMED ' : ''}${rep.converged === false ? 'NOT-CONVERGED' : ''} — fixed=${rep.total_fixed || 0}`);
+      }
       if (rep && !(rep.skipped === 'unchanged')) {                // don't log the cheap idle no-op
         console.log(rep.skipped
           ? `[audit] auto-cleaner skipped (${rep.skipped})`
@@ -1442,6 +1451,10 @@ app.whenReady().then(() => {
       const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGAPPLY_BATCH, tiers: KGAPPLY_TIERS, exclude_entity_type: 'concept' } }, { timeoutMs: KGJUDGE_DISPATCH_MS });
       let rep = null; try { rep = JSON.parse(dr && dr.text); } catch {}
       if (rep && rep.considered != null) {
+        // Durable + bad-news visible (census wire 6): the park-rate and any halt persist; a halt is
+        // console.error so a recurring one mints a need instead of scrolling away.
+        try { db.setMeta('kg.dedup.last', JSON.stringify({ ts: Date.now(), considered: rep.considered, applied: rep.applied || 0, parked: rep.parked || 0, halted: rep.halted || null })); } catch {}
+        if (rep.halted) console.error(`[kg-apply] adjudication HALTED(${rep.halted}) after ${rep.applied || 0}/${rep.considered}`);
         console.log(`[kg-apply] adjudicated ${rep.considered}: applied ${rep.applied || 0}, parked ${rep.parked || 0}${rep.halted ? ` HALTED(${rep.halted})` : ''}`);
         if (rep.applied > 0) {
           const text = `[Memory upkeep] I reviewed and reversibly merged ${rep.applied} confirmed duplicate${rep.applied === 1 ? '' : 's'} — each LLM-verified + structurally anchored, all undoable.`;
@@ -1744,6 +1757,9 @@ app.whenReady().then(() => {
       }
       const conceptTotal = conceptNormalized + conceptApplied;
       const total = anchoredApplied + strongApplied + conceptTotal;
+      // Durable sweep record (census wire 6): link-grounding output previously reached NOTHING but
+      // this console line — the whole nightly verdict now persists for status doors and trend reads.
+      try { db.setMeta('kg.nightly.last', JSON.stringify({ ts: Date.now(), swept, merges: total, anchoredApplied, strongApplied, conceptTotal, linkGrounded, pruned })); } catch {}
       console.log(`[kg-nightly] full sweep: +${swept} proposals; drained ${anchoredApplied} anchored + ${strongApplied} name-strong + ${conceptNormalized} concept-normalize + ${conceptApplied} concept-llm = ${total} merges; +${linkGrounded} grounded links; ${pruned} pruned`);
       if (total > 0 || swept > 0) {
         const text = `[Nightly upkeep] Full graph sweep: ${swept} new duplicate proposal${swept === 1 ? '' : 's'} found, and I reversibly merged ${total} confirmed duplicate${total === 1 ? '' : 's'} (${anchoredApplied} anchored + ${strongApplied} fuzzy name-match + ${conceptTotal} concept) — each verified and undoable.`;
@@ -18784,6 +18800,38 @@ async function _needsPressure(now = Date.now()) {
       openNeeds = needs.filter((n) => !stale.has(n.id));   // don't pick a need we just parked this tick
     }
   } catch (e) { console.error('[needs] stale reap failed:', e.message); }
+  // THE REPAIR LANE (census wire 4, 2026-08-27): a program-defect need — born from her own
+  // instruments (self-watch/self-audit) — must NEVER enter the tool-acquisition pipe. The rehearse
+  // sandbox cannot patch main.js; triage classed these 'buildable', which is where the #95/#100
+  // schema-validation recursion came from. Instead: ONE Stage-2 diagnosis pass (evidence bundle +
+  // file:line validator, lib/diagnosis — already built, previously unreachable), stored ON the need
+  // row, status → 'proposed'; the surface door below carries the diagnosis to the builder.
+  // Paced (30 min), capped (3 tries then parked), and the tool pipe never sees repair rows again.
+  try {
+    const _diag = require('./lib/diagnosis');
+    const _repairRows = openNeeds.filter((n) => _diag.isRepairNeed(n));
+    openNeeds = openNeeds.filter((n) => !_diag.isRepairNeed(n));
+    const _lastDiag = parseInt(db.getMeta('needs.last_diagnosis_at') || '0', 10) || 0;
+    const _cand = _repairRows.filter((n) => !n.diagnosis).sort((a, b) => (b.updated_ts || 0) - (a.updated_ts || 0))[0];
+    if (_cand && now - _lastDiag >= 30 * 60 * 1000) {
+      db.setMeta('needs.last_diagnosis_at', String(now));
+      const _tries = (parseInt(db.getMeta(`need.${_cand.id}.diag_tries`) || '0', 10) || 0) + 1;
+      db.setMeta(`need.${_cand.id}.diag_tries`, String(_tries));
+      const _sp = await runCloudOperator({ userMessage: _diag.diagnosisPrompt(_cand, _diag.preGather(_cand)), autonomous: true });
+      const _study = String((_sp && _sp.answer) || '').trim().slice(0, 2500);
+      if (_study && _diag.validateDiagnosis(_study)) {
+        require('./lib/capability_need').setDiagnosis(_cand.id, _study);
+        capn.setStatus(_cand.id, 'proposed', { nowMs: now });
+        console.log(`[needs] repair need #${_cand.id} DIAGNOSED (${(_study.match(/[\w./\\-]+\.(?:js|py|md):\d+/g) || []).length} file:line cite(s)) → proposed to the builder`);
+        try { _surfaceExternalNeeds(now); } catch {}
+      } else if (_tries >= 3) {
+        capn.setStatus(_cand.id, 'parked', { nowMs: now });
+        console.error(`[needs] repair need #${_cand.id} diagnosis failed ${_tries}x (${_study ? 'no file:line citations' : 'empty'}) — parked, named here so the failure is itself watchable`);
+      } else {
+        console.log(`[needs] repair need #${_cand.id} diagnosis ${_study ? 'rejected (no file:line citations)' : 'empty'} — retry ${_tries}/3`);
+      }
+    }
+  } catch (e) { console.error('[needs] repair lane failed:', e.message); }
   const due = nt.duePressure({ run, needs: openNeeds, lastRehearseTs: lastTs, nowMs: now, gapMs: NEEDS_REHEARSE_GAP_MS });
   if (!due) return null;
   if (due.kind === 'iterate') {
@@ -18830,22 +18878,32 @@ async function _needsPressure(now = Date.now()) {
   try { capn.setStatus(need.id, 'parked', { nowMs: now }); console.log(`[needs] #${need.id} parked as junk — ${String(v.reason || '').slice(0, 80)}`); } catch {}
   return null;
 }
-// Consolidated blocked-external ask — once per day at most, only what Lucas can actually unlock.
+// Consolidated needs surface — once per day at most: blocked-external asks (what only Lucas can
+// unlock) + PROPOSED rows (census wire 3: 'proposed' was WRITE-ONLY — a green rehearsal or a
+// repair diagnosis landed a state nothing ever read; approvals reads the run meta, which gets
+// replaced). Each proposed row surfaces once, re-airs weekly until adopted/retired.
 function _surfaceExternalNeeds(now = Date.now()) {
   try {
     if (now - (parseInt(db.getMeta('needs.external_surfaced_at') || '0', 10) || 0) < 24 * 3600e3) return;
     const rows = db.getDb().prepare("SELECT id, need FROM capability_needs WHERE status = 'blocked_external' ORDER BY updated_ts DESC LIMIT 6").all()
       .map((r) => ({ ...r, ask: (() => { try { return db.getMeta(`need.${r.id}.ask`) || ''; } catch { return ''; } })() }));
-    if (!rows.length) return;
-    const msg = require('./lib/need_triage').renderExternalAsk(rows);
+    const proposed = db.getDb().prepare("SELECT id, need, diagnosis FROM capability_needs WHERE status = 'proposed' ORDER BY updated_ts DESC LIMIT 4").all()
+      .filter((r) => now - (parseInt(db.getMeta(`need.${r.id}.proposed_surfaced_at`) || '0', 10) || 0) >= 7 * 24 * 3600e3);
+    if (!rows.length && !proposed.length) return;
+    let msg = rows.length ? require('./lib/need_triage').renderExternalAsk(rows) : '';
+    if (proposed.length) {
+      const pLines = proposed.map((r) => `• need #${r.id}: ${String(r.need).replace(/\s+/g, ' ').slice(0, 140)}${r.diagnosis ? `\n  diagnosis: ${String(r.diagnosis).replace(/\s+/g, ' ').slice(0, 280)}` : ''}`).join('\n');
+      msg = `${msg ? `${msg}\n\n` : ''}WORKED AND WAITING ON YOU — findings I've diagnosed or proven green, needing a builder or an adoption call (they re-air weekly until resolved):\n${pLines}`;
+    }
     const sid = currentSessionId;
     if (!msg || !sid) return;
+    for (const r of proposed) { try { db.setMeta(`need.${r.id}.proposed_surfaced_at`, String(now)); } catch {} }
     db.setMeta('needs.external_surfaced_at', String(now));
     const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'research', unprompted: 1 });
     try { db.setMeta('last_ai_utterance_at', String(now)); } catch {}
     try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
     try { require('./lib/blackboard').append({ source: 'research', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
-    console.log(`[needs] external-needs ask surfaced to chat (${rows.length} blocked)`);
+    console.log(`[needs] needs surfaced to chat (${rows.length} blocked, ${proposed.length} proposed)`);
   } catch (e) { console.error('[needs] external surfacing failed:', e.message); }
 }
 

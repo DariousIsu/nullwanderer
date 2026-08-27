@@ -170,12 +170,22 @@ function _mintNeed(findingText, bornFrom, { deps = {}, nowMs = Date.now() } = {}
 }
 
 function _maybeMintNeed(sig, line, st, { deps = {}, nowMs = Date.now() } = {}) {
-  const r = _mintNeed(sig, `self-watch: recurred ${st.hits.length}x/24h`, { deps, nowMs });
+  // born_from carries THE SIGNATURE (census C1, 2026-08-27): the old constant "self-watch:
+  // recurred Nx/24h" made record()'s born_from short-circuit fold every distinct 3x-failure into
+  // need #99 — silently (the deduped branch logged nothing), so what folded in was unrecoverable.
+  // Per-sig born_from → same failure folds into ITS row (bumping updated_ts = the recurrence
+  // clock); a distinct failure mints its own. isRepairNeed's startsWith('self-watch') still holds.
+  const r = _mintNeed(sig, `self-watch: ${sig.slice(0, 120)}`, { deps, nowMs });
   if (r && r.id != null && !r.deduped) {
     st.minted = r.id;
     obs.emit({ lane: 'watch', kind: 'need', level: 'warn', text: `recurring anomaly → opened need #${r.id}: ${sig}`, ref: `need:${r.id}`, data: { sig, hits24h: st.hits.length } }, { deps, nowMs });
     try { console.log(`[watch] recurring anomaly (${st.hits.length}x/24h) → opened need #${r.id}: ${sig.slice(0, 80)}`); } catch {}
-  } else if (r && r.deduped) { st.minted = r.id; }
+  } else if (r && r.deduped) {
+    st.minted = r.id;
+    // A FOLD IS NEWS, not noise: log + emit so the recurrence is attributable (the silent-fold cure).
+    obs.emit({ lane: 'watch', kind: 'need', level: 'warn', text: `anomaly recurred again (${st.hits.length}x/24h) → folded into need #${r.id}: ${sig}`, ref: `need:${r.id}`, data: { sig, hits24h: st.hits.length, folded: true } }, { deps, nowMs });
+    try { console.log(`[watch] recurrence folded into need #${r.id} (${st.hits.length}x/24h): ${sig.slice(0, 80)}`); } catch {}
+  }
 }
 
 // THE EXHAUST AUDIT (build plan 1.5 — the DB-side intake of the same organ): the log watcher
@@ -214,6 +224,7 @@ function runExhaustAudit({ deps = {}, nowMs = Date.now() } = {}) {
 
 function _flushStatus({ deps = {}, nowMs = Date.now() } = {}) {
   _lastStatusTs = nowMs;
+  _persistSigs({ deps, nowMs });   // recurrence must survive reboots — see the loader below (census C6)
   if (!_counts.size && !_observed) return;
   const counts = Object.fromEntries(_counts);
   const top = [..._counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => `${k}×${v}`).join(' ');
@@ -221,11 +232,44 @@ function _flushStatus({ deps = {}, nowMs = Date.now() } = {}) {
   _counts = new Map(); _observed = 0;
 }
 
+// ── recurrence persistence (census C6, 2026-08-27) ────────────────────────────────────────────
+// _sigs was module-level in-memory: a signature at 2-of-3 hits reset to ZERO on every reboot, so
+// frequent-reboot periods (build days — exactly when defects are most likely) suppressed detection.
+// Persist the hit windows on the 5-min status clock; reload on install. Bounded: top 40 signatures
+// by recency, hits pruned to the 24h window at both ends.
+const SIGS_KEY = 'watch.sigs';
+function _persistSigs({ deps = {}, nowMs = Date.now() } = {}) {
+  try {
+    const rows = [..._sigs.entries()]
+      .map(([sig, st]) => ({ sig, firstTs: st.firstTs, lastStoredTs: st.lastStoredTs, minted: st.minted || null, hits: (st.hits || []).filter((t) => nowMs - t < SIG_WINDOW_MS).slice(-10) }))
+      .filter((r) => r.hits.length)
+      .sort((a, b) => (b.hits[b.hits.length - 1] || 0) - (a.hits[a.hits.length - 1] || 0))
+      .slice(0, 40);
+    _dbm(deps).setMeta(SIGS_KEY, JSON.stringify(rows));
+  } catch { /* persistence is best-effort — the watcher never blocks on it */ }
+}
+function _loadSigs({ deps = {}, nowMs = Date.now() } = {}) {
+  try {
+    const rows = JSON.parse(_dbm(deps).getMeta(SIGS_KEY) || '[]');
+    let n = 0;
+    for (const r of rows) {
+      if (!r || !r.sig || _sigs.has(r.sig)) continue;
+      const hits = (r.hits || []).filter((t) => nowMs - t < SIG_WINDOW_MS);
+      if (!hits.length) continue;
+      _sigs.set(r.sig, { firstTs: r.firstTs || hits[0], lastStoredTs: r.lastStoredTs || 0, minted: r.minted || undefined, hits });
+      n++;
+    }
+    if (n) { try { console.log(`[watch] restored ${n} recurrence signature(s) from the last boot`); } catch {} }
+    return n;
+  } catch { return 0; }
+}
+
 // ── the console hook (installed once, at boot, in main.js) ────────────────────────────────────
 function install({ deps = {}, nowMs = Date.now() } = {}) {
   if (_installed) return false;
   _installed = true;
   _installedAt = nowMs;
+  try { _loadSigs({ deps, nowMs }); } catch {}
   const util = require('util');
   for (const [name, level] of [['log', 'info'], ['warn', 'warn'], ['error', 'error']]) {
     const orig = console[name].bind(console);
@@ -238,4 +282,4 @@ function install({ deps = {}, nowMs = Date.now() } = {}) {
   return true;
 }
 
-module.exports = { classify, signatureOf, observe, install, runExhaustAudit, inBootWindow, _reset, MINT_THRESHOLD, MAX_OPEN_WATCH_NEEDS, AUDIT_EVERY_MS, BOOT_GRACE_MS, SIGNAL_LANES };
+module.exports = { classify, signatureOf, observe, install, runExhaustAudit, inBootWindow, _reset, _persistSigs, _loadSigs, MINT_THRESHOLD, MAX_OPEN_WATCH_NEEDS, AUDIT_EVERY_MS, BOOT_GRACE_MS, SIGNAL_LANES };

@@ -68,6 +68,10 @@ function assemble({ deps = {}, nowMs = Date.now() } = {}) {
       hoursLeft: st.known && Number.isFinite(st.hoursLeft) ? Math.round(st.hoursLeft * 10) / 10 : null,
       idleOpen: !!qg.allow('idle', { quiet: true, now: nowMs }).allow,
       researchOpen: !!qg.allow('research', { quiet: true, now: nowMs }).allow,
+      // closure STREAKS (census wire 6b): "closed" alone hid duration — a 1-hour and a 2-week
+      // starvation rendered identically. Hours-closed, when the gate has stamped a streak.
+      idleClosedH: (() => { try { const s = qg.closedSince && qg.closedSince('idle'); return s ? Math.round((nowMs - s) / 3600e3 * 10) / 10 : null; } catch { return null; } })(),
+      researchClosedH: (() => { try { const s = qg.closedSince && qg.closedSince('research'); return s ? Math.round((nowMs - s) / 3600e3 * 10) / 10 : null; } catch { return null; } })(),
       describe: require('./quota').describe(st),
     };
   } catch {}
@@ -146,7 +150,7 @@ function line({ deps = {}, nowMs = Date.now() } = {}) {
   const bits = [];
   if (v.organs) bits.push(`Echo ${_flag(v.organs.echo)}`);
   if (v.voice) bits.push(`voice gate ${v.voice.gate ? 'on' : 'off'}${v.guard && v.guard.paused ? ` (PAUSED: ${v.guard.reason || 'guard'})` : ''}`);
-  if (v.quota && v.quota.known) bits.push(`quota ${v.quota.usedPct}% used, ${v.quota.hoursLeft}h to reset${v.quota.idleOpen ? '' : ' (idle lane closed)'}`);
+  if (v.quota && v.quota.known) bits.push(`quota ${v.quota.usedPct}% used, ${v.quota.hoursLeft}h to reset${v.quota.idleOpen ? '' : ` (idle lane closed${v.quota.idleClosedH ? ` ${v.quota.idleClosedH}h` : ''})`}`);
   if (v.gateMode) bits.push(`gate ${v.gateMode}`);
   if (v.machine) { const m = require('./machine_vitals').describe(v.machine); if (m) bits.push(m); }
   if (v.producers) { const pd = require('./producer_vitals').describe(v.producers); if (pd) bits.push(pd); }
@@ -177,8 +181,11 @@ function block({ deps = {}, nowMs = Date.now() } = {}) {
     const of = (v.focus.done != null && v.focus.universe) ? ` — ${v.focus.done} of ${v.focus.universe} done` : '';
     L.push(`Working focus: ${v.focus.goal}${of}${v.focus.workers ? ` (${v.focus.workers} background worker${v.focus.workers === 1 ? '' : 's'})` : ''}.`);
   }
-  if (v.quota && v.quota.describe) L.push(`Compute ${v.quota.describe} · autonomous lanes: research ${v.quota.researchOpen ? 'open' : 'closed'}, idle ${v.quota.idleOpen ? 'open' : 'closed'}.`);
+  if (v.quota && v.quota.describe) L.push(`Compute ${v.quota.describe} · autonomous lanes: research ${v.quota.researchOpen ? 'open' : `closed${v.quota.researchClosedH ? ` for ${v.quota.researchClosedH}h` : ''}`}, idle ${v.quota.idleOpen ? 'open' : `closed${v.quota.idleClosedH ? ` for ${v.quota.idleClosedH}h` : ''}`}.`);
   if (v.gateMode) L.push(`Echo tier gate: ${v.gateMode === 'enforce' ? 'ENFORCE (autonomous writes hard-blocked)' : 'shadow (logging would-blocks)'}.`);
+  // Producers in the FULL block too (census C5: line() spoke on a stall but block() — the render
+  // behind the direct state question — omitted the producer lanes entirely, an asymmetric door).
+  if (v.producers) { const pd = require('./producer_vitals').describe(v.producers); if (pd) L.push(`Producer lanes: ${pd}.`); }
   if (v.machine) { const m = require('./machine_vitals').describe(v.machine); if (m) L.push(`Machine (your body): ${m}${v.machine.uptimeMin != null ? ` · app up ${Math.round(v.machine.uptimeMin / 60 * 10) / 10}h` : ''}.`); }
   if (v.memory) { const h = require('./db_health').describe(v.memory); if (h) L.push(`Memory substrate: ${h}.`); }
   if (v.drives && v.drives.at) { try { L.push(`Drives (measured): ${JSON.stringify(v.drives).slice(0, 200)}.`); } catch {} }

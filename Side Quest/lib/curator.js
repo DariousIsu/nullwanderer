@@ -133,7 +133,12 @@ function curateNeeds({ staleDays = STALE_NEED_DAYS } = {}) {
   let aged = 0;
   try {
     const cn = require('./capability_need');
+    let isRepair = () => false;
+    try { isRepair = require('./diagnosis').isRepairNeed; } catch {}
     for (const r of cn.listOpen({})) {
+      // Repair-class needs (census wire 7) are EXEMPT from the 7d park — they follow the 14d
+      // quiet-retire below instead (the diagnosis lane owns them; parking would hide a defect).
+      if (isRepair(r)) continue;
       if ((r.updated_ts || r.created_ts || 0) < cutoff) { if (cn.setStatus(r.id, 'parked')) aged++; }
     }
   } catch (e) { console.error('[curator] curateNeeds failed:', e.message); }
@@ -141,4 +146,32 @@ function curateNeeds({ staleDays = STALE_NEED_DAYS } = {}) {
   return aged;
 }
 
-module.exports = { curateThreads, curateGaps, curateNeeds, curateMonologue, isJunk, STALE_THREAD_DAYS, STALE_GAP_DAYS, STALE_NEED_DAYS };
+// THE CORRECTION-FEEDBACK WIRE (census wire 7, 2026-08-27): a repair need whose SIGNATURE has been
+// quiet for quietDays is a CURED defect — updated_ts is the recurrence clock (record() bumps it on
+// every fold, self_watch's per-sig born_from made that reliable), so silence IS the measurement.
+// The watch organ that filed the finding also observes the cure: detect → diagnose → surface →
+// VERIFY-CURED → retire, closed without a hand. Covers open AND proposed repair rows (a landed fix
+// leaves the proposal moot). The retire is logged with the age so the ledger says WHY it closed.
+// This is the wire whose absence left need #99 open after the dispatch-timeout leash cure shipped.
+function retireQuietRepairs({ quietDays = 14, now = Date.now() } = {}) {
+  const cutoff = now - quietDays * 24 * 60 * 60 * 1000;
+  let retired = 0;
+  try {
+    const cn = require('./capability_need');
+    const dg = require('./diagnosis');
+    const db = require('./db');
+    const rows = db.getDb().prepare("SELECT * FROM capability_needs WHERE status IN ('open','proposed')").all();
+    for (const r of rows) {
+      if (!dg.isRepairNeed(r)) continue;
+      const lastSeen = r.updated_ts || r.created_ts || 0;
+      if (lastSeen >= cutoff) continue;
+      if (cn.setStatus(r.id, 'retired', { nowMs: now })) {
+        retired++;
+        console.log(`[curator] repair need #${r.id} RETIRED — its signature has been quiet ${Math.round((now - lastSeen) / 86400000)}d (the defect reads as cured): ${String(r.need).slice(0, 80)}`);
+      }
+    }
+  } catch (e) { console.error('[curator] retireQuietRepairs failed:', e.message); }
+  return retired;
+}
+
+module.exports = { curateThreads, curateGaps, curateNeeds, retireQuietRepairs, curateMonologue, isJunk, STALE_THREAD_DAYS, STALE_GAP_DAYS, STALE_NEED_DAYS };

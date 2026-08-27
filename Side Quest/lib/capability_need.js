@@ -83,7 +83,9 @@ function record(need, { bornFrom = null, deps = {}, nowMs = Date.now(), similarF
       // rehearsal reworded it (<0.55 token overlap → the _similar check alone missed them) while the rehearse
       // loop never resolved any. Fold the repeat into the existing row (bump recurrence) instead of forking.
       if (bf && str(row.born_from) === bf) { try { d.prepare('UPDATE capability_needs SET updated_ts = ? WHERE id = ?').run(nowMs, row.id); } catch {} return { id: row.id, deduped: true }; }
-      if (_similar(row.need, n) >= similarFloor) return { id: row.id, deduped: true };
+      // A similarity fold is a RECURRENCE too — it must bump updated_ts (census 08-27: the curator's
+      // dormancy clock keys off updated_ts, so an un-bumped fold let a still-recurring need age out).
+      if (_similar(row.need, n) >= similarFloor) { try { d.prepare('UPDATE capability_needs SET updated_ts = ? WHERE id = ?').run(nowMs, row.id); } catch {} return { id: row.id, deduped: true }; }
     }
     const info = d.prepare('INSERT INTO capability_needs (need, born_from, status, created_ts, updated_ts) VALUES (?, ?, ?, ?, ?)')
       .run(n, str(bornFrom).slice(0, 160) || null, 'open', nowMs, nowMs);
@@ -101,7 +103,21 @@ function setStatus(id, status, { deps = {}, nowMs = Date.now() } = {}) {
   try {
     const r = _db(deps).getDb().prepare('UPDATE capability_needs SET status = ?, updated_ts = ? WHERE id = ?').run(str(status), nowMs, Number(id) || 0);
     return r.changes > 0;
-  } catch { return false; }
+  } catch (e) {
+    // NEVER a silent swallow (census C2, 2026-08-27): the triage lane wrote CHECK-rejected statuses
+    // for weeks and this catch ate every throw — the escalation door never fired and nothing could
+    // tell. console.error is self_watch-visible: a recurring schema mismatch now mints a need.
+    console.error(`[need] setStatus(${id}, '${str(status)}') FAILED: ${e.message}`);
+    return false;
+  }
+}
+// Store a Stage-2 repair diagnosis ON the need row (census wire 4) — the escalate-to-builder card
+// reads it from here, and it survives the rehearsal-run meta being replaced (the C3 lesson).
+function setDiagnosis(id, text, { deps = {}, nowMs = Date.now() } = {}) {
+  try {
+    const r = _db(deps).getDb().prepare('UPDATE capability_needs SET diagnosis = ?, updated_ts = ? WHERE id = ?').run(str(text).slice(0, 2500), nowMs, Number(id) || 0);
+    return r.changes > 0;
+  } catch (e) { console.error(`[need] setDiagnosis(${id}) FAILED: ${e.message}`); return false; }
 }
 
 // Scan run text and land every detected need. Returns the landed rows' ids (deduped included).
@@ -169,4 +185,4 @@ function slugFor(id, needText) {
   return base.slice(0, 40).replace(/-+$/, '') || `need-${id}`;
 }
 
-module.exports = { detect, record, listOpen, get, setStatus, harvest, suiteFor, slugFor, manifestLines };
+module.exports = { detect, record, listOpen, get, setStatus, setDiagnosis, harvest, suiteFor, slugFor, manifestLines };

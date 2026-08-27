@@ -74,6 +74,13 @@ function snapshot({ maxFoci = 12, now = Date.now() } = {}) {
   // The site-sweep walker (2026-08-27): an active/recent whole-site sweep is real background work —
   // a whole-plate status ask must see it, or the model composes its absence (the F10 disease).
   try { snap.sweep = require('./site_crawler').standing(); } catch { snap.sweep = null; }
+  // Self-diagnostic standing (census C5, 2026-08-27): the needs ledger and the last audit verdict
+  // were invisible to every status surface — the antifab reflex denies what no door can see.
+  try {
+    snap.needs = require('./db').getDb().prepare('SELECT status, COUNT(*) n FROM capability_needs GROUP BY status').all()
+      .reduce((a, r) => { a[r.status] = r.n; return a; }, {});
+  } catch { snap.needs = null; }
+  try { snap.audit = JSON.parse(require('./db').getMeta('audit.last_report') || 'null'); } catch { snap.audit = null; }
   return snap;
 }
 
@@ -136,6 +143,9 @@ function renderStatus(snap, { now = Date.now() } = {}) {
   }
   if (snap.sweep && snap.sweep.status === 'active') {
     lines.push(`Site sweep: ${snap.sweep.host} — ${snap.sweep.done}/${snap.sweep.total} pages walked (${snap.sweep.fetched} fetched, ${snap.sweep.reused} reused, ${snap.sweep.docs} docs landed).`);
+  }
+  if (snap.needs && (snap.needs.open || snap.needs.proposed || snap.needs.blocked_external)) {
+    lines.push(`Self-diagnostics: ${snap.needs.open || 0} open need(s)${snap.needs.proposed ? `, ${snap.needs.proposed} PROPOSED awaiting the builder` : ''}${snap.needs.blocked_external ? `, ${snap.needs.blocked_external} blocked on Lucas` : ''}.`);
   }
   return lines.join('\n');
 }

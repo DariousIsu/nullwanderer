@@ -19,7 +19,11 @@ const fs = require('fs');
 
 const ROOT = path.resolve(__dirname, '..');
 const LOG_DIRS = [ROOT, path.join(ROOT, 'data')];
-const LOG_NAME_RE = /^(?:boot[\w.-]*\.log|[\w.-]+\.err\.log)$/i;
+// stall_attrib.log admitted 2026-08-27 (census C5): the sharpest latency instrument in the app —
+// the 1s event-loop-drift attributor + the ≥1s-SQL slow-sync probe both write ONLY there, and this
+// regex refused it by name, so her own stall data was invisible to every tool (the same
+// denial shape the site-sweep walker hit before sweep_status existed).
+const LOG_NAME_RE = /^(?:boot[\w.-]*\.log|[\w.-]+\.err\.log|stall_attrib\.log)$/i;
 const LOG_SLICE_BYTES = 8 * 1024 * 1024;   // resource guard: read at most the LAST 8MB of a big log (tail semantics — the fresh end is the diagnostic end)
 
 // ── LOGS ─────────────────────────────────────────────────────────────────────────────────────

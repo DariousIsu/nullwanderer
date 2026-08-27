@@ -221,13 +221,18 @@ const MIGRATIONS = [
     done_ts INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS idx_site_sweeps_status ON site_sweeps(status)`,
+  // CHECK includes blocked_external/routed_research (census C2, 2026-08-27): the triage lane wrote
+  // both for weeks against a CHECK that rejected them — every UPDATE threw, setStatus swallowed it,
+  // and the external-needs chat door NEVER fired. Older DBs are rebuilt in init() below (SQLite
+  // cannot ALTER a CHECK). `diagnosis` = the Stage-2 repair diagnosis stored ON the need row.
   `CREATE TABLE IF NOT EXISTS capability_needs (
     id INTEGER PRIMARY KEY,
     need TEXT NOT NULL,
     born_from TEXT,
-    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','rehearsing','proposed','parked','retired')),
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','rehearsing','proposed','parked','retired','blocked_external','routed_research')),
     created_ts INTEGER NOT NULL,
-    updated_ts INTEGER
+    updated_ts INTEGER,
+    diagnosis TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY,
@@ -1147,6 +1152,32 @@ function init() {
   for (const stmt of MIGRATIONS) {
     try { db.exec(stmt); } catch (e) { /* duplicate column — ignore */ }
   }
+  // ONE-TIME REBUILD (census C2, 2026-08-27): older DBs carry the narrow capability_needs CHECK
+  // that silently rejected 'blocked_external'/'routed_research' for the triage lane's whole life
+  // (the throw was swallowed; the external-needs door's 24h stamp was still NULL). SQLite cannot
+  // ALTER a CHECK — detect the old DDL and rebuild in place, preserving rows and ids. Idempotent:
+  // the rebuilt table matches the base DDL above, so this never fires twice.
+  try {
+    const _cnDdl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='capability_needs'").get();
+    if (_cnDdl && _cnDdl.sql && !/blocked_external/.test(_cnDdl.sql)) {
+      db.exec(`BEGIN;
+        CREATE TABLE capability_needs_rebuild (
+          id INTEGER PRIMARY KEY,
+          need TEXT NOT NULL,
+          born_from TEXT,
+          status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','rehearsing','proposed','parked','retired','blocked_external','routed_research')),
+          created_ts INTEGER NOT NULL,
+          updated_ts INTEGER,
+          diagnosis TEXT
+        );
+        INSERT INTO capability_needs_rebuild (id, need, born_from, status, created_ts, updated_ts)
+          SELECT id, need, born_from, status, created_ts, updated_ts FROM capability_needs;
+        DROP TABLE capability_needs;
+        ALTER TABLE capability_needs_rebuild RENAME TO capability_needs;
+        COMMIT;`);
+      console.log('[db] capability_needs REBUILT — CHECK now admits blocked_external/routed_research (+ diagnosis column); rows preserved');
+    }
+  } catch (e) { try { db.exec('ROLLBACK'); } catch {} console.error('[db] capability_needs rebuild failed:', e.message); }
   // Seed the owner-identity anchor (idempotent) so autonomous lanes recognize the operator across his facets.
   try { seedOwnerIdentity(); } catch {}
 }
