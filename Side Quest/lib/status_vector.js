@@ -84,6 +84,22 @@ function assemble({ deps = {}, nowMs = Date.now() } = {}) {
   try { const p = JSON.parse(_db(deps).getMeta('producer_vitals') || 'null'); if (p && p.at) v.producers = p; } catch {}
   try { const h = JSON.parse(_db(deps).getMeta('db_health') || 'null'); if (h && h.at) v.memory = h; } catch {}
 
+  // self-diagnostic needs (adversarial round 1 legs C/H, 2026-08-27): the ledger her own watch
+  // organ files was absent from the self-read, so "what's broken" was answered from 18-day-old
+  // memory while an hours-old open repair need sat unnamed. Counts + the newest open repair need.
+  try {
+    const d = _db(deps).getDb();
+    const counts = d.prepare('SELECT status, COUNT(*) n FROM capability_needs GROUP BY status').all()
+      .reduce((a, r) => { a[r.status] = r.n; return a; }, {});
+    let newestRepair = null;
+    const nr = d.prepare("SELECT id, need, born_from, status, updated_ts, CASE WHEN diagnosis IS NULL THEN 0 ELSE 1 END dg FROM capability_needs WHERE status IN ('open','proposed') AND (born_from LIKE 'self-watch%' OR born_from LIKE 'self-audit%') ORDER BY updated_ts DESC LIMIT 1").get();
+    if (nr) {
+      let tries = 0; try { tries = parseInt(_db(deps).getMeta(`need.${nr.id}.diag_tries`) || '0', 10) || 0; } catch {}
+      newestRepair = { id: nr.id, gist: String(nr.need).replace(/\s+/g, ' ').slice(0, 110), status: nr.status, diagnosed: !!nr.dg, tries };
+    }
+    v.needs = { ...counts, newestRepair };
+  } catch {}
+
   // drives — C1's journal, fail-absent until that circuit exists (measured, never asserted)
   try { const dr = JSON.parse(_db(deps).getMeta('drive_gauge') || 'null'); if (dr && dr.at) v.drives = dr; } catch {}
 
@@ -155,6 +171,7 @@ function line({ deps = {}, nowMs = Date.now() } = {}) {
   if (v.machine) { const m = require('./machine_vitals').describe(v.machine); if (m) bits.push(m); }
   if (v.producers) { const pd = require('./producer_vitals').describe(v.producers); if (pd) bits.push(pd); }
   if (v.memory && v.memory.sq && v.memory.sq.sizeMB != null) bits.push(`memory ${(v.memory.sq.sizeMB / 1024).toFixed(1)}GB${v.memory.quickCheck && !v.memory.quickCheck.ok ? ' INTEGRITY-FAIL' : ''}`);
+  if (v.needs && v.needs.newestRepair) bits.push(`self-repair need #${v.needs.newestRepair.id} ${v.needs.newestRepair.status}${v.needs.newestRepair.diagnosed ? ' (diagnosed)' : v.needs.newestRepair.tries ? ` (diagnosis try ${v.needs.newestRepair.tries}/3)` : ''}`);
   if (!bits.length) return null;
   let delta = '';
   try {
@@ -188,6 +205,11 @@ function block({ deps = {}, nowMs = Date.now() } = {}) {
   if (v.producers) { const pd = require('./producer_vitals').describe(v.producers); if (pd) L.push(`Producer lanes: ${pd}.`); }
   if (v.machine) { const m = require('./machine_vitals').describe(v.machine); if (m) L.push(`Machine (your body): ${m}${v.machine.uptimeMin != null ? ` · app up ${Math.round(v.machine.uptimeMin / 60 * 10) / 10}h` : ''}.`); }
   if (v.memory) { const h = require('./db_health').describe(v.memory); if (h) L.push(`Memory substrate: ${h}.`); }
+  if (v.needs) {
+    const n = v.needs;
+    const r = n.newestRepair;
+    L.push(`Self-diagnostics (the needs ledger — answer "what's broken" from THIS, never from memory): ${n.open || 0} open, ${n.proposed || 0} proposed awaiting the builder, ${n.parked || 0} parked${r ? ` · newest repair: need #${r.id} "${r.gist}" — ${r.status}${r.diagnosed ? ', diagnosed' : r.tries ? `, diagnosis try ${r.tries}/3` : ''}` : ' · no open repair needs'}.`);
+  }
   if (v.drives && v.drives.at) { try { L.push(`Drives (measured): ${JSON.stringify(v.drives).slice(0, 200)}.`); } catch {} }
   if (v.recentFires && v.recentFires.length) L.push(`Recent organ activity: ${v.recentFires.slice(-5).join(' | ')}.`);
   if (!L.length) return null;

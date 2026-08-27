@@ -15,7 +15,14 @@
 // "What are you doing / what can you see / what's your status" — current operational state.
 // WIDENED 2026-08-15 (status-vector build): systems/machine/memory/database phrasings now open the
 // same door — previously "how are your systems?" missed every branch and she confabulated state.
-const STATE_RE = /\b(what are you (?:doing|up to)(?: right now)?|what(?:'?s| is) (?:going on|happening) with you|what(?:'?s| is) your (?:status|state|situation)|what can you (?:see|access|do)(?: right now)?|are you (?:searching|online|connected|busy|working)(?: right now)?|what(?:'?s| is) (?:running|active|connected)|status (?:report|check)|are you (?:there|with me)|what tools do you have|how(?: are| is|'?s) (?:your|the) (?:systems?|machine|hardware|memory|databases?|db|organs?|body|loops?|vitals?)(?: (?:doing|holding up|running|looking))?|systems? (?:status|check|report|health)|how are you running|(?:everything|all) (?:ok(?:ay)?|good|healthy|green) (?:with|on) your (?:end|side|systems?)|any(?:thing)? (?:wrong|broken|down|red) (?:with|on) your (?:end|side|systems?))\b/i;
+// WIDENED AGAIN 2026-08-27 (adversarial round 1, legs C/D/H — one disease, three phrasings): a
+// self-DEFECT question ("what's broken in your program"), a LANE question ("how long has your idle
+// lane been shut down"), and an INSTRUMENT question ("did the thing your watch organ caught get
+// fixed") all missed every branch — so episodic memory composed the PRESENT and contradicted her
+// own measured instruments (she said "no shutdown" while quota.closed_since.idle sat stamped 2h,
+// and never named the open need her watch had filed hours earlier). The past is remembered; the
+// present must be MEASURED — these shapes now open the same door as every other state question.
+const STATE_RE = /\b(what are you (?:doing|up to)(?: right now)?|what(?:'?s| is) (?:going on|happening) with you|what(?:'?s| is) your (?:status|state|situation)|what can you (?:see|access|do)(?: right now)?|are you (?:searching|online|connected|busy|working)(?: right now)?|what(?:'?s| is) (?:running|active|connected)|status (?:report|check)|are you (?:there|with me)|what tools do you have|how(?: are| is|'?s) (?:your|the) (?:systems?|machine|hardware|memory|databases?|db|organs?|body|loops?|vitals?)(?: (?:doing|holding up|running|looking))?|systems? (?:status|check|report|health)|how are you running|(?:everything|all) (?:ok(?:ay)?|good|healthy|green) (?:with|on) your (?:end|side|systems?)|any(?:thing)? (?:wrong|broken|down|red) (?:with|on) your (?:end|side|systems?)|what(?:'?s| is)[^?.!\n]{0,20}\b(?:broken|failing|busted|wrong)\b[^?.!\n]{0,30}\b(?:your|my|the) (?:own )?(?:program|code|systems?)|(?:how long|since when)[^?.!\n]{0,40}\b(?:idle|research|quota)\b[^?.!\n]{0,20}\b(?:lane|pool)\b|(?:your|the) (?:idle|research) lane\b|\bwatch organ\b|\bself.?(?:watch|audit|diagnos\w*)\b|\bneed #\d+)\b/i;
 
 // COVERAGE questions — "how's the research going", "how much have we covered". Separate from
 // STATE_RE because they are a different question with a different answer: state is what's running

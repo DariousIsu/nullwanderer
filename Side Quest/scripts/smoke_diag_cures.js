@@ -119,6 +119,27 @@ const ok = (c, m) => { if (c) { pass++; console.log('  \u2713', m); } else { fai
     QG._noteClosure('idle', true, now + 120000);
     ok(QG.closedSince('idle') === null, 'W6b: the first allow clears the streak (reopen logged)');
 
+    // ── round-1 C/D/H cure: self-state questions ROUTE TO THE MEASURED SELF-READ ───────────────
+    // The live failures verbatim + the KIND's variants (retest the CLASS, not the phrase).
+    const SS = require(`${ROOT}/lib/self_state`);
+    for (const q of [
+      'whats actually broken in your own program right now, if anything?',
+      'how long has your idle lane been shut down?',
+      'did the thing your watch organ caught actually get fixed or is it still failing?',
+      "what's failing in your code these days",
+      'is your research lane closed again?',
+      'since when has the idle lane been starved',
+      'what did self-watch flag this week',
+      'tell me about need #101',
+    ]) ok(SS.detectStateQuestion(q), `state door opens: "${q.slice(0, 60)}"`);
+    for (const q of ['the bill about idle land use in Maine', 'how long until the election', 'what broke the negotiations between the parishes'])
+      ok(!SS.detectStateQuestion(q), `state door stays SHUT on a non-self question: "${q.slice(0, 50)}"`);
+    // the injected authority now carries the needs ledger (executed, not grepped)
+    const SV = require(`${ROOT}/lib/status_vector`);
+    const v = SV.assemble({ deps: {} });
+    ok(v.needs && typeof v.needs === 'object', 'status_vector.assemble carries v.needs (the ledger in the self-read)');
+    ok(v.needs.newestRepair && v.needs.newestRepair.gist, `the newest open repair need rides the self-read (#${v.needs.newestRepair && v.needs.newestRepair.id})`);
+
     // ── wiring pins (main.js + doors) ──────────────────────────────────────────────────────────
     const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
     ok(/THE REPAIR LANE \(census wire 4/.test(main) && /setDiagnosis\(_cand\.id/.test(main),
