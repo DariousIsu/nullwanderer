@@ -42,7 +42,7 @@ const EXTRACT_WANT =
   + '"meetings":[{"name":"","cadence":"weekly|monthly|one-off|other","with":[],"note":""}]}. '
   + 'relation is how the PERSON relates to Lucas. org (on a person) is where they work. meetings.with is the '
   + 'list of people names in that meeting. Use [] for any empty list and "" for any unknown field. Invent '
-  + 'NOTHING — only what he stated. If the message names no such personal-world entity, return all empty arrays.';
+  + 'NOTHING — only what they stated. If the message names no such personal-world entity, return all empty arrays.';
 
 function validateExtract(raw) {
   const m = String(raw || '').match(/\{[\s\S]*\}/);

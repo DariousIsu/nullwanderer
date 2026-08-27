@@ -87,7 +87,7 @@ const GRAPH = async (mention) => {
     ok(/RECURRING MEETINGS YOU HAVE SAT IN/.test(r.text), 'a message about meetings gets the series she has attended');
     ok(/Alice, Bob, Cara/.test(r.text), 'with the roster — she was there, so she knows who is in it');
     ok(/Monday/.test(r.text) && /4 sessions/.test(r.text), 'and the cadence, which is the only binding signal we hold');
-    ok(/never state which meeting he means/i.test(r.text),
+    ok(/never state which meeting they mean/i.test(r.text),
       'SAFETY: nothing links a Meet code to a spoken name — asserting the binding is forbidden');
     ok(/as a question/.test(r.text), 'the permitted move is to ASK, not to assert');
     // a message with no meeting in it pays nothing for this
@@ -106,7 +106,7 @@ const GRAPH = async (mention) => {
     ok(/Rainey Weekly Huddle \(mav-myni-mkw\)/.test(r.text), 'the calendar title leads; the Meet code trails as our internal key');
     ok(/regulars \(who actually speaks/.test(r.text) && /Bill Dunne/.test(r.text), 'the spoken roster is still ours, from sitting in the room');
     ok(/invited \(from the calendar, 3\)/.test(r.text) && /Clark Powers/.test(r.text), 'and the calendar says who was SUPPOSED to be there');
-    ok(!/never state which meeting he means/i.test(r.text),
+    ok(!/never state which meeting they mean/i.test(r.text),
       'a NAMED series drops the do-not-assert caveat — we can now name it, so the warning would be false');
 
     // …but an UNLABELLED series must keep the caveat, and a labelled one alongside it must not
@@ -116,14 +116,14 @@ const GRAPH = async (mention) => {
       { code: 'zzz-nolabel-q', sessions: 3, last: Date.parse('2026-07-10'), weekdays: [4], roster: ['Someone Else'] },
     ];
     const rm = await R.build(MSG, { objects: [], deps: { getMeta: () => '{}', resolve: GRAPH, series: mixed, labels }, now: Date.parse('2026-07-21') });
-    ok(/never state which meeting he means/i.test(rm.text), 'SAFETY: an unlabelled series keeps the do-not-assert caveat');
+    ok(/never state which meeting they mean/i.test(rm.text), 'SAFETY: an unlabelled series keeps the do-not-assert caveat');
     ok(/zzz-nolabel-q/.test(rm.text.split('Nothing links')[1] || ''), 'and the caveat names exactly which codes it applies to');
     ok(!/Rainey Weekly Huddle/.test(rm.text.split('Nothing links')[1] || ''), 'the named one is not swept into the caveat');
 
     // a dead calendar costs the NAMES, never the block
     const dead = await R.build(MSG, { objects: [], deps: { getMeta: () => '{}', resolve: GRAPH, series, labels: async () => { throw new Error('google down'); } }, now: Date.parse('2026-07-21') });
     ok(/mav-myni-mkw/.test(dead.text) && /Bill Dunne/.test(dead.text), 'Google down → the roster and cadence still ship');
-    ok(/never state which meeting he means/i.test(dead.text), 'SAFETY: and it correctly falls back to not naming it');
+    ok(/never state which meeting they mean/i.test(dead.text), 'SAFETY: and it correctly falls back to not naming it');
   }
 
   // ── a pasted Meet link resolves to the meeting's NAME ────────────────────────────────────────

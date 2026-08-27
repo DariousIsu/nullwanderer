@@ -178,7 +178,7 @@ function buildDemonstrativeBlock(referentText, refNoun, userName = 'Lucas') {
 
   "${r.slice(0, 500)}"
 
-Answer about THAT specific ${refNoun || 'thing'} and nothing else. Do NOT substitute a different ${refNoun || 'one'} from your recent research, the news beat, or anything else in this prompt — if several similar items exist, the one he means is the one above. If you truly cannot tell which he means, ASK.`;
+Answer about THAT specific ${refNoun || 'thing'} and nothing else. Do NOT substitute a different ${refNoun || 'one'} from your recent research, the news beat, or anything else in this prompt — if several similar items exist, the one they mean is the one above. If you truly cannot tell which they mean, ASK.`;
 }
 
 // The prompt block. States the referent and, just as importantly, forbids substituting a different one —

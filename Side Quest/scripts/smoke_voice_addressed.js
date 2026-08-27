@@ -36,7 +36,7 @@ ok(va.namesHer('hey lane, you up?', 'zoe lane'), 'multi-word chosen name: any to
 const main = read('main.js');
 ok(/sttOpts && sttOpts\.handsFree/.test(main), 'the gate arms on the HANDS-FREE lane only (push-to-talk never gated)');
 ok(/!\(spkr && spkr\.match === false\)/.test(main), 'the addressed gate runs only on speech the speaker gate passed');
-ok(/\[ambient, his voice\]/.test(main), 'a dropped utterance shelves on room.overheard (awareness survives)');
+ok(/\[ambient, \$\{db\.getMeta\('user_name'\) \|\| 'Lucas'\}'s voice\]/.test(main), 'a dropped utterance shelves on room.overheard (awareness survives, owner-named not gendered)');
 ok(/addressed gate errored \(fail-open, turn proceeds\)/.test(main), 'a gate error fails OPEN — she never goes deaf to a bug');
 ok(/mainWindow\.isFocused\(\)/.test(main), 'focus comes from the real window (the dictation discriminator)');
 const chat = read('renderer/chat.js');

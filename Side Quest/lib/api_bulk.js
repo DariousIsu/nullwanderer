@@ -157,8 +157,23 @@ async function runDueBulk({ dispatch, landDoc, now = Date.now(), billLimit = 50,
   return out;
 }
 
+// standing() — the scheduler's own state, readable by her work-state introspection (F10-class,
+// 2026-08-27): the api-bulk backfill was INVISIBLE to every status surface, so "did the backfill
+// run?" drew "no such pass registered" while this scheduler was mid-drain. One row per configured
+// job: landed-record count + newest landing ts. Fail-soft: any read error yields [].
+function standing() {
+  try {
+    ensureBulkSchema();
+    const st = store.get().prepare('SELECT COUNT(*) n, MAX(ts) t FROM bulk_records WHERE job_id = ?');
+    return jobs().map((j) => {
+      const r = st.get(j.id) || {};
+      return { id: j.id, state: j.state, records: r.n || 0, newestTs: r.t || 0 };
+    });
+  } catch { return []; }
+}
+
 module.exports = {
   jobs, statusLabel, ensureBulkSchema,
   storedSessionHashes, putSession, getRecord, putRecord, countRecords,
-  sessionsToProcess, buildBillDoc, callTool, runBulk, runDueBulk,
+  sessionsToProcess, buildBillDoc, callTool, runBulk, runDueBulk, standing,
 };

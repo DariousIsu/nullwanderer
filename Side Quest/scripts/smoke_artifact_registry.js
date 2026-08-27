@@ -110,5 +110,24 @@ ok(/registry-first: canonical "\$\{h\.slug\}"/.test(main) && /Read it before any
 ok(/pursuit topic kin-rebound → project/.test(main) && /sibling mint prevented/.test(main), 'C1c/d cure: a pursued promise composes THE PROJECT, never a fragment sibling');
 ok(/hold REFUSED as vague/.test(main) && /IN THE NOTE'S OWN WORDS/.test(main), 'D2 cure: a vague hold asks instead of booking; a booked hold echoes the note verbatim');
 
+// ── b3(a) 08-27: the advisory kin matcher is PLURAL-BLIND + DATASET-STATE-AWARE ──────────────────
+// Live: "how did iowa end up looking in the bill sweep" answered from a stale 2017 doc — neither
+// "iowa" nor "bill" met the project's topic tokens ("bills" ≠ "bill"; the state lived only in the
+// dataset rows). Advisory-only loosening — resolveOrMint identity is untouched (pinned above).
+{
+  const ds = require('../lib/dataset_store');
+  ds._setDb(new Database(':memory:'));
+  const p2 = reg.resolveOrMint({ topic: 'levee maintenance funding bills' });
+  ok(!p2.existing, 'b3 setup: a disjoint topic mints its own project (identity untouched)');
+  reg.record({ slug: p2.slug, relPath: p2.relPath, title: 'Report — levee maintenance funding bills', topic: 'levee maintenance funding bills' });
+  const pb = reg.matchKinProject('the levee funding bill tracker');
+  ok(pb && pb.slug === p2.slug, 'b3(a): plural-blind — the ask\'s "bill" meets the topic\'s "bills"');
+  ok(reg.matchKinProject('how did iowa fare on levee matters') === null,
+    'b3(a) guard: a state the project does NOT hold adds nothing (no dataset rows → no state vocabulary)');
+  ds.upsertRows({ slug: p2.slug, rows: [{ entity: 'IA SF2366', attrs: { state: 'IA', title: 'Levee levy', status: 'Passed' } }] });
+  const sh = reg.matchKinProject('how did iowa fare on levee matters');
+  ok(sh && sh.slug === p2.slug, 'b3(a): the dataset\'s held STATE joins the vocabulary — the state-slice paraphrase reaches the project');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

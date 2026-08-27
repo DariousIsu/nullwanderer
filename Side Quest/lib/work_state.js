@@ -67,6 +67,10 @@ function snapshot({ maxFoci = 12, now = Date.now() } = {}) {
   try { snap.lastGatherTs = require('./echo_suit').lastGatherTs() || 0; } catch {}
   try { snap.lastExternalGatherTs = require('./echo_suit').lastExternalGatherTs() || 0; } catch {}
   try { snap.lastCanvasWriteTs = require('./canvas_docs').lastWriteTs() || 0; } catch {}
+  // Background schedulers (F10-class, 2026-08-27): the api-bulk backfill was invisible to her
+  // introspection — a "did the backfill run?" ask found no record and she asserted "no such pass
+  // registered" while the scheduler was mid-drain. One measured row per configured job.
+  try { snap.bulk = require('./api_bulk').standing(); } catch { snap.bulk = []; }
   return snap;
 }
 
@@ -82,6 +86,7 @@ function pendingRecordFor(anchors, snap) {
   const hay = [];
   for (const p of snap.promises || []) hay.push(p.subject, p.deliverable, p.topic);
   for (const f of snap.foci || []) { hay.push(f.subject, f.file); for (const t of f.targets || []) hay.push(t); }
+  for (const b of snap.bulk || []) hay.push(b.id, b.state, 'backfill legiscan bulk');   // scheduler jobs ground backfill claims (F10-class)
   const flat = hay.map((s) => str(s).toLowerCase()).join(' \n ');
   return want.some((t) => flat.includes(t));
 }
@@ -121,6 +126,10 @@ function renderStatus(snap, { now = Date.now() } = {}) {
     }
   } else lines.push('Directed foci: none recorded recently.');
   lines.push(`Last tool read ${age(snap.lastGatherTs)}; last canvas write ${age(snap.lastCanvasWriteTs)}.`);
+  const bulk = snap.bulk || [];
+  if (bulk.length) {
+    lines.push(`Background backfill (api-bulk scheduler): ${bulk.map((b) => `${b.state || b.id} ${b.records} record(s)${b.newestTs ? `, newest landed ${age(b.newestTs)}` : ''}`).join(' · ')}.`);
+  }
   return lines.join('\n');
 }
 

@@ -141,12 +141,20 @@ function matchAsk(subject) {
  *  contract subject never clears 0.6 of a wide report topic, and a false hit here costs one
  *  extra directive line (unlike resolveOrMint, where it would merge projects). */
 function matchKinProject(text, { kind = 'report', minShared = 2 } = {}) {
-  const toks = new Set(tokensOf(text));
+  // b3(a) (2026-08-27): comparison is PLURAL-BLIND (trailing s stripped on both sides — "bill"
+  // meets "bills") and a dataset-backed project's held STATE NAMES join its vocabulary ("how did
+  // Iowa end up looking in the bill sweep" answered from a stale 2017 doc because neither "iowa"
+  // nor "bill" met the topic tokens). Advisory-only loosening: a false hit costs one directive
+  // line; resolveOrMint's identity matching is untouched.
+  const _stem = (w) => (w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w);
+  const toks = new Set(tokensOf(text).map(_stem));
   if (toks.size < minShared) return null;
   let best = null, bestN = 0;
   for (const r of _rows()) {
     if (!String(r.slug).startsWith(kind + '-')) continue;
-    const rToks = new Set([...tokensOf(r.topic), ...tokensOf(String(r.slug).replace(/-/g, ' '))]);
+    let stateToks = [];
+    try { stateToks = require('./dataset_store').statesFor(r.slug).flatMap((s) => tokensOf(s.name)); } catch {}
+    const rToks = new Set([...tokensOf(r.topic), ...tokensOf(String(r.slug).replace(/-/g, ' ')), ...stateToks].map(_stem));
     let n = 0;
     for (const w of rToks) if (toks.has(w)) n++;
     if (n >= minShared && n > bestN) { best = r; bestN = n; }   // ties keep the first = newest (rows sort updated_ts DESC)

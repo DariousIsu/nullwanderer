@@ -90,7 +90,13 @@ function findUndecomposed(db, { limit = 50, sinceId = 0, sources = null } = {}) 
   // An explicit `sources` still wins, so a caller can deliberately sweep one lane.
   let rows = [];
   try {
-    const where = ['d.body IS NOT NULL', "TRIM(d.body) <> ''", 'd.id > ?'];
+    // SLOW-SCAN CURE (2026-08-27, the probe's 1.96s face): the body predicates used to LEAD the
+    // WHERE, so every scanned row — including the already-decomposed ones the anti-join rejects —
+    // paid to load its body overflow pages and run TRIM over it (1.35GB corpus). Cheap predicates
+    // (id, source, the indexed anti-join probe) now run FIRST and LENGTH replaces TRIM (no string
+    // allocation; a whitespace-only body slipping through just decomposes to nothing and marks
+    // attempted — harmless). Rows that fail the cheap filters never touch the body column at all.
+    const where = ['d.id > ?'];
     const args = [Number(sinceId) || 0];
     if (Array.isArray(sources) && sources.length) {
       where.push(`d.source IN (${sources.map(() => '?').join(',')})`);
@@ -104,6 +110,7 @@ function findUndecomposed(db, { limit = 50, sinceId = 0, sources = null } = {}) 
          FROM documents d
         WHERE ${where.join(' AND ')}
           AND NOT EXISTS (SELECT 1 FROM encounters e WHERE e.source_ref = 'doc:' || d.id)
+          AND d.body IS NOT NULL AND LENGTH(d.body) > 0
         ORDER BY d.id DESC
         LIMIT ?`).all(...args, Math.max(1, (Number(limit) || 50) * 4));
   } catch { return []; }

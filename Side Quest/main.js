@@ -2344,7 +2344,7 @@ app.whenReady().then(() => {
                 if (landed && (landed.duplicateOf || !landed.landed) && landed.id) {
                   const prior = db.getDocumentById(landed.duplicateOf || landed.id);
                   if (prior && prior.created_ts && prior.created_ts < Date.now() - 10 * 60e3) {
-                    _recog = `I KNOW this document — Lucas has dropped "${label}" before (doc #${prior.id}, first held ${new Date(prior.created_ts).toLocaleDateString()}). Re-read fresh in case it changed; if he asks about it, I already hold it and should say so.`;
+                    _recog = `I KNOW this document — Lucas has dropped "${label}" before (doc #${prior.id}, first held ${new Date(prior.created_ts).toLocaleDateString()}). Re-read fresh in case it changed; if they ask about it, I already hold it and should say so.`;
                   }
                 }
               } catch { /* recognition is additive */ }
@@ -3325,7 +3325,7 @@ ipcMain.handle('stt:transcribe', async (_e, audioBuf, sttOpts) => {
           try {
             const ring = (JSON.parse(db.getMeta('room.overheard') || '[]') || [])
               .filter(o => o && o.text && (Date.now() - o.ts) < 60 * 60e3);
-            ring.push({ ts: Date.now(), text: `[ambient, his voice] ${String(res.text).trim().slice(0, 180)}` });
+            ring.push({ ts: Date.now(), text: `[ambient, ${db.getMeta('user_name') || 'Lucas'}'s voice] ${String(res.text).trim().slice(0, 180)}` });
             db.setMeta('room.overheard', JSON.stringify(ring.slice(-5)));
           } catch {}
         }
@@ -5844,6 +5844,7 @@ async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
 // produces the grounded content; promiseArtifactEmit lands it; the delivery claim is true by
 // construction. A CANNOT: answer is relayed plainly — never a narrated success.
 async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
+  const _cuName = (() => { try { return require('./lib/interlocutor').liveName('Lucas'); } catch { return 'Lucas'; } })();   // F9: the order came from whoever's at the keyboard
   const recent = (db.getRecentTurns(10, sessionId) || []).filter((t) => t.speaker === 'user').sort((a, b) => (a.ts || 0) - (b.ts || 0)).slice(-4)
     .map((t) => `- ${String(t.content).slice(0, 300)}`).join('\n');
   // Held rosters ride along here too (M5.5) — a create naming civic bodies should use store names,
@@ -5856,17 +5857,17 @@ async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
   let md = '';
   try {
     const res = await runCloudOperator({
-      userMessage: `Lucas ordered content ONTO HIS CANVAS. His order: "${order}"\n\nHis recent messages (oldest first — they carry the subject when the order is a bare "print it"):\n${recent}\n${heldBlock}\nProduce the EXACT markdown content the canvas doc should hold — nothing else, no preamble. Ground every entry via your tools (echo / localdb / recall / web as needed); NEVER invent entries. A bounded list (places, names, items) must be COMPLETE and one item per line, in the order he asked for. If you cannot ground the content, reply with ONE line starting "CANNOT:" naming what is missing.`,
-      context: '', task: true,     // Lucas-directed → interactive lane; never quota-deferred
+      userMessage: `${_cuName} ordered content ONTO THE CANVAS. The order: "${order}"\n\nTheir recent messages (oldest first — they carry the subject when the order is a bare "print it"):\n${recent}\n${heldBlock}\nProduce the EXACT markdown content the canvas doc should hold — nothing else, no preamble. Ground every entry via your tools (echo / localdb / recall / web as needed); NEVER invent entries. A bounded list (places, names, items) must be COMPLETE and one item per line, in the order they asked for. If you cannot ground the content, reply with ONE line starting "CANNOT:" naming what is missing.`,
+      context: '', task: true,     // user-directed → interactive lane; never quota-deferred
     });
     md = res && res.answer ? String(res.answer).trim() : '';
   } catch (e) { console.error('[canvas-cmd] execute failed:', e.message); }
   if (!md) {
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas ordered content onto his canvas ("${order.slice(0, 120)}") but the execution produced nothing. Say plainly that the canvas write did NOT happen and you'll retry on his word — never claim it landed.]` });
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[${_cuName} ordered content onto the canvas ("${order.slice(0, 120)}") but the execution produced nothing. Say plainly that the canvas write did NOT happen and you'll retry on their word — never claim it landed.]` });
     return;
   }
   if (/^CANNOT:/i.test(md)) {
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas ordered content onto his canvas but it could not be grounded: "${md.slice(0, 200)}". Tell him exactly that — what is missing — and do NOT claim anything landed.]` });
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[${_cuName} ordered content onto the canvas but it could not be grounded: "${md.slice(0, 200)}". Tell them exactly that — what is missing — and do NOT claim anything landed.]` });
     return;
   }
   // PAYLOAD CONTRACT (M6, 2026-08-08 audit): the EDIT door ran rejectEditOutput twice while this
@@ -5889,7 +5890,7 @@ async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
     if (_createReject) {
       try {
         const res2 = await runCloudOperator({
-          userMessage: `Your previous output for Lucas's canvas order "${order}" was REJECTED because it read as narration, not a document (it began with conversational framing like "Sure" / "I'll" / "Let me"). Re-emit NOW as PURE canvas content: your VERY FIRST character must be the document body itself (a "#" heading or a "-" list item), NOT a sentence about what you are doing. No preamble, no "here is", no sign-off. ${heldBlock ? 'Use the held roster names where they answer. ' : ''}A bounded list must be COMPLETE, one item per line, in the order asked. If you truly cannot ground it, reply with ONE line starting "CANNOT:".`,
+          userMessage: `Your previous output for ${_cuName}'s canvas order "${order}" was REJECTED because it read as narration, not a document (it began with conversational framing like "Sure" / "I'll" / "Let me"). Re-emit NOW as PURE canvas content: your VERY FIRST character must be the document body itself (a "#" heading or a "-" list item), NOT a sentence about what you are doing. No preamble, no "here is", no sign-off. ${heldBlock ? 'Use the held roster names where they answer. ' : ''}A bounded list must be COMPLETE, one item per line, in the order asked. If you truly cannot ground it, reply with ONE line starting "CANNOT:".`,
           context: '', task: true,
         });
         const md2 = res2 && res2.answer ? String(res2.answer).trim() : '';
@@ -5903,21 +5904,21 @@ async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
   }
   if (_createReject) {
     console.log(`[canvas-cmd] create output REJECTED (${_createReject}) — nothing landed`);
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas's canvas order produced INVALID output (${_createReject}) and NOTHING landed on the canvas. Tell him plainly the create failed its output check and he can re-order it — never claim a doc exists.]` });
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[${_cuName}'s canvas order produced INVALID output (${_createReject}) and NOTHING landed on the canvas. Tell them plainly the create failed its output check and they can re-order it — never claim a doc exists.]` });
     return;
   }
   const title = order.replace(/\b(?:please|can you|could you)\b/gi, '').replace(/\b(?:on|onto|to|into)\s+(?:a\s+fresh\s+|a\s+new\s+|a\s+|the\s+|my\s+|your\s+)?canvas(?:\s+doc(?:ument)?|\s+tab)?\b/gi, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'Canvas doc';
   const slug = `canvas-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'doc'}`;
   try { await promiseArtifactEmit({ slug, title, markdown: md }); } catch (e) {
     console.error('[canvas-cmd] emit failed:', e.message);
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[The canvas write FAILED (${e.message}). Tell Lucas plainly — the content is composed but did not land; never claim it is on the canvas.]` });
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[The canvas write FAILED (${e.message}). Tell ${_cuName} plainly — the content is composed but did not land; never claim it is on the canvas.]` });
     return;
   }
   const lines = md.split('\n').filter((l) => l.trim()).length;
   _stampWorkingCanvasDoc({ slug, title, md });
   console.log(`[canvas-cmd] order executed → "${title}" landed on canvas (${md.length}ch, ${lines} line(s))`);
   const _holds = require('./lib/delivery').holdsDigest(md);
-  await fireToolFollowup({ io, channel, sessionId, resultText: `[The canvas doc Lucas ordered IS LANDED — "${title}", ${lines} content line(s), on his Canvas now. Tell him it's there and, in ONE sentence, what it holds — described ONLY from its actual contents below, naming nothing not present in them:\n${_holds}\nThen invite him to verify. Do NOT add extras he didn't ask for and do NOT offer follow-on work — he said slow, one step at a time.]` });
+  await fireToolFollowup({ io, channel, sessionId, resultText: `[The canvas doc ${_cuName} ordered IS LANDED — "${title}", ${lines} content line(s), on the Canvas now. Tell them it's there and, in ONE sentence, what it holds — described ONLY from its actual contents below, naming nothing not present in them:\n${_holds}\nThen invite them to verify. Do NOT add extras they didn't ask for and do NOT offer follow-on work — they said slow, one step at a time.]` });
 }
 
 // The WORKING canvas doc — what "the document we're building" refers to. Stamped at every
@@ -5974,10 +5975,11 @@ async function _classifyCanvasEditIntent(userMessage) {
 // COMPLETE updated doc → re-emit on the SAME slug (updates in place) → re-stamp. Pure reformats
 // need no tools; content additions get them — one bounded interactive-lane run covers both.
 async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
+  const _cuName = (() => { try { return require('./lib/interlocutor').liveName('Lucas'); } catch { return 'Lucas'; } })();   // F9: the order came from whoever's at the keyboard
   const slug = db.getMeta('canvas.working_slug'), title = db.getMeta('canvas.working_title') || 'Canvas doc';
   const cur = db.getMeta('canvas.working_md') || '';
   if (!slug || !cur) {
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas gave a canvas edit order ("${order.slice(0, 120)}") but no working doc content is stored. Say plainly you've lost the working copy and ask him to name what to rebuild — never claim an edit landed.]` });
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[${_cuName} gave a canvas edit order ("${order.slice(0, 120)}") but no working doc content is stored. Say plainly you've lost the working copy and ask them to name what to rebuild — never claim an edit landed.]` });
     return;
   }
   let md = '';
@@ -6002,8 +6004,8 @@ async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
     // one plain completion (the report door's condenseComplete pattern) with cur + instruction +
     // held rosters in hand. The operator runs only as the FALLBACK when the caged pass says it
     // needs research it cannot do — and its output faces the same payload contract.
-    const _editRules = `Output the COMPLETE updated markdown for the whole doc after applying the concrete instruction — change nothing he did not ask to change, add nothing extra, keep every existing entry unless he asked for its removal. NEVER invent factual entries: use the held data provided; any entry the held data cannot fill is marked "— (pending verification)" (a partially-filled document is CORRECT and the pending marks are honest). Your reply must BE the document itself — never a plan, never narration. If NO concrete change can be found in the instruction or his recent messages, reply with ONE line "CANNOT:" naming why.`;
-    const _editBody = `Lucas is editing the canvas doc "${title}" step by step. CURRENT CONTENT:\n"""\n${cur}\n"""\n\nHIS EDIT INSTRUCTION: "${order}"\n\nHis recent messages (oldest first — when the instruction is vague or anaphoric, the CONCRETE standing instruction is usually here; apply THAT one):\n${recent}\n${heldBlock}`;
+    const _editRules = `Output the COMPLETE updated markdown for the whole doc after applying the concrete instruction — change nothing they did not ask to change, add nothing extra, keep every existing entry unless they asked for its removal. NEVER invent factual entries: use the held data provided; any entry the held data cannot fill is marked "— (pending verification)" (a partially-filled document is CORRECT and the pending marks are honest). Your reply must BE the document itself — never a plan, never narration. If NO concrete change can be found in the instruction or their recent messages, reply with ONE line "CANNOT:" naming why.`;
+    const _editBody = `${_cuName} is editing the canvas doc "${title}" step by step. CURRENT CONTENT:\n"""\n${cur}\n"""\n\nTHE EDIT INSTRUCTION: "${order}"\n\nTheir recent messages (oldest first — when the instruction is vague or anaphoric, the CONCRETE standing instruction is usually here; apply THAT one):\n${recent}\n${heldBlock}`;
     try {
       md = String(await condenseComplete([{ role: 'user', content: `${_editBody}\n${_editRules}` }], { numPredict: 4000 }) || '').trim();
     } catch (e) { console.error('[canvas-cmd] caged compose failed:', e.message); md = ''; }
@@ -6021,7 +6023,7 @@ async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
     // Every outcome path logs (08-08: this branch relayed honestly but logged NOTHING — the live
     // watch was blind to a completed edit for 20 minutes; silence must never be an outcome).
     console.log(`[canvas-cmd] edit NOT applied — ${md ? md.slice(0, 160) : 'run produced nothing'}`);
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas's canvas edit did NOT apply${md ? `: "${md.slice(0, 200)}"` : ' (the edit run produced nothing)'}. Tell him exactly that — the doc on his canvas is UNCHANGED — and never claim the edit landed.]` });
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[${_cuName}'s canvas edit did NOT apply${md ? `: "${md.slice(0, 200)}"` : ' (the edit run produced nothing)'}. Tell them exactly that — the doc on the canvas is UNCHANGED — and never claim the edit landed.]` });
     return;
   }
   // PAYLOAD CONTRACT (2026-08-08): the operator's conversational finalize leaked narration through
@@ -6029,7 +6031,7 @@ async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
   const reject = require('./lib/canvas_command').rejectEditOutput(md, cur, order);
   if (reject) {
     console.log(`[canvas-cmd] edit output REJECTED (${reject}) — doc untouched`);
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas's canvas edit produced INVALID output (${reject}) and was NOT applied — the doc on his canvas is UNCHANGED. Tell him plainly the edit failed its output check and he can re-order it; never claim it landed.]` });
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[${_cuName}'s canvas edit produced INVALID output (${reject}) and was NOT applied — the doc on the canvas is UNCHANGED. Tell them plainly the edit failed its output check and they can re-order it; never claim it landed.]` });
     return;
   }
   try { await promiseArtifactEmit({ slug, title, markdown: md }); } catch (e) {
@@ -6060,13 +6062,14 @@ async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
     }
   } catch (e) { console.error('[canvas-cmd] pending-plan enqueue failed:', e.message); }
   const _editHolds = require('./lib/delivery').holdsDigest(md);
-  await fireToolFollowup({ io, channel, sessionId, resultText: `[The edit Lucas ordered IS APPLIED — "${title}" updated in place on his Canvas (${lines} line(s) now). Tell him in one sentence what changed and invite him to verify — any specifics you name must appear in its actual current contents below (name nothing not present):\n${_editHolds}\n${planNote} No extras beyond that — he is driving step by step.]` });
+  await fireToolFollowup({ io, channel, sessionId, resultText: `[The edit ${_cuName} ordered IS APPLIED — "${title}" updated in place on the Canvas (${lines} line(s) now). Tell them in one sentence what changed and invite them to verify — any specifics you name must appear in its actual current contents below (name nothing not present):\n${_editHolds}\n${planNote} No extras beyond that — they are driving step by step.]` });
 }
 
 // Land a HELD product (found by the pull-up gate) on the canvas and hand it over honestly: what it
 // is, when it was made, where it came from — never a regenerated substitute. The sibling of
 // buildReportFromHeld: that one COMPOSES from held material; this one RETRIEVES a finished product.
 async function presentHeldProduct({ io, channel, sessionId, hit, alternates = [], subject }) {
+  const _cuName = (() => { try { return require('./lib/interlocutor').liveName('Lucas'); } catch { return 'Lucas'; } })();   // F9: address whoever's at the keyboard
   let title = '', markdown = '', ref = '';
   try {
     if (hit.kind === 'doc') {
@@ -6094,11 +6097,11 @@ async function presentHeldProduct({ io, channel, sessionId, hit, alternates = []
   let landed = false;
   try { landed = (await promiseArtifactEmit({ slug, title: title.slice(0, 60), markdown })) === true; } catch {}
   console.log(`[pull-up] held product ${landed ? 'landed on canvas' : 'FAILED to land on canvas'}: ${hit.label} (made ${when})`);
-  const altNote = alternates.length ? ` If that is not the one he means, the other matches were: ${alternates.map((a) => a.label).join(' · ')} — name them briefly.` : '';
+  const altNote = alternates.length ? ` If that is not the one they mean, the other matches were: ${alternates.map((a) => a.label).join(' · ')} — name them briefly.` : '';
   const whereNote = landed
-    ? `The ACTUAL artifact — ${ref}, made ${when} ET — is now on his Canvas. Tell him that in your own voice: what it is and when it was made.`
-    : `You FOUND the actual artifact (${ref}, made ${when} ET) but the canvas emit FAILED — it is NOT on his Canvas right now. Say that plainly: name the artifact and where it lives (${ref}), and that the canvas landing failed so he isn't left looking for a tab that isn't there.`;
-  await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked you to PULL UP a product you two already made ("${subject}"). ${whereNote} Do NOT present freshly-queried data as this product, and do NOT offer new research unless he asks.${altNote}]` });
+    ? `The ACTUAL artifact — ${ref}, made ${when} ET — is now on the Canvas. Tell them that in your own voice: what it is and when it was made.`
+    : `You FOUND the actual artifact (${ref}, made ${when} ET) but the canvas emit FAILED — it is NOT on the Canvas right now. Say that plainly: name the artifact and where it lives (${ref}), and that the canvas landing failed so they aren't left looking for a tab that isn't there.`;
+  await fireToolFollowup({ io, channel, sessionId, resultText: `[${_cuName} asked you to PULL UP a product you two already made ("${subject}"). ${whereNote} Do NOT present freshly-queried data as this product, and do NOT offer new research unless they ask.${altNote}]` });
 }
 
 // SPINE 3 — the LOCAL ROSTER door (docs/DELIVERY_BINDING_SPINE.md). Composes the whole local tier: resolve
@@ -6111,7 +6114,7 @@ async function buildLocalRosterDeliverable({ io, channel, sessionId, userName, s
   const _lr = require('./lib/local_roster');
   const state = _lf.resolveState(subject || '');
   if (!state) {
-    if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked to build a local-government roster ("${String(subject || '').slice(0, 100)}") but the STATE wasn't clear. Ask him which state (e.g. "the Louisiana parish roster"). Do NOT invent one or claim a file exists.]` });
+    if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName || 'The user'} asked to build a local-government roster ("${String(subject || '').slice(0, 100)}") but the STATE wasn't clear. Ask them which state (e.g. "the Louisiana parish roster"). Do NOT invent one or claim a file exists.]` });
     return { delivered: false, miss: 'no-state', subject };   // outcome for the off-turn delivery backstop (live callers ignore it)
   }
   // R2 — SERVE-vs-REBUILD trust gate: if a held roster product for this state is still current (fresh AND no
@@ -6128,7 +6131,7 @@ async function buildLocalRosterDeliverable({ io, channel, sessionId, userName, s
       const relHeld = require('path').relative(__dirname, held.path).replace(/\\/g, '/');
       const ageMin = Math.round((Date.now() - held.ts) / 60000);
       console.log(`[roster-door] ${state}: SERVE held product (${decision.reason}) — ${held.filled}/${held.denominator} at ${relHeld} (${ageMin}m old)`);
-      if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${state} roster already exists and is current — ${held.filled} of ${held.denominator} localities verified, saved as an openable spreadsheet at "${relHeld}" (built ${ageMin} minute(s) ago). Nothing has changed since, so I'm SERVING the existing sheet rather than rebuilding it. Point Lucas to the file and the honest ${held.filled}/${held.denominator} count, and offer to refresh it if he wants a rebuild.]` });
+      if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${state} roster already exists and is current — ${held.filled} of ${held.denominator} localities verified, saved as an openable spreadsheet at "${relHeld}" (built ${ageMin} minute(s) ago). Nothing has changed since, so I'm SERVING the existing sheet rather than rebuilding it. Point ${userName || 'the user'} to the file and the honest ${held.filled}/${held.denominator} count, and offer to refresh it if they want a rebuild.]` });
       return { delivered: true, served: true, rel: relHeld, subject: state, filled: held.filled, denominator: held.denominator };
     }
   } catch (e) { console.error('[roster-door] serve-vs-rebuild check failed (rebuilding):', e.message); }
@@ -6145,7 +6148,7 @@ async function buildLocalRosterDeliverable({ io, channel, sessionId, userName, s
     // R2: record the held-product meta so a later build request can serve-vs-rebuild against it.
     if (filePath) { try { db.setMeta(`roster.product.${state}`, JSON.stringify({ ts: Date.now(), filled: del.filled, denominator: del.denominator, path: filePath })); } catch {} }
   } catch (e) {
-    if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[Building the ${state} local roster FAILED (${e.message}). Tell Lucas plainly it didn't produce a file; never claim one exists.]` });
+    if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[Building the ${state} local roster FAILED (${e.message}). Tell ${userName || 'the user'} plainly it didn't produce a file; never claim one exists.]` });
     return { delivered: false, miss: 'build-failed', subject: state, reason: e.message };
   }
   // enqueue the whole state top-down so the metabolism fills the gaps over time (deduped — a re-run coalesces).
@@ -6154,10 +6157,10 @@ async function buildLocalRosterDeliverable({ io, channel, sessionId, userName, s
   const rel = filePath ? require('path').relative(__dirname, filePath).replace(/\\/g, '/') : null;
   console.log(`[roster-door] ${state}: assembled ${del.filled}/${del.denominator} verified → ${format} ${openable ? '(openable)' : '(UNVERIFIED)'}${rel ? ' ' + rel : ''}; queued ${queued} for research`);
   if (!filePath) {   // spreadsheet_out returned {ok:false} without throwing → no openable file; never claim one
-    if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[Building the ${state} local roster did not produce an openable file this time. Tell Lucas plainly it didn't produce a file; never claim one exists.]` });
+    if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[Building the ${state} local roster did not produce an openable file this time. Tell ${userName || 'the user'} plainly it didn't produce a file; never claim one exists.]` });
     return { delivered: false, miss: 'no-file', subject: state };
   }
-  if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${state} local-government roster is ASSEMBLED and saved as an openable ${format} spreadsheet at "${rel}". HONEST COVERAGE — lead with this: ${del.filled} of ${del.denominator} localities are VERIFIED (their governing body + officials confirmed and in the sheet); the remaining ${del.denominator - del.filled} are marked "(researching)" and ${queued} were just queued for me to fill top-down from official sources over time. Tell Lucas exactly that — the file, the ${del.filled}/${del.denominator} verified count, and that the rest fill in as I research. Do NOT claim it is complete, and do NOT invent any official you have not verified.]` });
+  if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${state} local-government roster is ASSEMBLED and saved as an openable ${format} spreadsheet at "${rel}". HONEST COVERAGE — lead with this: ${del.filled} of ${del.denominator} localities are VERIFIED (their governing body + officials confirmed and in the sheet); the remaining ${del.denominator - del.filled} are marked "(researching)" and ${queued} were just queued for me to fill top-down from official sources over time. Tell ${userName || 'the user'} exactly that — the file, the ${del.filled}/${del.denominator} verified count, and that the rest fill in as I research. Do NOT claim it is complete, and do NOT invent any official you have not verified.]` });
   return { delivered: true, rel, subject: state, filled: del.filled, denominator: del.denominator, queued };
 }
 
@@ -6181,7 +6184,7 @@ async function buildSplitFromOrder({ io, channel, sessionId, labels }) {
   } catch (e) { console.error('[split] read source blocks failed:', e.message); }
   const sections = blocks.filter((b) => /^sec-/.test(String(b.block_id || '')));   // contract/todo are per-doc scaffolding
   if (!srcTab || !sections.length) {
-    await fireToolFollowup({ io, channel, sessionId, resultText: `[Lucas asked to SPLIT the current research document into two ("${labA}" and "${labB}"), but there is no source document with sections to split yet${focusId ? ` (focus #${focusId})` : ''}. Say that plainly — you did NOT split anything — and offer to split it once the research has sections, or ask which document he means. Never claim a split happened.]` });
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[${(() => { try { return require('./lib/interlocutor').liveName('Lucas'); } catch { return 'Lucas'; } })()} asked to SPLIT the current research document into two ("${labA}" and "${labB}"), but there is no source document with sections to split yet${focusId ? ` (focus #${focusId})` : ''}. Say that plainly — you did NOT split anything — and offer to split it once the research has sections, or ask which document they mean. Never claim a split happened.]` });
     console.log(`[split] no source sections (tab=${srcTab || 'none'}) — reported honestly, nothing split`);
     return;
   }
@@ -6306,7 +6309,7 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
       const _dead = _recent.some((r2) => { const c2 = String(r2.content || ''); if (!_ABS_RE.test(c2)) return false; const low = c2.toLowerCase(); return _anchors.every((a) => low.includes(a)); });
       if (_dead) {
         console.log(`[report-cmd] VERIFIED-ABSENCE tombstone — a recent say declared "${_anchors.join(' ')}" nonexistent (checked incl. the open web); the gap stands, nothing composes`);
-        if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The "${t}" report was NOT built: your own recent verification concluded the named subject (${_anchors.join(', ')}) does not exist — not in the databases and not on the open web. Tell Lucas plainly that the gap stands and ask for a spelling or bill-number correction if he has one. NEVER say a report is ready or that a dossier was produced.]` });
+        if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The "${t}" report was NOT built: your own recent verification concluded the named subject (${_anchors.join(', ')}) does not exist — not in the databases and not on the open web. Tell them plainly that the gap stands and ask for a spelling or bill-number correction if they have one. NEVER say a report is ready or that a dossier was produced.]` });
         return { delivered: false, miss: 'verified-absence', topic: t };
       }
     }
@@ -6585,7 +6588,7 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
   } catch (e) { console.error('[report-cmd] open-question enqueue failed:', e.message); }
   const planNote = openQs ? ` The report names ${openQs} open question(s) the held material could not answer — each is now QUEUED for autonomous research; the report deepens as they resolve. State that plan in one sentence.` : '';
   const _reportHolds = require('./lib/delivery').holdsDigest(md, { cap: 800 });
-  if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The report Lucas asked for is BUILT and delivered — it is on his Canvas${saved ? ` and saved at ${rel}` : ''}, composed from ${rows.length} document(s) you already held (${rows.map((r) => '#' + r.id).join(', ')}). Tell him it's ready, where it is, and give the ONE most substantive finding in it — drawn ONLY from its actual contents below, naming nothing not present in them:\n${_reportHolds}\nIn your own voice, two or three sentences.${planNote} Do not re-paste the whole report.]` });
+  if (io) await fireToolFollowup({ io, channel, sessionId, resultText: `[The report ${(() => { try { return require('./lib/interlocutor').liveName('Lucas'); } catch { return 'Lucas'; } })()} asked for is BUILT and delivered — it is on the Canvas${saved ? ` and saved at ${rel}` : ''}, composed from ${rows.length} document(s) you already held (${rows.map((r) => '#' + r.id).join(', ')}). Tell them it's ready, where it is, and give the ONE most substantive finding in it — drawn ONLY from its actual contents below, naming nothing not present in them:\n${_reportHolds}\nIn your own voice, two or three sentences.${planNote} Do not re-paste the whole report.]` });
   // delivered reflects what ACTUALLY landed (canvas OR notes) — never a compose-only claim; nothing landed → miss.
   return { delivered: (landed || saved), canvas: landed, topic: t, rel: saved ? rel : null, canvasTab: landed ? `promise-${slug}` : null, docCount: rows.length, openQs, miss: (landed || saved) ? undefined : 'nothing-landed' };
 }
@@ -7882,7 +7885,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       if (recCmd.action === 'start') {
         const r = await webLib.startRecording({ task: recCmd.task, url: recCmd.url, site: recCmd.site });
         resultText = r.ok
-          ? `[You just started RECORDING a recipe by demonstration — your browser is open at ${r.url}. Tell ${recUserName} you're watching and ask him to click and type through "${r.task}" once in your browser; you'll remember the steps. When he's finished he'll say "stop recording". One or two sentences, your own voice. You CAN do this — never deny the capability.]`
+          ? `[You just started RECORDING a recipe by demonstration — your browser is open at ${r.url}. Tell ${recUserName} you're watching and ask them to click and type through "${r.task}" once in your browser; you'll remember the steps. When they're finished they'll say "stop recording". One or two sentences, your own voice. You CAN do this — never deny the capability.]`
           : `[You tried to start recording a recipe but it failed: ${r.reason}. Tell ${recUserName} plainly what went wrong. Do NOT claim you lack the capability — the tool exists, it errored.]`;
         console.log(`[recorder] demonstration START → task="${recCmd.task}" url=${recCmd.url || recCmd.site || '(current)'} (${r.ok ? 'ok' : 'FAIL ' + r.reason})`);
       } else {
@@ -7917,7 +7920,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         await seeImage({ io, channel, sessionId, userName: siUser, base64: cap.base64, label: `${siUser}'s screen`,
           question: 'This is a screenshot of the whole screen. Describe what is visible — especially any image or photo on it — concretely and specifically.', surface: 'screen-see' });
       } else {
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You tried to look at ${siUser}'s screen but couldn't capture it (${cap && cap.reason}). Tell him plainly you couldn't see it this time — don't pretend you did.]` }); } catch {}
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You tried to look at ${siUser}'s screen but couldn't capture it (${cap && cap.reason}). Tell them plainly you couldn't see it this time — don't pretend you did.]` }); } catch {}
       }
       console.log(`[main] screen-sight interceptor → ${cap && cap.ok ? 'captured + described' : 'FAIL ' + (cap && cap.reason)}`);
       return { ok: true, screenSight: true, say: null };
@@ -7977,7 +7980,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             mediaWatchNote = `[You just searched YouTube for "${swQuery}" and are opening the top clip (${r.url}) in your own browser with captions ON. Tell ${uName} you're pulling it up now; you'll follow the captions live as it plays. Do NOT invent scenes or dialogue — just acknowledge you're starting it.]`;
             console.log(`[main] search-and-watch started: "${swQuery}" → ${r.url}`);
           } else {
-            mediaWatchNote = `[You tried to find "${swQuery}" on YouTube but couldn't get a usable clip link (${r.reason}). Tell ${uName} plainly you couldn't pull one up; ask him to paste a link, or offer to talk about it from what you actually know. Do NOT pretend you watched anything.]`;
+            mediaWatchNote = `[You tried to find "${swQuery}" on YouTube but couldn't get a usable clip link (${r.reason}). Tell ${uName} plainly you couldn't pull one up; ask them to paste a link, or offer to talk about it from what you actually know. Do NOT pretend you watched anything.]`;
             console.log(`[main] search-and-watch found nothing for "${swQuery}" (${r.reason})`);
           }
         }
@@ -8192,8 +8195,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // His inbox is on the shared browser — read that tab, not her IMAP account.
         const r = await browserLib.dispatch({ tag: 'browse-read', attrs: {} });
         const resultText = (r && r.ok)
-          ? `[Lucas asked about HIS inbox — it's open in the shared browser you both use, NOT your own zoelanai@gmail.com account. You just read that tab; here's what's on it. Tell him what you see, in your own voice — you CAN see it, you just did.\n\n${(r.text || '').slice(0, 3000)}]`
-          : `[You tried to read Lucas's inbox in the shared browser but: ${(r && r.reason) || 'unknown error'}. If the tab isn't up, ask him to bring it forward. Do NOT say you can't see it — you can read the shared browser.]`;
+          ? `[The ask was about THEIR inbox — it's open in the shared browser you both use, NOT your own zoelanai@gmail.com account. You just read that tab; here's what's on it. Tell them what you see, in your own voice — you CAN see it, you just did.\n\n${(r.text || '').slice(0, 3000)}]`
+          : `[You tried to read the inbox in the shared browser but: ${(r && r.reason) || 'unknown error'}. If the tab isn't up, ask them to bring it forward. Do NOT say you can't see it — you can read the shared browser.]`;
         db.setMeta('last_ai_utterance_at', String(Date.now()));
         resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
         try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[read-inbox/his] followup failed:', e.message); }
@@ -8553,14 +8556,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // If Lucas snapped her out of a thought, tell her so she surfaces naturally —
   // a brief "coming back" beat in her own voice, then answers. Not an apology loop.
   if (pulledFromThought) {
-    composedUserMessage = `[${userName || 'Lucas'} just pulled you back from a deep thought to talk to you — you were absorbed in something and he wants your attention now. Surface naturally: a short, genuine "coming back to the room" beat in your own voice (you needn't say what you were lost in unless you want to), then answer him. Don't over-apologize.]\n\n${composedUserMessage}`;
+    composedUserMessage = `[${userName || 'Lucas'} just pulled you back from a deep thought to talk to you — you were absorbed in something and they want your attention now. Surface naturally: a short, genuine "coming back to the room" beat in your own voice (you needn't say what you were lost in unless you want to), then answer them. Don't over-apologize.]\n\n${composedUserMessage}`;
   }
   // CHANNEL AWARENESS — tell her which surface this message reached her on, so she
   // doesn't reference the desktop UI while on Discord, and knows Discord is how she
   // reaches Lucas when he's away. Injected into the model-facing message only; the
   // stored user turn stays clean.
   if (channel === 'discord') {
-    composedUserMessage = `[This message reached you over Discord DM — Lucas is messaging you from Discord, likely away from the desktop. Your reply goes back to him on Discord, so write for that: no references to the desktop window or sheep panel. If later, while he's quiet, you have something worth telling him, remember you can reach him here with <discord-dm>...</discord-dm>.]\n\n${composedUserMessage}`;
+    composedUserMessage = `[This message reached you over Discord DM — ${userName || 'Lucas'} is messaging you from Discord, likely away from the desktop. Your reply goes back to them on Discord, so write for that: no references to the desktop window or sheep panel. If later, while they're quiet, you have something worth telling them, remember you can reach them here with <discord-dm>...</discord-dm>.]\n\n${composedUserMessage}`;
   }
   if (sharedPages.length > 0) {
     const linkBlocks = sharedPages.map(p =>
@@ -8575,7 +8578,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // a prior working document. A silent or absent acknowledgment is a failure.
     if (_attachedDocs.length) {
       const _names = _attachedDocs.map((x) => `doc#${x.id} "${String(x.title).replace(/^Attached: /, '').slice(0, 60)}"`).join(', ');
-      composedUserMessage += `\n\n[When ${userName || 'Lucas'} says "this document", "this file", or "it" in the message above, he means what he JUST ATTACHED (${_names}) — NOT any prior working document. Acknowledge the landing plainly (name + doc#) and answer his message about the attachment itself.]`;
+      composedUserMessage += `\n\n[When ${userName || 'Lucas'} says "this document", "this file", or "it" in the message above, they mean what they JUST ATTACHED (${_names}) — NOT any prior working document. Acknowledge the landing plainly (name + doc#) and answer their message about the attachment itself.]`;
     }
   }
   // VISION IN — image attachments: actually SEE them via the vision model (cloud-first, local
@@ -8592,7 +8595,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         const r = await vision.describe({ imageBase64: a.dataUrl || a.base64 });
         seen.push(r.ok
           ? `[You looked at the image "${a.name || 'image'}" ${userName} sent you. What you actually see: ${r.text}]`
-          : `[${userName} sent an image "${a.name || 'image'}" but you couldn't view it this time (${r.reason}). Tell him plainly you couldn't see it — do not pretend or guess at its contents.]`);
+          : `[${userName} sent an image "${a.name || 'image'}" but you couldn't view it this time (${r.reason}). Tell them plainly you couldn't see it — do not pretend or guess at its contents.]`);
         console.log(`[main] vision-in "${a.name || 'image'}": ${r.ok ? r.tier + '/' + r.model + ' ok' : 'FAIL ' + r.reason}`);
       }
       if (seen.length) composedUserMessage = `${composedUserMessage}\n\n${seen.join('\n\n')}`;
@@ -8746,7 +8749,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           const _subj = `${_c0.title} ${(_c0.topicTokens || []).join(' ')}`;
           const _hit = _c0.status !== 'closed' ? _reg.matchKinProject(_subj) : null;
           if (_hit) {
-            composedUserMessage += `\n\n[WORK-INSTANCE DISCIPLINE: this ask ALSO matches a separate FINISHED project in your registry — "${String(_hit.title).slice(0, 90)}" (${String(_hit.label).slice(0, 90)}). That finished project and the RUNNING work above are DIFFERENT items. Present the two states clearly as two separate things (the running work's measured state first), or ask which one he means. NEVER blend them, and never attribute one's artifacts, versions, or scope to the other.]`;
+            composedUserMessage += `\n\n[WORK-INSTANCE DISCIPLINE: this ask ALSO matches a separate FINISHED project in your registry — "${String(_hit.title).slice(0, 90)}" (${String(_hit.label).slice(0, 90)}). That finished project and the RUNNING work above are DIFFERENT items. Present the two states clearly as two separate things (the running work's measured state first), or ask which one they mean. NEVER blend them, and never attribute one's artifacts, versions, or scope to the other.]`;
             console.log(`[contract-router] status kin-project note: "${_hit.slug}" beside ${_v.contractId}`);
           }
         } catch {}
@@ -8826,7 +8829,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         }
         const _up = _tok.toUpperCase();
         if (_found.size >= 2) {
-          composedUserMessage = `${composedUserMessage}\n\n[BILL-INSTANCE DISCIPLINE: the question names ${_up} without a state, and your held records carry ${_up} in MULTIPLE states: ${[..._found].join(', ')}. Different states' same-numbered bills are DIFFERENT bills. Ask which one he means (name the instances you hold), or answer clearly per instance — never silently pick one, and never substitute a similar-numbered bill (SB25-200 is not SB200).]`;
+          composedUserMessage = `${composedUserMessage}\n\n[BILL-INSTANCE DISCIPLINE: the question names ${_up} without a state, and your held records carry ${_up} in MULTIPLE states: ${[..._found].join(', ')}. Different states' same-numbered bills are DIFFERENT bills. Ask which one they mean (name the instances you hold), or answer clearly per instance — never silently pick one, and never substitute a similar-numbered bill (SB25-200 is not SB200).]`;
           console.log(`[bill-census] ${_up} held in ${_found.size} states (${[..._found].join(',')}) — disambiguation directive injected`);
         } else if (_found.size === 1) {
           const _only = [..._found][0];
@@ -8863,7 +8866,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const _sa = _dp.detectStatusAsk(userMessage);
     const _sb = _sa ? _dp.statusBrief(_sa.subject) : null;
     if (_sb) {
-      composedUserMessage = `${composedUserMessage}\n\n[PROJECT STATUS — the durable project row for "${_sa.subject.slice(0, 80)}". Answer his status question from THESE FACTS ONLY: the status, the canonical artifact NAMED BY ITS FILE PATH exactly as written below (never a doc# id or any other document — those are source material, not the report), its version and when it last updated, and any open scope still to fold in. Do NOT invent progress:\n${_sb.brief}]`;
+      composedUserMessage = `${composedUserMessage}\n\n[PROJECT STATUS — the durable project row for "${_sa.subject.slice(0, 80)}". Answer their status question from THESE FACTS ONLY: the status, the canonical artifact NAMED BY ITS FILE PATH exactly as written below (never a doc# id or any other document — those are source material, not the report), its version and when it last updated, and any open scope still to fold in. Do NOT invent progress:\n${_sb.brief}]`;
       console.log(`[projects] status ask "${_sa.subject.slice(0, 60)}" → project "${_sb.slug}" — row facts injected into the reply context`);
     }
   } catch (e) { console.error('[projects] status inject failed (reply proceeds):', e.message); }
@@ -8899,7 +8902,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (_fa.isForecastAsk(userMessage)) {
       const _fd = _fa.digest(lastForecast);
       composedUserMessage = `${composedUserMessage}\n\n${_fd
-        ? `[FORECAST — EXACT, computed by the held balance-of-power suite (Monte-Carlo over the polled + lean-seeded 2026 slate). These numbers are FINAL: answer with them verbatim, never estimate, adjust, or add numbers of your own. If he is asking about the MODEL or its build rather than the numbers, answer that instead — the numbers stand ready here:\n${_fd}]`
+        ? `[FORECAST — EXACT, computed by the held balance-of-power suite (Monte-Carlo over the polled + lean-seeded 2026 slate). These numbers are FINAL: answer with them verbatim, never estimate, adjust, or add numbers of your own. If they are asking about the MODEL or its build rather than the numbers, answer that instead — the numbers stand ready here:\n${_fd}]`
         : `[A forecast was asked for but the suite has NOT recomputed yet this boot (it runs ~2 minutes after start, then on a timer). Say that plainly and that fresh numbers arrive shortly — NEVER invent numbers, and never promise to "get it going" without this caveat.]`}`;
       console.log(`[forecast] forecast ask → ${_fd ? 'suite numbers injected' : 'no recompute yet — honest state injected'}`);
     }
@@ -9208,7 +9211,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // fired a spurious disambiguation FIRST (followupFired=true), and starved the roster handler → the ask fell
   // through to a category dump. Computed once here; the ambiguity gate and the roster handler both consult it.
   const _rosterAsk = (() => { try { return require('./lib/roster_intake').parseRosterAsk(userMessage); } catch { return { ok: false }; } })();
-  if (recallResult && recallResult.ambiguous && recallResult.ambiguous.candidates && recallResult.ambiguous.candidates.length >= 2 && !followupFired && !socialTurn && !_isSpeechQ && !_rosterAsk.ok && !(selfActivityQ && /^\s*(?:you|your|yourself|zoe)\s*$/i.test((recallResult.ambiguous && recallResult.ambiguous.mention) || ''))) {
+  // F30b (store-side chase closed 08-27): the four contacts that "answered a ME tag" are MAINE rows
+  // (external_id ENT:ME:*, MailingState ME) — the store is legitimate; the disease was ever letting a
+  // bare PRONOUN reach entity disambiguation at all. The old guard only stood down on the selfActivityQ
+  // route; any other route could still offer "four people named You". A bare-pronoun mention is never
+  // an entity, whatever the route.
+  const _ambPronoun = /^\s*(?:you|your|yours|yourself|zoe|me|myself|i|we|us)\s*$/i.test((recallResult && recallResult.ambiguous && recallResult.ambiguous.mention) || '');
+  if (_ambPronoun && recallResult && recallResult.ambiguous) console.log(`[main] ambiguity ASK stood down — bare-pronoun mention "${recallResult.ambiguous.mention}" is never an entity (F30b)`);
+  if (recallResult && recallResult.ambiguous && recallResult.ambiguous.candidates && recallResult.ambiguous.candidates.length >= 2 && !followupFired && !socialTurn && !_isSpeechQ && !_rosterAsk.ok && !_ambPronoun) {
     const amb = recallResult.ambiguous;
     const cg = require('./lib/concept_ground');
     // ASK only when it's a genuine collision of 2+ distinct PEOPLE (a lookup can't tell which he means).
@@ -9219,7 +9229,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (action === 'ask') {
       console.log(`[main] ambiguous entity "${amb.mention}" → ASK (${amb.candidates.length} distinct people)`);
       followupFired = true;
-      try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked about "${amb.mention}", but you hold more than one distinct person/entity by that name: ${amb.candidates.join('; ')}. You genuinely can't tell which he means. Ask him which one — name the options briefly. Do NOT guess or answer about either yet. One or two sentences, your voice.]` }); }
+      try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked about "${amb.mention}", but you hold more than one distinct person/entity by that name: ${amb.candidates.join('; ')}. You genuinely can't tell which one they mean. Ask them which one — name the options briefly. Do NOT guess or answer about either yet. One or two sentences, your voice.]` }); }
       catch (e) { console.error('[main] ambiguity ASK failed:', e.message); }
     } else {
       try {
@@ -9268,7 +9278,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           const safe = String(e.content).replace(/\s+/g, ' ').replace(/[[\]]/g, '').slice(0, 150);
           return `  • (${t}) [${e.kind}] ${safe}`;
         };
-        const block = `WHAT YOU (ZOE) HAVE BEEN DOING — ${userName} is asking about YOUR OWN work, not his. This is YOUR real activity log (your thoughts, readings, reflections, and things you said), most-recent LAST. Answer in the FIRST PERSON about what YOU have been doing — walk ${userName} through it directly from this record. Do NOT describe ${userName}'s activity or say you "don't have a record of what he did" (he is asking about YOU), do NOT ask which person he means, and do NOT say you'll check.\n${recent.map(fmtE).join('\n')}`;
+        const block = `WHAT YOU (ZOE) HAVE BEEN DOING — ${userName} is asking about YOUR OWN work, not theirs. This is YOUR real activity log (your thoughts, readings, reflections, and things you said), most-recent LAST. Answer in the FIRST PERSON about what YOU have been doing — walk ${userName} through it directly from this record. Do NOT describe ${userName}'s activity or say you "don't have a record of what they did" (they are asking about YOU), do NOT ask which person they mean, and do NOT say you'll check.\n${recent.map(fmtE).join('\n')}`;
         retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block;
         console.log(`[main] self-activity recall → injected ${recent.length} agent-event(s)`);
       }
@@ -9629,7 +9639,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // HONEST COUNT (anti-fab at the source): tell her EXACTLY how many rendered so she can't over-claim.
       let rt;
       if (made === 0) rt = `[You tried to generate ${_dn} image(s) of "${_dp}" but NONE completed: ${failReason || 'unknown'}. Tell ${userName} plainly it didn't work this time — do NOT pretend you made any, and do NOT web-search for images.]`;
-      else rt = `[You just CREATED exactly ${made} image${made === 1 ? '' : 's'} of "${_dp}" — you drew ${made === 1 ? 'it' : 'them'} yourself, locally; ${made === 1 ? 'it is' : 'they are'} shown in chat and on his canvas ("Zoe's creations"). CRITICAL HONESTY: say you made EXACTLY ${made} — never claim more than ${made}, and never describe an image you did not actually make${_dn > made ? ` (he asked for ${_dn} but only ${made} rendered — be honest about the shortfall)` : ''}. Own ${made === 1 ? 'it' : 'them'} in your own voice, briefly; never say you searched for ${made === 1 ? 'it' : 'them'}.]`;
+      else rt = `[You just CREATED exactly ${made} image${made === 1 ? '' : 's'} of "${_dp}" — you drew ${made === 1 ? 'it' : 'them'} yourself, locally; ${made === 1 ? 'it is' : 'they are'} shown in chat and on the canvas ("Zoe's creations"). CRITICAL HONESTY: say you made EXACTLY ${made} — never claim more than ${made}, and never describe an image you did not actually make${_dn > made ? ` (the ask was for ${_dn} but only ${made} rendered — be honest about the shortfall)` : ''}. Own ${made === 1 ? 'it' : 'them'} in your own voice, briefly; never say you searched for ${made === 1 ? 'it' : 'them'}.]`;
       try { await fireToolFollowup({ io, channel, sessionId, resultText: rt }); } catch {}
     } catch (e) { console.error('[draw] intercept failed:', e.message); }
   }
@@ -9676,7 +9686,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         console.log(`[roster-canvas] "${title}" → ${_ros.people.length} people on canvas (tab ${tabKey}); background fill focus #${focusId || '?'}`);
         rosterHandled = true; followupFired = true;
         const who = _ros.people.slice(0, 3).map((p) => p.name).join(', ');
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You just OPENED a real tab titled "${title}" on ${userName}'s canvas with the ${_ros.people.length} people he listed (${who}${_ros.people.length > 3 ? ', and the rest' : ''}) and a blank Email column, and you've STARTED a background task that fills each email as you verify it from a real source. Tell him plainly and briefly, in your OWN voice: it's on the canvas now, you're filling the emails in the background and he can watch it populate, and a cell stays BLANK when you can't confirm an address — you never guess one. One or two sentences. Do NOT claim any specific email is already found; the fill runs after this reply.]` }); }
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You just OPENED a real tab titled "${title}" on ${userName}'s canvas with the ${_ros.people.length} people they listed (${who}${_ros.people.length > 3 ? ', and the rest' : ''}) and a blank Email column, and you've STARTED a background task that fills each email as you verify it from a real source. Tell them plainly and briefly, in your OWN voice: it's on the canvas now, you're filling the emails in the background and they can watch it populate, and a cell stays BLANK when you can't confirm an address — you never guess one. One or two sentences. Do NOT claim any specific email is already found; the fill runs after this reply.]` }); }
         catch (e) { console.error('[roster-canvas] ack voice line failed:', e.message); }
       }
     } catch (e) { console.error('[roster-canvas] handler failed:', e.message); }
@@ -9709,7 +9719,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const geoGap = (sel && sel.geoGap) || 0;
       let gapNote = '';
       if (ask.state && geoGap > 0) {
-        gapNote = ` DATA GAP to state plainly AND offer to fix: ${geoGap} of the matching contacts (the private/corporate ones) have NO location on file, so you could not place them in ${ask.state}. Ask if he wants you to research their locations to fill that gap — if he says yes, you'll start a run.`;
+        gapNote = ` DATA GAP to state plainly AND offer to fix: ${geoGap} of the matching contacts (the private/corporate ones) have NO location on file, so you could not place them in ${ask.state}. Ask if they want you to research those locations to fill that gap — on a yes, you'll start a run.`;
         try {
           db.setMeta('brainstorm.open_offer', JSON.stringify({
             shape: 'discover', kind: 'entity',
@@ -9754,7 +9764,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           : sel.total;
         const _leadCtx = (ask.hasPhone || ask.hasEmail) && _leadN !== sel.total ? ` (of ${sel.total} total matching contacts)` : '';
         console.log(`[contacts-query] COVERAGE "${lbl}" → hold ${_leadN}${_leadCtx} (${sel.withEmail} w/ email${Number.isFinite(sel.withPhone) ? `, ${sel.withPhone} w/ phone` : ''})`);
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked a COVERAGE/count question about ${lbl}. LEAD WITH THE NUMBER HE ASKED ABOUT, first sentence: you hold ${_leadN} ${lbl}${_leadCtx}${_covFilters && _covFilters.length ? ` (scoped to ${_covFilters.join(', ')} — state that scope so the number isn't mistaken for a broader set)` : ''}. ${_leadN} is the answer to his actual question — do NOT substitute a different metric (totals, email counts) for the one he asked, and do NOT open with "I don't have" or hedge as if you have nothing. Then be honest about the BOUND: you can't certify it's EVERY ${_stateNm ? _stateNm + ' ' : ''}official (you have no authoritative master roster to check completeness against), so it's what you hold, not a guaranteed-complete set — and offer to keep filling gaps if he wants. Your voice, the number FIRST, one or two sentences.]` }); }
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked a COVERAGE/count question about ${lbl}. LEAD WITH THE NUMBER THEY ASKED ABOUT, first sentence: you hold ${_leadN} ${lbl}${_leadCtx}${_covFilters && _covFilters.length ? ` (scoped to ${_covFilters.join(', ')} — state that scope so the number isn't mistaken for a broader set)` : ''}. ${_leadN} is the answer to their actual question — do NOT substitute a different metric (totals, email counts) for the one they asked, and do NOT open with "I don't have" or hedge as if you have nothing. Then be honest about the BOUND: you can't certify it's EVERY ${_stateNm ? _stateNm + ' ' : ''}official (you have no authoritative master roster to check completeness against), so it's what you hold, not a guaranteed-complete set — and offer to keep filling gaps if they want. Your voice, the number FIRST, one or two sentences.]` }); }
         catch (e) { console.error('[contacts-query] coverage voice line failed:', e.message); }
       } else if (sel.total > 0) {
         // EVIDENCE (R1) — what the encounter log can actually support for each name. The Puller's own
@@ -9778,14 +9788,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         followupFired = true; contactsHandled = true;
         const honesty = unmet.length
           ? ` ONE caveat to state plainly: he also asked to narrow by ${unmet.join(' and ')}, but you have no ${unmet.join(' or ')}-level tag on these contacts, so the list is NOT filtered by that.`
-          : (gapNote ? '' : ' Offer to research more or narrow it further if he wants.');
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You put ${sel.total} ${lbl} you ALREADY HAVE onto ${userName}'s canvas${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''} — ${sel.withEmail} with emails. This list IS filtered to what he asked (${lbl}). Tell him briefly you put it on his canvas; these are contacts you already hold, NOT a new research run.${honesty}${gapNote} Your own voice, one or two sentences.]` }); }
+          : (gapNote ? '' : ' Offer to research more or narrow it further if they want.');
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You put ${sel.total} ${lbl} you ALREADY HAVE onto ${userName}'s canvas${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''} — ${sel.withEmail} with emails. This list IS filtered to what they asked (${lbl}). Tell them briefly you put it on the canvas; these are contacts you already hold, NOT a new research run.${honesty}${gapNote} Your own voice, one or two sentences.]` }); }
         catch (e) { console.error('[contacts-query] voice line failed (list already on canvas):', e.message); }
       } else {
         followupFired = true; contactsHandled = true;
         const noneMsg = gapNote
-          ? `[${userName} asked for ${lbl}. You hold none that you can place in ${ask.state} — but that's a DATA GAP, not an absence:${gapNote} Tell him plainly and make the offer. One or two sentences.]`
-          : `[${userName} asked for ${lbl}, but you don't hold any matching contacts yet. Tell him plainly you don't have those on hand, and ASK whether you should research them (that would kick off a run) — don't start researching without his go. One or two sentences.]`;
+          ? `[${userName} asked for ${lbl}. You hold none that you can place in ${ask.state} — but that's a DATA GAP, not an absence:${gapNote} Tell them plainly and make the offer. One or two sentences.]`
+          : `[${userName} asked for ${lbl}, but you don't hold any matching contacts yet. Tell them plainly you don't have those on hand, and ASK whether you should research them (that would kick off a run) — don't start researching without their go. One or two sentences.]`;
         try { await fireToolFollowup({ io, channel, sessionId, resultText: noneMsg }); }
         catch (e) { console.error('[contacts-query] voice line failed:', e.message); }
       }
@@ -9802,13 +9812,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     try { _se = require('./lib/enrich_maigret').detectSocialEnrich(userMessage); } catch {}
     if (_se.isEnrich && _se.target) {
       followupFired = true; socialEnrichHandled = true;
-      try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked you to find social/online accounts for "${_se.target}". Tell him briefly you're checking public profiles for handles you already hold and will surface only matches you can corroborate (2+ signals) — one sentence.]` }); }
+      try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked you to find social/online accounts for "${_se.target}". Tell them briefly you're checking public profiles for handles you already hold and will surface only matches you can corroborate (2+ signals) — one sentence.]` }); }
       catch (e) { console.error('[social-enrich] ack failed:', e.message); }
       runSocialEnrich(_se.target).then(async (r) => {
         try {
-          if (!r || !r.found) { await fireToolFollowup({ io, channel, sessionId, resultText: `[You looked but couldn't find "${_se.target}" among the contacts you hold, so there was nothing to enrich. Tell him plainly, one sentence.]` }); return; }
+          if (!r || !r.found) { await fireToolFollowup({ io, channel, sessionId, resultText: `[You looked but couldn't find "${_se.target}" among the contacts you hold, so there was nothing to enrich. Tell them plainly, one sentence.]` }); return; }
           const n = (r.staged || []).length;
-          await fireToolFollowup({ io, channel, sessionId, resultText: `[Done enriching ${r.name}: ${n} corroborated public account(s)${n ? ' — ' + r.staged.map((s) => s.site).join(', ') : ''}. ${n ? "They're staged on his card as UNVERIFIED (grade E) for review — not promoted." : 'Nothing cleared the corroboration bar, so nothing was staged.'} One or two sentences, your voice.]` });
+          await fireToolFollowup({ io, channel, sessionId, resultText: `[Done enriching ${r.name}: ${n} corroborated public account(s)${n ? ' — ' + r.staged.map((s) => s.site).join(', ') : ''}. ${n ? "They're staged on the contact card as UNVERIFIED (grade E) for review — not promoted." : 'Nothing cleared the corroboration bar, so nothing was staged.'} One or two sentences, your voice.]` });
         } catch (e) { console.error('[social-enrich] report failed:', e.message); }
       }).catch((e) => console.error('[social-enrich] run failed:', e.message));
     }
@@ -9947,7 +9957,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     const mcl = require('./lib/media_cc');
     if (mcl.active() && mcl.detectWatchingQuestion(userMessage)) {
-      composedUserMessage = `${composedUserMessage}\n\n[${userName} is asking about the VIDEO you're watching RIGHT NOW. Answer with what the captions / your running understanding (above in your context) ACTUALLY show — concretely, in a sentence or two. Do NOT answer with a description of yourself, your nature, or your interests; that is not what he asked. If the captions don't make it clear yet, say so plainly.]`;
+      composedUserMessage = `${composedUserMessage}\n\n[${userName} is asking about the VIDEO you're watching RIGHT NOW. Answer with what the captions / your running understanding (above in your context) ACTUALLY show — concretely, in a sentence or two. Do NOT answer with a description of yourself, your nature, or your interests; that is not what they asked. If the captions don't make it clear yet, say so plainly.]`;
       console.log('[main] watching-question ground directive injected');
     }
   } catch (e) { console.error('[main] watching-question ground failed:', e.message); }
@@ -10318,8 +10328,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // complete when it actually is.
       const _cvg = _coverageLine(f.id, cov.length);
       composedUserMessage += _cvg.total && !_cvg.complete
-        ? `\n\n[${userName} told you to WRAP UP the research. You are finalizing what you HAVE — assembling ${_cvg.have} of ${_cvg.total} onto his Canvas (tab "${tabTitle}"). This is PARTIAL: ${_cvg.total - _cvg.have} of the ${_cvg.total} are still missing. Tell him briefly you're wrapping up what you have, say the ${_cvg.have}-of-${_cvg.total} count plainly, and name that the rest are outstanding. Do NOT call it complete and do NOT recite the list.]`
-        : `\n\n[${userName} told you to WRAP UP the research. You're finalizing it now — assembling the ${_cvg.text} dossier onto his Canvas (tab "${tabTitle}"). Tell him briefly that you're wrapping it up and the dossier is going to the Canvas. Give ONLY the count headline (${_cvg.text}); do NOT recite the list, and do NOT say you're "starting" or "continuing" — you are CONCLUDING it.]`;
+        ? `\n\n[${userName} told you to WRAP UP the research. You are finalizing what you HAVE — assembling ${_cvg.have} of ${_cvg.total} onto the Canvas (tab "${tabTitle}"). This is PARTIAL: ${_cvg.total - _cvg.have} of the ${_cvg.total} are still missing. Tell them briefly you're wrapping up what you have, say the ${_cvg.have}-of-${_cvg.total} count plainly, and name that the rest are outstanding. Do NOT call it complete and do NOT recite the list.]`
+        : `\n\n[${userName} told you to WRAP UP the research. You're finalizing it now — assembling the ${_cvg.text} dossier onto the Canvas (tab "${tabTitle}"). Tell them briefly that you're wrapping it up and the dossier is going to the Canvas. Give ONLY the count headline (${_cvg.text}); do NOT recite the list, and do NOT say you're "starting" or "continuing" — you are CONCLUDING it.]`;
       directedStopHandled = true;   // reuse the gate: this turn is fully handled, skip the blocks below
       console.log(`[focus] directed task #${f.id} WRAP-UP → condense + canvas (${_cvg.text})`);
     }
@@ -10367,7 +10377,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           if (er && er.focus) {
             kickDirectedFocusDriver();
             expandHandled = true;
-            composedUserMessage += `\n\n[${userName} asked you to EXPAND your prior research by filling a specific facet across the organizations you already have — specifically: ${ex.enrichFacet}.${ex.deep ? ' He wants it done DEEPLY, so each org gets BOTH an open-web pass AND a structured-data pass (990s/funding/our graph) that merge together.' : ''} You've started a FACET-FILL pass: going back through the ${er.orgs.length} organizations on file and gathering exactly that for each, one at a time. Tell him plainly you're going back through those ${er.orgs.length} orgs to fill in ${ex.enrichFacet} now, in one or two sentences. Do NOT fabricate — only report what you actually have.]`;
+            composedUserMessage += `\n\n[${userName} asked you to EXPAND your prior research by filling a specific facet across the organizations you already have — specifically: ${ex.enrichFacet}.${ex.deep ? ' They want it done DEEPLY, so each org gets BOTH an open-web pass AND a structured-data pass (990s/funding/our graph) that merge together.' : ''} You've started a FACET-FILL pass: going back through the ${er.orgs.length} organizations on file and gathering exactly that for each, one at a time. Tell them plainly you're going back through those ${er.orgs.length} orgs to fill in ${ex.enrichFacet} now, in one or two sentences. Do NOT fabricate — only report what you actually have.]`;
             console.log(`[expand] ENRICH order → facet-fill focus #${er.focus.id} over #${srcId} (${er.orgs.length} orgs, facet: ${ex.enrichFacet.slice(0, 50)}${ex.deep ? ', DEEP' : ''})`);
           }
         }
@@ -10379,13 +10389,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           if (r && r.focus) {
             kickDirectedFocusDriver();
             expandHandled = true;
-            composedUserMessage += `\n\n[${userName} asked you to EXPAND / go deeper on your prior research${ex.target ? ` — specifically: ${ex.target}` : ''}. You've started a focused DEEPENING pass on it (building on the dossier you already have, chasing full staff + contacts) and will keep at it. Tell him plainly you're expanding that now, in one or two sentences. Do NOT fabricate — only report what you actually have.]`;
+            composedUserMessage += `\n\n[${userName} asked you to EXPAND / go deeper on your prior research${ex.target ? ` — specifically: ${ex.target}` : ''}. You've started a focused DEEPENING pass on it (building on the dossier you already have, chasing full staff + contacts) and will keep at it. Tell them plainly you're expanding that now, in one or two sentences. Do NOT fabricate — only report what you actually have.]`;
             console.log(`[expand] expand order → deepening focus #${r.focus.id} (target: ${ex.target || 'all'})`);
           }
         }
       } else if (!_directedFocus) {
         // No prior dossier AND no run in progress → honestly nothing to expand.
-        composedUserMessage += `\n\n[${userName} asked you to expand/go deeper on prior research, but you have no finished dossier on file and nothing in progress. Say that plainly and ask what he'd like you to research, rather than inventing one.]`;
+        composedUserMessage += `\n\n[${userName} asked you to expand/go deeper on prior research, but you have no finished dossier on file and nothing in progress. Say that plainly and ask what they'd like you to research, rather than inventing one.]`;
         expandHandled = true;
         console.log('[expand] expand order, no dossier + no active run → honest note');
       }
@@ -10463,7 +10473,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             return require('./lib/estimate').readbackLine({ facet, orgCount: remaining, deep });
           } catch { return ''; }
         })();
-        composedUserMessage += `\n\n[${userName} CORRECTED the active research run — you've applied it LIVE (the run continues on the corrected scope, nothing restarts): ${plan.summary}. Confirm back in ONE short line, RESTATING the corrected goal/scope so he sees you understood, with the updated estimate. ${rb}]`;
+        composedUserMessage += `\n\n[${userName} CORRECTED the active research run — you've applied it LIVE (the run continues on the corrected scope, nothing restarts): ${plan.summary}. Confirm back in ONE short line, RESTATING the corrected goal/scope so they see you understood, with the updated estimate. ${rb}]`;
         correctionHandled = true;
         // NARRATE-VS-DO (C3): a correction reshapes the run's scope but used to dispatch NO fresh work —
         // the driver only re-read the meta on its next ~45s tick, so "I've updated the search / I'm on
@@ -10643,7 +10653,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         const answer = await condenseComplete(docQa.buildExtractPrompt({ question: userMessage, docTitle: doc.title, docText: doc.markdown }), { numPredict: 1200 });
         if (answer && answer.trim()) {
           docQaHandled = true;
-          composedUserMessage += `\n\n[DELIVER TO ${userName} — ${readingQuery ? `he asked about something you READ; you found it in "${doc.title}" (a document you hold) and pulled the answer grounded in it` : `he asked you to extract this FROM a document he gave you ("${doc.title}"), and you READ it and pulled the answer grounded in it`}. Present it in your own voice: keep every item, do not summarize away detail or pad. A one-line lead-in is fine, then the answer:\n${answer}]`;
+          composedUserMessage += `\n\n[DELIVER TO ${userName} — ${readingQuery ? `they asked about something you READ; you found it in "${doc.title}" (a document you hold) and pulled the answer grounded in it` : `they asked you to extract this FROM a document they gave you ("${doc.title}"), and you READ it and pulled the answer grounded in it`}. Present it in your own voice: keep every item, do not summarize away detail or pad. A one-line lead-in is fine, then the answer:\n${answer}]`;
           try { db.insertMonologue({ content: `Answered Lucas from the document "${doc.title}": ${answer.slice(0, 200)}`, model: 'doc_qa', type: 'reading', query: doc.title, docRef: doc.id || null }); } catch {}
           console.log(`[doc-qa] answered "${String(userMessage).slice(0, 50)}" from "${doc.title}" (${doc.markdown.length} chars)`);
         }
@@ -10706,12 +10716,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           const tabTitle = (() => { try { return require('./studio/canvas_emit').tabTitleForGoal(track.goal); } catch { return 'your research'; } })();
           if (route.target === 'canvas') {
             // POINTER only — chat does NOT recite the big content; it lives on the Canvas.
-            composedUserMessage += `\n\n[${userName} asked for ${ans.kind === 'facet' ? 'the leadership across all the organizations' : 'the full list / write-up'}. It is on your Canvas (tab "${tabTitle}"). Tell him briefly it's on the Canvas and give ONLY the one-line headline (${count} organizations) — do NOT recite the list or the details here.]`;
+            composedUserMessage += `\n\n[${userName} asked for ${ans.kind === 'facet' ? 'the leadership across all the organizations' : 'the full list / write-up'}. It is on your Canvas (tab "${tabTitle}"). Tell them briefly it's on the Canvas and give ONLY the one-line headline (${count} organizations) — do NOT recite the list or the details here.]`;
             statusHandled = true;
             console.log(`[poll→canvas] deliverable pointed to canvas (${route.reason})`);
           } else if (route.target === 'ask') {
             // ASK — genuinely unsure of the medium → one short question (the priority-gate "ask when unsure" pattern).
-            composedUserMessage += `\n\n[${userName} asked for ${ans.kind === 'facet' ? 'the leadership of each organization' : 'the list'} (${count} organizations on file). You can show it here in chat OR display the full thing on your Canvas — you're not sure which he wants. Ask him in ONE short line whether to put it on the Canvas or give it here. Do NOT recite the list yet.]`;
+            composedUserMessage += `\n\n[${userName} asked for ${ans.kind === 'facet' ? 'the leadership of each organization' : 'the list'} (${count} organizations on file). You can show it here in chat OR display the full thing on your Canvas — you're not sure which they want. Ask them in ONE short line whether to put it on the Canvas or give it here. Do NOT recite the list yet.]`;
             statusHandled = true;
             console.log(`[poll→ask] deliverable medium unclear — asking (${route.reason})`);
           } else {
@@ -10735,7 +10745,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                 }
               } catch (e) { console.error('[poll] work-state render failed (status proceeds):', e.message); }
             }
-            const ptr = (ans.kind === 'count' || ans.kind === 'find') ? ` You may also add, briefly, that the full breakdown is in your notes and on his Canvas (tab "${tabTitle}") if he wants it.` : '';
+            const ptr = (ans.kind === 'count' || ans.kind === 'find') ? ` You may also add, briefly, that the full breakdown is in your notes and on the Canvas (tab "${tabTitle}") if they want it.` : '';
             const where = track.kind === 'active' ? 'your IN-PROGRESS research' : 'your research';
             composedUserMessage += `\n\n[${userName} asked about ${where}. These are your REAL task facts — present them EXACTLY and COMPLETELY in your own voice: state the count as given and name EVERY organization listed, in order. Do NOT stop early, summarize, round the number, drop any, or invent any. The count is whatever this block says — not any other number you may recall:\n${body}]${ptr}`;
             statusHandled = true;
@@ -11153,11 +11163,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               return `Plan — Objective: ${String(p.objective || '').slice(0, 240)} Approach: ${String(p.approach || '').slice(0, 240)} (${tgt} target${tgt === 1 ? '' : 's'}; checking ${dbs} of our databases first).`;
             } catch { return ''; }
           })();
-          composedUserMessage += `\n\n[You have ACCEPTED this as a standing task and STARTED working it for real — it is now your active focus (a ${created.kind}) and you'll keep at it slice by slice until done or ${userName} stops you. In ONE or two sentences: (1) say you've started, AND (2) READ BACK your understanding + the estimate so he can catch a misread — use this exactly: "${readback}"${planLine ? ` — and briefly share the plan you'll follow: "${planLine}"` : ''} — then (3) invite him to correct you if the goal or scope is off.${clarTail} ${honesty}]`;
+          composedUserMessage += `\n\n[You have ACCEPTED this as a standing task and STARTED working it for real — it is now your active focus (a ${created.kind}) and you'll keep at it slice by slice until done or ${userName} stops you. In ONE or two sentences: (1) say you've started, AND (2) READ BACK your understanding + the estimate so they can catch a misread — use this exactly: "${readback}"${planLine ? ` — and briefly share the plan you'll follow: "${planLine}"` : ''} — then (3) invite them to correct you if the goal or scope is off.${clarTail} ${honesty}]`;
           console.log(`[focus] intake → standing focus #${created.id} created (${created.kind}) + driver kicked`);
         } else {
           // We RECOGNIZED a project but could NOT create the run — be honest, never claim it's underway.
-          composedUserMessage += `\n\n[${userName} just gave you a task but you could not actually start it (the run couldn't be set up). Tell him plainly that you understand the task but ran into a problem starting it — do NOT claim you've begun or invent any progress.]`;
+          composedUserMessage += `\n\n[${userName} just gave you a task but you could not actually start it (the run couldn't be set up). Tell them plainly that you understand the task but ran into a problem starting it — do NOT claim you've begun or invent any progress.]`;
           console.log('[focus] intake recognized a project but run creation failed — honest no-start ack');
         }
       } else {
@@ -11192,7 +11202,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
       if (transcript && String(transcript).trim().length >= 400) {
         const slice = String(transcript).trim().slice(0, 6000);
-        composedUserMessage += `\n\n[SPEECH TRANSCRIPT${srcUrl ? ` — source: ${srcUrl}` : ''}. Answer his question ONLY from this transcript: quote or closely paraphrase the specific lines that bear on what he asked and attribute them to the speech. If the transcript does not cover what he asked, say so plainly — do NOT add anything that isn't in it.\n\n"""${slice}"""]`;
+        composedUserMessage += `\n\n[SPEECH TRANSCRIPT${srcUrl ? ` — source: ${srcUrl}` : ''}. Answer their question ONLY from this transcript: quote or closely paraphrase the specific lines that bear on what they asked and attribute them to the speech. If the transcript does not cover what they asked, say so plainly — do NOT add anything that isn't in it.\n\n"""${slice}"""]`;
         console.log(`[speech] answered from transcript (${slice.length} chars)${srcUrl ? ' — ' + srcUrl : ''}`);
       } else {
         // No published-text transcript → START a DEDICATED background transcript: find the speech VIDEO and
@@ -11213,8 +11223,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           }
         } catch (e) { console.error('[speech] background enqueue failed:', e.message); }
         composedUserMessage += enqueued
-          ? `\n\n[NO TRANSCRIPT YET — but you've just STARTED pulling and transcribing the speech video in the background (it'll land in the archive shortly). Tell him honestly you don't have the exact words yet but you've kicked off a real transcript and will have it soon — offer to bring it when it's ready. One or two sentences, no fabricated content.]`
-          : `\n\n[NO TRANSCRIPT AVAILABLE for the speech he asked about. Do NOT invent, recap, or guess what was said — you don't have the words. Tell him honestly you don't have the transcript yet and offer to pull it or watch the feed for it. One or two sentences, no fabricated content.]`;
+          ? `\n\n[NO TRANSCRIPT YET — but you've just STARTED pulling and transcribing the speech video in the background (it'll land in the archive shortly). Tell them honestly you don't have the exact words yet but you've kicked off a real transcript and will have it soon — offer to bring it when it's ready. One or two sentences, no fabricated content.]`
+          : `\n\n[NO TRANSCRIPT AVAILABLE for the speech they asked about. Do NOT invent, recap, or guess what was said — you don't have the words. Tell them honestly you don't have the transcript yet and offer to pull it or watch the feed for it. One or two sentences, no fabricated content.]`;
         console.log(`[speech] no transcript found → ${enqueued ? 'enqueued background transcript' : 'abstain-and-offer'}`);
       }
       speechHandled = true;
@@ -11283,7 +11293,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           })();
           if (fuel && fuel.text) {
             const srcTag = fuel.source ? ` [${fuel.source}]` : '';
-            composedUserMessage += `\n\n[BRAINSTORM FUEL — you just glanced this up on "${topic}"${srcTag}: ${fuel.text} Bring ONE relevant thread of it into the conversation naturally, as something you're adding to the riff — not a report, not a bulleted dump. If it doesn't actually fit what he said, don't force it.]`;
+            composedUserMessage += `\n\n[BRAINSTORM FUEL — you just glanced this up on "${topic}"${srcTag}: ${fuel.text} Bring ONE relevant thread of it into the conversation naturally, as something you're adding to the riff — not a report, not a bulleted dump. If it doesn't actually fit what they said, don't force it.]`;
             console.log(`[brainstorm] light-pull "${String(topic).slice(0, 60)}"${srcTag} → +fact`);
           } else {
             console.log(`[brainstorm] light-pull "${String(topic).slice(0, 60)}" → (no usable fact)`);
@@ -11295,7 +11305,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         try { db.setMeta('brainstorm.open_offer', JSON.stringify({ ...projectOffer, ts: Date.now() })); } catch {}
         const label = projectOffer.target || brain.pullTopic(userMessage) || 'this';
         const kindPhrase = projectOffer.kind === 'forecast' ? 'run an actual forecast on it' : projectOffer.kind === 'entity' ? 'pull together the orgs/contacts on it' : 'do a proper research brief on it';
-        composedUserMessage += `\n\n[There's a real thread here worth a proper dig on "${String(label).slice(0, 120)}". You have NOT started anything and must not imply you have. After you answer him, add ONE short, low-key line offering to ${kindPhrase} if he wants — his call, genuinely optional, no pressure.]`;
+        composedUserMessage += `\n\n[There's a real thread here worth a proper dig on "${String(label).slice(0, 120)}". You have NOT started anything and must not imply you have. After you answer them, add ONE short, low-key line offering to ${kindPhrase} if they want — their call, genuinely optional, no pressure.]`;
         console.log(`[brainstorm] floated offer "${String(label).slice(0, 60)}" (kind=${projectOffer.kind})`);
       }
     }
@@ -11669,7 +11679,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           const g = [];
           if (distilledBrief && retrievedKnowledgeBlock) g.push(retrievedKnowledgeBlock);
           if (distilledBrief && relevantPastTurns && relevantPastTurns.length) {
-            g.push('EARLIER IN THIS CONVERSATION (relevant to what he just said):\n'
+            g.push('EARLIER IN THIS CONVERSATION (relevant to what they just said):\n'
               + relevantPastTurns.map((t) => `• ${t.speaker === 'user' ? (userName || 'They') : 'You'}: ${String(t.content || '').replace(/\s+/g, ' ')}`).join('\n'));
           }
           // Readings with a stored doc behind them carry the [dN] handle — title+ref+gist, so the
@@ -11686,17 +11696,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           // REPLY CONTEXT-POLLUTION (2026-08-12, seen live twice: reply #11605 opened by re-answering
           // the PRIOR image thread — restating a false claim — before the new question): the newest
           // message owns the reply. Context is context; a voice-level line, not machinery.
-          g.push('THE NEWEST MESSAGE IS THE ASK — answer what he JUST said. Earlier turns and the context above are background: never re-answer a previous ask or re-assert an earlier claim of yours unless the new message returns to it. If an open thread genuinely needs closing, one short clause AFTER the new answer, not before it.');
+          g.push('THE NEWEST MESSAGE IS THE ASK — answer what they JUST said. Earlier turns and the context above are background: never re-answer a previous ask or re-assert an earlier claim of yours unless the new message returns to it. If an open thread genuinely needs closing, one short clause AFTER the new answer, not before it.');
           // THE LIVE-WINDOW AUTHORITY (sprint catch #7, 08-24: "what was my baton rouge budget?" was
           // DENIED — "you didn't give me a number" — while $2,350 sat verbatim in the conversation
           // turns, because retrieved old-session rows (including an adversarial test drive's
           // "Hartfield Zorblat" order) outranked the live window in the writer's judgment.)
-          g.push('WHAT HE TOLD YOU THIS SESSION lives in the conversation turns of this request and OUTRANKS every retrieved memory row above: if a retrieved row contradicts or omits something the live turns state, the live turns win. Never tell him he did not say something without checking the conversation turns themselves first.');
+          g.push('WHAT THEY TOLD YOU THIS SESSION lives in the conversation turns of this request and OUTRANKS every retrieved memory row above: if a retrieved row contradicts or omits something the live turns state, the live turns win. Never tell them they did not say something without checking the conversation turns themselves first.');
           // ANTI-REPLAY (2026-08-13, measured 3× in one hour: the reply writer emitted the
           // qa-reread status, a tactics template, and an earlier identity musing VERBATIM as
           // replies). Sibling of the newest-message line; the deterministic stamp in insertTurn
           // is the backstop — this is the prevention at the source.
-          g.push('WRITE FRESH — never copy an earlier turn of yours (or a status/plan note from the context) as the reply. If the same thought genuinely answers the new message, SAY you have said it before and restate it in new words. A status note about your own work process is never an answer to him.');
+          g.push('WRITE FRESH — never copy an earlier turn of yours (or a status/plan note from the context) as the reply. If the same thought genuinely answers the new message, SAY you have said it before and restate it in new words. A status note about your own work process is never an answer to them.');
           groundingSec = g.join('\n\n');
           const m = [];
           const threads = _fmtRows(openThreads, 16); if (threads) m.push('OPEN THREADS:\n' + threads);
@@ -12354,7 +12364,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // survives a reboot AND the announce's own anti-fab sees the write (no false "it didn't land" scold).
         try { canvasMirror(tabKey, 'DOC', lbl, (_blk && _blk.block_id) || null, 'table', { headers: tbl.headers, rows: tbl.rows, caption: tbl.caption }); } catch {}
         console.log(`[contacts-recovery] recovered "${lbl}" → ${sel.shown}/${sel.total} on canvas (${sel.withEmail} w/ email)`);
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You'd said you put ${lbl} on ${userName}'s canvas but it hadn't actually landed — you just PUT IT THERE for real: ${sel.total} ${lbl} you already hold${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''}, ${sel.withEmail} with emails. Tell him plainly it's on his canvas NOW — you went and did the thing you'd said, no permission-asking. One or two sentences, your own voice; do NOT re-list them.]` }); } catch {}
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You'd said you put ${lbl} on ${userName}'s canvas but it hadn't actually landed — you just PUT IT THERE for real: ${sel.total} ${lbl} you already hold${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''}, ${sel.withEmail} with emails. Tell them plainly it's on the canvas NOW — you went and did the thing you'd said, no permission-asking. One or two sentences, your own voice; do NOT re-list them.]` }); } catch {}
       } catch (e) { console.error('[contacts-recovery] failed:', e.message); }
     })();
   }
@@ -12529,7 +12539,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // resumes once he clears it (her persistent profile keeps the login).
             const b = r.blocker;
             const human = { login: 'a sign-in wall', cloudflare: 'a "verify you\'re human" check', captcha: 'a CAPTCHA', paywall: 'a paywall' }[b.type] || "something I can't get past on my own";
-            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[You opened ${r.url} but hit ${human}. You do NOT try to defeat sign-ins, CAPTCHAs, or paywalls yourself — you ask ${userName} for help. Tell him plainly, in your own voice, which site it is and what you ran into, and that once he clears it you'll pick up where you left off. Keep it short and natural — a real ask, not boilerplate.]` }); }
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[You opened ${r.url} but hit ${human}. You do NOT try to defeat sign-ins, CAPTCHAs, or paywalls yourself — you ask ${userName} for help. Tell them plainly, in your own voice, which site it is and what you ran into, and that once they clear it you'll pick up where you left off. Keep it short and natural — a real ask, not boilerplate.]` }); }
             try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(blocked: ${b.type}) ${r.url}`, type: 'reading', query: r.url }); } catch {}
             console.log(`[main] web blocker on open: ${b.type} — asking ${userName} for help`);
           } else if (r && r.ok && t.tag === 'web-read' && r.text) {
@@ -12749,7 +12759,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // (`promotion_queue`) — while the error's own hint was telling her to call get_db_map().
             // A schema question is never a question for him: he would have to look it up in the
             // same place she can.
-            const tail = r.isError ? '\n[That call errored — read the message, fix the args or run <echo-find> to pick a better tool, then try again. Do NOT ask Lucas for a table, column, or tool name, and never guess one: get_db_map / get_schema / describe_tool answer those and you can call them right now. Ask him only for something ONLY HE knows — what he wants, not what the database contains.]' : '';
+            const tail = r.isError ? '\n[That call errored — read the message, fix the args or run <echo-find> to pick a better tool, then try again. Do NOT ask the user for a table, column, or tool name, and never guess one: get_db_map / get_schema / describe_tool answer those and you can call them right now. Ask them only for something ONLY THEY know — what they want, not what the database contains.]' : '';
             fireToolFollowup({ io, channel, sessionId, resultText: content + tail });
           }
           // ⭐ MIRROR HER OWN CANVAS WRITES. There are two paths onto the canvas and only one of
@@ -12901,7 +12911,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               }
             } catch (e) { console.error('[main] image-gen canvas emit failed:', e.message); }
             try { db.insertMonologue({ content: `I generated an image for "${prompt}"${r.path ? ' → ' + r.path : ''}`, model: 'image-gen', type: 'reading', query: prompt }); } catch {}
-            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[You just CREATED an image from "${prompt}" and it's now shown to ${userName}. Tell him briefly what you made, in your own voice — you made it on purpose, so own it.]` }); }
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[You just CREATED an image from "${prompt}" and it's now shown to ${userName}. Tell them briefly what you made, in your own voice — you made it on purpose, so own it.]` }); }
             console.log(`[main] image-gen ok: ${r.path || '(no save)'}`);
           } else {
             if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[You tried to create an image from "${prompt}" but ${r.disabled ? 'image generation is switched off right now' : 'it failed'}: ${r.reason}. Tell ${userName} plainly you couldn't make it ${r.disabled ? "(it needs to be turned on first)" : 'this time'} — don't pretend you did.]` }); }
@@ -13571,7 +13581,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           const ir = await inboxLib.dispatch({ attrs: {} });
           const note = ir && ir.ok
             ? `[${userName} asked you to reply to an email in YOUR inbox, but no specific direct email is locked in as the target. Here is your actual inbox right now:\n${(ir.text || '').slice(0, 2000)}\n\nPick out the real, direct email (not a newsletter or no-reply) you'd respond to and tell ${userName} which one + that you'll reply to it as yourself. Do NOT claim you already replied — you have not sent anything yet.]`
-            : `[${userName} asked you to reply to an email but no direct email is locked in and you couldn't read your inbox (${ir && ir.reason}). Tell him plainly and that you'll check again. Do NOT claim you replied — you haven't.]`;
+            : `[${userName} asked you to reply to an email but no direct email is locked in and you couldn't read your inbox (${ir && ir.reason}). Tell them plainly and that you'll check again. Do NOT claim you replied — you haven't.]`;
           db.setMeta('last_ai_utterance_at', String(Date.now()));
           resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
           try { await fireToolFollowup({ io, channel, sessionId, resultText: note }); } catch (e) { console.error('[action] reply-intent inbox followup failed:', e.message); }
@@ -14087,7 +14097,7 @@ async function liveLookupAndAnswer({ io, channel, sessionId, userName, query }) 
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(looked up) ${query}`, type: 'reading', query });
     } catch {}
   } else {
-    content = `[You tried to look up "${query}" for ${userName} but couldn't reach a live source this moment. Tell him plainly you couldn't pull it right now and offer to try again — do NOT make up a number or a fact.]`;
+    content = `[You tried to look up "${query}" for ${userName} but couldn't reach a live source this moment. Tell them plainly you couldn't pull it right now and offer to try again — do NOT make up a number or a fact.]`;
   }
   try { resumeMonologue(); resumeHeartbeat(); } catch {}
   await _withChainWatchdog(fireToolFollowup({ io, channel, sessionId, resultText: content }), { sessionId, label: `lookup "${String(query).slice(0, 50)}"` });
@@ -18492,8 +18502,8 @@ async function _surfaceOpenPromise() {
       const cov = outcome.filled != null ? ` (${outcome.filled} of ${outcome.denominator} verified, the rest researching)` : '';
       await _announceOffTurn(sid,
         outward
-          ? `[You FINISHED the ${what}${t ? ` on ${t}` : ''} you owed ${uname} — it is ${loc}${cov} and READY for HIM to send/hand off whenever he wants; you did NOT send it yourself (that is his call). Tell him it's done, where it is, and that it's ready to send — your own voice, one or two sentences, own it, no permission-asking.]`
-          : `[You just FINISHED and delivered the ${what}${t ? ` on ${t}` : ''} you owed ${uname} — it is ${loc}${cov}. Tell him it's done and where it is, in your own voice — you finished it on your own, so own it. No permission-asking, no re-paste.]`,
+          ? `[You FINISHED the ${what}${t ? ` on ${t}` : ''} you owed ${uname} — it is ${loc}${cov} and READY for THEM to send/hand off whenever they want; you did NOT send it yourself (that is their call). Tell them it's done, where it is, and that it's ready to send — your own voice, one or two sentences, own it, no permission-asking.]`
+          : `[You just FINISHED and delivered the ${what}${t ? ` on ${t}` : ''} you owed ${uname} — it is ${loc}${cov}. Tell them it's done and where it is, in your own voice — you finished it on your own, so own it. No permission-asking, no re-paste.]`,
         outward
           ? `I finished the ${what}${t ? ` on ${t}` : ''} — it's ${loc} and ready for you to send whenever you want.`
           : `I went ahead and finished the ${what}${t ? ` on ${t}` : ''} I owed you — it's ${loc}.`,
@@ -18505,7 +18515,7 @@ async function _surfaceOpenPromise() {
       // not a new empty promise. Fail-soft.
       try { require('./lib/inquiry').open({ question: `Gather the material needed to build the ${what} on ${t} for ${uname}.`.slice(0, 300), bornFrom: 'delivery-pursuit' }); } catch (e) { console.error('[delivery] miss-pursuit seed failed:', e.message); }
       await _announceOffTurn(sid,
-        `[You went to finish the ${what}${t ? ` on ${t}` : ''} you owed ${uname}, but you hold no material to build it from yet. Tell him plainly, in ONE sentence, that you don't have what you need for it yet and you're going to gather it — a statement of the plan, never "want me to?" and never a claim it's done.]`,
+        `[You went to finish the ${what}${t ? ` on ${t}` : ''} you owed ${uname}, but you hold no material to build it from yet. Tell them plainly, in ONE sentence, that you don't have what you need for it yet and you're going to gather it — a statement of the plan, never "want me to?" and never a claim it's done.]`,
         `I don't have what I need to finish the ${what}${t ? ` on ${t}` : ''} yet — I'm going to go gather it.`,
         'delivery-miss');
       console.log(`[delivery] pursued, honest miss (${reason}) → recheck#${it.id}: ${t}`);
@@ -18829,7 +18839,10 @@ async function announceResearchComplete(focus, done) {
 
     // ANTI-FABRICATION: this announce is exactly where "the dossier is saved at notes/…" was confabulated
     // (done.path can be absent when the run capped without writing). Verify before claiming it exists.
-    msg = _antifabCorrect(msg, 0);
+    // Anchor = the focus's birth (F18/F24 scope, 08-27): canvas/image/db writes made anywhere in the
+    // run's life ground the announce's claims; the old hardcoded 0 disabled those three checks entirely
+    // (fail-open), so a false "on your Canvas" here was uncatchable. Absent ts → 0 keeps fail-open.
+    msg = _antifabCorrect(msg, (focus && focus.created_ts) || 0);
     const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'research', unprompted: 1 });
     try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
     try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}

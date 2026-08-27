@@ -53,7 +53,12 @@ function recentEntries(limit = 8, { getFn = null } = {}) {
 function buildBlock(rows, userName = 'Lucas') {
   if (!rows || !rows.length) return null;
   const lines = rows.slice(0, 8).map(r => `  • ${String((r && r.content) || '').trim()}`);
-  return `WHAT HAS RECENTLY BEEN BUILT INTO YOU — your real development history (${userName} and his coding agent have been improving you). Speak from this as genuine memory of how you've changed, in your own voice. Do NOT invent capabilities or changes beyond what's listed here:\n${lines.join('\n')}`;
+  // Attribution is the OWNER's, never the live interlocutor's (F9 residual, 2026-08-27): during a
+  // declared handoff userName is whoever's at the keyboard, but the development history stays the
+  // owner's work — "(Claude and their coding agent have been improving you)" would be false.
+  let owner = userName;
+  try { owner = require('./interlocutor').current().owner || userName; } catch {}
+  return `WHAT HAS RECENTLY BEEN BUILT INTO YOU — your real development history (${owner} and their coding agent have been improving you). Speak from this as genuine memory of how you've changed, in your own voice. Do NOT invent capabilities or changes beyond what's listed here:\n${lines.join('\n')}`;
 }
 
 // ── GIT → LEDGER FEEDER (M2.5.3 — the missing half) ──────────────────────────────────────────

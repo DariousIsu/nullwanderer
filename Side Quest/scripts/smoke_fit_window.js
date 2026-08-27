@@ -84,9 +84,9 @@ console.log('\nO8 HISTORY HANDLES');
   ];
   const h = ctx.historyHandle(dropped);
   ok(/EARLIER IN THIS CONVERSATION/.test(h), 'the dropped span leaves a handle behind');
-  ok(/3 message\(s\) of his/.test(h), 'it counts HIS messages only (the assistant turn is not one of them)');
+  ok(/3 message\(s\) of theirs/.test(h), 'it counts THEIR messages only (the assistant turn is not one of them)');
   ok(!/should never appear in the handle/.test(h), 'her own replies are not quoted — his asks are what a re-ask would step on');
-  ok(/recall it rather than asking him to repeat himself/.test(h), 'and it names the behaviour it exists to buy back');
+  ok(/recall it rather than asking them to repeat themselves/.test(h), 'and it names the behaviour it exists to buy back');
   ok(/chat audit/.test(h) && /what do you advise/.test(h), 'the asks themselves are listed');
   ok(h.length <= ctx.HANDLE_MAX, 'the handle stays within its own budget');
 

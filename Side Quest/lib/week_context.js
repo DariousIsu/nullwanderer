@@ -112,7 +112,7 @@ function formatWeek(items, { now = Date.now(), heldLookup = null } = {}) {
   // chat guidance): an attendee tag is the ONLY licence to state facts about them.
   const groundRule = upcoming.some((x) => _attendeeNames(x.ev).length)
     ? `\n  ⚠️ GROUNDING: state a fact about a meeting attendee ONLY from their [held: …] tag or a live search THIS run. `
-      + `An attendee tagged [NOT IN OUR RECORDS] / [unverified] means you hold NOTHING on them — do NOT invent an employer, role, publication, or link; research them or tell him you don't have anything on them yet.`
+      + `An attendee tagged [NOT IN OUR RECORDS] / [unverified] means you hold NOTHING on them — do NOT invent an employer, role, publication, or link; research them or say you don't have anything on them yet.`
     : '';
   const lines = [
     ...past.map((x) => line(x, true)),
@@ -234,8 +234,8 @@ async function scheduleGrounding({ gcalOpts = {}, now = Date.now(), deps = {} } 
     try { const c = await refresh({ gcalOpts, now, force: !lines, deps }); lines = String((c && c.lines) || '').trim(); } catch {}
   }
   if (!lines) return '';
-  return 'His calendar — live, the authoritative source for his schedule (all times Eastern). Answer '
-    + 'his schedule question from THESE events; pick the one he means by name/day/time, and give the '
+  return 'Their calendar — live, the authoritative source for their schedule (all times Eastern). Answer '
+    + 'their schedule question from THESE events; pick the one they mean by name/day/time, and give the '
     + 'time (and place/platform if shown). Do not say you could not find it — it is here:\n' + lines;
 }
 

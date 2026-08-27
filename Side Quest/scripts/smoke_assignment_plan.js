@@ -51,7 +51,7 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
   // document (that last part I dont think is wired)". He was right: saga_render_* appears NOWHERE in
   // this codebase and Echo reports zero successful calls to it, ever.
   ok(/BUILD THE DOCUMENT IN THREE STAGES, starting THIS TURN/.test(a), 'the document is built in stages, beginning now');
-  ok(/OPEN IT AND WRITE THE CONTRACT/.test(a) && /what he asked for, in his words/.test(a),
+  ok(/OPEN IT AND WRITE THE CONTRACT/.test(a) && /what they asked for, in their words/.test(a),
     'stage 1 affixes the ask AND the plan — same shape as the research runs\' contract block');
   ok(/correct the plan before you have spent an hour on the wrong thing/.test(a),
     'and the reason it goes first: it is his chance to redirect');
@@ -80,7 +80,7 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
   ok(/do not reach for a render\/briefing tool/.test(a), 'SAFETY: she does not invoke the packaging tools');
   ok(/Lucas asks for it to be packaged and the house style is applied then/.test(a),
     'packaging is named as HIS command, not hers');
-  ok(/Tell him it is ready for packaging; do not package it yourself/.test(a),
+  ok(/Tell them it is ready for packaging; do not package it yourself/.test(a),
     'and she is told what to say instead');
   ok(/Partial and cited beats complete and promised/.test(a), 'partial-and-real beats whole-and-imaginary');
 

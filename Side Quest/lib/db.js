@@ -2046,10 +2046,30 @@ function listUnpromotedDocuments(limit = 100) {
   ).all(Math.max(1, limit | 0));
 }
 
-// Keyword search over title+body (simple LIKE; embedding search can layer on later). Newest first.
+// Keyword search over title+body. Newest first.
+// FTS-FIRST (slow-scan pair, 2026-08-27): the bare LIKE '%q%' walks the 1.35GB body corpus — the
+// slow-sync probe caught it at 1.8s on the main thread (db.js:2045, the stall stratum's second
+// face) — while documents_fts (already built + watermark-synced) answers the same ask in ~2ms.
+// Tokens are quoted so hyphenated terms (co-sponsors, SB25-200) keep phrase semantics rather than
+// tripping FTS5's column-filter grammar (the Echo search_entities lesson, e525668). Word-boundary
+// matching is also the wanted semantics (the atlANTIc-never-matches-'anti' rule). Zero FTS hits or
+// any FTS error falls through to the original LIKE — availability never changes, only speed.
 function searchDocuments(queryLike, n = 10) {
-  const q = `%${String(queryLike || '').trim()}%`;
-  return getDb().prepare(`SELECT * FROM documents WHERE (title LIKE ? OR body LIKE ?) AND ${LIVE} ORDER BY id DESC LIMIT ?`).all(q, q, Math.max(1, n | 0));
+  const raw = String(queryLike || '').trim();
+  const lim = Math.max(1, n | 0);
+  if (raw && documentsFtsReady()) {
+    try {
+      const match = (raw.match(/[^\s]+/g) || []).map((t) => `"${t.replace(/"/g, '""')}"`).join(' ');
+      if (match) {
+        const rows = getDb().prepare(
+          `SELECT d.* FROM documents_fts f JOIN documents d ON d.id = f.rowid
+            WHERE documents_fts MATCH ? AND d.${LIVE} ORDER BY d.id DESC LIMIT ?`).all(match, lim);
+        if (rows.length) return rows;
+      }
+    } catch (e) { try { console.error('[documents_fts] search fell back to LIKE:', e && e.message); } catch {} }
+  }
+  const q = `%${raw}%`;
+  return getDb().prepare(`SELECT * FROM documents WHERE (title LIKE ? OR body LIKE ?) AND ${LIVE} ORDER BY id DESC LIMIT ?`).all(q, q, lim);
 }
 
 // Mark a document consolidated into Echo long-term (promotedRef = where it landed, e.g. an Echo doc_id).

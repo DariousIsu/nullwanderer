@@ -168,7 +168,7 @@ function detectPersonalFactQuestion(text) {
 // her retrieved memory/context she uses it; if not she admits it. No grounding-detection
 // needed (so it can't wrongly suppress a fact she actually has).
 function groundingDirective(userName = 'Lucas') {
-  return `[${userName} is asking for a specific fact about himself or someone in his life. Answer ONLY from what is actually in your memory and the context above. If the answer is genuinely there, give it directly. If it is NOT there, say plainly that you don't have it and ask him — do NOT invent a name, date, age, or detail, and never claim he "just mentioned" or "told you earlier" something you cannot actually see. Guessing wrong here is far worse than admitting you don't know.]`;
+  return `[${userName} is asking for a specific fact about themselves or someone in their life. Answer ONLY from what is actually in your memory and the context above. If the answer is genuinely there, give it directly. If it is NOT there, say plainly that you don't have it and ask them — do NOT invent a name, date, age, or detail, and never claim they "just mentioned" or "told you earlier" something you cannot actually see. Guessing wrong here is far worse than admitting you don't know.]`;
 }
 
 module.exports = {

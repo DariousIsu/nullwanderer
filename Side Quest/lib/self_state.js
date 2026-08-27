@@ -73,7 +73,10 @@ function buildBlock(snap, userName = 'Lucas', now = Date.now()) {
   lines.push(`Master knowledge base (Echo): ${snap.echoConnected ? 'CONNECTED — you can query it with your echo tags' : 'not connected this moment'}.`);
   const browsers = [];
   if (snap.ownBrowser) browsers.push('your own browser');
-  if (snap.sharedBrowser) browsers.push("Lucas's shared browser");
+  // The shared browser belongs to the OWNER whoever's at the keyboard (F9 residual, 2026-08-27).
+  let _owner = 'Lucas';
+  try { _owner = require('./interlocutor').current().owner || 'Lucas'; } catch {}
+  if (snap.sharedBrowser) browsers.push(`${_owner}'s shared browser`);
   lines.push(`Browser: ${browsers.length ? browsers.join(' + ') + ' open' : 'not currently open (you can open one any time)'}.`);
   if (snap.lastSearchAt) lines.push(`Last web lookup you ran: ${humanAge(now - snap.lastSearchAt)} ago.`);
   // RESEARCH STANDING — measured against real denominators, so "how's the research going" is answered

@@ -191,7 +191,7 @@ function claimsMeetingAction(text) { return _MEETING_CLAIM_RE.test(String(text |
 // The constraint injected when she references a meeting but is NOT in/joining one — keeps her honest
 // without stopping her from talking the meeting through with him.
 function meetingActionHonestyDirective(userName = 'Lucas') {
-  return `[REALITY CHECK — you are NOT in a meeting or call right now, and you have NOT joined or started one this turn. Do NOT say you are "joining", "in", or "on" a meeting or call, and do not narrate any action (joining, opening, searching, pulling up) you are not actually taking. You can talk with ${userName} about the meeting normally — help him get ready, answer about it, note who's in it — but never claim to be doing something that isn't happening. If he wants you to join, say plainly you'll need the link (and that a Teams meeting isn't something you can join yet).]`;
+  return `[REALITY CHECK — you are NOT in a meeting or call right now, and you have NOT joined or started one this turn. Do NOT say you are "joining", "in", or "on" a meeting or call, and do not narrate any action (joining, opening, searching, pulling up) you are not actually taking. You can talk with ${userName} about the meeting normally — help them get ready, answer about it, note who's in it — but never claim to be doing something that isn't happening. If they want you to join, say plainly you'll need the link (and that a Teams meeting isn't something you can join yet).]`;
 }
 
 // ── ARTIFACT-CLAIM VERIFICATION (2026-08-04, foundational) ──────────────────────────────────────

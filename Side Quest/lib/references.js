@@ -288,7 +288,7 @@ function render(refs = [], series = [], { includeSeries = false, now = Date.now(
     }
   }
   if (open.length) {
-    lines.push((lines.length ? '\n' : '') + 'NOT PINNED DOWN — do not guess which one he means. If it matters to the answer, ask:');
+    lines.push((lines.length ? '\n' : '') + 'NOT PINNED DOWN — do not guess which one they mean. If it matters to the answer, ask:');
     for (const r of open) {
       const cands = (r.candidates || []).length ? ` — could be: ${r.candidates.join('; ')}` : '';
       lines.push(`• "${r.mention}"${r.type ? ` (${r.type})` : ''} — ${r.status === 'ambiguous' ? 'several records match' : 'no record'}${cands}`);
@@ -315,7 +315,7 @@ function render(refs = [], series = [], { includeSeries = false, now = Date.now(
     if (unlabelled.length) {
       // The pre-calendar caveat, now scoped to the ones we genuinely cannot name.
       lines.push(`Nothing links ${unlabelled.map((s) => s.code).join(', ')} to a spoken name. If the day and time `
-        + 'he mentions match one, you may say so as a question; never state which meeting he means as though '
+        + 'they mention match one, you may say so as a question; never state which meeting they mean as though '
         + 'we recorded it.');
     }
   }

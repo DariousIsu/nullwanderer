@@ -245,7 +245,7 @@ function formatDepth2Block(activeThreads) {
   const top = activeThreads.slice(0, 3).map(t => `  · ${t.content}`);
   return {
     role: 'user',
-    content: `(Reminder of standing work: ${top.length} thread${top.length === 1 ? '' : 's'} you are CARRYING — not necessarily worked recently. Pursue if relevant to what Lucas says next, otherwise just answer him.)\n${top.join('\n')}`
+    content: `(Reminder of standing work: ${top.length} thread${top.length === 1 ? '' : 's'} you are CARRYING — not necessarily worked recently. Pursue if relevant to what Lucas says next, otherwise just answer them.)\n${top.join('\n')}`
   };
 }
 

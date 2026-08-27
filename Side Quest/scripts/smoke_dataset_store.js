@@ -214,6 +214,16 @@ ok(lrows[0].attrs.state === 'AZ' && lrows[0].attrs.tags[0] === 'surveillance' &&
     ok(/renders proceed on held attrs/.test(main), 'enrichment is fail-soft — a miss never blocks the report');
     ok(/_ds\.trendBy\(_dsRows, _renderDims\.trendKey\)/.test(main) && /block_type: 'chart', data: chart/.test(main), 'the trend rides the canvas as a REAL chart block (code-authored monthly points)');
     ok(/chart: _dsChart/.test(main), 'the compose door threads the trend chart into the canvas emit');
+
+    // b3(a) 08-27: statesFor — the cheap distinct-states read the kin matcher unions into a
+    // project's vocabulary. Junk states filtered; every entry carries code + full name.
+    ds.upsertRows({ slug: SLUG, rows: [{ entity: 'ZZ junk', attrs: { state: 'ZZ', title: 'not a state' } }] });
+    const sf = ds.statesFor(SLUG);
+    ok(sf.some((s) => s.code === 'UT' && s.name === 'utah') && sf.some((s) => s.code === 'TX' && s.name === 'texas'),
+      'statesFor: distinct held states, each with its full name (kin vocabulary)');
+    ok(!sf.some((s) => s.code === 'ZZ'), 'statesFor: a junk state code is filtered');
+    ok(ds.statesFor('report-nonexistent').length === 0, 'statesFor: unknown slug → empty, never throws');
+
     _print(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
     process.exit(fail === 0 ? 0 : 1);
     }

@@ -645,7 +645,7 @@ function historyHandle(droppedMessages, maxChars = HANDLE_MAX) {
   // the part that stops her treating the listed few as the whole history.
   const shown = asks.slice(-HANDLE_ITEMS).reverse();
   const more = asks.length - shown.length;
-  const head = `[EARLIER IN THIS CONVERSATION — ${asks.length} message(s) of his that no longer fit the window. This DID happen; if any of it bears on what he is asking now, recall it rather than asking him to repeat himself:`;
+  const head = `[EARLIER IN THIS CONVERSATION — ${asks.length} message(s) of theirs that no longer fit the window. This DID happen; if any of it bears on what they are asking now, recall it rather than asking them to repeat themselves:`;
   const lines = [];
   let used = head.length + 2;
   for (const a of shown) {

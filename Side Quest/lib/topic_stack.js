@@ -54,7 +54,7 @@ function returnDirective(userName, referent, ordinal) {
     : ordinal === 'second' ? 'the SECOND thing you discussed this conversation'
     : ordinal === 'last' ? 'the topic just before this one'
     : 'an earlier point in this conversation';
-  return `[${userName} is RETURNING to ${which}. Structurally, by the ORDER of THIS conversation, that is: "${topic}". Resume THAT topic — pick up what you were saying about it — do NOT answer about a more emotionally-salient memory from another day. Recall what was discussed about it if you need to. If this genuinely does not fit what he's asking, treat this note as noise.]`;
+  return `[${userName} is RETURNING to ${which}. Structurally, by the ORDER of THIS conversation, that is: "${topic}". Resume THAT topic — pick up what you were saying about it — do NOT answer about a more emotionally-salient memory from another day. Recall what was discussed about it if you need to. If this genuinely does not fit what they're asking, treat this note as noise.]`;
 }
 
 module.exports = { detectReturn, referentForOrdinal, returnDirective, RETURN_RE };

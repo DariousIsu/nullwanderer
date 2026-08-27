@@ -90,6 +90,23 @@ ok(mc.verifyWorkStateClaims('Records show nothing new since then.', { gatherRanT
 {
   const snap = ws.snapshot();   // the one db edge — must not throw, must return the shape
   ok(snap && Array.isArray(snap.promises) && Array.isArray(snap.foci), 'snapshot(): returns the shape without throwing (fail-soft edges)');
+  ok(Array.isArray(snap.bulk), 'snapshot(): carries the scheduler section (fail-soft to [])');
+}
+
+// ── F10-class (08-27): the api-bulk scheduler is VISIBLE to introspection ────────────────────────────────
+// Live failure: "did the backfill run?" → "no such pass registered" while the LegiScan drain was mid-run —
+// the vector held promises/foci/stamps but no scheduler lane. The bulk section renders + grounds claims.
+{
+  const snap = {
+    promises: [], foci: [], lastGatherTs: 0, lastCanvasWriteTs: 0,
+    bulk: [{ id: 'legiscan:TN', state: 'TN', records: 4200, newestTs: 1000 }, { id: 'legiscan:IA', state: 'IA', records: 34, newestTs: 0 }],
+  };
+  const st = ws.renderStatus(snap, { now: 2000 });
+  ok(/Background backfill \(api-bulk scheduler\)/.test(st), 'renderStatus: the scheduler line renders when jobs exist');
+  ok(/TN 4200 record\(s\), newest landed/.test(st), 'renderStatus: per-job record count + newest-landing age');
+  ok(/IA 34 record\(s\)/.test(st) && !/IA 34 record\(s\), newest/.test(st), 'renderStatus: a job with no landings yet omits the age clause');
+  ok(!/Background backfill/.test(ws.renderStatus({ promises: [], foci: [], bulk: [] }, { now: 2000 })), 'renderStatus: no configured jobs → no scheduler line');
+  ok(ws.pendingRecordFor(['the legiscan backfill'], snap) === true, 'pendingRecordFor: a backfill claim is GROUNDED by the scheduler section');
 }
 
 // ── F29 (saturation run 3): the whole-plate work-status door ─────────────────────────────────────────────

@@ -65,6 +65,19 @@ function rowsFor(slug) {
   } catch { return []; }
 }
 function countFor(slug) { ensure(); try { return _handle().prepare('SELECT COUNT(*) n FROM project_datasets WHERE project_slug = ?').get(slug).n; } catch { return 0; } }
+
+// The distinct states a dataset actually holds, as [{code, name}] — cheap SQL (indexed by slug,
+// no JS row hydration). b3(a) 2026-08-27: a dataset-backed project's held states are part of its
+// SUBJECT — "how did Iowa end up looking in the bill sweep" names no title token but names a state
+// whose rows the project holds; the kin matcher unions these names into the project's vocabulary.
+const _STATE_NAME = { AL: 'alabama', AK: 'alaska', AZ: 'arizona', AR: 'arkansas', CA: 'california', CO: 'colorado', CT: 'connecticut', DE: 'delaware', FL: 'florida', GA: 'georgia', HI: 'hawaii', ID: 'idaho', IL: 'illinois', IN: 'indiana', IA: 'iowa', KS: 'kansas', KY: 'kentucky', LA: 'louisiana', ME: 'maine', MD: 'maryland', MA: 'massachusetts', MI: 'michigan', MN: 'minnesota', MS: 'mississippi', MO: 'missouri', MT: 'montana', NE: 'nebraska', NV: 'nevada', NH: 'new hampshire', NJ: 'new jersey', NM: 'new mexico', NY: 'new york', NC: 'north carolina', ND: 'north dakota', OH: 'ohio', OK: 'oklahoma', OR: 'oregon', PA: 'pennsylvania', RI: 'rhode island', SC: 'south carolina', SD: 'south dakota', TN: 'tennessee', TX: 'texas', UT: 'utah', VT: 'vermont', VA: 'virginia', WA: 'washington', WV: 'west virginia', WI: 'wisconsin', WY: 'wyoming' };
+function statesFor(slug) {
+  ensure();
+  try {
+    return _handle().prepare(`SELECT DISTINCT UPPER(TRIM(json_extract(attrs_json, '$.state'))) s FROM project_datasets WHERE project_slug = ?`).all(slug)
+      .map((r) => r.s).filter((s) => s && _STATE_NAME[s]).map((s) => ({ code: s, name: _STATE_NAME[s] }));
+  } catch { return []; }
+}
 function hasRows(slug, attrEq = null) {
   if (!attrEq) return countFor(slug) > 0;
   return rowsFor(slug).some((r) => Object.entries(attrEq).every(([k, v]) => String(r.attrs[k]) === String(v)));
@@ -250,4 +263,4 @@ function renderReportData(rows, dims = {}, { rosterRows = null, rosterNote = '' 
   ].join('\n');
 }
 
-module.exports = { ensure, upsertRows, rowsFor, countFor, hasRows, countsBy, renderCounts, renderTable, renderRoster, sampleBalanced, trendBy, renderTrend, renderReportData, stateCensus, _setDb };
+module.exports = { ensure, upsertRows, rowsFor, countFor, hasRows, statesFor, countsBy, renderCounts, renderTable, renderRoster, sampleBalanced, trendBy, renderTrend, renderReportData, stateCensus, _setDb };
