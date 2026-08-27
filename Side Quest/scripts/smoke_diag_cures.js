@@ -144,6 +144,13 @@ const ok = (c, m) => { if (c) { pass++; console.log('  \u2713', m); } else { fai
     db.setMeta('audit.last_report', JSON.stringify({ ts: Date.now(), total_fixed: 3, converged: true }));
     const v2 = SV.assemble({ deps: {} });
     ok(v2.audit && v2.audit.converged === true, 'the auditor’s last verdict rides the self-read (refute halt-claims from it)');
+    // round-2 H2+E2: the week's ACTUAL self-watch filings ride the read; the block rails against
+    // instrument confusion and turn-ending check-promises (both live-caught twice)
+    ok(Array.isArray(v2.needs.recentWatch) && v2.needs.recentWatch.length >= 1, `recentWatch lists the week's real filings (${v2.needs.recentWatch && v2.needs.recentWatch.length})`);
+    SV.refresh({ deps: {} });
+    const blk = SV.block({ deps: {} });
+    ok(/DIFFERENT organ, content review, never self-watch/.test(blk), 'block: the instrument boundary is named (curation queues ≠ self-watch)');
+    ok(/NEVER end the turn on "let me check\/look"/.test(blk), 'block: the answer-now rail (the check-promise dangled twice live)');
 
     // ── wiring pins (main.js + doors) ──────────────────────────────────────────────────────────
     const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');

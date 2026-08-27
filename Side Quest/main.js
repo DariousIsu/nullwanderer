@@ -9467,8 +9467,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       } else if (_om.kind === 'clarify') {
         _swBlock = `${userName} ordered a whole-site crawl but no site is nameable from the message. Ask WHICH site (a URL or domain) — echo their own words back, do not guess a target, and do not claim anything started.`;
       } else {
+        // Host-resolved history FIRST (round-2 A2: the last-sweep-only standing made a question
+        // about a PRIOR completed sweep compose across sweeps); the latest standing as fallback.
+        const _hist = _sc.historyFor(userMessage);
         const _sl9 = _sc.standingLine();
-        _swBlock = _sl9 ? `THE SITE-SWEEP ORGAN'S MEASURED STANDING (answer sweep questions FROM this, never compose — Echo/KG/vault cannot see the sweep ledger, their emptiness proves nothing; the sweep_status tool is the only other readout): ${_sl9}. If the message is not actually about a site sweep, ignore this note.`
+        _swBlock = _hist ? `THE SWEEP LEDGER FOR THE SITE YOU NAMED — every sweep of it, measured (answer FROM these rows; each row is its own sweep, never blend them):\n${_hist}${_sl9 ? `\nCurrent standing: ${_sl9}.` : ''} If the message is not actually about a site sweep, ignore this note.`
+          : _sl9 ? `THE SITE-SWEEP ORGAN'S MEASURED STANDING (answer sweep questions FROM this, never compose — Echo/KG/vault cannot see the sweep ledger, their emptiness proves nothing; the sweep_status tool is the only other readout): ${_sl9}. If the message is not actually about a site sweep, ignore this note.`
           : `THE SITE-SWEEP ORGAN'S MEASURED STANDING: no sweep has ever been run. If asked about a crawl/sweep, say that plainly. If the message is not about a site sweep, ignore this note.`;
       }
       if (_swBlock) {

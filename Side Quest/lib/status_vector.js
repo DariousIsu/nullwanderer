@@ -97,7 +97,12 @@ function assemble({ deps = {}, nowMs = Date.now() } = {}) {
       let tries = 0; try { tries = parseInt(_db(deps).getMeta(`need.${nr.id}.diag_tries`) || '0', 10) || 0; } catch {}
       newestRepair = { id: nr.id, gist: String(nr.need).replace(/\s+/g, ' ').slice(0, 110), status: nr.status, diagnosed: !!nr.dg, tries };
     }
-    v.needs = { ...counts, newestRepair };
+    // the week's actual self-watch/self-audit filings (round-2 leg H2: asked "what did self-watch
+    // flag", she listed KG curation-queue rows — real entities, WRONG ORGAN; the self-read carried
+    // only counts, so a list-shaped question went to a look-alike queue)
+    const recentWatch = d.prepare("SELECT id, need, status FROM capability_needs WHERE (born_from LIKE 'self-watch%' OR born_from LIKE 'self-audit%') AND created_ts > ? ORDER BY created_ts DESC LIMIT 3").all(nowMs - 7 * 24 * 3600e3)
+      .map((r) => ({ id: r.id, gist: String(r.need).replace(/\s+/g, ' ').slice(0, 90), status: r.status }));
+    v.needs = { ...counts, newestRepair, recentWatch };
   } catch {}
 
   // the integrity auditor's last real verdict (round-1 leg E: a false "your audit halted and
@@ -213,6 +218,9 @@ function block({ deps = {}, nowMs = Date.now() } = {}) {
     const n = v.needs;
     const r = n.newestRepair;
     L.push(`Self-diagnostics (the needs ledger — answer "what's broken" from THIS, never from memory): ${n.open || 0} open, ${n.proposed || 0} proposed awaiting the builder, ${n.parked || 0} parked${r ? ` · newest repair: need #${r.id} "${r.gist}" — ${r.status}${r.diagnosed ? ', diagnosed' : r.tries ? `, diagnosis try ${r.tries}/3` : ''}` : ' · no open repair needs'}.`);
+    if (n.recentWatch && n.recentWatch.length) {
+      L.push(`What self-watch/self-audit ACTUALLY filed this week (this list is the whole answer to "what did self-watch flag" — KG curation/dedup review queues are a DIFFERENT organ, content review, never self-watch): ${n.recentWatch.map((w) => `#${w.id} "${w.gist}" [${w.status}]`).join(' · ')}.`);
+    }
   }
   if (v.audit) {
     const ageH = Math.round((nowMs - v.audit.ts) / 3600e3 * 10) / 10;
@@ -221,7 +229,7 @@ function block({ deps = {}, nowMs = Date.now() } = {}) {
   if (v.drives && v.drives.at) { try { L.push(`Drives (measured): ${JSON.stringify(v.drives).slice(0, 200)}.`); } catch {} }
   if (v.recentFires && v.recentFires.length) L.push(`Recent organ activity: ${v.recentFires.slice(-5).join(' | ')}.`);
   if (!L.length) return null;
-  return `YOUR SYSTEMS — a measured self-read taken ${ageMin <= 1 ? 'moments' : `${ageMin}m`} ago (answer from THIS, never invent state):\n${L.map((s) => '  • ' + s).join('\n')}`;
+  return `YOUR SYSTEMS — a measured self-read taken ${ageMin <= 1 ? 'moments' : `${ageMin}m`} ago (answer from THIS, never invent state). ANSWER NOW, from this read: if it lacks the datum, SAY it lacks it — that absence IS the measured answer — or query localdb/obs_query IN THIS TURN; NEVER end the turn on "let me check/look" (twice live-caught: the check never happens):\n${L.map((s) => '  • ' + s).join('\n')}`;
 }
 
 module.exports = { assemble, refresh, line, block, _delta, META_KEY, DELTA_KEY, STALE_MS };

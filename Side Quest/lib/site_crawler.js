@@ -362,8 +362,24 @@ function standingLine() {
   return `[site-sweep] ${s.host}: ${s.status} — ${s.done}/${s.total} pages (${s.fetched} fetched, ${s.reused} reused, ${s.failed} failed, ${s.docs} docs)${s.note ? ` · ${s.note}` : ''}`;
 }
 
+// HOST-RESOLVED SWEEP HISTORY (round-2 leg A2, 2026-08-27): standing() carries only the LAST sweep,
+// so a question about a PRIOR completed sweep got no measured standing and memory composed ACROSS
+// sweeps (sweep #1's stopped-at-11/143 stitched onto #2's completed-144 — "before it was stopped"
+// said of a sweep that FINISHED). Resolve the message's own words against the swept hosts and
+// return EVERY sweep of the matched host, each row its own honest line.
+function historyFor(text) {
+  const words = [...new Set((str(text).toLowerCase().match(/[a-z0-9][a-z0-9-]{3,}/g) || []))].slice(0, 40);
+  if (!words.length) return null;
+  try {
+    const rows = db().getDb().prepare('SELECT * FROM site_sweeps ORDER BY id').all();
+    const hit = rows.filter((r) => words.some((w) => str(r.host).toLowerCase().includes(w)));
+    if (!hit.length) return null;
+    return hit.map((r) => `[site-sweep #${r.id}] ${r.host}: ${r.status.toUpperCase()}${r.note ? ` (${r.note})` : ''} — fetched ${r.pages_fetched}, reused ${r.pages_reused}, failed ${r.pages_failed}, robots-skipped ${r.skipped_robots}, binary ${r.skipped_binary}, PDFs ${r.pdfs_grabbed}, docs ${r.docs_landed}`).join('\n');
+  } catch { return null; }
+}
+
 module.exports = {
   startSweep, stopSweep, activeSweep, lastSweep, sweepTick, isSweptHost,
-  orderMatch, parseRobots, robotsBlocked, parseSitemap, standing, standingLine,
+  orderMatch, parseRobots, robotsBlocked, parseSitemap, standing, standingLine, historyFor,
   SWEEP_BITE, PAGE_DELAY_MS, SWEPT_WINDOW_MS,
 };

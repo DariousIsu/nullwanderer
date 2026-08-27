@@ -141,6 +141,19 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
     ok(SL.getPlan('x.gov').urls.some((e) => e.status === 'pending'), 'the reopened frontier is walkable again');
     SC.stopSweep({});
 
+    // ── host-resolved sweep history (round-2 A2: last-sweep-only standing made a prior completed
+    // sweep compose from memory — sweep #1's stopped-state stitched onto #2's completion) ───────
+    // two sweeps of one host (the migration sweep already left one on newname.org)
+    const stH = SC.startSweep('https://newname.org/', { requestedBy: 'smoke' });
+    ok(stH.ok, 'history setup: a second newname.org sweep starts');
+    SC.stopSweep({});
+    const hist = SC.historyFor('give me the newname sweep numbers one more time');
+    ok(hist && (hist.match(/\[site-sweep #/g) || []).length >= 2, 'historyFor: a named host returns EVERY sweep of it, one labeled row each');
+    ok(/DONE|STOPPED|ACTIVE/.test(hist), 'historyFor: each row carries its own status (no cross-sweep blending possible)');
+    ok(SC.historyFor('how are the parish contacts coming along') === null, 'historyFor: no swept host named → null (the generic standing serves)');
+    const mainH = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
+    ok(/historyFor\(userMessage\)/.test(mainH), 'main.js: the status branch resolves the named host FIRST');
+
     // ── wiring pins (main.js + work_state + the ladder pass-through) ──────────────────────────
     const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
     ok(/sweepTick\(\{/.test(main), 'main.js: the walker driver rides the metabolism tick');
