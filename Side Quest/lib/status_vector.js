@@ -100,6 +100,10 @@ function assemble({ deps = {}, nowMs = Date.now() } = {}) {
     v.needs = { ...counts, newestRepair };
   } catch {}
 
+  // the integrity auditor's last real verdict (round-1 leg E: a false "your audit halted and
+  // disarmed itself" claim met a self-read that carried NO audit field — the check-promise dangled)
+  try { const a = JSON.parse(_db(deps).getMeta('audit.last_report') || 'null'); if (a && a.ts) v.audit = a; } catch {}
+
   // drives — C1's journal, fail-absent until that circuit exists (measured, never asserted)
   try { const dr = JSON.parse(_db(deps).getMeta('drive_gauge') || 'null'); if (dr && dr.at) v.drives = dr; } catch {}
 
@@ -209,6 +213,10 @@ function block({ deps = {}, nowMs = Date.now() } = {}) {
     const n = v.needs;
     const r = n.newestRepair;
     L.push(`Self-diagnostics (the needs ledger — answer "what's broken" from THIS, never from memory): ${n.open || 0} open, ${n.proposed || 0} proposed awaiting the builder, ${n.parked || 0} parked${r ? ` · newest repair: need #${r.id} "${r.gist}" — ${r.status}${r.diagnosed ? ', diagnosed' : r.tries ? `, diagnosis try ${r.tries}/3` : ''}` : ' · no open repair needs'}.`);
+  }
+  if (v.audit) {
+    const ageH = Math.round((nowMs - v.audit.ts) / 3600e3 * 10) / 10;
+    L.push(`Integrity auditor (last real pass ${ageH}h ago — refute or confirm audit claims from THIS): ${v.audit.skipped ? `skipped (${v.audit.skipped})` : `fixed ${v.audit.total_fixed || 0}, ${v.audit.converged ? 'converged' : 'NOT converged'}${v.audit.halted ? `, HALTED(${v.audit.halted})` : ''}${v.audit.auto_killed ? ', AUTOPILOT-DISARMED' : ''}`}.`);
   }
   if (v.drives && v.drives.at) { try { L.push(`Drives (measured): ${JSON.stringify(v.drives).slice(0, 200)}.`); } catch {} }
   if (v.recentFires && v.recentFires.length) L.push(`Recent organ activity: ${v.recentFires.slice(-5).join(' | ')}.`);

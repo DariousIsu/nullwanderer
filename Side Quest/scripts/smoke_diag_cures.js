@@ -131,6 +131,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  \u2713', m); } else { fai
       'since when has the idle lane been starved',
       'what did self-watch flag this week',
       'tell me about need #101',
+      'I saw that your integrity audit got halted last night and disarmed its own autopilot. what happened there?',
     ]) ok(SS.detectStateQuestion(q), `state door opens: "${q.slice(0, 60)}"`);
     for (const q of ['the bill about idle land use in Maine', 'how long until the election', 'what broke the negotiations between the parishes'])
       ok(!SS.detectStateQuestion(q), `state door stays SHUT on a non-self question: "${q.slice(0, 50)}"`);
@@ -139,6 +140,10 @@ const ok = (c, m) => { if (c) { pass++; console.log('  \u2713', m); } else { fai
     const v = SV.assemble({ deps: {} });
     ok(v.needs && typeof v.needs === 'object', 'status_vector.assemble carries v.needs (the ledger in the self-read)');
     ok(v.needs.newestRepair && v.needs.newestRepair.gist, `the newest open repair need rides the self-read (#${v.needs.newestRepair && v.needs.newestRepair.id})`);
+    // the audit verdict rides the self-read too (leg E: a false halt-claim met no audit field)
+    db.setMeta('audit.last_report', JSON.stringify({ ts: Date.now(), total_fixed: 3, converged: true }));
+    const v2 = SV.assemble({ deps: {} });
+    ok(v2.audit && v2.audit.converged === true, 'the auditor’s last verdict rides the self-read (refute halt-claims from it)');
 
     // ── wiring pins (main.js + doors) ──────────────────────────────────────────────────────────
     const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
