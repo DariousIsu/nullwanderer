@@ -281,6 +281,32 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
     ok(r && /Hodges/.test(r.say) && !/Mullica/.test(r.say), '⭐ the ladder DROPS the wrong-instance wiki text and answers from the matching web hit');
   }
 
+  // ── ERROR-VS-EMPTY (the starvation audit's last structural item, 08-26): a THROWN lane is a
+  // FAILED lookup, never an absence — "I checked our records" may only cover lanes that ran clean.
+  {
+    const throwing = async () => { throw new Error('ECONNREFUSED — echo down'); };
+    const needAsk = async () => 'NEED: the Dravenmoor water compact sponsor';
+    const intent = { kind: 'other', topic: '', needs_fresh: false };
+    // 1) EVERY lane throws → the say names a FAILED lookup, never claims a check happened
+    const r1 = await cog.answerGrounded({ userMessage: 'who sponsored the Dravenmoor water compact?', grounding: '', scope: 'records', deps: {
+      ask: needAsk, intent, dispatch: throwing, retrieveTurns: throwing, wikiLookup: throwing, routeNeed: throwing, webSearch: throwing, excavate: throwing,
+    } });
+    ok(r1 && r1.lookupFailed === true && /lookup itself failed on my side/.test(r1.say), '⭐ all lanes THREW → the say reports a FAILED search, not an absence');
+    ok(r1 && !/I checked our records and searched, but/.test(r1.say), 'the false verification claim is gone when nothing ran clean');
+    // 2) one lane runs clean-empty, the rest throw → the miss claim covers ONLY the clean lane
+    const r2 = await cog.answerGrounded({ userMessage: 'who sponsored the Dravenmoor water compact?', grounding: '', scope: 'records', deps: {
+      ask: needAsk, intent, dispatch: throwing, retrieveTurns: throwing, wikiLookup: throwing, routeNeed: throwing, webSearch: async () => ({ results: [] }), excavate: throwing,
+    } });
+    ok(r2 && !r2.lookupFailed && /^I searched, but I couldn't pin down/.test(r2.say) && !/checked our records/.test(r2.say), 'mixed: "where" claims only the CLEAN lane (searched, never "our records" — graph threw)');
+    ok(r2 && /errored, so that part went unchecked/.test(r2.say), 'mixed: the errored lanes are named as UNCHECKED in the say');
+    // 3) all lanes run clean and empty → the classic honest miss, no phantom error note
+    const emptyLane = async () => ({ results: [] });
+    const r3 = await cog.answerGrounded({ userMessage: 'who sponsored the Dravenmoor water compact?', grounding: '', scope: 'records', deps: {
+      ask: needAsk, intent, dispatch: emptyDispatch, retrieveTurns: async () => [], wikiLookup: async () => [], routeNeed: async () => ({ ok: false }), webSearch: emptyLane, excavate: async () => ({ found: false }),
+    } });
+    ok(r3 && !r3.lookupFailed && /couldn't pin down/.test(r3.say) && !/errored/.test(r3.say), 'all-clean empties keep the classic honest miss (no phantom error note)');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

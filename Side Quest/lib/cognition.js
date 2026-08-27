@@ -113,6 +113,11 @@ async function _draftOrNeed(userMessage, grounding, deps = {}) {
 }
 
 function _json(s) { try { return JSON.parse(s); } catch { return null; } }
+// ERROR-VS-EMPTY (the starvation audit's last structural item, 08-26): every tier swallowed its
+// throws into an empty result, so the closer claimed "I checked our records and searched" after the
+// lookup itself DIED (Echo down, network dead, embedder hung). Each guarded call now notes its
+// lane's failure; the closer claims only what ran CLEAN, and an all-failed ladder says so.
+function _laneErr(deps, lane, e) { try { (deps._laneErrors = deps._laneErrors || []).push({ lane, msg: (e && e.message) || String(e || 'error') }); } catch {} }
 function _rows(s) { const j = _json(s); const r = j && (j.result || j.rows || j); return Array.isArray(r) ? r : []; }
 function _entLine(e) {
   if (!e || !e.name) return '';
@@ -131,7 +136,7 @@ async function _enrichGraph(need, object, deps = {}) {
   try {
     const r = await d({ kind: 'do', name: 'search_entities', args: { query: need, top_k: 6 } });
     if (r && r.ok) hits = _rows(r.text);
-  } catch {}
+  } catch (e) { _laneErr(deps, 'graph', e); }
   for (const e of hits.slice(0, 6)) { const l = _entLine(e); if (l) parts.push(l); }
   const seen = new Set();
   const toWalk = [];
@@ -152,7 +157,7 @@ async function _enrichGraph(need, object, deps = {}) {
       const named = [];
       for (const r of rel) { const nm = _cleanEnt(r.name); if (nm) { neighborNames.push(nm); named.push(nm); } }
       if (named.length) parts.push(`Connected to ${_cleanEnt(w.name) || 'it'}: ${[...new Set(named)].slice(0, 12).join(', ')}`);
-    } catch {}
+    } catch (e) { _laneErr(deps, 'graph', e); }
   }
   // FOLLOW THE EDGES to the connected OBJECTS — resolve each connected entity to ITS OWN object and read
   // its title/role (which lives in the neighbor's facts: Rubio → "Secretary of State", NOT in Trump's).
@@ -162,7 +167,7 @@ async function _enrichGraph(need, object, deps = {}) {
   try {
     const titled = await echo.expandNeighbors(uniq, { dispatch: d, top: 8 });
     if (titled.length) parts.push('Connected people and their roles (from our records):\n' + titled.map(e => `  • ${e.name} — ${e.title}`).join('\n'));
-  } catch {}
+  } catch (e) { _laneErr(deps, 'graph', e); }
   return { text: parts.join('\n').trim(), url: null };   // OUR KG — already local, nothing to write back
 }
 
@@ -190,12 +195,12 @@ async function _enrichConvo(need, deps = {}) {
   // embedder stalled the whole ladder. 6s then the tier honestly yields nothing.
   try {
     hits = (await new Promise((resolve) => {
-      const t = setTimeout(() => resolve([]), deps.convoTimeoutMs || 6000);
+      const t = setTimeout(() => { _laneErr(deps, 'convo', 'timeout — embedder hung'); resolve([]); }, deps.convoTimeoutMs || 6000);
       Promise.resolve(retrieve(need, { k: 4, minSim: 0.42, scan: 4000 }))
         .then((r) => { clearTimeout(t); resolve(r || []); })
-        .catch(() => { clearTimeout(t); resolve([]); });
+        .catch((e) => { clearTimeout(t); _laneErr(deps, 'convo', e); resolve([]); });
     })) || [];
-  } catch {}
+  } catch (e) { _laneErr(deps, 'convo', e); }
   if (!hits.length) return { text: '', url: null };
   const lines = hits.map((h) => {
     const who = h.speaker === 'user' ? 'Lucas said' : 'You said';
@@ -233,7 +238,7 @@ async function _enrichForecast(need, deps = {}) {
       lines.push(`- ${ch}: P(A control) ${(100 * (c.pA_control || 0)).toFixed(1)}%; A seats ${Number(c.seatsA_mean || 0).toFixed(0)} (80% band ${c.seatsA_p10}–${c.seatsA_p90}) of ${c.total_seats}; ${c.n_races} races simulated.`);
     }
     return { text: lines.join('\n'), url: null, source: 'forecast' };
-  } catch { return { text: '', url: null }; }
+  } catch (e) { _laneErr(deps, 'forecast', e); return { text: '', url: null }; }
 }
 
 async function _enrichNews(need, deps = {}) {
@@ -260,7 +265,7 @@ async function _enrichNews(need, deps = {}) {
       return head + ups;
     });
     return { text: 'From my own news stream (fresh, corroborated):\n' + top.join('\n'), url: null };
-  } catch { return { text: '', url: null }; }
+  } catch (e) { _laneErr(deps, 'news', e); return { text: '', url: null }; }
 }
 
 // WIKI IS A LINKING STEP, NOT A GENERAL ANSWER SOURCE (Lucas, 2026-07-20):
@@ -289,8 +294,8 @@ async function _enrichWiki(need, deps = {}, { object = null } = {}) {
   const _needLc = String(need || '').toLowerCase();
   const _anchor = _ctx.find((t) => !_needLc.includes(t.toLowerCase()) && t.toLowerCase() !== _needLc);
   let pages = [];
-  if (_anchor) { try { pages = (await wiki(`${need} ${_anchor}`)) || []; } catch {} }
-  if (!pages.length) { try { pages = (await wiki(need)) || []; } catch {} }
+  if (_anchor) { try { pages = (await wiki(`${need} ${_anchor}`)) || []; } catch (e) { _laneErr(deps, 'wiki', e); } }
+  if (!pages.length) { try { pages = (await wiki(need)) || []; } catch (e) { _laneErr(deps, 'wiki', e); } }
   if (!pages.length) return { text: '', url: null };
   const url = pages[0] && pages[0].title ? 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(pages[0].title).replace(/ /g, '_')) : null;
   return { text: 'From Wikipedia:\n' + pages.map(p => `• ${p.title}: ${p.extract}`).join('\n'), url };
@@ -305,7 +310,7 @@ async function _enrichExcavate(need, deps = {}) {
   if (!_worthExcavating(need)) return { text: '', url: null };   // don't pop her browser for a need no page can settle
   const fn = deps.excavate || ((n) => { try { return require('./excavate').excavate(n, { deps }); } catch { return Promise.resolve(null); } });
   let r = null;
-  try { r = await fn(need); } catch {}
+  try { r = await fn(need); } catch (e) { _laneErr(deps, 'excavate', e); }
   if (r && r.found && r.answer) return { text: `Read directly off the rendered page (${r.url || 'web'}): ${r.answer}`, url: r.url || null };
   return { text: '', url: null };
 }
@@ -316,14 +321,14 @@ async function _enrichWeb(need, deps = {}) {
   const searchFn = deps.webSearch || ((q) => { try { return require('./web_search').search(q); } catch { return Promise.resolve(null); } });
   const fetchFn = deps.fetchPage || ((u) => { try { return require('./web_search').fetchPage(u, { maxChars: 3000, reuse: true }); } catch { return Promise.resolve(null); } });
   let results = [];
-  try { const r = await searchFn(need); results = (r && r.results) || (Array.isArray(r) ? r : []); } catch {}
+  try { const r = await searchFn(need); results = (r && r.results) || (Array.isArray(r) ? r : []); } catch (e) { _laneErr(deps, 'web', e); }
   if (!results.length) return { text: '', url: null };
   const parts = [];
   // FETCH the top TWO result pages — DDG snippets are often just the title, and the #1 hit can be messy
   // (Wikipedia serves raw infobox wikitext); a cleaner source (Ballotpedia etc.) at #2 carries the answer.
   const urls = results.filter(x => x && x.url).slice(0, 2);
   for (const u of urls) {
-    try { const p = await fetchFn(u.url); if (p && p.ok && p.text && (p.chars != null ? p.chars : p.text.length) > 120) parts.push(`From ${p.title || u.url}:\n${require('./content_firewall').truncateFramed(p.text, 2400)}`); } catch {}
+    try { const p = await fetchFn(u.url); if (p && p.ok && p.text && (p.chars != null ? p.chars : p.text.length) > 120) parts.push(`From ${p.title || u.url}:\n${require('./content_firewall').truncateFramed(p.text, 2400)}`); } catch (e) { _laneErr(deps, 'web', e); }
   }
   const snip = results.slice(0, 5).map(x => {
     const t = String((x && x.title) || '').replace(/\s+/g, ' ').trim();
@@ -351,7 +356,7 @@ async function _enrichRouted(need, deps = {}) {
         return { text: `Looked up in our records (${r.chose || 'tool'}): ${t.slice(0, 2400)}`, url: null };   // Echo tool — our data
       }
     }
-  } catch {}
+  } catch (e) { _laneErr(deps, 'routed', e); }
   return { text: '', url: null };
 }
 
@@ -425,6 +430,7 @@ function _instanceMismatch(question, text) {
 //   null  → cloud unavailable → caller uses the normal local flow.
 async function answerGrounded({ userMessage, grounding = '', object = null, userName = 'Lucas', scope = null, deps = {} } = {}) {
   if (!userMessage) return null;
+  if (!deps._laneErrors) deps._laneErrors = [];   // error-vs-empty: the tiers note lane failures here
   let g = String(grounding || '').trim();
   // INTENT PARSE (model-primary, regex fallback) runs CONCURRENTLY with the first draft — a fast cloud model
   // reads what the turn is actually asking (kind / clean topic / does-it-turn-over) so routing no longer
@@ -461,7 +467,7 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
       // The already-linked skip belongs to the enrichment ladder below; applying it here would mean a
       // linked object could never be re-verified, which is precisely the confidently-stale answer
       // (Echo still records Biden as president) this path exists to catch.
-      try { fresh = (tier === 'news' ? await _enrichNews(topic, deps) : tier === 'wiki' ? await _enrichWiki(topic, deps) : await _enrichExcavate(topic, deps)) || fresh; } catch {}
+      try { fresh = (tier === 'news' ? await _enrichNews(topic, deps) : tier === 'wiki' ? await _enrichWiki(topic, deps) : await _enrichExcavate(topic, deps)) || fresh; } catch (e) { _laneErr(deps, tier, e); }
       if (!fresh.text) continue;
       if (_instanceMismatch(userMessage, fresh.text)) { console.log(`[cognition] ${tier} fresh-check DROPPED — bill-instance mismatch`); continue; }
       const gv = [`Fresh check for the current fact (${topic}):\n${fresh.text}`, g].filter(Boolean).join('\n\n');   // fresh check LEADS so the draft cap keeps the verified value, not the stale grounding it's meant to override
@@ -556,13 +562,25 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
     console.log(`[cognition] general-knowledge miss on "${String(need0).slice(0, 60)}" → answering from the model, not refusing`);
     return null;
   }
-  const _ours = _tried.includes('graph') || _tried.includes('routed');
-  const _out = _tried.includes('wiki') || _tried.includes('web') || _tried.includes('excavate');
+  // ERROR-VS-EMPTY at the closer: "I checked X" may only cover lanes that ran CLEAN. A lane whose
+  // guarded call THREW (Echo down, network dead, embedder hung) was not checked — it failed. All
+  // lanes failed → the honest sentence is "the lookup failed", never "it's not there".
+  const _errs = deps._laneErrors || [];
+  if (_errs.length) console.warn(`[cognition] ${_errs.length} lane error(s) during enrich: ${_errs.slice(0, 6).map((x) => `${x.lane}: ${String(x.msg).slice(0, 60)}`).join(' · ')}`);
+  const _errLanes = [...new Set(_errs.map((x) => x.lane))];
+  const _clean = _tried.filter((m) => !_errLanes.includes(m));
+  if (_tried.length && !_clean.length && _errLanes.length) {
+    return { say: `I tried to look that up, but the lookup itself failed on my side (${_errLanes.join(', ')}) — so treat this as a failed search, not as ${need0} being absent. I can retry in a bit.`, enriched: true, missed: true, lookupFailed: true, need: need0, tried: _tried, errLanes: _errLanes };
+  }
+  const _ours = _clean.includes('graph') || _clean.includes('routed');
+  const _out = _clean.includes('wiki') || _clean.includes('web') || _clean.includes('excavate');
   const where = _ours && _out ? 'I checked our records and searched'
     : _ours ? 'I checked our records'
     : _out ? 'I searched'
     : 'I looked at what I have';
-  return { say: `${where}, but I couldn't pin down ${need0}.`, enriched: true, missed: true, need: need0, tried: _tried };
+  const _unchecked = _errLanes.filter((l) => _tried.includes(l));
+  const _uncheckedNote = _unchecked.length ? ` (my ${_unchecked.join('/')} lookup${_unchecked.length > 1 ? 's' : ''} errored, so that part went unchecked)` : '';
+  return { say: `${where}, but I couldn't pin down ${need0}.${_uncheckedNote}`, enriched: true, missed: true, need: need0, tried: _tried, errLanes: _errLanes };
 }
 
 module.exports = { answerGrounded, _draftOrNeed, _enrichConvo, _enrichGraph, _enrichWiki, _enrichNews, _enrichForecast, isForecastQuestion, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _hasStaleGrounding, _entLine, _billToksOf, _instanceMismatch, NEED_RE };
