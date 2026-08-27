@@ -503,12 +503,12 @@ function formatForPrompt(rows, userName = 'them') {
       let p = {}; try { p = r.provenance ? JSON.parse(r.provenance) : {}; } catch {}
       const asOf = p.as_of || 'recently';
       const url = p.url || 'a source you checked';
-      lines.push(`  [VERIFIED — as of ${asOf}, source ${url}] ${(r.content || '').slice(0, 400)}`);
+      lines.push(`  [VERIFIED — as of ${asOf}, source ${url}] ${(r.content || '').slice(0, 1200)}`);
       lines.push(`    ↳ You confirmed this yourself against a live source. Your training data is stale — prefer THIS over anything you recall from memory.`);
       continue;
     }
     const tag = r.kind === 'trajectory' ? '[did]' : r.kind === 'reference' ? '[ref]' : r.kind === 'skill' ? '[how-to]' : '[note]';
-    lines.push(`  ${tag} ${(r.content || '').slice(0, 400)}`);
+    lines.push(`  ${tag} ${(r.content || '').slice(0, 1200)}`);   // widened 08-26 (starvation audit: 400c gists under a 131k window)
   }
   return lines.join('\n');
 }

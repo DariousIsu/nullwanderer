@@ -185,7 +185,7 @@ const selfDialogue = require('./lib/self_dialogue');
 
 const MODEL = config.frontModel();   // her VOICE model (front); cognition/extraction may differ
 const RECENT_TURN_LIMIT = 28;   // freed by the stripped voice-renderer prompt (Slice 3) — ~20-30 rounds
-const RECENT_REFLECTION_LIMIT = 5;
+const RECENT_REFLECTION_LIMIT = 10;   // widened 08-26 (starvation audit: 8k-era portion under a 131k window)
 const DISPLAY_HISTORY_LIMIT = 50;
 
 let mainWindow = null;
@@ -8430,15 +8430,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   }
 
   const recentReflections = db.getRecentReflections(RECENT_REFLECTION_LIMIT);
-  let recentMonologue = db.getRecentMonologueByType('thought', 5);
+  let recentMonologue = db.getRecentMonologueByType('thought', 10);
   let recentReadings = db.getRecentMonologueByType('reading', 2, { excludeConsolidated: true });
-  const heldCommitments = db.getHeldCommitments(8);
+  const heldCommitments = db.getHeldCommitments(16);
   // REGISTER GATE (conversation harness, Piece 2): on a personal/social turn — a greeting or
   // check-in, not a work request — the work-goal scaffolding RECEDES so she's present instead
   // of reciting goals/professionalism at him. Her threads still drive her idle loop + tools;
   // they just stop colonizing a warm "how are you". (Root cause of the corporate-reply bug.)
   const socialTurn = isSocialTurn(userMessage);
-  let openThreads = socialTurn ? [] : db.getActiveOpenThreads(3, { includeStalled: false });  // don't pull parked/stalled threads into chat replies (gated for relevance below, alongside recentMonologue/recentReadings)
+  let openThreads = socialTurn ? [] : db.getActiveOpenThreads(6, { includeStalled: false });  // don't pull parked/stalled threads into chat replies (gated for relevance below, alongside recentMonologue/recentReadings)
   // WHERE-WE-ARE (conversation harness, Piece 3): the running summary of this conversation,
   // so she stays on-thread even after raw turns scroll out of the recency window.
   // CATCH-UP FOLD. Every chat turn passes through here, whereas the post-reply fold at the bottom
@@ -9028,7 +9028,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const ar = require('./lib/active_recall');
       // recent conversation → the cloud extractor can bind pronouns/anaphora ("his cabinet" → Trump).
       const _recentCtx = (recentTurns || []).slice(-4).map(t => `${t.speaker || '?'}: ${String(t.content || '').replace(/\s+/g, ' ').slice(0, 160)}`).join('\n');
-      recallResult = await ar.recall(userMessage, { k: 4, context: _recentCtx });
+      // k + per-row widths sized for the package's grounding allowance (~150KB at 131k), not the
+      // 8k era. Depth-first: rows carry near-full content; counts rise modestly (more rows = more
+      // room for off-topic bleed — the Thune-leak lesson; the relevance gates stay the filter).
+      recallResult = await ar.recall(userMessage, { k: 8, context: _recentCtx });
       // DROP internal research/focus artifacts — a research dossier / focus tombstone is stored at high
       // importance (0.85), so retrieveScored surfaces it for ANY entity query and it bled "Enrich 19
       // organizations" into unrelated turns (the Thune leak). These are her internal work artifacts, not
@@ -9055,8 +9058,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // off-topic importance-boosted globs sneak in (the Thune leak). A thin/stub object or no object
       // still needs its notes (e.g. an entity we only hold via a dropped document → Russ Walker case).
       if (!ar._objectRich(recallResult.object)) {
-        const noteLines = cleanNotes.slice(0, 6)
-          .map(n => { const c = String((n && n.content) || '').replace(/\s+/g, ' ').trim().slice(0, 200); return c ? `  • ${c}` : ''; })
+        const noteLines = cleanNotes.slice(0, 12)
+          .map(n => { const c = String((n && n.content) || '').replace(/\s+/g, ' ').trim().slice(0, 900); return c ? `  • ${c}` : ''; })
           .filter(Boolean);
         if (noteLines.length) parts.push('Related from your memory:\n' + noteLines.join('\n'));
       }
@@ -9064,8 +9067,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // + tracked NEWS relevant to this entity, surfaced INDEPENDENTLY of the object so a rich KG record can't
       // hide them (chat answering was blind to news_bucket + the documents table). Capped; artifact-tagged.
       if (recallResult.streamHits && recallResult.streamHits.length) {
-        const sLines = recallResult.streamHits.slice(0, 5)
-          .map(h => { const c = String((h && h.content) || '').replace(/\s+/g, ' ').trim().slice(0, 240); return c ? `  • [${h.source || 'stream'}] ${c}` : ''; })
+        const sLines = recallResult.streamHits.slice(0, 10)
+          .map(h => { const c = String((h && h.content) || '').replace(/\s+/g, ' ').trim().slice(0, 1000); return c ? `  • [${h.source || 'stream'}] ${c}` : ''; })
           .filter(Boolean);
         if (sLines.length) { parts.push('From your live data streams (news + documents you hold on this):\n' + sLines.join('\n')); recallResult.streamHits.forEach(h => rkRows.unshift({ content: h.content, source: h.source })); }
         // A news story that just rode into THIS conversation's grounding is now a story they DISCUSSED —
@@ -9083,8 +9086,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // assembles its own parts (it never calls active_recall.knowledgeBlock), which is exactly how
       // the first D14 chat test grounded blind while the recall arm sat populated one field away.
       if (recallResult.civicHits && recallResult.civicHits.length) {
-        const cLines = recallResult.civicHits.slice(0, 3)
-          .map(c => { const s = String((c && c.line) || '').replace(/\s+/g, ' ').trim().slice(0, 400); return s ? `  • ${s}` : ''; })
+        const cLines = recallResult.civicHits.slice(0, 8)
+          .map(c => { const s = String((c && c.line) || '').replace(/\s+/g, ' ').trim().slice(0, 800); return s ? `  • ${s}` : ''; })
           .filter(Boolean);
         if (cLines.length) {
           // The header's promise must match what the lines guarantee (2026-08-15 deep-dive C2):
@@ -9099,7 +9102,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       retrievedKnowledgeBlock = parts.length ? parts.join('\n\n') : null;
     } else {
       // Broad/open turn — scored recency×relevance×importance retrieval keeps her texture (unchanged).
-      const rk = await memoryLib.retrieveScored(userMessage, { k: 6, minRelevance: 0.35 });
+      const rk = await memoryLib.retrieveScored(userMessage, { k: 12, minRelevance: 0.35 });
       rkRows = rk || [];
       retrievedKnowledgeBlock = memoryLib.formatForPrompt(rk, userName);
     }
@@ -11672,7 +11675,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           // Readings with a stored doc behind them carry the [dN] handle — title+ref+gist, so the
           // writer QUOTES the document (one <recall ref="dN"/> pulls it whole) instead of parroting
           // a 240-char gist. The dereference IS the design: full-inference memory, not full-context cost.
-          const readings = (recentReadings || []).slice(-6)
+          const readings = (recentReadings || []).slice(-12)
             .map((x) => {
               const gist = String((x && x.content) || '').replace(/\s+/g, ' ').trim();
               if (!gist || gist.length <= 2) return '';
@@ -11696,10 +11699,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           g.push('WRITE FRESH — never copy an earlier turn of yours (or a status/plan note from the context) as the reply. If the same thought genuinely answers the new message, SAY you have said it before and restate it in new words. A status note about your own work process is never an answer to him.');
           groundingSec = g.join('\n\n');
           const m = [];
-          const threads = _fmtRows(openThreads, 8); if (threads) m.push('OPEN THREADS:\n' + threads);
-          const commits = _fmtRows(heldCommitments, 8); if (commits) m.push('POSITIONS SHE HOLDS:\n' + commits);
-          const refl = _fmtRows(recentReflections, 6); if (refl) m.push('NOTES TO SELF:\n' + refl);
-          const mono = _fmtRows(recentMonologue, 6); if (mono) m.push('RECENT PRIVATE THOUGHTS:\n' + mono);
+          const threads = _fmtRows(openThreads, 16); if (threads) m.push('OPEN THREADS:\n' + threads);
+          const commits = _fmtRows(heldCommitments, 16); if (commits) m.push('POSITIONS SHE HOLDS:\n' + commits);
+          const refl = _fmtRows(recentReflections, 10); if (refl) m.push('NOTES TO SELF:\n' + refl);
+          const mono = _fmtRows(recentMonologue, 10); if (mono) m.push('RECENT PRIVATE THOUGHTS:\n' + mono);
           memorySec = m.join('\n\n');
         } catch (e) { console.error('[main] package grounding/memory assembly failed:', e.message); }
         const _win = await require('./lib/cloud_logic').resolveWindow(db.getMeta('model.replier') || null);

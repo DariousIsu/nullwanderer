@@ -29,7 +29,7 @@ const db = require('./db');
 // number here just needlessly starved distill/tool-route/curator/drafts late in the day. Keep it
 // high; override via env ZOE_CLOUD_DAILY_CAP or db meta `cloud.dailyCap` if ever needed.
 const DEFAULT_DAILY_CAP = 5000;
-const DEFAULT_MAX_INPUT_CHARS = 6000 * 4;   // ~6k tokens of packaged input (cloud headroom is large)
+const DEFAULT_MAX_INPUT_CHARS = 60000 * 4;   // ~60k tokens of packaged input — sized to the cloud window, not the 8k era (starvation audit 08-26; callers may still pass deps.maxInputChars to bound micro-tasks)
 
 function dailyCap() {
   try {
@@ -58,7 +58,7 @@ async function _resolveModel(models, cloud) {
   if (m) { _modelCache = m; _modelCacheAt = Date.now(); }
   return m;
 }
-async function _complete(messages, { temperature = 0.2, num_predict = 400, model: modelOverride = null, think = undefined } = {}) {
+async function _complete(messages, { temperature = 0.2, num_predict = 1500, model: modelOverride = null, think = undefined } = {}) {   // default 400→1500 (starvation audit: 400 sat below the reasoning floor and cut structured output mid-line; explicit caller numPredict still wins)
   let models, ollama;
   try { models = require('./models'); ollama = require('./ollama'); } catch { return null; }
   const cloud = (models.sources() || []).find(s => s.tier === 'cloud' && s.token);
@@ -180,7 +180,9 @@ function _hash(obj) { return crypto.createHash('sha1').update(JSON.stringify(obj
 
 function _packInput(input, maxChars) {
   let s = JSON.stringify(input);
-  if (s.length > maxChars) s = s.slice(0, maxChars);   // deterministic truncation (cost guard)
+  // Truncation is the disease this codebase keeps re-catching — it produces NO error, the parser
+  // just sees less. When the cap genuinely binds, SAY SO in the log (truth-in-logging).
+  if (s.length > maxChars) { console.warn(`[cloud_logic] input truncated ${s.length} → ${maxChars} chars (mid-structure; the tail is gone)`); s = s.slice(0, maxChars); }
   return s;
 }
 

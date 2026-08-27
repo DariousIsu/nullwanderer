@@ -274,5 +274,21 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
   ok(/cloudMessages = \[_pkgSys, \.\.\._histTurns, \.\.\.\(_finalTurn \? \[_finalTurn\] : \[\]\)\]/.test(src), 'the built package rides as the system prompt + the real convo turns');
 }
 
+// ── THE PORTION WIDENING (starvation audit, 08-26): the 131k window measured 14% fit because the
+// section MATERIALS were still cooked in 8k-era portions (k:4 recall · 200-400c row gists · 3-8 row
+// fetches). These pins are FLOORS-of-intent: re-widening updates the pin; re-STARVING fails it.
+{
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/ar\.recall\(userMessage, \{ k: 8/.test(src) && /retrieveScored\(userMessage, \{ k: 12/.test(src), 'recall depth is post-widening (k 8 narrow / 12 broad, not the 8k-era 4/6)');
+  ok(/cleanNotes\.slice\(0, 12\)/.test(src) && /\.slice\(0, 900\)/.test(src), 'memory notes carry near-full content (12 × 900c, not 6 × 200c gists)');
+  ok(/streamHits\.slice\(0, 10\)/.test(src) && /civicHits\.slice\(0, 8\)/.test(src), 'stream + civic lanes widened (10/8 rows)');
+  ok(/_fmtRows\(openThreads, 16\)/.test(src) && /_fmtRows\(heldCommitments, 16\)/.test(src), 'the memory section rows are post-widening (16/16/10/10)');
+  const mem = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'memory.js'), 'utf8');
+  ok((mem.match(/\.slice\(0, 1200\)/g) || []).length >= 2, 'formatForPrompt rows carry 1200c (both verified + note rows)');
+  const cl = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'cloud_logic.js'), 'utf8');
+  ok(/DEFAULT_MAX_INPUT_CHARS = 60000 \* 4/.test(cl) && /num_predict = 1500/.test(cl), 'cloud_logic defaults are post-widening (input 240k chars, predict 1500)');
+  ok(/input truncated \$\{s\.length\}/.test(cl), 'input truncation is LOGGED, never silent (truth-in-logging)');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
