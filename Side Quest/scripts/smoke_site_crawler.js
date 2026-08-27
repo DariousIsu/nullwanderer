@@ -124,6 +124,9 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
     const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
     ok(/sweepTick\(\{/.test(main), 'main.js: the walker driver rides the metabolism tick');
     ok(/orderMatch\(userMessage\)/.test(main), 'main.js: the sweep door reads the user turn');
+    ok(/THE SWEEP ORGAN OWNS THIS ORDER/.test(main) && /do NOT search, fetch, enumerate/.test(main),
+      'main.js: the start block carries the OWNERSHIP RAIL (live catch #1: the agent loop ran its own ad-hoc crawl and claimed completion)');
+    ok(/never claim "no crawl state exists"/.test(main), 'main.js: the ledger-row-is-the-state rail (live catch #1: false absence claim over an existing sweep row)');
     ok(/isSweptHost\(_swHost\)/.test(main), 'main.js: _docLeashOk carries the swept-host bypass');
     ok(/isSweptHost\(_swHost2\)/.test(main), 'main.js: the download-ingest leash carries the swept-host bypass');
     const ws = fs.readFileSync(path.join(ROOT, 'lib', 'work_state.js'), 'utf8');
