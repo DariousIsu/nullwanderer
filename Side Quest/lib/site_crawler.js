@@ -225,24 +225,30 @@ async function sweepTick(deps = {}) {
   }
 
   try {
-    // ── bootstrap tick: robots, the seed page, sitemap → the frontier ──────────────────────────
+    // ── bootstrap tick: the seed page → host migration → robots → sitemap → the frontier ───────
     if (!sw.bootstrapped) {
+      const seedRes = await _fetchOne(sw.seed_url, sw.host, deps);
+      let base = sw.seed_url, links = (seedRes && seedRes.links) || [];
+      // SEED-REDIRECT HOST MIGRATION (live catch #2, cityofbristolfl.gov 08-27): the ordered .gov
+      // seed 301s to cityofbristolflorida.org — the sitemap's 87 real pages lived on the .org and
+      // the same-host filter silently dropped the ENTIRE site body, leaving a thin 23-page shell
+      // frontier. The seed is the operator-ordered entry point: wherever it lands IS the site, so
+      // ANY host change on the seed redirect migrates the sweep (www-variants and cross-domain
+      // canonical homes alike). Robots + sitemap are fetched AFTER migration so they read the real
+      // host. Bounded like everything else by the frontier cap and page pacing.
+      const finalUrl = seedRes && seedRes.finalUrl;
+      const migratedFrom = (finalUrl && sl.hostOf(finalUrl) && sl.hostOf(finalUrl) !== sw.host) ? sw.host : null;
+      if (migratedFrom) {
+        _upd(sw.id, { host: sl.hostOf(finalUrl), note: `host migrated ${migratedFrom} → ${sl.hostOf(finalUrl)} (seed redirect — the ordered entry point lives there)` });
+        sw = activeSweep(); base = finalUrl;
+        try { sl.reopenStale(sw.host, { now }); } catch {}   // re-sweep freshness follows the migration — the real plan lives on the new host
+      } else if (finalUrl) { base = finalUrl; }
       let rules = null;
       if (ROBOTS_ON) {
         const rtxt = await rawGet(`https://${sw.host}/robots.txt`, { timeoutMs: 6000 });
         rules = parseRobots(rtxt || '');
         if (rules.disallow.length || rules.sitemaps.length) _upd(sw.id, { robots: JSON.stringify(rules) });
       }
-      const seedRes = await _fetchOne(sw.seed_url, sw.host, deps);
-      let base = sw.seed_url, links = (seedRes && seedRes.links) || [];
-      // Redirect host migration (x.gov → www.x.gov): the frontier must live on the host the links
-      // actually carry, or the same-host filter silently drops the entire site.
-      const finalUrl = seedRes && seedRes.finalUrl;
-      if (finalUrl && !_eqHost(sl.hostOf(finalUrl), sw.host)) { /* off-site redirect — keep the ordered host */ }
-      else if (finalUrl && sl.hostOf(finalUrl) !== sw.host) {
-        _upd(sw.id, { host: sl.hostOf(finalUrl), note: `host migrated ${sw.host} → ${sl.hostOf(finalUrl)} (redirect)` });
-        sw = activeSweep(); base = finalUrl;
-      } else if (finalUrl) { base = finalUrl; }
       const locs = [];
       for (const sm of (rules && rules.sitemaps.length ? rules.sitemaps.slice(0, 3) : [`https://${sw.host}/sitemap.xml`])) {
         const xml = await rawGet(sm, { timeoutMs: 8000 });
@@ -262,7 +268,7 @@ async function sweepTick(deps = {}) {
         pages_failed: (sw.pages_failed || 0) + (seedRes && seedRes.ok ? 0 : 1),
         docs_landed: (sw.docs_landed || 0) + (() => { try { const r = sl.seen(base); return r && r.doc_id ? 1 : 0; } catch { return 0; } })(),
       });
-      say.push(`Site sweep of ${sw.host} is underway — ${mapped} page(s) mapped so far (the frontier grows as I read${locs.length ? `; sitemap contributed ${locs.length}` : ''}${rules && rules.disallow.length ? `; ${rules.disallow.length} robots rule(s) will be honored` : ''}). I'll report at each quarter and when it completes.`);
+      say.push(`Site sweep of ${sw.host} is underway${migratedFrom ? ` (${migratedFrom} redirects there — following the site to its real home)` : ''} — ${mapped} page(s) mapped so far (the frontier grows as I read${locs.length ? `; sitemap contributed ${locs.length}` : ''}${rules && rules.disallow.length ? `; ${rules.disallow.length} robots rule(s) will be honored` : ''}). I'll report at each quarter and when it completes.`);
       log(`[site-sweep] bootstrap ${sw.host}: frontier ${mapped}, sitemap ${locs.length}, robots rules ${(rules && rules.disallow.length) || 0}`);
       return { status: 'active', say };
     }

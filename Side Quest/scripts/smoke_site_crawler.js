@@ -108,6 +108,27 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
     ok(!fetched.includes('https://y.org/preheld') && !fetched.includes('https://y.org/midread') && fetched.includes('https://y.org/fresh'), 'neither held page re-fetched; the fresh page fetched');
     ok(SC.lastSweep().pages_reused === 1, 'the walker-layer reuse is counted, not hidden');
 
+    // ── seed-redirect host migration (live catch #2: cityofbristolfl.gov → cityofbristolflorida.org
+    // — the ordered .gov 301s to the .org where the WHOLE site body lives; the same-host filter was
+    // silently dropping all 87 sitemap pages, leaving a 23-page shell frontier) ─────────────────
+    const stM = SC.startSweep('https://oldname.gov/', { requestedBy: 'smoke' });
+    ok(stM.ok, 'migration case: sweep starts on the ordered host');
+    const escRedirect = async (url) => ({ ok: true, text: 'z'.repeat(400), via: 'plain fetch',
+      links: ['https://newname.org/council', 'https://newname.org/news'], finalUrl: 'https://newname.org/' });
+    const rawGetOrg = async (url) => {
+      if (/^https:\/\/newname\.org\/robots\.txt$/.test(url)) return 'User-agent: *\nSitemap: https://newname.org/sm.xml\n';
+      if (/newname\.org\/sm\.xml$/.test(url)) return '<urlset><url><loc>https://newname.org/from-sitemap</loc></url></urlset>';
+      return null;   // the OLD host serves nothing — robots/sitemap must be fetched AFTER migration
+    };
+    r = await SC.sweepTick({ escalate: escRedirect, rawGet: rawGetOrg, sleep: noSleep, log: () => {} });
+    ok(SC.activeSweep().host === 'newname.org', 'the sweep MIGRATES to the redirect target (the ordered entry point lives there)');
+    const planM = SL.getPlan('newname.org');
+    ok(planM && planM.urls.some((e) => e.url === 'https://newname.org/from-sitemap'),
+      'robots+sitemap read the MIGRATED host — the real site body enters the frontier');
+    ok(planM.urls.some((e) => e.url === 'https://newname.org/council'), 'the seed page’s links live on the migrated frontier');
+    ok(/redirects there/.test(r.say[0]), 'the migration is narrated, never silent');
+    SC.stopSweep({});
+
     // ── stop order ────────────────────────────────────────────────────────────────────────────
     const st3 = SC.startSweep('https://z.gov/', { requestedBy: 'smoke' });
     ok(st3.ok && SC.stopSweep({}).ok && !SC.activeSweep(), 'stopSweep ends the active sweep');
