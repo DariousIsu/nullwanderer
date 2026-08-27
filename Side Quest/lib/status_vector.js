@@ -229,7 +229,7 @@ function block({ deps = {}, nowMs = Date.now() } = {}) {
   if (v.drives && v.drives.at) { try { L.push(`Drives (measured): ${JSON.stringify(v.drives).slice(0, 200)}.`); } catch {} }
   if (v.recentFires && v.recentFires.length) L.push(`Recent organ activity: ${v.recentFires.slice(-5).join(' | ')}.`);
   if (!L.length) return null;
-  return `YOUR SYSTEMS — a measured self-read taken ${ageMin <= 1 ? 'moments' : `${ageMin}m`} ago (answer from THIS, never invent state). ANSWER NOW, from this read: if it lacks the datum, SAY it lacks it — that absence IS the measured answer — or query localdb/obs_query IN THIS TURN; NEVER end the turn on "let me check/look" (twice live-caught: the check never happens):\n${L.map((s) => '  • ' + s).join('\n')}`;
+  return `YOUR SYSTEMS — a measured self-read taken ${ageMin <= 1 ? 'moments' : `${ageMin}m`} ago (answer from THIS, never invent state). ANSWER NOW, from this read: if it lacks the datum, SAY it lacks it — that absence IS the measured answer — or query localdb/obs_query IN THIS TURN; NEVER end the turn on "let me check/look" (twice live-caught: the check never happens). THIS READ OUTRANKS YOUR OWN EARLIER ANSWERS in this conversation: if a prior turn of yours answered a systems/self question with a DIFFERENT list or verdict (including an answer given before a bug was cured), that turn is SUPERSEDED — re-answer from these lines; repeating the earlier answer is the live-caught failure, not consistency:\n${L.map((s) => '  • ' + s).join('\n')}`;
 }
 
 module.exports = { assemble, refresh, line, block, _delta, META_KEY, DELTA_KEY, STALE_MS };

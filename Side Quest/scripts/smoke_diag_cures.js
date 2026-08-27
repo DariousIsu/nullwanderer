@@ -151,6 +151,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  \u2713', m); } else { fai
     const blk = SV.block({ deps: {} });
     ok(/DIFFERENT organ, content review, never self-watch/.test(blk), 'block: the instrument boundary is named (curation queues ≠ self-watch)');
     ok(/NEVER end the turn on "let me check\/look"/.test(blk), 'block: the answer-now rail (the check-promise dangled twice live)');
+    ok(/THIS READ OUTRANKS YOUR OWN EARLIER ANSWERS/.test(blk), 'block: the anti-precedent rail (round-3 H3: her round-2 wrong answer in-window beat the injected read while E3 obeyed the same block)');
 
     // ── wiring pins (main.js + doors) ──────────────────────────────────────────────────────────
     const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
