@@ -1086,7 +1086,12 @@ app.whenReady().then(() => {
     auditRunning = true; markActivity('audit');   // stall-attrib (diagnostic)
     db.setMeta('last_audit_dispatch_at', String(Date.now()));    // claim the slot before the round-trip
     try {
-      const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_integrity_audit', args: {} });
+      // THE SECOND DEAD CONSUMER (2026-08-27, found chasing degree drift): this dispatch ALSO died
+      // at the 90s default on every cadence ([dispatch-timeout] in the recent boots) — the full
+      // audit loop re-scans an 8.75M-edge graph to convergence. Same idle-op leash as the judge
+      // family; the auditor is backup-first + reversible + halts-on-regression by construction.
+      const _auditLeashMs = (parseFloat(process.env.ZOE_KG_JUDGE_TIMEOUT_MIN) || 15) * 60 * 1000;
+      const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_integrity_audit', args: {} }, { timeoutMs: _auditLeashMs });
       let rep = null; try { rep = JSON.parse(ar && ar.text); } catch {}
       if (rep && !(rep.skipped === 'unchanged')) {                // don't log the cheap idle no-op
         console.log(rep.skipped

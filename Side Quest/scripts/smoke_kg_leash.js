@@ -33,5 +33,9 @@ ok(/ZOE_DEDUP_ADJUDICATE_BATCH, 10\) \|\| 25/.test(main), 'the 20h curation bite
 // The link-grounding lane (web+cloud per candidate) rides the same class of leash.
 ok(/name: 'run_link_grounding'[^\n]*timeoutMs/.test(main), 'run_link_grounding carries a leash (same slow-judge class)');
 
+// The SECOND dead consumer (found chasing degree drift): run_integrity_audit died at 90s on every
+// cadence too — the full audit loop re-scans an 8.75M-edge graph to convergence.
+ok(/name: 'run_integrity_audit'[^\n]*timeoutMs/.test(main), 'run_integrity_audit carries the leash (the second dead consumer)');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
