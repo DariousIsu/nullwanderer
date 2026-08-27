@@ -210,8 +210,10 @@ async function maybeSignificanceReflect() {
   inFlight = true;
   try {
     const userName = db.getMeta('user_name') || 'them';
-    const thoughtLines = recent.slice(-20).map((m, i) => `${i + 1}. ${(m.content || '').replace(/\s+/g, ' ').slice(0, 200)}`).join('\n');
-    const docLines = recentDocs.map((d, i) => `${i + 1}. ${(d.title || 'untitled').replace(/\s+/g, ' ').slice(0, 120)}${d.understanding ? ' — ' + String(d.understanding).replace(/\s+/g, ' ').slice(0, 240) : ''}`).join('\n');
+    // Widened 08-26 (extraction-door sweep): 200c cut monologue rows mid-sentence — the distiller
+    // reflected on fragments. ctx below sized to the widened stream.
+    const thoughtLines = recent.slice(-20).map((m, i) => `${i + 1}. ${(m.content || '').replace(/\s+/g, ' ').slice(0, 600)}`).join('\n');
+    const docLines = recentDocs.map((d, i) => `${i + 1}. ${(d.title || 'untitled').replace(/\s+/g, ' ').slice(0, 120)}${d.understanding ? ' — ' + String(d.understanding).replace(/\s+/g, ' ').slice(0, 600) : ''}`).join('\n');
     const streamParts = [];
     if (thoughtLines) streamParts.push(`These are things ${userName}'s companion has recently thought and read on its own:\n\n${thoughtLines}`);
     if (docLines) streamParts.push(`And material it recently worked with and landed — deliverables it produced, meeting notes, research it studied:\n\n${docLines}`);
@@ -229,7 +231,7 @@ async function maybeSignificanceReflect() {
     await streamChat({
       model: MODEL,
       messages,
-      options: { temperature: 0.5, top_p: 0.9, num_ctx: 8192, num_predict: 260 },
+      options: { temperature: 0.5, top_p: 0.9, num_ctx: 16384, num_predict: 400 },
       onToken: (t) => { raw += t; }
     });
 

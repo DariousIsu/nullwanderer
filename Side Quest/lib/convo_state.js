@@ -23,7 +23,7 @@ async function _modelGenerate(messages) {
   await streamChat({
     model: config.extractionModel(),
     messages,
-    options: { temperature: 0.2, top_p: 0.9, num_ctx: 8192, num_predict: 200 },
+    options: { temperature: 0.2, top_p: 0.9, num_ctx: 16384, num_predict: 200 },
     onToken: (t) => { out += t; }
   });
   return out.trim();
@@ -61,9 +61,12 @@ async function update(sessionId, userMsg, aiSay, { generate = _modelGenerate } =
     const old = (prev && prev.summary) ? prev.summary : '(none yet — this is the start of the conversation)';
     // Prefer the real unfolded turns; fall back to the hint the caller passed (first fold of a
     // session, before any turn rows exist for it).
+    // Widened 08-26 (extraction-door sweep): 700c per turn folded a research reply's arc away.
+    // Pending is unbounded (watermark backlog) — the newest 24 turns ride; older ones were already
+    // partially carried by the prior summary. ctx 16384 sized to the widened exchange.
     const exchange = pending.length
-      ? pending.map(t => `${t.speaker === 'user' ? 'Lucas' : 'You (Zoe)'}: ${String(t.content || '').slice(0, 700)}`).join('\n')
-      : `Lucas: ${(userMsg || '').slice(0, 1200)}\nYou (Zoe): ${(aiSay || '').slice(0, 1200)}`;
+      ? pending.slice(-24).map(t => `${t.speaker === 'user' ? 'Lucas' : 'You (Zoe)'}: ${String(t.content || '').slice(0, 2000)}`).join('\n')
+      : `Lucas: ${(userMsg || '').slice(0, 4000)}\nYou (Zoe): ${(aiSay || '').slice(0, 4000)}`;
     const label = pending.length > 2 ? `EXCHANGES SINCE YOUR LAST NOTE (${pending.length} turns)` : 'LATEST EXCHANGE';
     const messages = [
       { role: 'system', content: `You keep a terse running summary of your ongoing conversation with Lucas — private notes to yourself so you never lose the thread. You are Zoe; he is Lucas.` },

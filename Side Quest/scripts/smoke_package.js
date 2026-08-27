@@ -290,5 +290,19 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
   ok(/input truncated \$\{s\.length\}/.test(cl), 'input truncation is LOGGED, never silent (truth-in-logging)');
 }
 
+// ── THE EXTRACTION-DOOR SWEEP (08-26): the six material-reading doors, each sized input+ctx+output
+// TOGETHER (micro-verdict calls stay small by design — blanket widening wastes KV). Floors-of-intent.
+{
+  const rd = (p) => require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', p), 'utf8');
+  ok(/aiSaidContent\.slice\(0, 8000\)/.test(rd('commitments.js')) && /num_ctx: 16384/.test(rd('commitments.js')), 'commitments reads the full reply (8000c, ctx 16384) — late commitments are visible');
+  const cs2 = rd('convo_state.js');
+  ok(/pending\.slice\(-24\)/.test(cs2) && /\.slice\(0, 2000\)/.test(cs2) && /num_ctx: 16384/.test(cs2), 'convo_state folds 24 × 2000c turns (bounded AND unstarved)');
+  ok(/\.slice\(0, 600\)/.test(rd('reflection.js')) && /num_predict: 400/.test(rd('reflection.js')), 'reflection distills whole thoughts (600c rows, predict 400)');
+  ok(/\.slice\(0, 40000\)/.test(rd('excavate.js')) && /num_ctx: 16384, num_predict: 500/.test(rd('excavate.js')), 'excavate reads 40k of page text with an explicit output budget');
+  ok(/\.slice\(0, 10000\)/.test(rd('byline.js')) && /\.slice\(0, 20000\)/.test(rd('byline.js')), 'byline reads sources at 10k and notes at 20k');
+  const gm = rd('gmeet.js');
+  ok(/t\.slice\(-12000\)/.test(gm) && /\.slice\(-8000\)/.test(gm) && /\.slice\(-40000\)/.test(gm) && /num_ctx: 32768, num_predict: 600/.test(gm), 'gmeet follows 12k of captions, answers from 8k, and recaps 40k of notes (the first half of a meeting is never silently lost)');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

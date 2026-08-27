@@ -118,7 +118,9 @@ async function extractCommitments({ userName, userMessage, aiSaidContent, aiSaid
     { role: 'system', content: EXTRACTOR_SYSTEM },
     {
       role: 'user',
-      content: `${userName || 'They'} asked or said:\n"${(userMessage || '').slice(0, 400)}"\n\nThe speaker (their companion) replied:\n"${aiSaidContent.slice(0, 1200)}"\n\nExtract any explicit commitments. Output JSON array only.`
+      // Input widened 08-26 (extraction-door sweep): a commitment stated late in a long research
+      // reply sat past the old 1200c cut — invisible, silently. ctx sized to the widened input.
+      content: `${userName || 'They'} asked or said:\n"${(userMessage || '').slice(0, 2000)}"\n\nThe speaker (their companion) replied:\n"${aiSaidContent.slice(0, 8000)}"\n\nExtract any explicit commitments. Output JSON array only.`
     }
   ];
 
@@ -127,7 +129,7 @@ async function extractCommitments({ userName, userMessage, aiSaidContent, aiSaid
     await streamChat({
       model: EXTRACTOR_MODEL,
       messages,
-      options: { temperature: 0.2, top_p: 0.9, num_ctx: 8192, num_predict: 200 },
+      options: { temperature: 0.2, top_p: 0.9, num_ctx: 16384, num_predict: 200 },
       onToken: (t) => { raw += t; }
     });
   } catch (err) {

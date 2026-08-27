@@ -93,7 +93,7 @@ function _textAnswerPrompt(need, text) {
   return `Read the following page text and answer ONE question:\n"${String(need).slice(0, 220)}"\n\n`
     + `If the answer is present in the text, reply EXACTLY one line:\nFOUND: <the answer, one short sentence>\n`
     + `If it is not in the text, reply EXACTLY:\nNOT_VISIBLE\n`
-    + `Only use the text below; never guess or fall back on prior knowledge.\n\n--- PAGE TEXT ---\n${String(text).slice(0, 6000)}`;
+    + `Only use the text below; never guess or fall back on prior knowledge.\n\n--- PAGE TEXT ---\n${String(text).slice(0, 40000)}`;   // 6000→40000 (extraction-door sweep 08-26: the caps-memory chunk disease — the answer often sat past the 6k cut)
 }
 async function _answerFromText(need, text, deps = {}) {
   const t = String(text || '').trim();
@@ -109,7 +109,7 @@ async function _answerFromText(need, text, deps = {}) {
       if (!src) return null;
       const model = deps.textModel || (() => { try { return require('./vision').visionModelFor('excavate').model; } catch { return null; } })();
       if (!model) return null;
-      out = await complete({ model, messages: [{ role: 'user', content: _textAnswerPrompt(need, t) }], base: src.base, headers: src.token ? { Authorization: `Bearer ${src.token}` } : {}, options: { temperature: 0.1, num_ctx: 8192 }, timeoutMs: 120000 });
+      out = await complete({ model, messages: [{ role: 'user', content: _textAnswerPrompt(need, t) }], base: src.base, headers: src.token ? { Authorization: `Bearer ${src.token}` } : {}, options: { temperature: 0.1, num_ctx: 16384, num_predict: 500 }, timeoutMs: 120000 });
     }
   } catch { return null; }
   const s = String(out || '').trim();

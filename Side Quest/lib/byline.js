@@ -173,7 +173,7 @@ async function stepRead(d, ctx, surface) {
   if (!openRes || !openRes.ok) { db.setMeta('byline_read_idx', String(idx + 1)); return { stage: 'read', ok: true, note: `source ${idx} open failed: ${openRes && openRes.reason} — skipped` }; }
 
   const readRes = await d.web.read();
-  const text = (readRes && readRes.ok && readRes.text) ? readRes.text.slice(0, 2000) : '';
+  const text = (readRes && readRes.ok && readRes.text) ? readRes.text.slice(0, 10000) : '';   // 2000→10000 (extraction-door sweep 08-26: commentary written from a 2k keyhole of the source)
   const notesPath = db.getMeta('byline_notes_path');
   try { d.files.fileAppend(notesPath, `\n## ${src.title || src.url}\n${src.url}\n${text}\n`); } catch {}
   src.read = true; sources[idx] = src; db.setMeta('byline_sources', JSON.stringify(sources));
@@ -188,10 +188,10 @@ async function stepWrite(d, ctx, surface) {
   const notes = (() => { try { const r = d.files.fileRead(notesPath); return r && r.ok ? r.text : ''; } catch { return ''; } })();
   const tp = topic();
   const sys = (ctx.awareness ? ctx.awareness + '\n\n' : '') + `You are Zoe Lane, writing a piece for your own Substack under your own byline. Write in YOUR voice — a real essayist with a point of view, not a corporate explainer. No "in conclusion", no hedging boilerplate, no "as an AI". Make a real argument and land it.`;
-  const user = `Topic: ${tp}\n\nYour research notes:\n${(notes || '(no notes gathered)').slice(0, 5000)}\n\nWrite the post now. First line: "Title: <a real title>". Then the body — tight, opinionated, your own take. Plain prose/markdown, no tags.`;
+  const user = `Topic: ${tp}\n\nYour research notes:\n${(notes || '(no notes gathered)').slice(0, 20000)}\n\nWrite the post now. First line: "Title: <a real title>". Then the body — tight, opinionated, your own take. Plain prose/markdown, no tags.`;
   let out = '';
   try {
-    await d.streamChat({ model: d.MODEL, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], options: { temperature: 0.8, top_p: 0.95, num_ctx: 8192, num_predict: 900 }, onToken: (t) => { out += t; } });
+    await d.streamChat({ model: d.MODEL, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], options: { temperature: 0.8, top_p: 0.95, num_ctx: 16384, num_predict: 900 }, onToken: (t) => { out += t; } });
   } catch (e) { const g = _strike(); return { stage: 'write', ok: false, note: `model write failed: ${e.message}${g ? ' (pipeline reset)' : ''}` }; }
   const { title, body } = parseDraft(out);
   const rej = rejectDraft(title, body);

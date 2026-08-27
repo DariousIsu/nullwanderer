@@ -602,7 +602,7 @@ async function modelMeetingTurn(d, ctx, transcript) {
       model: d.MODEL,
       messages: [{ role: 'user', content: `You're following a live meeting on ${u}'s behalf via the captions below — not a transcriber but a sharp aide who THINKS and keeps working.\n\n`
         + `${room ? room + '\n\n' : ''}`
-        + `Recent captions:\n${t.slice(-2500)}${ground}\n\n`
+        + `Recent captions:\n${t.slice(-12000)}${ground}\n\n`
         + `First, in 1–2 sentences: what's being discussed, and name WHO is discussing it using the room above. `
         + `If a name, place or event in the captions is one you can place, say which one it is; if you cannot place it, say so plainly rather than reaching for a famous match.\n\n`
         + `Then output ONE final line, exactly one of:\n`
@@ -617,7 +617,7 @@ async function modelMeetingTurn(d, ctx, transcript) {
         + `do not look up a general topic she could already reason about, and never research a person who is sitting in the call. `
         + `CONNECT when you notice a genuine link but there's nothing to look up — a real link to this organisation's own work or an earlier session of this meeting, not a loose thematic association. `
         + `No preamble.` }],
-      options: { temperature: 0.5, top_p: 0.9, num_ctx: 8192, num_predict: 200 },
+      options: { temperature: 0.5, top_p: 0.9, num_ctx: 16384, num_predict: 200 },   // sized to the widened caption window (extraction-door sweep 08-26)
       onToken: (tok) => { out += tok; }
     });
   } catch { return { understanding: '', action: { kind: 'quiet', payload: '' } }; }
@@ -684,8 +684,8 @@ async function modelAnswerForChat(d, ctx, ask, transcript, knowledge) {
   try {
     await d.streamChat({
       model: d.MODEL,
-      messages: [{ role: 'user', content: `You are ${self}, ${ctx.userName || 'Lucas'}'s AI assistant, actively taking part in a live meeting. ${who} just addressed you directly:\n"${askText}"\n\nRecent conversation:\n${String(transcript || '').slice(-1500)}${k}\n\nWrite a SHORT, direct reply to post in the meeting chat (1–3 sentences). Answer the question or do what's asked, using what you know. If you genuinely don't have the information, say so plainly and that you'll look into it and follow up. Your own voice. No preamble, no quotes, no stage directions.` }],
-      options: { temperature: 0.5, top_p: 0.9, num_ctx: 8192, num_predict: 180 },
+      messages: [{ role: 'user', content: `You are ${self}, ${ctx.userName || 'Lucas'}'s AI assistant, actively taking part in a live meeting. ${who} just addressed you directly:\n"${askText}"\n\nRecent conversation:\n${String(transcript || '').slice(-8000)}${k}\n\nWrite a SHORT, direct reply to post in the meeting chat (1–3 sentences). Answer the question or do what's asked, using what you know. If you genuinely don't have the information, say so plainly and that you'll look into it and follow up. Your own voice. No preamble, no quotes, no stage directions.` }],
+      options: { temperature: 0.5, top_p: 0.9, num_ctx: 16384, num_predict: 180 },
       onToken: (tok) => { out += tok; }
     });
   } catch { return ''; }
@@ -708,8 +708,11 @@ async function modelMeetingRecap(d, ctx, notes, directives = []) {
   try {
     await d.streamChat({
       model: d.MODEL,
-      messages: [{ role: 'user', content: `You just sat in on a meeting on ${u}'s behalf and followed it live. Here are your running notes, oldest first:\n\n${String(notes).slice(-5000)}${dirBlock}\n\nWrite a tight recap FOR ${u} so none of it is lost:\n- 2–4 sentences on what the meeting was about and what was decided.\n- Then "Action items:" — a short list of concrete follow-ups, each tagged with who owns it (${u} / someone else by name / you). Include EVERY assigned task listed above. Only items actually discussed; don't invent any.\nBe specific (names, dates, numbers). No preamble, no "the notes say".` }],
-      options: { temperature: 0.4, top_p: 0.9, num_ctx: 8192, num_predict: 360 },
+      // -5000 → -40000 (extraction-door sweep 08-26): a full meeting's notes run tens of KB and the
+      // recap silently lost the FIRST HALF of the call — the "eats the beginning" disease by another
+      // door. ctx 32768 + predict 600 sized together (many action items truncated at 360).
+      messages: [{ role: 'user', content: `You just sat in on a meeting on ${u}'s behalf and followed it live. Here are your running notes, oldest first:\n\n${String(notes).slice(-40000)}${dirBlock}\n\nWrite a tight recap FOR ${u} so none of it is lost:\n- 2–4 sentences on what the meeting was about and what was decided.\n- Then "Action items:" — a short list of concrete follow-ups, each tagged with who owns it (${u} / someone else by name / you). Include EVERY assigned task listed above. Only items actually discussed; don't invent any.\nBe specific (names, dates, numbers). No preamble, no "the notes say".` }],
+      options: { temperature: 0.4, top_p: 0.9, num_ctx: 32768, num_predict: 600 },
       onToken: (t) => { out += t; }
     });
   } catch { return ''; }
