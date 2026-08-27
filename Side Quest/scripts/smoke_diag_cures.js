@@ -152,6 +152,14 @@ const ok = (c, m) => { if (c) { pass++; console.log('  \u2713', m); } else { fai
     ok(/DIFFERENT organ, content review, never self-watch/.test(blk), 'block: the instrument boundary is named (curation queues ≠ self-watch)');
     ok(/NEVER end the turn on "let me check\/look"/.test(blk), 'block: the answer-now rail (the check-promise dangled twice live)');
     ok(/THIS READ OUTRANKS YOUR OWN EARLIER ANSWERS/.test(blk), 'block: the anti-precedent rail (round-3 H3: her round-2 wrong answer in-window beat the injected read while E3 obeyed the same block)');
+    // H4 ROOT (three rails lost to a TOOL RESULT — correctly): obs_events was LABELED "her
+    // self-watch stream" so the store itself misattributed research [cite] exhaust as watch
+    // findings. The store labels are the cure; prompts were never going to win against data.
+    const ldSrc = fs.readFileSync(path.join(ROOT, 'lib', 'localdb.js'), 'utf8');
+    ok(/OMNIBUS organ event bus/.test(ldSrc) && !/'her self-watch stream/.test(ldSrc), 'localdb: obs_events labeled as the OMNIBUS bus (never "her self-watch stream")');
+    ok(/lane='watch' rows ONLY/.test(ldSrc), 'localdb: self-watch findings scoped to lane=watch + the needs ledger');
+    const opSrc = fs.readFileSync(path.join(ROOT, 'lib', 'operator.js'), 'utf8');
+    ok(/OMNIBUS event bus/.test(opSrc) && /NEVER self-watch findings/.test(opSrc), 'operator: obs_query doc carries the same boundary');
 
     // ── wiring pins (main.js + doors) ──────────────────────────────────────────────────────────
     const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');

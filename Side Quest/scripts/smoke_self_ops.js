@@ -85,7 +85,9 @@ const skip = (t) => console.log(`  ⏭ ${t} — skipped (rehearsal sandbox: no l
   const localdb = require('../lib/localdb');
   const rows = [{ table: 'obs_events', rows: 1000 }, { table: 'route_obs', rows: 999999 }, { table: 'knowledge', rows: 50 }];
   const manifest = localdb.manifestTables(16, rows);
-  ok(manifest.some((t) => t.table === 'obs_events' && /self-watch/.test(t.purpose || '')), 'obs_events is manifest-listed with its purpose');
+  // label corrected 2026-08-27 (H-KIND root): the purpose now names the OMNIBUS bus + the
+  // lane='watch' boundary — it must still mention self-watch (the boundary), never AS the stream.
+  ok(manifest.some((t) => t.table === 'obs_events' && /self-watch/i.test(t.purpose || '') && /omnibus/i.test(t.purpose || '')), 'obs_events is manifest-listed with the corrected omnibus purpose');
   ok(!manifest.some((t) => t.table === 'route_obs' && t.purpose), 'route_obs stays unlisted exhaust');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

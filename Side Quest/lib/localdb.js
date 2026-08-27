@@ -167,7 +167,11 @@ const CURATED = [
   ['news.news_items', 'the news she has collected — current-events lookups'],
   // M2.5.2 un-blacklist: obs_events IS answer-bearing when the question is about HERSELF —
   // "why did I go quiet / what did self-watch flag" is answered from this stream and nowhere else.
-  ['obs_events', 'her self-watch stream — lane events + anomalies about her OWN behavior (also reachable via obs_query)'],
+  // Label fixed 2026-08-27 (adversarial H-KIND, three rounds): "her self-watch stream" made a
+  // "what did self-watch flag" question query this table UNFILTERED and present research-lane
+  // [cite] exhaust as watch findings — the model rightly trusted the store over three prompt
+  // rails; the LABEL was the defect. obs_events is the omnibus bus; the watch organ = lane 'watch'.
+  ['obs_events', "the OMNIBUS organ event bus — EVERY lane's events (research cites, harvest, transport, anomalies). Self-watch findings = lane='watch' rows ONLY (+ capability_needs); research [cite] rows are citation exhaust, never watch findings"],
   // 2026-08-27 (census C5): the route drain distills 2.6M route_obs rows into this small per-tool
   // health table — and its reader count was ZERO; it competed for fill slots by row count and lost.
   // Pinned: "which of my tools keep failing/missing" is answered here and nowhere else.
