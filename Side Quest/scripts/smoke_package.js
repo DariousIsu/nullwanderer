@@ -302,6 +302,10 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
   ok(/\.slice\(0, 10000\)/.test(rd('byline.js')) && /\.slice\(0, 20000\)/.test(rd('byline.js')), 'byline reads sources at 10k and notes at 20k');
   const gm = rd('gmeet.js');
   ok(/t\.slice\(-12000\)/.test(gm) && /\.slice\(-8000\)/.test(gm) && /\.slice\(-40000\)/.test(gm) && /num_ctx: 32768, num_predict: 600/.test(gm), 'gmeet follows 12k of captions, answers from 8k, and recaps 40k of notes (the first half of a meeting is never silently lost)');
+  // The overrun guard's last piece (08-26): the ghost-caller class (the historic 72k-token prompt,
+  // 94% discarded, never identified) becomes SELF-REPORTING — both ollama paths announce a prompt
+  // riding ≥90% of its num_ctx, with the lane name.
+  ok((rd('ollama.js').match(/WINDOW EDGE — /g) || []).length >= 2, 'the window-edge tripwire rides BOTH ollama paths (stream + blocking)');
 }
 
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);

@@ -192,6 +192,16 @@ async function streamChat({ model, messages, options = {}, onToken, onThinking, 
           }
           if (obj.done) {
             try { const um = require('./usage_meter'); um.record(obj.model || (body && body.model), um.tokensOf({ prompt_eval_count: obj.prompt_eval_count, eval_count: obj.eval_count })); } catch {}   // meter real spend
+            // THE WINDOW-EDGE TRIPWIRE (overrun guard, 08-26; caps-history round 4): a prompt riding
+            // its num_ctx is SILENT quality loss — just-under leaves a generation sliver, just-over
+            // front-truncates to half the window. One historic caller shipped 72k tokens (94%
+            // discarded) and was never identified because nothing logged. Every stream now announces
+            // the edge itself, whatever lane it came from — the ghost class is self-reporting.
+            try {
+              const _ctx = (body && body.options && body.options.num_ctx) || 0;
+              const _pe = obj.prompt_eval_count || 0;
+              if (_ctx && _pe >= _ctx * 0.9) console.warn(`[ollama] WINDOW EDGE — ${lane || 'unlabeled lane'} / ${obj.model || (body && body.model)}: prompt_eval ${_pe} of num_ctx ${_ctx}${obj.done_reason && obj.done_reason !== 'stop' ? ` (done_reason=${obj.done_reason})` : ''} — input may be front-truncated or the reply cut short`);
+            } catch {}
             // Surface done_reason so callers can tell a real "stop" from a LOAD-ONLY close. On
             // ollama.com CLOUD a cold/rebalanced instance answers a stream:true request with a single
             // {done_reason:"load", content:""} chunk and closes WITHOUT generating (confirmed live
@@ -303,6 +313,11 @@ async function completeDetailed({ model, messages, options = {}, base = OLLAMA_B
     // eval_count = output.
     const usage = { prompt_tokens: (obj && obj.prompt_eval_count) || 0, eval_tokens: (obj && obj.eval_count) || 0 };
     try { const um = require('./usage_meter'); um.record((obj && obj.model) || model, um.tokensOf(usage)); } catch {}   // meter real spend (canvas usage pill)
+    // THE WINDOW-EDGE TRIPWIRE, blocking twin (overrun guard 08-26 — see the streamChat site).
+    try {
+      const _ctx = (options && options.num_ctx) || 8192;
+      if (_ctx && usage.prompt_tokens >= _ctx * 0.9) console.warn(`[ollama] WINDOW EDGE — ${lane || 'unlabeled lane'} / ${model}: prompt_eval ${usage.prompt_tokens} of num_ctx ${_ctx}${obj && obj.done_reason && obj.done_reason !== 'stop' ? ` (done_reason=${obj.done_reason})` : ''} — input may be front-truncated or the reply cut short`);
+    } catch {}
     try {
       const _m = (obj && obj.message) || {};
       if (!(_m.content != null ? String(_m.content) : '').trim() && _m.thinking) _noteThinkingSalvage(model);
