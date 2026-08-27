@@ -28,6 +28,14 @@ ok(has("Let me gather the emails and build a table."), 'promise: "gather the ema
 ok(has("I'm working through the filings now and pulling the whole picture together."), 'promise: progressive "working through … pulling … together" → detected');
 ok(has("Let me piece the timeline together from what we hold."), 'promise: "piece the timeline together" → the same split-construction kind');
 ok(has("I'll pull it all together tonight."), 'promise: "pull it all together" → detected (pronoun object still a debt)');
+
+// ── the RETRIEVAL-promise shape (leg-2 live dangle, 08-27 — "what we have on X" is the debt) ────────────
+{
+  const p = d.detectPromise("Let me pull what we actually have on Iowa in our records so I'm not giving you air.");
+  ok(p[0] && /iowa/i.test(p[0].deliverable), 'promise: "pull what we actually have on Iowa in our records" → booked with Iowa as the subject (the live dangle verbatim)');
+}
+ok(has("I'll grab everything we hold on the Delta Forge deal and lay it out."), 'promise: "grab everything we hold on X" → the same retrieval-promise kind');
+ok(!has('Want me to pull what we have on Iowa?'), 'offer guard: "want me to pull what we have on X?" is an offer, not a debt');
 ok(!has("I'll pull myself together and get back to it."), 'FP: "pull myself together" (reflexive) is composure, not a deliverable');
 ok(!has("I'm working on it."), 'FP: bare "working on it" (no deliver-verb, no object) → not a promise');
 ok(has('Let me actually run both searches now and get you real findings.'), '⭐ THE LIVE DANGLE (08-22): "get you real findings" is a bookable debt (findings joined the noun net)');

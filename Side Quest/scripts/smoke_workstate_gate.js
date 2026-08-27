@@ -109,6 +109,16 @@ ok(mc.verifyWorkStateClaims('Records show nothing new since then.', { gatherRanT
   ok(ws.pendingRecordFor(['the legiscan backfill'], snap) === true, 'pendingRecordFor: a backfill claim is GROUNDED by the scheduler section');
 }
 
+// ── F10 leg-3 (08-27): the BACKFILL DOOR — a specific backfill ask answers from the scheduler ────────────
+{
+  const fs = require('fs'), path = require('path');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/\[backfill-door\] scheduler standing injected/.test(main), 'the backfill door logs its injection');
+  ok(/get_pass_status cannot see it/.test(main) && /never report its absence there as "the backfill didn't run"/.test(main),
+    'the door names the exact live failure: Echo pass-land is the WRONG store for the api-bulk drain');
+  ok(/require\('\.\/lib\/api_bulk'\)\.standing\(\)/.test(main), 'the door reads the scheduler\'s own measured standing');
+}
+
 // ── F29 (saturation run 3): the whole-plate work-status door ─────────────────────────────────────────────
 // Both live phrasings missed the poll-track door and composed ledgers from raw tool reads; this
 // probe is the general door, and the wiring grep pins the main.js lead + marker.

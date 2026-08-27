@@ -140,21 +140,37 @@ function matchAsk(subject) {
  *  project of the given kind? Absolute intersection ≥2 content tokens, no ratio floor — a
  *  contract subject never clears 0.6 of a wide report topic, and a false hit here costs one
  *  extra directive line (unlike resolveOrMint, where it would merge projects). */
+// The ADVISORY matcher's own vocabulary (b3(a), leg-1 live catch 08-27): the minting stop-list
+// deliberately drops bill/bills/legislation/state/states so SLUGS stay distinctive — but for kin
+// MATCHING those are exactly the load-bearing links ("how did Iowa end up looking in the bill
+// sweep" contributed only "iowa", n=1, and the door never opened). Kin tokens keep the
+// legislative domain nouns; report/doc/list stay stopped (every report-* slug carries "report" —
+// un-stopping it would make any "the report" ask match everything).
+const _KIN_KEEP = new Set(['bill', 'bills', 'legislation', 'state', 'states']);
+function _kinTokens(text) {
+  const out = [];
+  const seen = new Set();
+  for (const w of String(text || '').toLowerCase().split(/[^a-z0-9]+/)) {
+    if (w.length < 3 || (_STOP.has(w) && !_KIN_KEEP.has(w)) || seen.has(w)) continue;
+    seen.add(w); out.push(w);
+  }
+  return out;
+}
+
 function matchKinProject(text, { kind = 'report', minShared = 2 } = {}) {
   // b3(a) (2026-08-27): comparison is PLURAL-BLIND (trailing s stripped on both sides — "bill"
-  // meets "bills") and a dataset-backed project's held STATE NAMES join its vocabulary ("how did
-  // Iowa end up looking in the bill sweep" answered from a stale 2017 doc because neither "iowa"
-  // nor "bill" met the topic tokens). Advisory-only loosening: a false hit costs one directive
-  // line; resolveOrMint's identity matching is untouched.
+  // meets "bills"), the vocabulary is _kinTokens (domain nouns count), and a dataset-backed
+  // project's held STATE NAMES join its vocabulary. Advisory-only loosening: a false hit costs
+  // one directive line; resolveOrMint's identity matching (tokensOf) is untouched.
   const _stem = (w) => (w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w);
-  const toks = new Set(tokensOf(text).map(_stem));
+  const toks = new Set(_kinTokens(text).map(_stem));
   if (toks.size < minShared) return null;
   let best = null, bestN = 0;
   for (const r of _rows()) {
     if (!String(r.slug).startsWith(kind + '-')) continue;
     let stateToks = [];
-    try { stateToks = require('./dataset_store').statesFor(r.slug).flatMap((s) => tokensOf(s.name)); } catch {}
-    const rToks = new Set([...tokensOf(r.topic), ...tokensOf(String(r.slug).replace(/-/g, ' ')), ...stateToks].map(_stem));
+    try { stateToks = require('./dataset_store').statesFor(r.slug).flatMap((s) => _kinTokens(s.name)); } catch {}
+    const rToks = new Set([..._kinTokens(r.topic), ..._kinTokens(String(r.slug).replace(/-/g, ' ')), ...stateToks].map(_stem));
     let n = 0;
     for (const w of rToks) if (toks.has(w)) n++;
     if (n >= minShared && n > bestN) { best = r; bestN = n; }   // ties keep the first = newest (rows sort updated_ts DESC)

@@ -223,6 +223,10 @@ ok(lrows[0].attrs.state === 'AZ' && lrows[0].attrs.tags[0] === 'surveillance' &&
       'statesFor: distinct held states, each with its full name (kin vocabulary)');
     ok(!sf.some((s) => s.code === 'ZZ'), 'statesFor: a junk state code is filtered');
     ok(ds.statesFor('report-nonexistent').length === 0, 'statesFor: unknown slug → empty, never throws');
+    // b3(a) leg-1: the state-slice door — a kin-bound ask naming a held state answers from ROWS.
+    ok(/\[state-slice\] \$\{_named4\.code\} slice injected/.test(main), 'the state-slice door logs its injection');
+    ok(/do NOT recall an older run's completeness state/.test(main), 'the slice directive rails against stale "never completed" recall');
+    ok(/STATE SLICE — EXACT, from the governing dataset/.test(main) && /countsBy\(_slice4, 'status'\)/.test(main), 'the slice numbers are CODE-authored from the dataset rows');
 
     _print(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
     process.exit(fail === 0 ? 0 : 1);

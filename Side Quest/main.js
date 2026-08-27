@@ -8839,6 +8839,30 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     }
   } catch (e) { console.error('[bill-census] door failed (turn proceeds):', e.message); }
+  // b3(a) THE STATE-SLICE DOOR (leg-1 live catch, 08-27): "how did Iowa end up looking in the bill
+  // sweep" routed lookup and answered from STALE convo memory ("the per-state tally never got
+  // completed") while the kin project's dataset held 34 enriched IA rows — no door carried the
+  // dataset into a non-count state-slice ask. When the advisory kin matcher binds a project AND the
+  // ask names a state its dataset holds, the state's rows ride the turn CODE-AUTHORED (the model
+  // never writes these numbers) with an explicit no-stale-recall rail. Fail-soft; fires only on a
+  // kin hit (≥2 shared domain tokens), so bare state smalltalk never trips it.
+  try {
+    const _reg4 = require('./lib/artifact_registry');
+    const _ds4 = require('./lib/dataset_store');
+    const _kin4 = _reg4.matchKinProject(userMessage);
+    if (_kin4) {
+      const _named4 = _ds4.statesFor(_kin4.slug).find((s) => new RegExp(`\\b${s.name}\\b`, 'i').test(userMessage));
+      if (_named4) {
+        const _slice4 = _ds4.rowsFor(_kin4.slug).filter((r) => String((r.attrs || {}).state || '').toUpperCase() === _named4.code);
+        if (_slice4.length) {
+          const _status4 = _ds4.countsBy(_slice4, 'status').map(([k, n]) => `${k}: ${n}`).join(' · ');
+          const _samp4 = _slice4.slice(0, 12).map((r) => `  • ${r.entity}${r.attrs && r.attrs.title ? ` — ${String(r.attrs.title).slice(0, 90)}` : ''}`).join('\n');
+          composedUserMessage = `${composedUserMessage}\n\n[STATE SLICE — EXACT, from the governing dataset of "${_kin4.title}" (${_kin4.path}, v${_kin4.version}): ${_named4.code} holds ${_slice4.length} verified row(s)${_status4 ? ` — ${_status4}` : ''}. This dataset IS the current tally for ${_named4.code}; do NOT recall an older run's completeness state ("wasn't finished", "never completed") — answer from these rows:\n${_samp4}${_slice4.length > 12 ? `\n  … and ${_slice4.length - 12} more in the dataset` : ''}]`;
+          console.log(`[state-slice] ${_named4.code} slice injected from "${_kin4.slug}" — ${_slice4.length} row(s)`);
+        }
+      }
+    }
+  } catch (e) { console.error('[state-slice] door failed (turn proceeds):', e.message); }
   // E1 RESUME CONTEXT (the 171s affirm-continue pathology): "ok back to it" / "where were we"
   // re-enters the MEASURED thread — his last substantive ask + her last point, snapshotted after
   // every substantive exchange — instead of re-deriving the whole context from scratch.
@@ -9329,6 +9353,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     } catch (e) { console.error('[status] work-state render failed (turn proceeds):', e.message); }
   }
+
+  // F10 THE BACKFILL DOOR (leg-3 live catch, 08-27): "did the LegiScan backfill actually run?" is a
+  // SPECIFIC-thing status ask, so the whole-plate door correctly stays out — and the specific lane
+  // consulted Echo's get_pass_status, where api-bulk does not live, then asserted "no backfill pass
+  // registered / no such table" while bulk_records held the 7-state drain. The scheduler's OWN
+  // standing answers its own question, measured, before the model can compose an absence.
+  try {
+    if (/\b(?:backfill|bulk[- ](?:pull|drain|pass|sync)|legiscan\b[^.!?\n]{0,40}\b(?:drain|sweep|pull|backfill|scheduler)|api[- ]bulk)\b/i.test(userMessage)) {
+      const _bulkStanding = require('./lib/api_bulk').standing();
+      const _age5 = (ts) => { if (!ts) return 'never'; const m = Math.max(0, Math.round((Date.now() - ts) / 60000)); return m < 60 ? `${m}m ago` : m < 2880 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
+      const _bl = _bulkStanding.map((b) => `  • ${b.id}: ${b.records} record(s) landed${b.newestTs ? `, newest ${_age5(b.newestTs)}` : ' (none landed yet)'}`).join('\n');
+      const block = _bulkStanding.length
+        ? `THE API-BULK SCHEDULER'S MEASURED STANDING — ${userName} asked about the backfill. This IS the backfill (the LegiScan bulk drain runs inside this app, NOT as an Echo pass — get_pass_status cannot see it; never report its absence there as "the backfill didn't run"). Answer FROM these measured rows:\n${_bl}`
+        : `THE API-BULK SCHEDULER'S MEASURED STANDING — no bulk jobs are configured right now (LEGISCAN_STATES empty). Say that plainly; do not guess at pass tables.`;
+      retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block;
+      console.log(`[backfill-door] scheduler standing injected — ${_bulkStanding.length} job(s)`);
+    }
+  } catch (e) { console.error('[backfill-door] failed (turn proceeds):', e.message); }
 
   // SELF-STATE LEDGER — on a "what can you see / what's running / status" question, prepend her real
   // live operational snapshot. Skipped when it's an ACTIVITY question (the activity poll owns those,

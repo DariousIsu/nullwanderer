@@ -39,6 +39,11 @@ const _DONE_RE = /\b(?:i'?ve|i have|already|just)\b[^.!?\n]*\b(?:pulled|compiled
 // owes. Reflexives ("pull myself together") are composure, not deliverables.
 const _PULL_TOGETHER_OBJ = /\b(?:pull(?:ing|ed|s)?|put(?:ting|s)?|piec\w+)\s+((?:[a-z][a-z0-9'-]*\s+){0,4}[a-z][a-z0-9'-]*)\s+together\b/i;
 const _REFLEXIVE = /\b(?:my|your|him|her|it|our|them)sel(?:f|ves)\b/i;
+// The RETRIEVAL-promise construction (leg-2 live dangle, 08-27): "Let me pull what we actually
+// have on Iowa in our records so I'm not giving you air" carried no artifact noun and no
+// "together" — nothing booked, nothing delivered, the say dangled. "what we have/hold on X" NAMES
+// the debt; X (lazily captured, stopped at trailing glue) is the deliverable subject.
+const _HAVE_ON_OBJ = /\b(?:what(?:ever)?|everything|all)\s+(?:we|i)\s+(?:actually\s+|really\s+)?(?:have|hold|'?ve\s+got|keep)\s+(?:on|about|for)\s+([A-Za-z0-9][\w'-]*(?:\s+[A-Za-z0-9][\w'-]*){0,3}?)(?=\s+(?:in|from|so|and|then|before|—|-)\b|[,.;:!?]|\s*$)/i;
 
 // Find the delivery PROMISES in a reply. Returns [{ sentence, deliverable }]. A promise requires: a
 // committal lead + a deliver-verb + a deliverable object, and is NOT an offer/question and NOT a
@@ -57,6 +62,10 @@ function detectPromise(say) {
     if (!m) {
       const pt = s.match(_PULL_TOGETHER_OBJ);
       if (pt && !_REFLEXIVE.test(pt[1])) m = [pt[1]];
+    }
+    if (!m) {
+      const ho = s.match(_HAVE_ON_OBJ);
+      if (ho) m = [`what we have on ${ho[1]}`];   // the debt reads naturally in the pursuit subject
     }
     if (!m) continue;
     out.push({ sentence: s.slice(0, 160), deliverable: m[0].replace(/\s+/g, ' ').trim() });

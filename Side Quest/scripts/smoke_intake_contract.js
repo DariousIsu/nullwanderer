@@ -17,6 +17,15 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
 }
 ok(!!ic.detectDeliverableOrder('Update notes/anti_china_2026_sponsors.md in place — close or dead-end each open question.'), 'C1: "update notes/… in place" → detected');
 ok(!!ic.detectDeliverableOrder('build the bill-sponsors sheet. One row per bill: state, bill number, title.'), 'C1: "build the … sheet" → detected');
+// Leg-4 live (08-27): "Pull the full text of Louisiana SB200 …" read as topic-discussed — bare
+// "pull" is not an order verb except when its object IS the full/bill text (lookahead-bounded).
+{
+  const o = ic.detectDeliverableOrder('Pull the full text of Louisiana SB200 and check what carve-outs it actually has.');
+  ok(o && /full text/i.test(o.deliverable), 'C1: "Pull the full text of <bill> and check …" → books (the leg-4 live miss)');
+}
+ok(!ic.detectDeliverableOrder('text me when the meeting starts'), 'C1 FP guard: "text me" is not a deliverable');
+ok(!ic.detectDeliverableOrder('pull yourself together'), 'C1 FP guard: reflexive pull never books');
+ok(!ic.detectDeliverableOrder('what does the full text of SB200 say?'), 'C1 FP guard: an interrogative about the text is an ask, not an order');
 // P2 gate catch (2026-08-21): "REBUILD the report on X" was not an order to this detector — the
 // intake filed a direct imperative as "topic discussed, not commanded" and NOTHING dispatched.
 ok(!!ic.detectDeliverableOrder('rebuild the report on anti-China and surveillance bills state by state with sponsors and co-sponsors: Utah, Arizona, Texas, Florida, Tennessee, Louisiana, Iowa'),

@@ -39,7 +39,10 @@ const _QUESTION_RE = /\?\s*$|^(?:who|what|where|why|how|hows|how's|is|are|was|we
 // re-order verbs joined 2026-08-21 (P2 gate catch): "REBUILD the report on X" was not an order
 // to this detector — no booking, no bind, and the intake filed a direct imperative as "topic
 // discussed, not commanded". Mirrors the report net's f2163db verb set.
-const _ORDER_VERB = /(?:finish|complete|update|build|re-?build|make|compile|compose|re-?compose|create|assemble|land|write|draft|re-?draft|produce|generate|re-?generate|refresh|deliver|put together|pull together|knock out|redo|polish|tighten|revise|rework|reword|edit|refine|smooth|trim|clean\s*up|copy-?edit|proofread|put|drop|place|post|package)/i;
+// Bare "pull" stays out (too broad) except when its object IS the full/bill text — the leg-4 live
+// order shape ("Pull the full text of Louisiana SB200 …"), lookahead-bounded so "pull back" /
+// "pull yourself together" never qualify.
+const _ORDER_VERB = /(?:finish|complete|update|build|re-?build|make|compile|compose|re-?compose|create|assemble|land|write|draft|re-?draft|produce|generate|re-?generate|refresh|deliver|put together|pull together|knock out|redo|polish|tighten|revise|rework|reword|edit|refine|smooth|trim|clean\s*up|copy-?edit|proofread|put|drop|place|post|package|pull(?=\s+(?:the\s+)?(?:full|bill|complete)\s+text))/i;
 // The bridge span stays inside one sentence but must cross FILENAME dots ("notes/x.md and smooth…"):
 // a dot followed by non-space is an extension dot, a dot followed by space/EOL ends the sentence.
 const _APPROACH_BRIDGE = `(?:(?:go\\s+(?:into|to|through|over)|open(?:\\s+up)?|take|grab|pull\\s+up)\\s+(?:[^.!?;\\n]|\\.(?=\\S)){0,80}?\\b(?:and|then)\\s+)?`;
@@ -53,7 +56,11 @@ const _ORDER_WANT_RE = new RegExp(`\\bi\\s+(?:want|need)\\s+(?:you\\s+to\\s+)?(?
 // Deliverable evidence: an explicit workspace path, the canvas, or an artifact noun.
 const _TARGET_PATH_RE = /((?:notes|docs|data)\/[\w./-]+\.[a-z]{2,4})/i;
 const _CANVAS_RE = /\bcanvas\b/i;
-const _ARTIFACT_NOUN_RE = /\b(?:report|briefing|brief|dossier|roster|spreadsheet|sheet|list|summary|memo|write-?up|table|deck|doc(?:ument)?|note|csv|xlsx?|docx?|pdf|outline|digest|rundown|primer|recap|paper)\b/i;
+// "full/bill text" joined 2026-08-27 (leg-4 live): "Pull the full text of Louisiana SB200 and
+// check what carve-outs it actually has" read as topic-discussed — the order never booked and the
+// debt only survived via the slower absence lane. Bounded to full/bill/complete text (bare "text"
+// would FP on "text me" / "the text says").
+const _ARTIFACT_NOUN_RE = /\b(?:report|briefing|brief|dossier|roster|spreadsheet|sheet|list|summary|memo|write-?up|table|deck|doc(?:ument)?|note|csv|xlsx?|docx?|pdf|outline|digest|rundown|primer|recap|paper|(?:full|bill|complete)\s+text)\b/i;
 
 /** detectDeliverableOrder(text) → { deliverable, target, topic } | null. Precision over recall:
  *  questions, status checks, and chatter never match; an order needs a lead AND evidence. */

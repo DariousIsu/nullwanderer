@@ -127,6 +127,13 @@ ok(/hold REFUSED as vague/.test(main) && /IN THE NOTE'S OWN WORDS/.test(main), '
   ds.upsertRows({ slug: p2.slug, rows: [{ entity: 'IA SF2366', attrs: { state: 'IA', title: 'Levee levy', status: 'Passed' } }] });
   const sh = reg.matchKinProject('how did iowa fare on levee matters');
   ok(sh && sh.slug === p2.slug, 'b3(a): the dataset\'s held STATE joins the vocabulary — the state-slice paraphrase reaches the project');
+  // Leg-1 live catch (08-27): the minting stop-list dropped "bill"/"state" so the EXACT live ask
+  // contributed only "iowa" (n=1) and no door opened. _kinTokens keeps the legislative domain
+  // nouns; report/doc stay stopped (promiscuity guard).
+  const l1 = reg.matchKinProject('How did Iowa end up looking in the bill sweep?');
+  ok(l1 && l1.shared >= 2, 'b3(a) leg-1 verbatim: "bill" counts in the kin vocabulary — the live ask binds');
+  ok(reg.matchKinProject('the report') === null, 'b3(a) guard: bare "the report" matches nothing ("report" stays stopped)');
+  ok(reg.matchKinProject('hows iowa doing') === null, 'b3(a) guard: bare state smalltalk never binds (below the 2-token floor)');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
