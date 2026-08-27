@@ -970,8 +970,12 @@ app.whenReady().then(() => {
         try {
           if (echoSuit && echoSuit.connected) {
             const tiers = String(process.env.ZOE_DEDUP_ADJUDICATE_TIERS || 'strong-id,name-exact').trim();
-            const batch = parseInt(process.env.ZOE_DEDUP_ADJUDICATE_BATCH, 10) || 200;
-            const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { tiers, batch, apply_batch: 50 } });
+            // batch 200 → 25 + the judge leash (2026-08-27 dead-consumer cure): 200 proposals × ~5
+            // pairs × ~2s (fast tiers) ≈ 33 min — the default 90s dispatch abandoned EVERY call and
+            // this consumer drained zero for weeks. Same envelope as the kg-apply/nightly sites.
+            const batch = parseInt(process.env.ZOE_DEDUP_ADJUDICATE_BATCH, 10) || 25;
+            const _judgeLeashMs = (parseFloat(process.env.ZOE_KG_JUDGE_TIMEOUT_MIN) || 15) * 60 * 1000;
+            const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { tiers, batch, apply_batch: 50 } }, { timeoutMs: _judgeLeashMs });
             let arep = null; try { arep = JSON.parse(ar && ar.text); } catch {}
             if (arep) console.log(`[adjudicate] considered=${arep.considered != null ? arep.considered : '?'} applied=${arep.applied != null ? arep.applied : '?'} parked=${arep.parked != null ? arep.parked : '?'}${arep.halted ? ' HALTED(regression→reversed)' : ''} (${tiers}, reversible)`);
           }
@@ -1403,6 +1407,15 @@ app.whenReady().then(() => {
   const KGAPPLY_CHECK_MS = (parseFloat(process.env.ZOE_KG_APPLY_CHECK_MIN) || 60) * 60 * 1000;
   const KGAPPLY_MIN_GAP_MS = (parseFloat(process.env.ZOE_KG_APPLY_MIN_GAP_MIN) || 240) * 60 * 1000;  // 4h floor
   const KGAPPLY_BATCH = parseInt(process.env.ZOE_KG_APPLY_BATCH || '', 10) || 25;                     // proposals/run
+  // THE DEAD-CONSUMER CURE (big-organs leg 1, 2026-08-27): every run_dedup_adjudication call rode the
+  // DEFAULT 90s dispatch ceiling and was ABANDONED — [dispatch-timeout] ×5 in the recent boots, the
+  // nightly drained ZERO, pending grew to 32,507 while the proposal producers kept running (+63/+6/+3
+  // per paced pass; her own watch organ filed need #99 about it). The organ itself is HEALTHY (a
+  // batch-1 strong-id probe returns in seconds with a correct veto) — the judge is just slow by
+  // DESIGN (fast tiers ~2s/pair on gemma, fuzzy tiers up to ~20s/pair on kimi think, ~5 pairs per
+  // proposal), so batch 25-50 can never fit 90s. Same fix as run_blocking_dedup's documented leash:
+  // these are idle-gated maintenance ops nobody waits on — size the budget to the bite.
+  const KGJUDGE_DISPATCH_MS = (parseFloat(process.env.ZOE_KG_JUDGE_TIMEOUT_MIN) || 15) * 60 * 1000;
   const KGAPPLY_IDLE_MS = (parseFloat(process.env.ZOE_KG_APPLY_IDLE_MIN) || 5) * 60 * 1000;
   let kgApplyRunning = false;
   const maybeRunAdjudicate = async () => {
@@ -1421,7 +1434,7 @@ app.whenReady().then(() => {
       const KGAPPLY_TIERS = (process.env.ZOE_KG_APPLY_TIERS || 'strong-id,name-exact').trim();
       // CONCEPTS ARE MANUAL-ONLY (2026-07-12, Lucas): the person/org-tuned judge + the deliberate concept queue
       // (wells/formatting silt) mean concepts get a hand-run scoped pass, never this aggressive global drain.
-      const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGAPPLY_BATCH, tiers: KGAPPLY_TIERS, exclude_entity_type: 'concept' } });
+      const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGAPPLY_BATCH, tiers: KGAPPLY_TIERS, exclude_entity_type: 'concept' } }, { timeoutMs: KGJUDGE_DISPATCH_MS });
       let rep = null; try { rep = JSON.parse(dr && dr.text); } catch {}
       if (rep && rep.considered != null) {
         console.log(`[kg-apply] adjudicated ${rep.considered}: applied ${rep.applied || 0}, parked ${rep.parked || 0}${rep.halted ? ` HALTED(${rep.halted})` : ''}`);
@@ -1585,7 +1598,10 @@ app.whenReady().then(() => {
   // fast tick). Separate flag ZOE_KG_NIGHTLY_ENABLED (default OFF) — it writes the graph. Plug: =0 + reboot.
   const KGNIGHTLY_CHECK_MS = (parseFloat(process.env.ZOE_KG_NIGHTLY_CHECK_MIN) || 30) * 60 * 1000;
   const KGNIGHTLY_MAX_ITERS = parseInt(process.env.ZOE_KG_NIGHTLY_MAX_ITERS || '', 10) || 6;                 // fast-drain safety cap
-  const KGNIGHTLY_NAMESTRONG_BATCH = parseInt(process.env.ZOE_KG_NIGHTLY_NAMESTRONG_BATCH || '', 10) || 50; // slow-tier nightly bite (web-corroborated → modest)
+  // Name-strong bite 50 → 8 (2026-08-27, the dead-consumer cure): the fuzzy tier rides kimi think
+  // (~20s/pair × ~5 pairs/proposal) — 50 proposals ≈ 80+ minutes, unservable under ANY sane leash;
+  // 8 ≈ 13 min fits the KGJUDGE envelope. A fixed nightly chip was always the design; env still wins.
+  const KGNIGHTLY_NAMESTRONG_BATCH = parseInt(process.env.ZOE_KG_NIGHTLY_NAMESTRONG_BATCH || '', 10) || 8; // slow-tier nightly bite (web-corroborated → modest)
   const localDayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   const emitAbsorb = (rep) => {   // one kg:curation-move per landed fold — same contract the apply tick uses
     try {
@@ -1624,7 +1640,7 @@ app.whenReady().then(() => {
       //    lands nothing — never loop on considered>0 or it would re-judge the same parks forever.
       let anchoredApplied = 0;
       for (let i = 0; i < KGNIGHTLY_MAX_ITERS; i++) {
-        const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGAPPLY_BATCH, tiers, exclude_entity_type: 'concept' } });   // concepts manual-only
+        const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGAPPLY_BATCH, tiers, exclude_entity_type: 'concept' } }, { timeoutMs: KGJUDGE_DISPATCH_MS });   // concepts manual-only
         let rep = null; try { rep = JSON.parse(ar && ar.text); } catch {}
         if (!rep || rep.considered == null) break;
         anchoredApplied += rep.applied || 0;
@@ -1640,7 +1656,7 @@ app.whenReady().then(() => {
         // confirmation of identity supplies the EXTERNAL anchor (Lucas: "add outside search for cross-validation")
         // — fires web+cloud only on the otherwise-parking ones. Toggle ZOE_KG_NIGHTLY_WEB_CORROBORATE (default on).
         const webCorr = /^(1|true|yes|on)$/i.test(String(process.env.ZOE_KG_NIGHTLY_WEB_CORROBORATE ?? '1').trim());
-        const sr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGNIGHTLY_NAMESTRONG_BATCH, tiers: 'name-strong', web_corroborate: webCorr, exclude_entity_type: 'concept' } });   // concepts manual-only
+        const sr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGNIGHTLY_NAMESTRONG_BATCH, tiers: 'name-strong', web_corroborate: webCorr, exclude_entity_type: 'concept' } }, { timeoutMs: KGJUDGE_DISPATCH_MS });   // concepts manual-only
         let srep = null; try { srep = JSON.parse(sr && sr.text); } catch {}
         if (srep && srep.considered != null) { strongApplied = srep.applied || 0; emitAbsorb(srep); }
       } catch (e) { console.error('[kg-nightly] name-strong pass failed:', e.message); }
@@ -1665,7 +1681,7 @@ app.whenReady().then(() => {
         try {
           const CONCEPT_HUB_CAP = parseInt(process.env.ZOE_KG_CONCEPT_HUB_CAP || '', 10) || 50;
           const CONCEPT_TIERS = (process.env.ZOE_KG_CONCEPT_TIERS || 'name-exact,name-strong').trim();
-          const cr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGNIGHTLY_NAMESTRONG_BATCH, tiers: CONCEPT_TIERS, entity_type: 'concept', neighbor_hub_cap: CONCEPT_HUB_CAP } });
+          const cr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGNIGHTLY_NAMESTRONG_BATCH, tiers: CONCEPT_TIERS, entity_type: 'concept', neighbor_hub_cap: CONCEPT_HUB_CAP } }, { timeoutMs: KGJUDGE_DISPATCH_MS });
           let crep = null; try { crep = JSON.parse(cr && cr.text); } catch {}
           if (crep && crep.considered != null) { conceptApplied = crep.applied || 0; emitAbsorb(crep); }
         } catch (e) { console.error('[kg-nightly] concept pass failed:', e.message); }
@@ -1680,8 +1696,8 @@ app.whenReady().then(() => {
       const LINK_BATCH = Number.isFinite(_lb) ? _lb : 20;
       if (LINK_BATCH > 0) {
         try {
-          await echoSuit.dispatch({ kind: 'do', name: 'run_link_candidates', args: {} });   // land/refresh the pool
-          const lr = await echoSuit.dispatch({ kind: 'do', name: 'run_link_grounding', args: { limit: LINK_BATCH } });
+          await echoSuit.dispatch({ kind: 'do', name: 'run_link_candidates', args: {} }, { timeoutMs: KGDEDUP_DISPATCH_MS });   // land/refresh the pool
+          const lr = await echoSuit.dispatch({ kind: 'do', name: 'run_link_grounding', args: { limit: LINK_BATCH } }, { timeoutMs: KGJUDGE_DISPATCH_MS });   // web+cloud per candidate — same slow-judge class
           let lrep = null; try { lrep = JSON.parse(lr && lr.text); } catch {}
           if (lrep && lrep.grounded != null) linkGrounded = lrep.grounded || 0;
         } catch (e) { console.error('[kg-nightly] link grounding failed:', e.message); }

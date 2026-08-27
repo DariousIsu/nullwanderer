@@ -560,6 +560,7 @@ const smokes = [
   'smoke_workstate_gate.js',
   'smoke_agent_consume.js',
   'smoke_intake_contract.js',
+  'smoke_kg_leash.js',
   // ── run-2 D-batch (2026-08-20): the one-voice say filter — F15 emphasis words KEPT (stage
   // directions still go), F5b steering vocab stripped, F23 tool-call JSON stripped + the booked-topic
   // sanitize seam. smoke_stage_direction.js (already registered above) carries the F15 spec.
