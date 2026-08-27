@@ -195,6 +195,32 @@ const MIGRATIONS = [
     profile TEXT NOT NULL,
     updated_ts INTEGER NOT NULL
   )`,
+  // SITE SWEEPS (2026-08-27, the walker — lib/site_crawler): the accounting row for a directed
+  // whole-site sweep. The frontier itself lives in site_plans; this row carries status + the honest
+  // counters (fetched/reused/robots-skipped/binary/failed) the completion report is rendered from.
+  `CREATE TABLE IF NOT EXISTS site_sweeps (
+    id INTEGER PRIMARY KEY,
+    host TEXT NOT NULL,
+    seed_url TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','done','paused','stopped')),
+    reason TEXT,
+    requested_by TEXT,
+    bootstrapped INTEGER NOT NULL DEFAULT 0,
+    robots TEXT,
+    milestone INTEGER NOT NULL DEFAULT 0,
+    pages_fetched INTEGER NOT NULL DEFAULT 0,
+    pages_reused INTEGER NOT NULL DEFAULT 0,
+    pages_failed INTEGER NOT NULL DEFAULT 0,
+    skipped_robots INTEGER NOT NULL DEFAULT 0,
+    skipped_binary INTEGER NOT NULL DEFAULT 0,
+    pdfs_grabbed INTEGER NOT NULL DEFAULT 0,
+    docs_landed INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    created_ts INTEGER NOT NULL,
+    updated_ts INTEGER NOT NULL,
+    done_ts INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_site_sweeps_status ON site_sweeps(status)`,
   `CREATE TABLE IF NOT EXISTS capability_needs (
     id INTEGER PRIMARY KEY,
     need TEXT NOT NULL,

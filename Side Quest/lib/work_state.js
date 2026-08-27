@@ -71,6 +71,9 @@ function snapshot({ maxFoci = 12, now = Date.now() } = {}) {
   // introspection — a "did the backfill run?" ask found no record and she asserted "no such pass
   // registered" while the scheduler was mid-drain. One measured row per configured job.
   try { snap.bulk = require('./api_bulk').standing(); } catch { snap.bulk = []; }
+  // The site-sweep walker (2026-08-27): an active/recent whole-site sweep is real background work —
+  // a whole-plate status ask must see it, or the model composes its absence (the F10 disease).
+  try { snap.sweep = require('./site_crawler').standing(); } catch { snap.sweep = null; }
   return snap;
 }
 
@@ -87,6 +90,7 @@ function pendingRecordFor(anchors, snap) {
   for (const p of snap.promises || []) hay.push(p.subject, p.deliverable, p.topic);
   for (const f of snap.foci || []) { hay.push(f.subject, f.file); for (const t of f.targets || []) hay.push(t); }
   for (const b of snap.bulk || []) hay.push(b.id, b.state, 'backfill legiscan bulk');   // scheduler jobs ground backfill claims (F10-class)
+  if (snap.sweep) hay.push(snap.sweep.host, 'site sweep crawl');   // the walker grounds sweep claims the same way
   const flat = hay.map((s) => str(s).toLowerCase()).join(' \n ');
   return want.some((t) => flat.includes(t));
 }
@@ -129,6 +133,9 @@ function renderStatus(snap, { now = Date.now() } = {}) {
   const bulk = snap.bulk || [];
   if (bulk.length) {
     lines.push(`Background backfill (api-bulk scheduler): ${bulk.map((b) => `${b.state || b.id} ${b.records} record(s)${b.newestTs ? `, newest landed ${age(b.newestTs)}` : ''}`).join(' · ')}.`);
+  }
+  if (snap.sweep && snap.sweep.status === 'active') {
+    lines.push(`Site sweep: ${snap.sweep.host} — ${snap.sweep.done}/${snap.sweep.total} pages walked (${snap.sweep.fetched} fetched, ${snap.sweep.reused} reused, ${snap.sweep.docs} docs landed).`);
   }
   return lines.join('\n');
 }

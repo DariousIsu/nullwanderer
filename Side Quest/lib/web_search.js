@@ -144,6 +144,22 @@ async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal, reuse
     const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     const title = titleMatch ? stripTags(titleMatch[1]).trim() : '';
 
+    // LINK HARVEST (2026-08-27, the site-sweep walker): the browser lane feeds the frontier on
+    // every read (web.js $$eval → buildPlan); this lane threw the hrefs away with the tags, so a
+    // fetch-lane read could never extend a site plan. Harvest before stripping, resolve relative
+    // hrefs against the FINAL url (redirects: x.gov → www.x.gov), cap like the browser lane (400).
+    // Additive — returned as `links`; no existing consumer changes.
+    const finalUrl = res.url || url;
+    const links = [];
+    try {
+      for (const m of html.matchAll(/<a\s[^>]*?href\s*=\s*["']([^"'#>][^"'>]*)["']/gi)) {
+        if (links.length >= 400) break;
+        const href = m[1].trim();
+        if (!href || /^(?:javascript|mailto|tel|data):/i.test(href)) continue;
+        try { links.push(new URL(href, finalUrl).toString()); } catch {}
+      }
+    } catch { /* link harvest is best-effort — the read stands without it */ }
+
     // Strip non-content blocks
     let body = html
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -177,6 +193,8 @@ async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal, reuse
     return {
       ok: true,
       url,
+      finalUrl,           // post-redirect url — the sweep's frontier must live on the real host
+      links,              // harvested hrefs (absolute, capped 400) — the fetch lane can now feed a site plan
       title,
       text: capped,
       truncated: capped.length < text.length,

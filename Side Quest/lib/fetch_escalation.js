@@ -39,7 +39,9 @@ async function escalatedRead(url, { focus = '', fetchPage, seePage, maxChars = 4
     'plain fetch': async () => {
       if (typeof fetchPage !== 'function') return null;
       const r = await fetchPage(u, { maxChars }).catch(() => null);
-      return _good(r) ? { ok: true, text: r.text, via: 'plain fetch', note: null } : null;
+      // links/finalUrl ride through for the site-sweep walker (2026-08-27) — only this door can
+      // carry them (an archive copy's links point at web.archive.org rewrites, vision has none).
+      return _good(r) ? { ok: true, text: r.text, via: 'plain fetch', note: null, links: r.links || null, finalUrl: r.finalUrl || null } : null;
     },
     'archive snapshot': async () => {
       if (typeof fetchPage !== 'function') return null;

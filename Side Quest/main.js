@@ -2812,6 +2812,31 @@ app.whenReady().then(() => {
             console.log(`[metabolism] trend ${day}: ${gaps} open gap(s), ${st0.open} queued${prevN != null ? ` (prev day ${prevN} — ${gaps <= prevN ? 'declining ✓' : 'GROWING'})` : ''}`);
           }
         } catch { /* the snapshot is best-effort; the drain never blocks on it */ }
+        // THE SITE-SWEEP WALKER (2026-08-27, lib/site_crawler): the frontier site_ledger draws on
+        // every page read finally gets WALKED — one bounded bite per tick, lull-gated like every
+        // autonomous door. Narration (start / quarters / breaker pause / completion) is
+        // DETERMINISTIC text through the unprompted chat door: the counts must be exact, never a
+        // cloud paraphrase. Fail-soft — a walker error pauses the sweep, never breaks the tick.
+        try {
+          if (!_conversationActive()) {
+            const _sc = require('./lib/site_crawler');
+            markActivity('site-sweep');
+            const _swr = await _sc.sweepTick({
+              seePage: async (u, focus) => { const r = await require('./lib/excavate').seePage(String(focus || ''), { url: u }); return r && r.ok ? { ok: true, text: r.text } : { ok: false }; },
+              downloadPdf: (u) => require('./lib/web').downloadPdf(u),
+              isBrowserConnected: () => { try { return require('./lib/web').isConnected(); } catch { return false; } },
+            });
+            markActivity('idle');
+            for (const _line of (_swr && _swr.say) || []) {
+              if (currentSessionId) {
+                const _row = db.insertTurn({ sessionId: currentSessionId, speaker: 'ai_said', content: _line, model: 'site-sweep', unprompted: 1 });
+                try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+                try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: _row.id, truncated: 0, unprompted: true, say: _line }); } catch {}
+                try { require('./lib/blackboard').append({ source: 'site-sweep', kind: 'utterance', refTable: 'turns', refId: _row.id, content: _line }); } catch {}
+              } else console.log(`[site-sweep] (no session for narration) ${_line}`);
+            }
+          }
+        } catch (e) { console.error('[site-sweep] tick failed (metabolism proceeds):', e.message); }
         const capPerHour = parseInt(process.env.ZOE_RECHECK_PER_HOUR, 10) || 12;
         const hour = Math.floor(Date.now() / 3600000);
         if (parseInt(db.getMeta('recheck.hour') || '0', 10) !== hour) { db.setMeta('recheck.hour', String(hour)); db.setMeta('recheck.hour_n', '0'); }
@@ -4052,6 +4077,15 @@ function startDownloadsIngestWatcher() {
         const { isAuthoritativeSource } = require('./lib/curation_gate');
         if (!_leashPasses && (isAuthoritativeSource(_dlOrigin) || isAuthoritativeSource(_prov.fetchUrl))) _leashPasses = true;
       } catch { /* fail-soft: without the bypass the token verdict stands */ }
+      // SWEPT-HOST bypass (2026-08-27) — the download twin of _docLeashOk's rule: a PDF grabbed
+      // during a directed site sweep decomposes regardless of token overlap; the order is the
+      // vocabulary. Same authority (the sweep ledger), same fail-soft.
+      try {
+        if (!_leashPasses) {
+          const _swHost2 = require('./lib/origin').hostOf(_dlOrigin || _prov.fetchUrl || '');
+          if (_swHost2 && require('./lib/site_crawler').isSweptHost(_swHost2)) { _leashPasses = true; console.log(`[ingest] leash bypass — download from swept host ${_swHost2}`); }
+        }
+      } catch { /* the token verdict stands */ }
       // SLICE 5 HARD WALL (decision #5 hybrid): a NAMED-FLOOD frame (medical/legal directory dump) that is ALSO
       // off-domain (leash fail) is HARD-VETOED on this AUTONOMOUS download path — not even landed searchable —
       // so a repeat of the 2026-07-13 medical-directory flood can't happen even transiently. On-domain flood
@@ -9392,6 +9426,41 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       console.log(`[backfill-door] scheduler standing injected — ${_bulkStanding.length} job(s)`);
     }
   } catch (e) { console.error('[backfill-door] failed (turn proceeds):', e.message); }
+
+  // THE SWEEP DOOR (2026-08-27, the site-sweep walker): "run the deep crawl on X" — gap_plan's own
+  // advertised go-phrase — now starts a REAL whole-site sweep (before this it routed to
+  // judgment-driven browsing: a say-do gap inside the approval surface itself). Question-shaped
+  // mentions answer from the organ's measured standing (the backfill-door lesson: never let the
+  // model compose an absence about a scheduler it cannot see). Acting door: start/stop happen HERE,
+  // measured; the injected block makes the ack truthful (ack-then-async — no capture claims yet).
+  try {
+    const _sc = require('./lib/site_crawler');
+    const _om = _sc.orderMatch(userMessage);
+    if (_om) {
+      let _swBlock = null;
+      if (_om.kind === 'start') {
+        const _st = _sc.startSweep(_om.target, { reason: `order: ${String(userMessage).slice(0, 140)}`, requestedBy: 'user-order' });
+        if (_st.ok) _swBlock = `THE SITE SWEEP IS STARTED (measured): host ${_st.host}, seeded from ${_st.seed}. The walker bootstraps on the next background pass (robots + sitemap + the seed page), then works the frontier a few pages at a time; ${userName} gets a progress line at each quarter and an honest completion report. Acknowledge EXACTLY this — the sweep of ${_st.host} is started and runs in the background — and do NOT claim any pages are captured yet.`;
+        else if (_st.already) _swBlock = `A SWEEP OF ${_st.already.host} IS ALREADY RUNNING — this order matches it. Measured standing: ${_sc.standingLine() || 'bootstrapping'}. Say that plainly; do not start-claim a second sweep.`;
+        else if (_st.busy) _swBlock = `ONE SWEEP AT A TIME: ${_st.busy.host} is still active — ${_sc.standingLine() || 'in progress'}. Tell ${userName} plainly: the new sweep starts when ${_st.busy.host} finishes, or say "stop the sweep" to switch. Do not claim the new sweep started.`;
+        else _swBlock = `THE SWEEP COULD NOT START: ${_st.error}. Say exactly that — do not claim it is running.`;
+      } else if (_om.kind === 'stop') {
+        const _sp = _sc.stopSweep({});
+        _swBlock = _sp.ok ? `THE SWEEP OF ${_sp.host} IS STOPPED (measured). Its ledger and landed pages are kept; a new order can resume the host later. Say exactly that.`
+          : `NO SWEEP IS ACTIVE to stop. Say that plainly.`;
+      } else if (_om.kind === 'clarify') {
+        _swBlock = `${userName} ordered a whole-site crawl but no site is nameable from the message. Ask WHICH site (a URL or domain) — echo their own words back, do not guess a target, and do not claim anything started.`;
+      } else {
+        const _sl9 = _sc.standingLine();
+        _swBlock = _sl9 ? `THE SITE-SWEEP ORGAN'S MEASURED STANDING (answer sweep questions FROM this, never compose): ${_sl9}. If the message is not actually about a site sweep, ignore this note.`
+          : `THE SITE-SWEEP ORGAN'S MEASURED STANDING: no sweep has ever been run. If asked about a crawl/sweep, say that plainly. If the message is not about a site sweep, ignore this note.`;
+      }
+      if (_swBlock) {
+        retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${_swBlock}\n\n${retrievedKnowledgeBlock}` : _swBlock;
+        console.log(`[sweep-door] ${_om.kind} injected${_om.target ? ` (${_om.target})` : ''}`);
+      }
+    }
+  } catch (e) { console.error('[sweep-door] failed (turn proceeds):', e.message); }
 
   // SELF-STATE LEDGER — on a "what can you see / what's running / status" question, prepend her real
   // live operational snapshot. Skipped when it's an ACTIVITY question (the activity poll owns those,
@@ -17169,6 +17238,15 @@ function _docLeashOk(doc) {
     // it into entities regardless of current-focus token overlap. This is the fix for the leash "consistently
     // dropping LOCAL OFFICIALS" (they land from gov rosters) without reopening the .com medical/dental flood.
     try { const { isAuthoritativeSource } = require('./lib/curation_gate'); if (isAuthoritativeSource(doc && doc.sourceUrl)) return true; } catch { /* fall through to token match */ }
+    // SWEPT-HOST bypass (2026-08-27, the site-sweep walker): a doc from a host under a DIRECTED
+    // whole-site sweep is on-mission by fiat — the order IS the vocabulary, and the token leash
+    // would quarantine most real pages of an ordered site. Authority = the sweep ledger (not the
+    // landing lane), so the decompose sweep reaching a landed page days later still passes.
+    try {
+      const _swOrig = (doc && doc.sourceUrl) || (doc && doc.id != null ? ((db.getDocument(doc.id) || {}).origin) : null);
+      const _swHost = _swOrig ? require('./lib/origin').hostOf(_swOrig) : null;
+      if (_swHost && require('./lib/site_crawler').isSweptHost(_swHost)) { console.log(`[doc-decomp] leash bypass — doc #${doc && doc.id} from swept host ${_swHost}`); return true; }
+    } catch { /* fall through to token match */ }
     const hay = `${doc && doc.title || ''} ${String(doc && doc.body || '').slice(0, 6000)}`.toLowerCase();
     const words = new Set(hay.match(/[a-z]{4,}/g) || []);
     for (const t of _lt) if (words.has(t)) return true;

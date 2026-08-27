@@ -147,6 +147,24 @@ function nextPending(host) {
   const e = plan.urls.find((x) => x.status === 'pending');
   return e ? e.url : null;
 }
+// RE-SWEEP FRESHNESS (2026-08-27, the walker): a finished plan holds every url as done forever, so
+// a later directed sweep of the same host would "complete" instantly with zero fetches. Reopen the
+// entries whose ledger capture has aged past the TTL (or vanished) — a re-sweep then means a real
+// refresh, while fresh pages stay done ("each page only once" is per freshness window, not forever).
+function reopenStale(host, { ttlMs = DEFAULT_TTL_MS, now = Date.now() } = {}) {
+  const plan = getPlan(host);
+  if (!plan || !plan.urls.length) return 0;
+  let reopened = 0;
+  for (const e of plan.urls) {
+    if (e.status !== 'done') continue;
+    const row = seen(e.url);
+    if (!row || (now - row.last_ts) >= ttlMs) { e.status = 'pending'; reopened++; }
+  }
+  if (reopened) {
+    try { db.getDb().prepare('UPDATE site_plans SET plan = ?, updated_ts = ? WHERE host = ?').run(JSON.stringify(plan.urls), now, plan.host); } catch {}
+  }
+  return reopened;
+}
 // ── site access profiles: THE FAILURE HALF (Lucas: "she should be studying the process") ──
 // Per-host memory of which access DOOR worked or failed. doors: browser | plain fetch | archive
 // snapshot | vision | spreadsheet. Each entry: { ok: n, fail: n, last_ok_ts, last_fail_ts }.
@@ -227,4 +245,4 @@ function planLine(host) {
   return `[site-digest] ${plan.host}: ${done}/${plan.urls.length} pages digested${done < plan.urls.length ? ' — still working through it' : ' — complete'}`;
 }
 
-module.exports = { normalizeUrl, hostOf, isSerp, seen, record, shouldSkip, buildPlan, getPlan, markDone, nextPending, planLine, profileFor, recordAccess, bestDoor, accessLine, hostDown, DEFAULT_TTL_MS, SERP_TTL_MS, PLAN_MAX_URLS, DOWN_MIN_FAILS, DOWN_RETRY_MS };
+module.exports = { normalizeUrl, hostOf, isSerp, seen, record, shouldSkip, buildPlan, getPlan, markDone, nextPending, reopenStale, planLine, profileFor, recordAccess, bestDoor, accessLine, hostDown, DEFAULT_TTL_MS, SERP_TTL_MS, PLAN_MAX_URLS, DOWN_MIN_FAILS, DOWN_RETRY_MS };
