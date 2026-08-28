@@ -54,12 +54,26 @@ ok(c3.owners.filter((o) => o === 'absence').length === 1, 'a STALE late meter is
 for (let i = 0; i < 30; i++) road.claim({ order: { deliverable: 'memo', topic: 't' + i }, userText: 'z', deps });
 ok(road.claims({ deps }).length <= road.CLAIMS_CAP, `the claims list is capped (${road.claims({ deps }).length} ≤ ${road.CLAIMS_CAP})`);
 
+// ── S1: the mandate (pure) + budget table ───────────────────────────────────────────────────────
+const m1 = road.mandate({ order: { deliverable: 'analysis' }, road: { size: 'report', slug: 'report-analysis-frontier-act' }, userText: 'finish the Analysis of the Frontier Act' });
+ok(/Write the report \(up to ~10 pages\) NOW, in this run\./.test(m1), 'mandate: the size class sets the writing scope');
+ok(/registry project for this document is "report-analysis-frontier-act" — update the canonical/.test(m1), 'mandate: the registry slug rides — the canonical updates in place');
+ok(/HONEST PARTIAL naming exactly what is missing/.test(m1) && /FINAL message is the pointer/.test(m1), 'mandate: the say-gate demands the pointer or the honest partial');
+ok(/never authored/.test(m1), 'mandate: the numbers doctrine rides every run');
+const m2 = road.mandate({ order: { deliverable: 'summary' }, road: { size: 'brief', slug: null }, userText: 'x' });
+ok(/brief \(1-2 pages\)/.test(m2) && /notes\/report\.md/.test(m2), 'mandate: an unbound brief still writes to a real path');
+ok(road.BUDGET.brief === 0.75 && road.BUDGET.report === 1 && road.BUDGET.dossier === 2, 'the budget table matches the size classes');
+
 // ── wiring: the one door claims, all four organs tap ────────────────────────────────────────────
 const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/document_road'\)\.claim\(\{ order, userText, bind: _bind \}\)/.test(main), 'wiring: the intake door makes the claim with the captured bind');
 ok(/meter\(_road, 'promise', r\.id\)/.test(main), 'wiring: the promise backstop meters');
 ok(/meter\(_road, 'in-turn'\)/.test(main) && /meter\(_road, 'say-promise'\)/.test(main), 'wiring: in-turn delivery and say-promise cover both meter');
 ok(/notePreClaim\('redirect', target\.id\)/.test(main), 'wiring: the user-work redirect notes itself for the sweep');
+ok(/task: true, autonomous: false, budgetMult: dr\.BUDGET\[road\.size\]/.test(main), 'wiring S1: the run rides the INTERACTIVE lane (autonomous:false — a direct order never starves) in task mode');
+ok(/_road && !_roadRunInFlight/.test(main) && /S1 run starting/.test(main), 'wiring S1: the road fires once per claim, one run at a time');
+ok(/that's a failure on my side, not progress/.test(main), 'wiring S1: an empty run posts the honest failure — the say-gate never goes silent');
+ok(/model: 'document-road', unprompted: 1/.test(main), 'wiring S1: delivery posts as her own follow-up message');
 
 console.log(`\nsmoke_document_road: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

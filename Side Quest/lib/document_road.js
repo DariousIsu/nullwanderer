@@ -81,6 +81,23 @@ function meterIfRecent(organ, ref = null, { deps = {}, nowMs = Date.now() } = {}
 
 function claims({ deps = {} } = {}) { return _load(deps); }
 
+// ── S1: the in-turn document run (design D3) ────────────────────────────────────────────────────
+// The budget table keys off the size class; the mandate is PURE so the say-gate's demands are
+// pinnable. The run itself is fired by main.js on the interactive lane (autonomous:false — a
+// direct order is never quota-starved; his decision, 08-28).
+const BUDGET = { brief: 0.75, report: 1, dossier: 2 };
+function mandate({ order, road, userText } = {}) {
+  const size = (road && road.size) || 'report';
+  const slug = (road && road.slug) || null;
+  const sizeLine = size === 'brief' ? 'brief (1-2 pages)' : size === 'dossier' ? 'full dossier (as long as the material warrants)' : 'report (up to ~10 pages)';
+  return `DELIVERABLE ORDER (the document road): ${String(userText || '').slice(0, 400)}\n\n` +
+    `Write the ${sizeLine} NOW, in this run.` +
+    (slug ? ` The registry project for this document is "${slug}" — update the canonical, never a parallel copy.` : '') +
+    ` Save the document with the file tool (notes/${slug || 'report'}.md) or the canvas doc tool.` +
+    ' Numbers come from held rows and tool results ONLY — never authored.' +
+    ' Your FINAL message is the pointer to the finished document plus a 3-6 line summary of it — or an HONEST PARTIAL naming exactly what is missing and what you ran.';
+}
+
 function _resetForTest() { _lastClaim = null; _preNotes = []; }
 
-module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, claims, _resetForTest, CLAIMS_KEY, CLAIMS_CAP };
+module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, claims, mandate, BUDGET, _resetForTest, CLAIMS_KEY, CLAIMS_CAP };

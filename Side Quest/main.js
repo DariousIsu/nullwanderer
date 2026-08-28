@@ -18472,6 +18472,49 @@ function _bookDeliveryPromises(say, { sessionId, turnStartTs = 0 } = {}) {
 // focus, no promise. Kept = any artifact landed this turn (canvas / contact / image / FILE — files
 // were the kept-check's blind spot, lib/files.lastWriteTs closes it); covered = a promise already
 // booked this turn (her say-side booking). Fail-soft; dedup via the same (kind,subject) coalescing.
+// S1 THE DOCUMENT ROAD — the in-turn document run (design D3; decisions 08-28: interactive lane,
+// the size table). Fired from the one door when the road claims an order not already kept
+// in-turn. Fire-and-forget: the operator run writes the document with its own tools; completion
+// posts the pointer or an HONEST PARTIAL as her follow-up message — never silence, never a bare
+// ack (the say-gate; an empty run posts an honest failure). The promise booking still runs
+// alongside — S3 subtracts it once the meter proves the road delivers.
+let _roadRunInFlight = false;
+async function _roadRun({ order, road, userText, sessionId }) {
+  const t0 = Date.now();
+  const dr = require('./lib/document_road');
+  try {
+    const sp = await runCloudOperator({ userMessage: dr.mandate({ order, road, userText }), task: true, autonomous: false, budgetMult: dr.BUDGET[road.size] || 1 });
+    const ans = String((sp && sp.answer) || '').trim();
+    const msg = ans || `I started the ${String(order.deliverable || 'document')} and the run returned nothing — that's a failure on my side, not progress. It stays on my ledger and I'll retry with the material I hold.`;
+    const row = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'document-road', unprompted: 1 });
+    try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+    try { require('./lib/blackboard').append({ source: 'document-road', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
+    try { dr.meter(road, ans ? 'road-run' : 'road-run-empty'); } catch {}
+    // Root-A identity: a file the run landed in notes/ registers so the artifact has identity
+    // and update-in-place keeps working (same contract as the kept-branch registration).
+    try {
+      const _fw = require('./lib/files').lastWrite();
+      if (_fw && _fw.ts >= t0 && /[\\/]notes[\\/][^\\/]+\.md$/i.test(_fw.path || '')) {
+        const _reg = require('./lib/artifact_registry');
+        const _r = _reg.resolveOrMint({ topic: order.topic || String(userText).slice(0, 120), kind: 'report' });
+        _reg.record({ slug: _r.slug, relPath: 'notes/' + require('path').basename(_fw.path), title: `Report — ${String(order.topic || order.deliverable || '').slice(0, 80)}`, topic: order.topic || '' });
+        try { require('./lib/deliverable_projects').noteCompose({ topic: order.topic || '', artifactSlug: _r.slug }); } catch {}
+        console.log(`[road] S1 delivered + registered: ${_fw.path} (${Math.round((Date.now() - t0) / 1000)}s)`);
+      } else {
+        console.log(`[road] S1 ${ans ? 'answered — pointer/partial posted (no notes/ file this run)' : 'EMPTY RUN — honest failure posted'} (${Math.round((Date.now() - t0) / 1000)}s)`);
+      }
+    } catch {}
+  } catch (e) {
+    console.error('[road] S1 run failed:', e.message);
+    try {
+      const msg = `I tried to produce the ${String((order && order.deliverable) || 'document')} just now and the run errored (${String(e.message).slice(0, 120)}). It stays on my ledger — I'll retry.`;
+      const row = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'document-road', unprompted: 1 });
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg });
+    } catch {}
+  }
+}
+
 function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
   try {
     const ic = require('./lib/intake_contract');
@@ -18543,6 +18586,14 @@ function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
       console.log(`[intake] deliverable order delivered in-turn — no backstop booking (${order.deliverable})`);
       try { if (_road) require('./lib/document_road').meter(_road, 'in-turn'); } catch {}
       return;
+    }
+    // S1: the road RUNS the order now (fire-and-forget, interactive lane — a kept order never
+    // reaches here, its return is above). One run at a time; a second order while one runs is
+    // carried by the promise ledger exactly as today.
+    if (_road && !_roadRunInFlight) {
+      _roadRunInFlight = true;
+      console.log(`[road] S1 run starting: "${_road.slug || '(unbound)'}" (size=${_road.size}, interactive lane)`);
+      _roadRun({ order, road: _road, userText, sessionId }).finally(() => { _roadRunInFlight = false; });
     }
     // her say already booked a promise this turn → the ledger is carrying it; don't double-book.
     try {
