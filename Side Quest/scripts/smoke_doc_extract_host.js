@@ -10,6 +10,10 @@
  * directly. Run: ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_doc_extract_host.js
  */
 const fs = require('fs'), path = require('path'), os = require('os');
+// Simulate the utilityProcess environment marker BEFORE the worker loads: pdfjs mis-detects an
+// Electron utility child as a browser (versions.electron + process.type!=='browser') and dies on
+// DOM globals ("DOMMatrix is not defined" — need #101). The worker's env-shape must delete it.
+process.type = 'utility';
 const worker = require('../lib/doc_extract_worker');
 const host = require('../lib/doc_extract_host');
 const de = require('../lib/doc_extract');
@@ -23,6 +27,10 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
   const tmp = path.join(os.tmpdir(), `sq_dehost_${process.pid}.md`);
   fs.writeFileSync(tmp, '# Title\n\nBody line one.\n');
   try {
+    // 0. the #101 env-shape: requiring the worker with a utility-process marker present must have
+    //    DELETED it, so pdfjs (lazy-loaded later) detects Node instead of a browser.
+    ok(process.type === undefined, "worker env-shape deleted process.type ('utility' would send pdfjs down the browser path — need #101)");
+
     // 1. worker handleJob — the child-side contract (returns a reply object, never throws across the boundary)
     const w1 = await worker.handleJob({ id: 7, op: 'extractToMarkdown', filePath: tmp });
     ok(w1 && w1.id === 7 && w1.ok === true && /Title/.test(w1.result.markdown), 'worker handleJob extractToMarkdown → { ok, result } with the file markdown');

@@ -15,6 +15,17 @@
  * on success or { id, ok:false, error } on failure. The host (lib/doc_extract_host) falls back to in-process
  * doc_extract on ANY failure, so extraction can never break — this only moves WHERE the compute happens.
  */
+// THE #101 CURE (2026-08-27 — the self-repair loop's first landed build): pdfjs's environment
+// check (pdf.mjs `isNodeJS`) treats an Electron utilityProcess as a BROWSER — process.versions
+// .electron is set and process.type ('utility') !== 'browser' — so it took the DOM code path and
+// died on the first missing browser global ("DOMMatrix is not defined", 152 failures across the
+// sweep era; polyfilling DOMMatrix alone just moves the death to GlobalWorkerOptions.workerSrc).
+// This child is a plain Node context for our purposes and nothing in it reads process.type — hide
+// the marker BEFORE pdfjs can load, so pdfjs runs its own Node path (fake worker + internal
+// polyfills), the environment already proven green by the in-process fallback.
+try { if (process.type && process.type !== 'browser') delete process.type; } catch {}
+try { if (process.type && process.type !== 'browser') delete process.versions.electron; } catch {}
+
 const de = require('./doc_extract');
 
 async function handleJob(job) {
