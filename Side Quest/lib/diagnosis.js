@@ -52,23 +52,69 @@ function _gitSection(rel, { execFileSync = null } = {}) {
   } catch { return null; }
 }
 
-function _logSection(rel, detector) {
+// Newest boot logs (stdout + stderr) by boot number. The launch recipe writes them at the REPO
+// ROOT — the old data/-only listing made the live-log section silently dead (fidelity hole #2,
+// found while curing #1 below). data/ stays in the scan in case the recipe ever moves them.
+function _newestBootLogs({ max = 2 } = {}) {
+  const found = [];
+  for (const d of [ROOT, path.join(ROOT, 'data')]) {
+    let names = []; try { names = fs.readdirSync(d); } catch { continue; }
+    for (const n of names) if (/^boot_p\d+\.(?:err\.)?log$/.test(n)) found.push({ p: path.join(d, n), num: parseInt(n.match(/\d+/)[0], 10) });
+  }
+  return found.sort((a, b) => b.num - a.num).slice(0, max * 2).map((f) => f.p);
+}
+
+function _tailOf(p, cap = 128 * 1024) {
   try {
-    const dataDir = path.join(ROOT, 'data');
-    const logs = fs.readdirSync(dataDir).filter((n) => /^boot_p\d+\.log$/.test(n)).sort((a, b) => (parseInt(b.match(/\d+/)[0], 10) - parseInt(a.match(/\d+/)[0], 10)));
-    if (!logs.length) return null;
-    const p = path.join(dataDir, logs[0]);
     const size = fs.statSync(p).size;
     const fd = fs.openSync(p, 'r');
-    const len = Math.min(size, 128 * 1024);
+    const len = Math.min(size, cap);
     const buf = Buffer.alloc(len);
     fs.readSync(fd, buf, 0, len, size - len);
     fs.closeSync(fd);
+    return buf.toString('utf8');
+  } catch { return ''; }
+}
+
+function _logSection(rel, detector) {
+  try {
+    const logs = _newestBootLogs();
+    if (!logs.length) return null;
     const keys = [rel ? path.basename(rel, '.js') : null, detector || null].filter(Boolean);
     if (!keys.length) return null;
-    const hits = buf.toString('utf8').split('\n').filter((l) => keys.some((k) => l.includes(k))).slice(-10);
-    return hits.length ? `LIVE LOG (${logs[0]}, lines touching ${keys.join('/')}):\n${hits.join('\n')}` : null;
+    const hits = logs.flatMap((p) => _tailOf(p).split('\n')).filter((l) => keys.some((k) => l.includes(k))).slice(-10);
+    return hits.length ? `LIVE LOG (lines touching ${keys.join('/')}):\n${hits.join('\n')}` : null;
   } catch { return null; }
+}
+
+// ── SIGNATURE FIDELITY (§52e: the first wrong diagnosis) ───────────────────────────────────────
+// A self-watch signature is digit-blanked (\d+ → 'N'), whitespace-collapsed, and sliced to 90
+// chars (lib/self_watch.js) — evidence-SHAPED but LOSSY. Need #102's diagnosis read those
+// artifacts literally and named the normalization ("truncated/mangled slug") as the defect.
+// Restore fidelity: invert the blanking into a matcher and hand the diagnosis the VERBATIM lines.
+function _sigToRegex(sig) {
+  const esc = String(sig || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!esc) return null;
+  // every 'N' may be a blanked number OR a literal N; single spaces re-widen to any whitespace;
+  // the 90-char slice may end mid-word, so the pattern is a substring match, never anchored.
+  const body = esc.replace(/N/g, '(?:N|\\d+)').replace(/ /g, '\\s+');
+  try { return new RegExp(body); } catch { return null; }
+}
+function _rawLinesFor(sig, { text = null, maxLines = 4 } = {}) {
+  const re = _sigToRegex(sig);
+  if (!re) return [];
+  // A 24h-recurring signature's raw lines can sit several boots back and EARLY in a large log
+  // (the 128KB tail missed #102's lines under an overnight of subc chatter) — so this reads
+  // deeper (1MB) and wider (3 boots), newest file first, stopping at maxLines.
+  const hays = text != null ? [String(text)] : _newestBootLogs({ max: 3 }).map((p) => _tailOf(p, 1024 * 1024));
+  const seen = new Set(), out = [];
+  for (const hay of hays) {
+    for (const l of hay.split('\n')) {
+      const t = l.trim();
+      if (t && !seen.has(t) && re.test(t)) { seen.add(t); out.push(t.slice(0, 300)); if (out.length >= maxLines) return out; }
+    }
+  }
+  return out;
 }
 
 // ── IMPLICATED-CODE SEARCH (Lucas 08-27: repairs BUILT FROM REAL CODE) ─────────────────────────
@@ -117,6 +163,13 @@ function preGather(need, { deps = {} } = {}) {
   const m = bf.match(/^self-audit:([^:]+):(.+)$/);
   if (m) { detector = m[1]; rel = _safeRel(m[2]); }
   const sections = [];
+  // Signature fidelity FIRST (self-watch needs): the verbatim lines outrank everything else in the
+  // bundle — the cap must never starve them (the §52b lesson, where the cap ate the real files).
+  const sw = bf.match(/^self-watch:\s*(.+)$/);
+  if (sw) {
+    const raw = _rawLinesFor(sw[1], deps.rawText != null ? { text: deps.rawText } : {});
+    if (raw.length) sections.push(`RAW LOG LINES matching this signature (VERBATIM events — the signature itself is digit-blanked to N, whitespace-collapsed, and truncated):\n${raw.join('\n')}`);
+  }
   let rels = rel ? [rel] : [];
   if (!rels.length) rels = _findImplicated(String((need && need.need) || bf)).map(_safeRel).filter(Boolean);
   for (const r of rels.slice(0, 2)) {
@@ -144,7 +197,11 @@ function isRepairRunFor(run, needs, { getNeed = null } = {}) {
 
 /** The one model pass — diagnosis over evidence, never a fix, never a web search. */
 function diagnosisPrompt(need, bundle) {
+  const _swNote = /^self-watch:/.test(String((need && need.born_from) || ''))
+    ? '\nNOTE: the finding text above is a NORMALIZED signature — digits are blanked to "N", whitespace is collapsed, and it is truncated (possibly mid-word). Those artifacts are the recorder\'s doing, NEVER the defect: do not diagnose "N", "need-N", or a cut-off word as corruption. The RAW LOG LINES in the evidence are the verbatim events.\n'
+    : '';
   return `DIAGNOSIS ONLY — do not build, fix, or search the web. Your own source audit found this defect in YOUR OWN program: "${String((need && need.need) || '').slice(0, 300)}".
+${_swNote}
 
 EVIDENCE (gathered deterministically from your own repo and logs):
 ${bundle || '(no evidence gathered — reason from the finding text alone and say exactly which files to inspect)'}
@@ -191,4 +248,4 @@ function verifyStudyCitations(study, { deps = {} } = {}) {
   return { ok: verified.length >= 1, verified, unverified, reason: verified.length ? null : 'cited URLs were never actually read (no site-ledger record)' };
 }
 
-module.exports = { isRepairNeed, isRepairRunFor, preGather, diagnosisPrompt, validateDiagnosis, verifyStudyCitations, _findImplicated, _sigTokens, _safeRel, BUNDLE_CAP };
+module.exports = { isRepairNeed, isRepairRunFor, preGather, diagnosisPrompt, validateDiagnosis, verifyStudyCitations, _findImplicated, _sigTokens, _sigToRegex, _rawLinesFor, _safeRel, BUNDLE_CAP };

@@ -74,6 +74,25 @@ ok(dg.isRepairRunFor({ slug: 'need-40-x' }, [], { getNeed: () => ({ id: 40, born
   'getNeed returning a skill row still never discards');
 ok(dg.isRepairRunFor({ slug: 'need-77-x' }, [], { getNeed: () => null }) === null, 'getNeed finding nothing → null (still never blind)');
 
+// ── SIGNATURE FIDELITY (§52e: the first wrong diagnosis read blanking artifacts as the defect) ──
+// the matcher inverts self_watch's normalization: \d+→'N', whitespace collapsed, 90-char slice
+const rawLine = '[autonomy] chose=rehearse → need-94-i-need-a-fix-for-a-recurring-fai active — edit pick returned but FAILED VALIDATION (schema) — budget refunded';
+const blanked = rawLine.replace(/\d+/g, 'N').replace(/\s+/g, ' ').trim().slice(0, 90);   // the exact self_watch.js:99 recipe
+ok(dg._sigToRegex(blanked).test(rawLine), 'a digit-blanked, truncated signature matches its own VERBATIM source line');
+ok(dg._sigToRegex(blanked).test(rawLine.replace('need-94', 'need-101')) === true, 'the blanked N matches ANY instance number (the fold means many raw lines share one sig)');
+ok(dg._sigToRegex(blanked).test('[curator] stalled 5 long-untouched active thread(s)') === false, 'an unrelated line does not match');
+ok(dg._sigToRegex('BAD NEWS from a completed pass').test('BAD NEWS from a completed pass'), "a literal 'N' in real words still matches (N-or-digits, never digits-only)");
+const hayk = 'noise line\n' + rawLine + '\n' + rawLine + '\nother noise';
+const rawHits = dg._rawLinesFor(blanked, { text: hayk });
+ok(rawHits.length === 1 && rawHits[0] === rawLine, `raw lines gathered from text, deduped (${rawHits.length})`);
+// the bundle: raw lines lead for a self-watch need, and the prompt names the convention
+const swNeed = { need: `I need a fix for a recurring failure in my own program: ${blanked}`, born_from: `self-watch: ${blanked}` };
+const swBundle = dg.preGather(swNeed, { deps: { rawText: hayk } });
+ok(/^RAW LOG LINES matching this signature/.test(swBundle) && swBundle.includes('budget refunded'), 'a self-watch bundle LEADS with the verbatim raw lines (the cap can never starve them)');
+ok(/digit-blanked/.test(dg.diagnosisPrompt(swNeed, swBundle)) && /NEVER the defect/.test(dg.diagnosisPrompt(swNeed, swBundle)),
+  'the self-watch prompt names the normalization so artifacts are never diagnosed as corruption');
+ok(!/digit-blanked/.test(dg.diagnosisPrompt(need, bundle)), 'a self-audit prompt carries no signature note (nothing was blanked)');
+
 // study citations verify against the ledger (cited = actually read)
 const fakeLedger = { seen: (u) => (/known\.gov/.test(u) ? { url: u } : null) };
 const vc1 = dg.verifyStudyCitations('Pattern: use X. Sources: https://known.gov/how and https://never-read.example/post', { deps: { siteLedger: fakeLedger } });
