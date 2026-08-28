@@ -6053,7 +6053,13 @@ async function _classifyCanvasEditIntent(userMessage) {
       validate: _validateEditIntent, numPredict: 150, think: false,
     });
     if (!v) return null;                                   // infra/parse failure — caller may fall back to the offline path
-    if (v.edit && v.instruction) { console.log(`[canvas-cmd] classifier read the intent: "${v.instruction}"`); return { order: v.instruction }; }
+    if (v.edit && v.instruction) {
+      console.log(`[canvas-cmd] classifier read the intent: "${v.instruction}"`);
+      // S1.7 road meter: the canvas-cmd classifier is the SEVENTH owner door (leg 3: it read
+      // "present the final report" as an in-place edit) — it taps the meter either side of the claim.
+      try { require('./lib/document_road').tap('canvas-cmd'); } catch {}
+      return { order: v.instruction };
+    }
     return { notEdit: true };                              // a confident NO — judgment is final, no regex override
   } catch { return null; }
 }
@@ -18510,7 +18516,24 @@ async function _roadRun({ order, road, userText, sessionId }) {
     let _held = ''; try { _held = dr.heldMaterial({ topic: (order && order.topic) || userText }); } catch {}
     if (_held) console.log(`[road] held material riding the mandate (${_held.split('\n').length} item(s))`);
     const sp = await runCloudOperator({ userMessage: dr.mandate({ order, road, userText, held: _held }), task: true, autonomous: false, budgetMult: dr.BUDGET[road.size] || 1 });
-    const ans = String((sp && sp.answer) || '').trim();
+    let ans = String((sp && sp.answer) || '').trim();
+    // S1.7 SAY-GATE v2 (leg-3 catch): a non-empty final that is a PLAN ("let me read X to write
+    // the report") is not a deliverable — ONE re-drive with the specimen quoted back and a bigger
+    // budget; a second plan-shaped final degrades to a framed honest partial. Never a third run.
+    if (ans && dr.planShapedFinal(ans)) {
+      console.log('[road] say-gate v2: plan-shaped final → ONE re-drive (the mandate requires the deliverable, not the plan)');
+      try {
+        const sp2 = await runCloudOperator({
+          userMessage: dr.mandate({ order, road, userText, held: _held }) +
+            `\n\nYOUR PREVIOUS RUN ENDED ON A PLAN, not the deliverable — it said: "${ans.slice(0, 220)}". Do NOT plan again. EXECUTE now: read the named material with your tools and WRITE THE WHOLE DOCUMENT in this run; the final message is the pointer to the finished document, or the honest partial.`,
+          task: true, autonomous: false, budgetMult: (dr.BUDGET[road.size] || 1) * 1.5,
+        });
+        const ans2 = String((sp2 && sp2.answer) || '').trim();
+        if (ans2 && !dr.planShapedFinal(ans2)) ans = ans2;
+        else if (ans2) ans = `Honest partial — my run twice ended on a plan instead of the document. Where it actually stands: ${ans2.slice(0, 600)}`;
+        try { dr.meter(road, 'redrive'); } catch {}
+      } catch (e) { console.error('[road] re-drive failed:', e.message); }
+    }
     const msg = ans || `I started the ${String(order.deliverable || 'document')} and the run returned nothing — that's a failure on my side, not progress. It stays on my ledger and I'll retry with the material I hold.`;
     const row = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'document-road', unprompted: 1 });
     try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}

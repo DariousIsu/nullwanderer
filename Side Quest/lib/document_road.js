@@ -87,6 +87,27 @@ function meterIfRecent(organ, ref = null, { deps = {}, nowMs = Date.now() } = {}
 
 function claims({ deps = {} } = {}) { return _load(deps); }
 
+// A door that can fire either side of the claim (the canvas-cmd classifier) taps here: a live
+// claim gets metered, otherwise the note waits for the sweep.
+function tap(organ, ref = null, { deps = {}, nowMs = Date.now() } = {}) {
+  if (_lastClaim && nowMs - _lastClaim.ts <= RECENT_MS) meter(_lastClaim, organ, ref, { deps });
+  else notePreClaim(organ, ref, { nowMs });
+}
+
+// ── S1.7: the say-gate's SHAPE teeth (leg 3's specimen: "I have the core source material. Let me
+// read the full research paper and the Statt article to write the complete report." — a PLAN
+// posted as the final). A final is plan-shaped when it ends on forward intent and carries no
+// pointer; a long inline document or anything pointing at a file/canvas is a deliverable.
+const PLAN_TAIL_RE = /\b(?:let me|i'?ll(?:\s+now)?|i'?m (?:going to|about to|gonna)|next i(?:'ll)?|now i(?:'ll)?|give me a (?:sec|second|minute|moment)|one (?:sec|second|moment)|stand by|hang on|working on (?:it|that))\b[^.?!]{0,140}[.?!]?\s*$/i;
+const POINTER_RE = /\b(?:notes|docs|data)\/[\w./-]+\.\w{2,4}\b|\bcanvas\b|\bsaved (?:at|to|it)\b|\blanded (?:at|in|on)\b/i;
+function planShapedFinal(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  if (POINTER_RE.test(t)) return false;
+  if (t.length > 2500) return false;
+  return PLAN_TAIL_RE.test(t);
+}
+
 // ── S1.5 CURE 1: anaphoric completion orders (the p180 miss) ────────────────────────────────────
 // "yea go ahead and get that completed and pulled up on the canvas" carries no deliverable NOUN,
 // so detectDeliverableOrder (precision-over-recall) returns null and the road never saw the
@@ -174,4 +195,4 @@ function mandate({ order, road, userText, held = '' } = {}) {
 
 function _resetForTest() { _lastClaim = null; _preNotes = []; }
 
-module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, claims, mandate, BUDGET, anaphoricOrder, resolveAnaphor, heldMaterial, _resetForTest, CLAIMS_KEY, CLAIMS_CAP, ANAPHOR_WINDOW_MS };
+module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, tap, claims, mandate, BUDGET, anaphoricOrder, resolveAnaphor, heldMaterial, planShapedFinal, _resetForTest, CLAIMS_KEY, CLAIMS_CAP, ANAPHOR_WINDOW_MS };

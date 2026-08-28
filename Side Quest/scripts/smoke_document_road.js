@@ -106,6 +106,25 @@ const cf2 = road.claim({ order: { deliverable: 'report' }, userText: 'b', bind: 
 ok(cf1 === cf2, 'a same-slug claim inside the window FOLDS (two doors, one ledger entry)');
 ok(road.claim({ order: { deliverable: 'report' }, userText: 'c', bind: { slug: 'other-slug' }, deps }) !== cf1, 'a different slug still claims fresh');
 
+// ── S1.7: the say-gate's shape teeth (leg 3's plan-shaped final) ────────────────────────────────
+ok(road.planShapedFinal('I have the core source material. Let me read the full research paper and the Statt article to write the complete report.') === true,
+  "leg 3's verbatim final IS plan-shaped (a plan posted as the deliverable)");
+ok(road.planShapedFinal("I'll now pull the section-by-section and draft each part") === true, 'an ill-now tail is plan-shaped');
+ok(road.planShapedFinal('The report is finished and saved at notes/report-analysis-frontier-act.md — 9 pages covering all provisions. Summary: …') === false,
+  'a pointer-bearing final is a deliverable, never re-driven');
+ok(road.planShapedFinal('Honest partial: I read the bill text and drafted sections 1-3; sections 4-6 need the Statt breakdown which timed out. The draft so far covers definitions, tiers, and reporting.') === false,
+  'an honest partial that ENDS on substance passes');
+ok(road.planShapedFinal('x'.repeat(3000)) === false, 'a long inline document is a deliverable regardless of phrasing');
+ok(road.planShapedFinal('') === false && road.planShapedFinal(null) === false, 'empty → false (the emptiness gate owns that case)');
+
+// tap(): either side of the claim
+road._resetForTest();
+road.tap('canvas-cmd', null, { deps });
+const ct = road.claim({ order: { deliverable: 'report' }, userText: 't', bind: { slug: 'tap-test' }, deps });
+ok(ct.owners.includes('canvas-cmd'), 'a pre-claim canvas-cmd tap is swept into the claim');
+road.tap('canvas-cmd', null, { deps });
+ok(ct.owners.filter((o) => o === 'canvas-cmd').length === 2, 'a post-claim canvas-cmd tap meters directly');
+
 // ── wiring: the one door claims, all four organs tap ────────────────────────────────────────────
 const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/document_road'\)\.claim\(\{ order, userText, bind: _bind \}\)/.test(main), 'wiring: the intake door makes the claim with the captured bind');
@@ -120,6 +139,10 @@ ok(/anaphoricOrder\(userText\)/.test(main) && /resolveAnaphor\(\)/.test(main), '
 ok(/heldMaterial\(\{ topic:/.test(main) && /held: _held/.test(main), 'wiring S1.5: the held material rides the run mandate');
 ok(/typed finalize order → the road/.test(main) && /conductor fallback/.test(main), 'wiring S1.6: a typed finalize order rides the road; the conductor is the fail-soft fallback');
 ok(/THE DOCUMENT ROAD RUN HAS STARTED/.test(main), 'wiring S1.6: the control note tells the say-side the road run is live (no pivot, no promises)');
+ok(/planShapedFinal\(ans\)/.test(main) && /ONE re-drive/.test(main) && /YOUR PREVIOUS RUN ENDED ON A PLAN/.test(main),
+  'wiring S1.7: a plan-shaped final gets exactly one re-drive with the specimen quoted back');
+ok(/twice ended on a plan/.test(main), 'wiring S1.7: a second plan degrades to a framed honest partial — never a third run');
+ok(/document_road'\)\.tap\('canvas-cmd'\)/.test(main), 'wiring S1.7: the canvas-cmd door (the seventh owner) taps the meter');
 
 console.log(`\nsmoke_document_road: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
