@@ -42,7 +42,7 @@ const _QUESTION_RE = /\?\s*$|^(?:who|what|where|why|how|hows|how's|is|are|was|we
 // Bare "pull" stays out (too broad) except when its object IS the full/bill text — the leg-4 live
 // order shape ("Pull the full text of Louisiana SB200 …"), lookahead-bounded so "pull back" /
 // "pull yourself together" never qualify.
-const _ORDER_VERB = /(?:finish|complete|update|build|re-?build|make|compile|compose|re-?compose|create|assemble|land|write|draft|re-?draft|produce|generate|re-?generate|refresh|deliver|put together|pull together|knock out|redo|polish|tighten|revise|rework|reword|edit|refine|smooth|trim|clean\s*up|copy-?edit|proofread|put|drop|place|post|package|pull(?=\s+(?:the\s+)?(?:full|bill|complete)\s+text))/i;
+const _ORDER_VERB = /(?:finish|complete|update|build|re-?build|make|compile|compose|re-?compose|create|assemble|land|write|draft|re-?draft|produce|generate|re-?generate|refresh|deliver|present|final-?ize|put together|pull together|knock out|redo|polish|tighten|revise|rework|reword|edit|refine|smooth|trim|clean\s*up|copy-?edit|proofread|put|drop|place|post|package|pull(?=\s+(?:the\s+)?(?:full|bill|complete)\s+text))/i;
 // The bridge span stays inside one sentence but must cross FILENAME dots ("notes/x.md and smooth…"):
 // a dot followed by non-space is an extension dot, a dot followed by space/EOL ends the sentence.
 const _APPROACH_BRIDGE = `(?:(?:go\\s+(?:into|to|through|over)|open(?:\\s+up)?|take|grab|pull\\s+up)\\s+(?:[^.!?;\\n]|\\.(?=\\S)){0,80}?\\b(?:and|then)\\s+)?`;

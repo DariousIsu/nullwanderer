@@ -44,6 +44,12 @@ function notePreClaim(organ, ref = null, { nowMs = Date.now() } = {}) {
 
 function claim({ order, userText, bind = null, deps = {}, nowMs = Date.now() } = {}) {
   if (!order || !order.deliverable) return null;
+  // One turn can cross TWO doors (the paper-verb door pre-reply, the intake door post-reply) —
+  // a same-slug claim inside the window FOLDS instead of double-entering the ledger.
+  if (_lastClaim && nowMs - _lastClaim.ts <= RECENT_MS && _lastClaim.slug && bind && bind.slug === _lastClaim.slug) {
+    console.log(`[road] claim folded — "${bind.slug}" already claimed this turn`);
+    return _lastClaim;
+  }
   const c = {
     ts: nowMs,
     slug: (bind && bind.slug) || null,

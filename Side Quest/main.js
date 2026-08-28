@@ -10324,10 +10324,32 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
              } catch {} return ''; })() : '')
           || (() => { try { const f = require('./lib/focus').getCurrent(); return f ? String(f.content).replace(/^\W*(?:complete|finish|finalize|the)\s*/i, '').slice(0, 60) : ''; } catch { return ''; } })()
           || 'applied digital';
-        console.log(`[paper] finalize verb → conductor on "${_topic}" (redirect lane bypassed)`);
-        runPaperFinalize({ sessionId, topic: _topic })
-          .catch((e) => console.error('[paper] finalize failed:', e.message));
-        composedUserMessage += `\n\n[CONTROL — THE PAPER CONDUCTOR IS ALREADY RUNNING on "${_topic}" (started this instant: it assembles the ALREADY-GATHERED research into ONE finished, cited document and lands it on the canvas within about a minute; the delivery will announce itself). Confirm plainly that the finalize run has started. Do NOT register a pivot, do NOT open new research, do NOT promise passes.]`;
+        // S1.6 (leg-2 catch, 2026-08-28): a TYPED finalize order rides THE ROAD, not the one-shot
+        // conductor — the conductor composes with a single 900-token completion (inherently light)
+        // on the directed lane; the road runs the full operator on the INTERACTIVE lane with the
+        // say-gate, the held material, and the swarm offer. The conductor stays for the contract
+        // auto-finalize (the autonomous path) and as the fail-soft fallback here.
+        let _viaRoad = false;
+        try {
+          const _dr = require('./lib/document_road');
+          const _bindP = require('./lib/deliverable_projects').bindOrder({ text: String(userMessage).slice(0, 400), topic: _topic, kind: 'report' });
+          const _orderP = { deliverable: 'report', target: null, topic: _topic };
+          const _rcP = _dr.claim({ order: _orderP, userText: userMessage, bind: _bindP });
+          if (_rcP && !_roadRunInFlight) {
+            _roadRunInFlight = true;
+            console.log(`[road] typed finalize order → the road on "${_topic}" (was: the paper conductor)`);
+            _roadRun({ order: _orderP, road: _rcP, userText: userMessage, sessionId }).finally(() => { _roadRunInFlight = false; });
+            _viaRoad = true;
+          }
+        } catch (e) { console.error('[road] finalize claim failed → conductor fallback:', e.message); }
+        if (!_viaRoad) {
+          console.log(`[paper] finalize verb → conductor on "${_topic}" (redirect lane bypassed)`);
+          runPaperFinalize({ sessionId, topic: _topic })
+            .catch((e) => console.error('[paper] finalize failed:', e.message));
+        }
+        composedUserMessage += _viaRoad
+          ? `\n\n[CONTROL — THE DOCUMENT ROAD RUN HAS STARTED on "${_topic}" (this instant, on the interactive lane: it reads the held source material and writes the FULL document; the delivery will announce itself with the pointer, or an honest partial). Confirm plainly that the run has started. Do NOT register a pivot, do NOT open new research, do NOT promise passes.]`
+          : `\n\n[CONTROL — THE PAPER CONDUCTOR IS ALREADY RUNNING on "${_topic}" (started this instant: it assembles the ALREADY-GATHERED research into ONE finished, cited document and lands it on the canvas within about a minute; the delivery will announce itself). Confirm plainly that the finalize run has started. Do NOT register a pivot, do NOT open new research, do NOT promise passes.]`;
       }
       let red = null;
       if (!directedStopHandled && uw.REDIRECT_TRIGGER_RE.test(userMessage)) {

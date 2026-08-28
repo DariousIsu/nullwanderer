@@ -95,6 +95,17 @@ ok(!/YOU ALREADY HOLD/.test(road.mandate({ order: {}, road: { size: 'report' }, 
 ok(/FAN OUT/.test(m3) && /delegate_to_/.test(m3) && /INTEGRATE/.test(m3), 'a report-class mandate offers the swarm (delegate + integrate)');
 ok(!/FAN OUT/.test(road.mandate({ order: {}, road: { size: 'brief' }, userText: 'x' })), 'a brief never fans out');
 
+// ── S1.6: the leg-2 catches (the "present" verb, the claim fold, the conductor fold-in) ─────────
+const ic = require('../lib/intake_contract');
+ok(!!ic.detectDeliverableOrder('Alright please present your final, full and complete report'), "the p181 leg-2 order now classifies (the 'present' verb)");
+ok(!!ic.detectDeliverableOrder('finalize the report on the Frontier Act'), "'finalize' is an order verb now");
+ok(ic.detectDeliverableOrder('the presentation went well') === null, "'presentation' as a noun never claims (no order lead)");
+road._resetForTest();
+const cf1 = road.claim({ order: { deliverable: 'report' }, userText: 'a', bind: { slug: 'same-slug' }, deps });
+const cf2 = road.claim({ order: { deliverable: 'report' }, userText: 'b', bind: { slug: 'same-slug' }, deps });
+ok(cf1 === cf2, 'a same-slug claim inside the window FOLDS (two doors, one ledger entry)');
+ok(road.claim({ order: { deliverable: 'report' }, userText: 'c', bind: { slug: 'other-slug' }, deps }) !== cf1, 'a different slug still claims fresh');
+
 // ── wiring: the one door claims, all four organs tap ────────────────────────────────────────────
 const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/document_road'\)\.claim\(\{ order, userText, bind: _bind \}\)/.test(main), 'wiring: the intake door makes the claim with the captured bind');
@@ -107,6 +118,8 @@ ok(/that's a failure on my side, not progress/.test(main), 'wiring S1: an empty 
 ok(/model: 'document-road', unprompted: 1/.test(main), 'wiring S1: delivery posts as her own follow-up message');
 ok(/anaphoricOrder\(userText\)/.test(main) && /resolveAnaphor\(\)/.test(main), 'wiring S1.5: the door falls back to the anaphor resolver before giving up');
 ok(/heldMaterial\(\{ topic:/.test(main) && /held: _held/.test(main), 'wiring S1.5: the held material rides the run mandate');
+ok(/typed finalize order → the road/.test(main) && /conductor fallback/.test(main), 'wiring S1.6: a typed finalize order rides the road; the conductor is the fail-soft fallback');
+ok(/THE DOCUMENT ROAD RUN HAS STARTED/.test(main), 'wiring S1.6: the control note tells the say-side the road run is live (no pivot, no promises)');
 
 console.log(`\nsmoke_document_road: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
