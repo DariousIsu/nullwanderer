@@ -123,26 +123,58 @@ function createMeetDriver(getWC) {
   async function scrapeCaptions() { return (await exec(CAPTIONS_JS)) || ''; }
   async function scrapeAttendees() { return (await exec(ATTENDEES_JS)) || ''; }
 
-  // Post a message to the in-meeting chat: open the chat panel, set the textarea, dispatch Enter.
+  // Post a message to the in-meeting chat: open the chat panel, set the input, dispatch Enter.
+  // p177 catch ("intro post failed: chat input not found"): the probe knew only <textarea>, and
+  // current Meet builds render the chat input as a rich contenteditable TEXTBOX — so the intro
+  // died on a healthy panel. Both shapes are probed now, the panel gets a second render window,
+  // and the reason names what actually missed.
+  function _chatSetJS(message) {
+    return `(() => {
+      try {
+        const msg = ${JSON.stringify(String(message || ''))};
+        const ta = document.querySelector('textarea[aria-label*="send a message" i], textarea[placeholder*="message" i], textarea[aria-label*="message" i]');
+        if (ta) {
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set;
+          setter.call(ta, msg);
+          ta.dispatchEvent(new Event('input',{bubbles:true}));
+          ta.focus();
+          return 'textarea';
+        }
+        const rt = document.querySelector('[role="textbox"][contenteditable="true"][aria-label*="message" i], [role="textbox"][contenteditable="true"][aria-label*="chat" i], div[contenteditable="true"][aria-label*="message" i]');
+        if (rt) {
+          rt.focus();
+          const sel = window.getSelection(); sel.removeAllRanges();
+          const range = document.createRange(); range.selectNodeContents(rt); sel.addRange(range);
+          document.execCommand('insertText', false, msg);
+          rt.dispatchEvent(new Event('input',{bubbles:true}));
+          return 'textbox';
+        }
+        return '';
+      } catch (e) { return ''; }
+    })()`;
+  }
   async function postChat(message) {
     nudge();
-    await exec(clickByLabelJS(['chat with everyone', 'open chat', 'chat']), true);
+    const chatLabels = ['chat with everyone', 'open chat', 'show chat', 'chat'];
+    let opened = await exec(clickByLabelJS(chatLabels), true);
     await sleep(500);
-    const set = await exec(`(() => {
-      try {
-        const ta = document.querySelector('textarea[aria-label*="send a message" i], textarea[placeholder*="message" i], textarea[aria-label*="message" i]');
-        if (!ta) return false;
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set;
-        setter.call(ta, ${JSON.stringify(String(message || ''))});
-        ta.dispatchEvent(new Event('input',{bubbles:true}));
-        ta.focus();
-        return true;
-      } catch (e) { return false; }
-    })()`, true);
-    if (!set) return { ok: false, reason: 'chat input not found' };
+    let set = await exec(_chatSetJS(message), true);
+    if (!set) {
+      // The chat button TOGGLES — re-click ONLY when the first click found no button at all
+      // (labels can render late); a landed click just gets a longer render window.
+      if (!opened) opened = await exec(clickByLabelJS(chatLabels), true);
+      await sleep(900);
+      set = await exec(_chatSetJS(message), true);
+    }
+    if (!set) return { ok: false, reason: `chat input not found (textarea AND rich-textbox probes missed; chat button ${opened ? `clicked: "${opened}"` : 'NOT found'})` };
     await sleep(150);
     key('Return');
-    return { ok: true };
+    // Belt: if the input still holds text (Return swallowed by the rich editor), click Send.
+    try {
+      const residue = await exec(`(() => { const el = document.querySelector('textarea[aria-label*="message" i], [role="textbox"][contenteditable="true"]'); return !!el && ((el.value || el.textContent || '').trim().length > 0); })()`, true);
+      if (residue) await exec(clickByLabelJS(['send a message', 'send message', 'send']), true);
+    } catch {}
+    return { ok: true, via: set };
   }
 
   // Leave the call: click Leave; fallback navigate the pane away (about:blank).
