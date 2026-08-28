@@ -130,11 +130,15 @@ function preGather(need, { deps = {} } = {}) {
 // A rehearsal run advancing a repair-born need — grandfathered from before the repair lane
 // existed. The lane filters repair ROWS out of the tool pipe, but the iterate branch keys on the
 // loaded RUN, so a pre-cure run kept advancing (need #94 schema-failed 103x/7d against its own
-// failure count). Returns the need row when the run should be discarded, else null.
-function isRepairRunFor(run, needs) {
+// failure count). The needs array is listOpen() = status 'open' ONLY, and a run-backed row sits in
+// 'rehearsing' — invisible there (the v1 miss, caught live on p175) — so an absent row falls back
+// to the direct getNeed lookup. Returns the need row when the run should be discarded, else null.
+function isRepairRunFor(run, needs, { getNeed = null } = {}) {
   const m = run && run.slug && String(run.slug).match(/^need-(\d+)-/);
   if (!m) return null;
-  const row = (needs || []).find((n) => n && n.id === parseInt(m[1], 10));
+  const id = parseInt(m[1], 10);
+  let row = (needs || []).find((n) => n && n.id === id);
+  if (!row && typeof getNeed === 'function') { try { row = getNeed(id); } catch {} }
   return row && isRepairNeed(row) ? row : null;
 }
 

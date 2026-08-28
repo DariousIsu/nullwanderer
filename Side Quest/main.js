@@ -18806,10 +18806,11 @@ async function _needsPressure(now = Date.now()) {
   // the loaded RUN — need #94's grandfathered run kept advancing (and schema-failing) after its
   // class was intercepted. Discard it; the row already flows to the diagnosis queue below.
   try {
-    const _rrow = require('./lib/diagnosis').isRepairRunFor(run, needs);
+    const _rrow = require('./lib/diagnosis').isRepairRunFor(run, needs, { getNeed: (id) => capn.get(id) });
     if (_rrow) {
       require('./lib/rehearsal_driver').discard();
-      console.log(`[needs] repair-born run "${run.slug}" discarded — need #${_rrow.id} belongs to the repair lane, not the rehearse pipe (grandfathered-run leak)`);
+      if (_rrow.status !== 'open') capn.setStatus(_rrow.id, 'open', { nowMs: now });   // 'rehearsing' is invisible to the diagnosis queue
+      console.log(`[needs] repair-born run "${run.slug}" discarded — need #${_rrow.id} reopened for the repair lane, not the rehearse pipe (grandfathered-run leak)`);
       run = null;
     }
   } catch (e) { console.error('[needs] repair-run intercept failed:', e.message); }

@@ -65,6 +65,14 @@ ok(dg.isRepairRunFor({ slug: 'need-94-i-need-a-fix-for-a-recurring-fai' }, rowsF
 ok(dg.isRepairRunFor({ slug: 'need-40-oregon-house-committee-roster' }, rowsFor) === null, 'a run for a RUN-BORN (skill) need stays in the rehearse pipe');
 ok(dg.isRepairRunFor({ slug: 'canvas-format-polish' }, rowsFor) === null, 'a non-need slug is never intercepted');
 ok(dg.isRepairRunFor({ slug: 'need-94-i-need-a-fix' }, []) === null && dg.isRepairRunFor(null, rowsFor) === null, 'missing row or no run → null (never discard blind)');
+// the v1 miss, caught live: the run-backed row sits in 'rehearsing' — ABSENT from listOpen()'s
+// array — so the intercept must find it through the direct getNeed lookup.
+const rehearsingRow = { id: 94, status: 'rehearsing', born_from: 'self-watch: exhaust audit' };
+ok(dg.isRepairRunFor({ slug: 'need-94-i-need-a-fix' }, [], { getNeed: (id) => (id === 94 ? rehearsingRow : null) })?.id === 94,
+  "a 'rehearsing' repair row invisible to listOpen is found via getNeed (the LIVE leak shape)");
+ok(dg.isRepairRunFor({ slug: 'need-40-x' }, [], { getNeed: () => ({ id: 40, born_from: 'fill-gap:committees' }) }) === null,
+  'getNeed returning a skill row still never discards');
+ok(dg.isRepairRunFor({ slug: 'need-77-x' }, [], { getNeed: () => null }) === null, 'getNeed finding nothing → null (still never blind)');
 
 // study citations verify against the ledger (cited = actually read)
 const fakeLedger = { seen: (u) => (/known\.gov/.test(u) ? { url: u } : null) };
