@@ -42,5 +42,30 @@ ok(dg.validateDiagnosis('See https://example.com/blog for the pattern; also http
 ok(dg.validateDiagnosis('The root cause is probably somewhere in the calendar module and should be investigated further by the team.') === false, 'no citation → rejected');
 ok(dg.validateDiagnosis('lib/x.js:1') === false, 'too short to be a diagnosis → rejected');
 
+// ── REAL CODE, REAL CITES (Lucas 08-27: repairs built from sourced, verified evidence) ─────────
+// citation EXISTENCE: a repo-shaped cite must point at code that exists
+ok(dg.validateDiagnosis('Root cause: the fold in lib/does_not_exist.js:12 collapses distinct rows. Minimal repair: split the key at lib/does_not_exist.js:15.') === false,
+  'a citation into a NONEXISTENT repo file → the whole diagnosis rejected (hallucinated cite)');
+ok(dg.validateDiagnosis('Root cause: the loader at lib/diagnosis.js:999999 never returns. Minimal repair: bound the read at lib/diagnosis.js:999998.') === false,
+  'a citation past EOF → rejected');
+ok(dg.validateDiagnosis('Root cause: DOMMatrix is missing in the worker (node:internal/worker:123); the polyfill gate sits at lib/diagnosis.js:20 and never arms. Minimal repair: arm it.') === true,
+  'non-repo paths are ignored; a real repo cite carries the diagnosis');
+
+// implicated-code search: a file-less self-watch signature finds the real files by its tokens
+const toks = dg._sigTokens('[echo] FAILED: domainLeashTokens exploded in lane 4');
+ok(toks.includes('domainLeashTokens'), `distinctive identifier extracted (${toks.join(',')})`);
+const impl = dg._findImplicated('[echo] FAILED: domainLeashTokens exploded in lane 4');
+ok(impl.length >= 1 && impl.every((f) => /\.js$/.test(f)), `implicated files found by token search (${impl.join(', ')})`);
+const bundle2 = dg.preGather({ need: 'I need a fix for a recurring failure in my own program: domainLeashTokens exploded', born_from: 'self-watch: [echo] FAILED: domainLeashTokens exploded' });
+ok(/IMPLICATED FILE/.test(bundle2), 'a file-less self-watch need now gathers REAL CODE via the token search');
+
+// study citations verify against the ledger (cited = actually read)
+const fakeLedger = { seen: (u) => (/known\.gov/.test(u) ? { url: u } : null) };
+const vc1 = dg.verifyStudyCitations('Pattern: use X. Sources: https://known.gov/how and https://never-read.example/post', { deps: { siteLedger: fakeLedger } });
+ok(vc1.ok && vc1.verified.length === 1 && vc1.unverified.length === 1, 'study cites split into ledger-verified vs never-read');
+const vc2 = dg.verifyStudyCitations('Pattern: use Y. Source: https://never-read.example/post', { deps: { siteLedger: fakeLedger } });
+ok(vc2.ok === false && /never actually read/.test(vc2.reason), 'a study whose EVERY cite was never read → rejected (composed, not sourced)');
+ok(dg.verifyStudyCitations('no urls at all here', { deps: { siteLedger: fakeLedger } }).ok === false, 'no URLs → not sourced');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -71,10 +71,45 @@ function _logSection(rel, detector) {
   } catch { return null; }
 }
 
+// ── IMPLICATED-CODE SEARCH (Lucas 08-27: repairs BUILT FROM REAL CODE) ─────────────────────────
+// A self-watch signature names no file ("[doc-extract] worker job failed → DOMMatrix is not
+// defined"), so the evidence bundle used to be log-tail only and the diagnosis leaned on the
+// model's prior. Deterministic cure: pull the signature's DISTINCTIVE tokens and grep the repo's
+// own source for them — the files that carry the token ARE the implicated code. Bounded, no model.
+const _TOKEN_STOP = new Set(['recurring', 'failure', 'program', 'process', 'worker', 'defined', 'exceeded', 'abandoned', 'continues', 'failed', 'error', 'undefined', 'cannot', 'timeout', 'dispatch', 'request', 'message', 'module', 'function']);
+function _sigTokens(text) {
+  const toks = [...new Set(String(text || '').match(/[A-Za-z_$][\w$-]{5,}/g) || [])]
+    .filter((t) => !_TOKEN_STOP.has(t.toLowerCase()));
+  // rare-looking first: midword caps / dashes / underscores are code-ish identifiers
+  return toks.sort((a, b) => (/[A-Z].*[A-Z]|[-_]/.test(b) ? 1 : 0) - (/[A-Z].*[A-Z]|[-_]/.test(a) ? 1 : 0)).slice(0, 3);
+}
+function _findImplicated(needText, { maxFiles = 3 } = {}) {
+  const tokens = _sigTokens(needText);
+  if (!tokens.length) return [];
+  const hits = [];
+  try {
+    const dirs = [['lib', path.join(ROOT, 'lib')], ['studio', path.join(ROOT, 'studio')], ['', ROOT]];
+    for (const [prefix, dir] of dirs) {
+      let names = [];
+      try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.js')); } catch { continue; }
+      if (!prefix) names = names.filter((n) => n === 'main.js');
+      for (const n of names) {
+        if (hits.length >= maxFiles) return hits;
+        try {
+          const body = fs.readFileSync(path.join(dir, n), 'utf8');
+          if (tokens.some((t) => body.includes(t))) hits.push(prefix ? `${prefix}/${n}` : n);
+        } catch {}
+      }
+    }
+  } catch {}
+  return hits;
+}
+
 /**
  * The deterministic evidence bundle for a repair need. Parses the born_from signature
- * (self-audit:<detector>:<file>); a self-watch signature has no file → log-tail evidence only.
- * Fail-soft per section; '' when nothing gathers (the caller opens unstudied, honestly).
+ * (self-audit:<detector>:<file>); a self-watch signature has no file → the implicated-code
+ * SEARCH finds the files that carry the signature's distinctive tokens (real code in the
+ * bundle, never a prior). Fail-soft per section; '' when nothing gathers (opens unstudied).
  */
 function preGather(need, { deps = {} } = {}) {
   const bf = String((need && need.born_from) || '');
@@ -82,11 +117,13 @@ function preGather(need, { deps = {} } = {}) {
   const m = bf.match(/^self-audit:([^:]+):(.+)$/);
   if (m) { detector = m[1]; rel = _safeRel(m[2]); }
   const sections = [];
-  if (rel) {
-    const f = _fileSection(rel); if (f) sections.push(f);
-    const g = _gitSection(rel, deps); if (g) sections.push(g);
+  let rels = rel ? [rel] : [];
+  if (!rels.length) rels = _findImplicated(String((need && need.need) || bf)).map(_safeRel).filter(Boolean);
+  for (const r of rels.slice(0, 2)) {
+    const f = _fileSection(r); if (f) sections.push(f);
+    const g = _gitSection(r, deps); if (g) sections.push(g);
   }
-  const l = _logSection(rel, detector); if (l) sections.push(l);
+  const l = _logSection(rel || rels[0] || null, detector); if (l) sections.push(l);
   return sections.join('\n\n').slice(0, BUNDLE_CAP);
 }
 
@@ -100,13 +137,43 @@ ${bundle || '(no evidence gathered — reason from the finding text alone and sa
 Reply in at most 1200 chars: (1) the ROOT CAUSE in 2-3 sentences, (2) the MINIMAL repair, (3) an exact FILE:LINE citation for every claim (e.g. lib/x.js:42). If the evidence is insufficient to be sure, say precisely what to inspect next, with file paths — never guess a cause.`;
 }
 
-// A diagnosis must cite her own code (file:line), not the open web, and must not be narration.
+// A diagnosis must cite her own code (file:line), not the open web, and must not be narration —
+// and (Lucas 08-27: real code, real citations) every repo-shaped citation must point at code that
+// EXISTS: a cited file that isn't on disk, or a line past EOF, is a hallucinated citation and
+// invalidates the whole diagnosis. Non-repo paths (node:internal, package internals) are ignored.
 function validateDiagnosis(text) {
   const t = String(text || '').trim();
   if (t.length < 60) return false;
-  if (!/[\w./\\-]+\.(?:js|py|md):\d+/.test(t)) return false;                 // at least one FILE:LINE
+  const cites = t.match(/[\w./\\-]+\.(?:js|py|md):\d+/g) || [];
+  if (!cites.length) return false;                                           // at least one FILE:LINE
   try { if (require('./canvas_command').isNarration(t)) return false; } catch {}
+  for (const c of cites) {
+    const [, file, line] = c.match(/^(.*):(\d+)$/) || [];
+    const rel = _safeRel(file);
+    if (!rel) continue;                                                      // not repo-shaped → not ours to verify
+    try {
+      const body = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+      if (parseInt(line, 10) > body.split('\n').length) return false;        // line past EOF = hallucinated
+    } catch { return false; }                                                // repo-shaped but absent = hallucinated
+  }
   return true;
 }
 
-module.exports = { isRepairNeed, preGather, diagnosisPrompt, validateDiagnosis, _safeRel, BUNDLE_CAP };
+// ── STUDY CITATION VERIFICATION (Lucas 08-27: capability builds from REAL SOURCED CITES) ───────
+// The skill-study validator only checked that URLs were PRESENT — a hallucinated URL passed. The
+// site ledger records every page she actually fetches, so "cited" is checkable against "read":
+// a study citing pages the ledger has never seen is composed, not sourced. Requires ≥1 cited URL
+// ledger-verified; returns the split so the caller can log the unverified tail.
+function verifyStudyCitations(study, { deps = {} } = {}) {
+  const urls = [...new Set(String(study || '').match(/https?:\/\/[^\s"'<>)\]]+/g) || [])].slice(0, 8);
+  if (!urls.length) return { ok: false, verified: [], unverified: [], reason: 'no source URLs' };
+  const sl = (deps && deps.siteLedger) || require('./site_ledger');
+  const verified = [], unverified = [];
+  for (const u of urls) {
+    let row = null; try { row = sl.seen(u); } catch {}
+    (row ? verified : unverified).push(u);
+  }
+  return { ok: verified.length >= 1, verified, unverified, reason: verified.length ? null : 'cited URLs were never actually read (no site-ledger record)' };
+}
+
+module.exports = { isRepairNeed, preGather, diagnosisPrompt, validateDiagnosis, verifyStudyCitations, _findImplicated, _sigTokens, _safeRel, BUNDLE_CAP };

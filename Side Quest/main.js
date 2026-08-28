@@ -15614,6 +15614,18 @@ async function autonomyTick() {
                   } else if (study && !isRepair && (require('./lib/canvas_command').isNarration(study) || !/https?:\/\//.test(study))) {
                     console.log(`[autonomy] need #${need.id} study REJECTED (${/https?:\/\//.test(study) ? 'narration' : 'no source URLs'}) — opening unstudied`);
                     study = '';
+                  } else if (study && !isRepair) {
+                    // REAL SOURCED CITES (Lucas 08-27): URL presence is not sourcing — a study's
+                    // cited pages must exist in the site ledger (she actually READ them). A study
+                    // citing pages never fetched is composed, and building from it would bake a
+                    // hallucination into her own capabilities.
+                    const _vc = _diag ? _diag.verifyStudyCitations(study) : { ok: true, unverified: [] };
+                    if (!_vc.ok) {
+                      console.log(`[autonomy] need #${need.id} study REJECTED (${_vc.reason}) — opening unstudied`);
+                      study = '';
+                    } else if (_vc.unverified.length) {
+                      console.log(`[autonomy] need #${need.id} study: ${_vc.verified.length} cite(s) ledger-verified, ${_vc.unverified.length} NEVER READ (${_vc.unverified[0].slice(0, 60)}…) — kept, unverified cites named`);
+                    }
                   }
                 } catch (e) { console.error('[autonomy] study pass failed:', e.message); }
                 finally { try { require('./lib/board').release(studySlot); } catch {} }

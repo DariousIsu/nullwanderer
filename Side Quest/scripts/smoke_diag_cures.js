@@ -160,6 +160,8 @@ const ok = (c, m) => { if (c) { pass++; console.log('  \u2713', m); } else { fai
     ok(/lane='watch' rows ONLY/.test(ldSrc), 'localdb: self-watch findings scoped to lane=watch + the needs ledger');
     const opSrc = fs.readFileSync(path.join(ROOT, 'lib', 'operator.js'), 'utf8');
     ok(/OMNIBUS event bus/.test(opSrc) && /NEVER self-watch findings/.test(opSrc), 'operator: obs_query doc carries the same boundary');
+    ok(/verifyStudyCitations\(study\)/.test(fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8')),
+      'main.js: the study pass verifies cited URLs against the ledger (cited = actually read; Lucas 08-27)');
 
     // ── wiring pins (main.js + doors) ──────────────────────────────────────────────────────────
     const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
