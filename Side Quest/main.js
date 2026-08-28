@@ -2868,6 +2868,24 @@ app.whenReady().then(() => {
               } else console.log(`[site-sweep] (no session for narration) ${_line}`);
             }
           }
+        // S2 THE ROAD RESUMER (design D4): a pending document debt re-runs on pace (30 min) until
+        // a REGISTERED delivery clears it — research-lane resume (his lane rule), lull-gated, the
+        // same in-flight latch as a live order. A deferral inside just waits for the next pace.
+        try {
+          const _dr2 = require('./lib/document_road');
+          if (!_conversationActive() && !_roadRunInFlight && _dr2.resumeDue()) {
+            const _pr = _dr2.pendingResume();
+            _dr2.markResumeTry();
+            _roadRunInFlight = true;
+            console.log(`[road] S2 resumer: re-running "${(_pr && _pr.slug) || '(unbound)'}" (paced; the document is still owed)`);
+            const _ordR = { deliverable: 'report', target: null, topic: (_pr && (_pr.ask || _pr.slug)) || 'the owed document' };
+            const _rcR = { ts: Date.now(), slug: (_pr && _pr.slug) || null, size: (_pr && _pr.size) || 'report', owners: ['road-resume'] };
+            _roadRun({
+              order: _ordR, road: _rcR, sessionId: currentSessionId, asResume: true,
+              userText: `${(_pr && _pr.ask) || 'the owed document'} — RESUME: an earlier run left this document unfinished (${(_pr && _pr.note) || 'partial'}). If the complete document already exists on the canvas, save it to notes/${(_pr && _pr.slug) || 'report'}.md and point there; otherwise finish writing it now.`,
+            }).finally(() => { _roadRunInFlight = false; });
+          }
+        } catch (e) { console.error('[road] resumer failed:', e.message); }
         } catch (e) { console.error('[site-sweep] tick failed (metabolism proceeds):', e.message); }
         const capPerHour = parseInt(process.env.ZOE_RECHECK_PER_HOUR, 10) || 12;
         const hour = Math.floor(Date.now() / 3600000);
@@ -18507,7 +18525,7 @@ function _bookDeliveryPromises(say, { sessionId, turnStartTs = 0 } = {}) {
 // ack (the say-gate; an empty run posts an honest failure). The promise booking still runs
 // alongside — S3 subtracts it once the meter proves the road delivers.
 let _roadRunInFlight = false;
-async function _roadRun({ order, road, userText, sessionId }) {
+async function _roadRun({ order, road, userText, sessionId, asResume = false }) {
   const t0 = Date.now();
   const dr = require('./lib/document_road');
   try {
@@ -18515,7 +18533,10 @@ async function _roadRun({ order, road, userText, sessionId }) {
     // sources instead of writing down the press-release facts (the 1,520-byte-report class).
     let _held = ''; try { _held = dr.heldMaterial({ topic: (order && order.topic) || userText }); } catch {}
     if (_held) console.log(`[road] held material riding the mandate (${_held.split('\n').length} item(s))`);
-    const sp = await runCloudOperator({ userMessage: dr.mandate({ order, road, userText, held: _held }), task: true, autonomous: false, budgetMult: dr.BUDGET[road.size] || 1 });
+    // S2 lane rule (his decision): a DIRECT order rides interactive; a RESUME rides research
+    // (autonomous — the pre-prep probe applies, and a deferral just waits for the next pace).
+    const sp = await runCloudOperator({ userMessage: dr.mandate({ order, road, userText, held: _held }), task: true, autonomous: asResume, budgetMult: dr.BUDGET[road.size] || 1 });
+    if (asResume && sp && sp.deferred) { console.log('[road] S2 resume deferred by quota — the debt stands, next pace retries'); return; }
     let ans = String((sp && sp.answer) || '').trim();
     // S1.7 SAY-GATE v2 (leg-3 catch): a non-empty final that is a PLAN ("let me read X to write
     // the report") is not a deliverable — ONE re-drive with the specimen quoted back and a bigger
@@ -18526,7 +18547,7 @@ async function _roadRun({ order, road, userText, sessionId }) {
         const sp2 = await runCloudOperator({
           userMessage: dr.mandate({ order, road, userText, held: _held }) +
             `\n\nYOUR PREVIOUS RUN ENDED ON A PLAN, not the deliverable — it said: "${ans.slice(0, 220)}". Do NOT plan again. EXECUTE now: read the named material with your tools and WRITE THE WHOLE DOCUMENT in this run; the final message is the pointer to the finished document, or the honest partial.`,
-          task: true, autonomous: false, budgetMult: (dr.BUDGET[road.size] || 1) * 1.5,
+          task: true, autonomous: asResume, budgetMult: (dr.BUDGET[road.size] || 1) * 1.5,
         });
         const ans2 = String((sp2 && sp2.answer) || '').trim();
         if (ans2 && !dr.planShapedFinal(ans2)) ans = ans2;
@@ -18535,10 +18556,12 @@ async function _roadRun({ order, road, userText, sessionId }) {
       } catch (e) { console.error('[road] re-drive failed:', e.message); }
     }
     const msg = ans || `I started the ${String(order.deliverable || 'document')} and the run returned nothing — that's a failure on my side, not progress. It stays on my ledger and I'll retry with the material I hold.`;
-    const row = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'document-road', unprompted: 1 });
-    try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
-    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
-    try { require('./lib/blackboard').append({ source: 'document-road', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
+    if (sessionId) {
+      const row = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'document-road', unprompted: 1 });
+      try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+      try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+      try { require('./lib/blackboard').append({ source: 'document-road', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
+    } else console.log(`[road] (no session) run outcome: ${msg.slice(0, 160)}`);
     try { dr.meter(road, ans ? 'road-run' : 'road-run-empty'); } catch {}
     // Root-A identity: a file the run landed in notes/ registers so the artifact has identity
     // and update-in-place keeps working (same contract as the kept-branch registration).
@@ -18550,8 +18573,13 @@ async function _roadRun({ order, road, userText, sessionId }) {
         _reg.record({ slug: _r.slug, relPath: 'notes/' + require('path').basename(_fw.path), title: `Report — ${String(order.topic || order.deliverable || '').slice(0, 80)}`, topic: order.topic || '' });
         try { require('./lib/deliverable_projects').noteCompose({ topic: order.topic || '', artifactSlug: _r.slug }); } catch {}
         console.log(`[road] S1 delivered + registered: ${_fw.path} (${Math.round((Date.now() - t0) / 1000)}s)`);
+        // S2: a REGISTERED delivery is the only thing that pays the debt — a bare pointer claim
+        // never clears it (leg 1's fabricated "saved at notes/…" is why).
+        try { dr.clearResume({ why: 'registered delivery' }); } catch {}
       } else {
         console.log(`[road] S1 ${ans ? 'answered — pointer/partial posted (no notes/ file this run)' : 'EMPTY RUN — honest failure posted'} (${Math.round((Date.now() - t0) / 1000)}s)`);
+        // S2: anything short of a registered artifact records the debt; the paced resumer pays it.
+        try { dr.noteResume({ slug: road.slug, ask: (order && order.topic) || String(userText).slice(0, 200), note: ans ? ans.slice(0, 200) : 'empty run', size: road.size }); } catch {}
       }
     } catch {}
   } catch (e) {

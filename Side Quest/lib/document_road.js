@@ -94,6 +94,32 @@ function tap(organ, ref = null, { deps = {}, nowMs = Date.now() } = {}) {
   else notePreClaim(organ, ref, { nowMs });
 }
 
+// ── S2: the resume loop (design D4) — a partial NEVER strands ───────────────────────────────────
+// A road run that ends without a registered artifact records a pending resume; the paced resumer
+// (main.js metabolism hook) re-runs the document until a delivery clears it. ONE pending resume
+// at a time (the newest ask wins — re-orders update the same document anyway).
+const RESUME_KEY = 'road.resume';
+const RESUME_PACE_MS = 30 * 60 * 1000;
+function noteResume({ slug, ask, note, size = 'report', deps = {}, nowMs = Date.now() } = {}) {
+  try { _db(deps).setMeta(RESUME_KEY, JSON.stringify({ slug: slug || null, ask: String(ask || '').slice(0, 300), note: String(note || '').slice(0, 300), size, ts: nowMs, lastTryTs: 0 })); } catch {}
+  console.log(`[road] S2 resume noted: "${slug || '(unbound)'}" — the document is owed until a delivery clears it`);
+}
+function pendingResume({ deps = {} } = {}) {
+  try { return JSON.parse(_db(deps).getMeta(RESUME_KEY) || 'null'); } catch { return null; }
+}
+function markResumeTry({ deps = {}, nowMs = Date.now() } = {}) {
+  const r = pendingResume({ deps });
+  if (r) { r.lastTryTs = nowMs; try { _db(deps).setMeta(RESUME_KEY, JSON.stringify(r)); } catch {} }
+}
+function resumeDue({ deps = {}, nowMs = Date.now() } = {}) {
+  const r = pendingResume({ deps });
+  return !!(r && nowMs - (r.lastTryTs || 0) >= RESUME_PACE_MS);
+}
+function clearResume({ deps = {}, why = 'delivered' } = {}) {
+  const r = pendingResume({ deps });
+  if (r) { try { _db(deps).setMeta(RESUME_KEY, 'null'); } catch {} console.log(`[road] S2 resume cleared (${why}): "${r.slug || '(unbound)'}"`); }
+}
+
 // ── S1.7: the say-gate's SHAPE teeth (leg 3's specimen: "I have the core source material. Let me
 // read the full research paper and the Statt article to write the complete report." — a PLAN
 // posted as the final). A final is plan-shaped when it ends on forward intent and carries no
@@ -195,4 +221,4 @@ function mandate({ order, road, userText, held = '' } = {}) {
 
 function _resetForTest() { _lastClaim = null; _preNotes = []; }
 
-module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, tap, claims, mandate, BUDGET, anaphoricOrder, resolveAnaphor, heldMaterial, planShapedFinal, _resetForTest, CLAIMS_KEY, CLAIMS_CAP, ANAPHOR_WINDOW_MS };
+module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, tap, claims, mandate, BUDGET, anaphoricOrder, resolveAnaphor, heldMaterial, planShapedFinal, noteResume, pendingResume, markResumeTry, resumeDue, clearResume, _resetForTest, CLAIMS_KEY, CLAIMS_CAP, ANAPHOR_WINDOW_MS, RESUME_KEY, RESUME_PACE_MS };

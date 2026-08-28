@@ -125,6 +125,19 @@ ok(ct.owners.includes('canvas-cmd'), 'a pre-claim canvas-cmd tap is swept into t
 road.tap('canvas-cmd', null, { deps });
 ok(ct.owners.filter((o) => o === 'canvas-cmd').length === 2, 'a post-claim canvas-cmd tap meters directly');
 
+// ── S2: the resume loop — a partial never strands ───────────────────────────────────────────────
+const rmem = new Map();
+const rdeps = { db: { getMeta: (k) => rmem.get(k) || null, setMeta: (k, v) => rmem.set(k, v) } };
+ok(road.pendingResume({ deps: rdeps }) === null, 'no debt → no pending resume');
+road.noteResume({ slug: 'report-analysis-frontier-act', ask: 'the FRONTIER Act analysis', note: 'plan-shaped twice', size: 'report', deps: rdeps, nowMs: now });
+ok(road.pendingResume({ deps: rdeps }).slug === 'report-analysis-frontier-act', 'a non-registered outcome records the debt');
+ok(road.resumeDue({ deps: rdeps, nowMs: now }) === true, 'a fresh debt is due (lastTryTs 0)');
+road.markResumeTry({ deps: rdeps, nowMs: now });
+ok(road.resumeDue({ deps: rdeps, nowMs: now + 60e3 }) === false, 'inside the pace window → not due (no hammering)');
+ok(road.resumeDue({ deps: rdeps, nowMs: now + road.RESUME_PACE_MS + 1000 }) === true, 'past the pace window → due again');
+road.clearResume({ deps: rdeps, why: 'registered delivery' });
+ok(road.pendingResume({ deps: rdeps }) === null, 'only a REGISTERED delivery clears the debt');
+
 // ── wiring: the one door claims, all four organs tap ────────────────────────────────────────────
 const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/document_road'\)\.claim\(\{ order, userText, bind: _bind \}\)/.test(main), 'wiring: the intake door makes the claim with the captured bind');
@@ -143,6 +156,11 @@ ok(/planShapedFinal\(ans\)/.test(main) && /ONE re-drive/.test(main) && /YOUR PRE
   'wiring S1.7: a plan-shaped final gets exactly one re-drive with the specimen quoted back');
 ok(/twice ended on a plan/.test(main), 'wiring S1.7: a second plan degrades to a framed honest partial — never a third run');
 ok(/document_road'\)\.tap\('canvas-cmd'\)/.test(main), 'wiring S1.7: the canvas-cmd door (the seventh owner) taps the meter');
+ok(/clearResume\(\{ why: 'registered delivery' \}\)/.test(main) && /noteResume\(\{ slug: road\.slug/.test(main),
+  'wiring S2: only a registered delivery pays the debt; every lesser outcome records it');
+ok(/resumeDue\(\)/.test(main) && /markResumeTry\(\)/.test(main) && /asResume: true/.test(main),
+  'wiring S2: the paced resumer re-runs the owed document on the research lane');
+ok(/autonomous: asResume/.test(main), "wiring S2: the lane rule — direct orders interactive, resumes ride research");
 
 console.log(`\nsmoke_document_road: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
