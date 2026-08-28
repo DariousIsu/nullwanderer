@@ -127,6 +127,17 @@ function preGather(need, { deps = {} } = {}) {
   return sections.join('\n\n').slice(0, BUNDLE_CAP);
 }
 
+// A rehearsal run advancing a repair-born need — grandfathered from before the repair lane
+// existed. The lane filters repair ROWS out of the tool pipe, but the iterate branch keys on the
+// loaded RUN, so a pre-cure run kept advancing (need #94 schema-failed 103x/7d against its own
+// failure count). Returns the need row when the run should be discarded, else null.
+function isRepairRunFor(run, needs) {
+  const m = run && run.slug && String(run.slug).match(/^need-(\d+)-/);
+  if (!m) return null;
+  const row = (needs || []).find((n) => n && n.id === parseInt(m[1], 10));
+  return row && isRepairNeed(row) ? row : null;
+}
+
 /** The one model pass — diagnosis over evidence, never a fix, never a web search. */
 function diagnosisPrompt(need, bundle) {
   return `DIAGNOSIS ONLY — do not build, fix, or search the web. Your own source audit found this defect in YOUR OWN program: "${String((need && need.need) || '').slice(0, 300)}".
@@ -176,4 +187,4 @@ function verifyStudyCitations(study, { deps = {} } = {}) {
   return { ok: verified.length >= 1, verified, unverified, reason: verified.length ? null : 'cited URLs were never actually read (no site-ledger record)' };
 }
 
-module.exports = { isRepairNeed, preGather, diagnosisPrompt, validateDiagnosis, verifyStudyCitations, _findImplicated, _sigTokens, _safeRel, BUNDLE_CAP };
+module.exports = { isRepairNeed, isRepairRunFor, preGather, diagnosisPrompt, validateDiagnosis, verifyStudyCitations, _findImplicated, _sigTokens, _safeRel, BUNDLE_CAP };

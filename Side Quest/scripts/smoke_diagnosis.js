@@ -59,6 +59,13 @@ ok(impl.length >= 1 && impl.every((f) => /\.js$/.test(f)), `implicated files fou
 const bundle2 = dg.preGather({ need: 'I need a fix for a recurring failure in my own program: domainLeashTokens exploded', born_from: 'self-watch: [echo] FAILED: domainLeashTokens exploded' });
 ok(/IMPLICATED FILE/.test(bundle2), 'a file-less self-watch need now gathers REAL CODE via the token search');
 
+// the grandfathered-run intercept: a run advancing a repair-born need must leave the rehearse pipe
+const rowsFor = [{ id: 94, born_from: 'self-watch: exhaust audit' }, { id: 40, born_from: 'fill-gap:Oregon House committees' }];
+ok(dg.isRepairRunFor({ slug: 'need-94-i-need-a-fix-for-a-recurring-fai' }, rowsFor)?.id === 94, 'repair-born run → its need row returned (discard it)');
+ok(dg.isRepairRunFor({ slug: 'need-40-oregon-house-committee-roster' }, rowsFor) === null, 'a run for a RUN-BORN (skill) need stays in the rehearse pipe');
+ok(dg.isRepairRunFor({ slug: 'canvas-format-polish' }, rowsFor) === null, 'a non-need slug is never intercepted');
+ok(dg.isRepairRunFor({ slug: 'need-94-i-need-a-fix' }, []) === null && dg.isRepairRunFor(null, rowsFor) === null, 'missing row or no run → null (never discard blind)');
+
 // study citations verify against the ledger (cited = actually read)
 const fakeLedger = { seen: (u) => (/known\.gov/.test(u) ? { url: u } : null) };
 const vc1 = dg.verifyStudyCitations('Pattern: use X. Sources: https://known.gov/how and https://never-read.example/post', { deps: { siteLedger: fakeLedger } });

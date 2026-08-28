@@ -18801,6 +18801,18 @@ async function _needsPressure(now = Date.now()) {
   let run = null; try { run = require('./lib/rehearsal_driver').load(); } catch {}
   const lastTs = parseInt(db.getMeta('needs.last_rehearse_at') || '0', 10) || 0;
   const needs = (capn.listOpen() || []).map((n) => ({ ...n, triage: (() => { try { return db.getMeta(`need.${n.id}.triage`) || null; } catch { return null; } })() }));
+  // WIRE-4 COMPLEMENT (2026-08-27 night): the repair lane filters repair-born ROWS out of the
+  // tool pipe, but a run started BEFORE the cure leaks through the iterate branch, which keys on
+  // the loaded RUN — need #94's grandfathered run kept advancing (and schema-failing) after its
+  // class was intercepted. Discard it; the row already flows to the diagnosis queue below.
+  try {
+    const _rrow = require('./lib/diagnosis').isRepairRunFor(run, needs);
+    if (_rrow) {
+      require('./lib/rehearsal_driver').discard();
+      console.log(`[needs] repair-born run "${run.slug}" discarded — need #${_rrow.id} belongs to the repair lane, not the rehearse pipe (grandfathered-run leak)`);
+      run = null;
+    }
+  } catch (e) { console.error('[needs] repair-run intercept failed:', e.message); }
   // M2.5.6 STALE-NEED REAPER: park OPEN needs that have sat past the reap age without ever being
   // built (self-watch needs are exempt — they stay as self-repair targets). Keeps the pressure lane
   // pointed at live work instead of a growing pile of never-buildable inquiry/external needs.
