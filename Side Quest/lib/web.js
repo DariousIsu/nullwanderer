@@ -485,7 +485,15 @@ async function open(target, { autonomous = false, source = null } = {}) {
       const r = await _meetingReroute(url, _mk);
       if (r && r.ok) {
         console.log(`[web] F31 reroute — ${_mk} URL → the canvas meeting pane (her browser stays free)${r.already ? ' [meeting already live — no double-start]' : ''}`);
-        return { ok: true, url, rerouted: 'canvas-meeting', title: _mk === 'teams' ? 'Microsoft Teams' : 'Google Meet', why: 'meeting URLs live in the canvas pane, not the browser' };
+        // THE MEETING-MISFIRE CURE (2026-08-28): a rerouted open used to return READING-LESS ok —
+        // the tool-followup then deep-read her (unrelated) browser page, attributed it to the meet
+        // link, and voiced "that link didn't work" MID-JOIN. The result now states the truth the
+        // followup must repeat, so an empty result can never be misread as a failed open.
+        return { ok: true, url, rerouted: 'canvas-meeting', title: _mk === 'teams' ? 'Microsoft Teams' : 'Google Meet',
+          why: 'meeting URLs live in the canvas pane, not the browser',
+          reading: r.already
+            ? 'That meeting is ALREADY live in my dedicated canvas meeting pane — the link is handled; nothing needs opening or retrying.'
+            : 'The meeting is being joined in my dedicated canvas meeting pane right now — the link is handled; nothing needs opening or retrying.' };
       }
       console.error(`[web] F31 reroute REFUSED (${(r && r.reason) || 'no result'}) — falling through to a plain browser open`);
     } catch (e) { console.error('[web] F31 reroute failed — falling through to a plain browser open:', e.message); }

@@ -33,11 +33,15 @@ ok(web.meetingUrlKind('not a url') === null && web.meetingUrlKind('') === null, 
   const r1 = await web.open('https://meet.google.com/abc-defg-hij');
   ok(r1.ok === true && r1.rerouted === 'canvas-meeting', 'open(meet URL) reroutes to the canvas funnel (no browser)');
   ok(calls.length === 1 && calls[0].kind === 'meet' && /abc-defg-hij/.test(calls[0].url), 'the handler received the url and kind');
+  ok(/being joined in my dedicated canvas meeting pane/.test(r1.reading),
+    'the rerouted result STATES the join truth (the misfire cure — an empty result once read as a failed open)');
   const r2 = await web.open('meet.google.com/zzz-aaaa-bbb');
   ok(r2.rerouted === 'canvas-meeting' && calls.length === 2, 'a bare scheme-less meet link (toUrl-normalized) also reroutes');
   web.setMeetingReroute(async () => ({ ok: true, already: true }));
   const r3 = await web.open('https://teams.live.com/meet/12345');
   ok(r3.ok === true && r3.rerouted === 'canvas-meeting', 'an already-live meeting answers ok without double-starting');
+  ok(/ALREADY live in my dedicated canvas meeting pane/.test(r3.reading),
+    'the already-live variant says so (no retry, no failure claim to voice)');
   web.setMeetingReroute(null);
 
   // ── wiring greps ──────────────────────────────────────────────────────────────────────────────
@@ -48,6 +52,10 @@ ok(web.meetingUrlKind('not a url') === null && web.meetingUrlKind('') === null, 
   ok(/F31 reroute registered/.test(mainSrc), 'wiring: registration logs (observable, never silent)');
   const webSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'web.js'), 'utf8');
   ok(/if \(!url\) return \{ ok: false, reason: 'empty target' \};\s*\n\s*const _mk = meetingUrlKind\(url\);/.test(webSrc), 'wiring: the guard is open()\'s FIRST act after url validation (before the re-spin brake and every browser touch)');
+  ok(/t\.tag === 'web-open' && r\.rerouted === 'canvas-meeting'/.test(mainSrc),
+    'wiring: the ack-then-async guard — a rerouted open NEVER deep-reads her browser (the misfire attributed an unrelated page to the meet link)');
+  ok(/Do NOT open the link again and do NOT say the link failed/.test(mainSrc),
+    'wiring: the followup is TOLD the truth to repeat — a false "link didn\'t work" can\'t be voiced mid-join');
 
   // ── the T-5 auto-join organ (Lucas 2026-08-20: she presses her own join button) ───────────────
   ok(web.meetingUrlFromEvent({ hangoutLink: 'https://meet.google.com/abc-defg-hij' }) === 'https://meet.google.com/abc-defg-hij', 'event extraction: hangoutLink wins');

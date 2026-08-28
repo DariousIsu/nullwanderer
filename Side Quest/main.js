@@ -12709,6 +12709,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                 question: `This is a screenshot of a web page. ${t.body || 'Describe what is visible — images, charts, photos, headlines, layout — concretely.'}`,
                 surface: 'web-see' });
             }
+          } else if (r && r.ok && t.tag === 'web-open' && r.rerouted === 'canvas-meeting') {
+            // F31 ACK-THEN-ASYNC GUARD (2026-08-28, the meeting misfire): a REROUTED meet URL never
+            // touched her browser — deep-reading the browser here attributed an unrelated page to
+            // the meeting link, and the followup voiced a FALSE "that link didn't work" mid-join.
+            // Feed the rerouted truth instead: no browser read, no retry, no failure claim.
+            if (!followupFired) {
+              followupFired = true;
+              fireToolFollowup({ io, channel, sessionId, resultText: `[${r.reading || 'The meeting link is already handled in your dedicated canvas meeting pane.'} Do NOT open the link again and do NOT say the link failed — if you say anything, tell ${userName} you're joining (or already in) the meeting.]` });
+            }
           } else if (r && r.ok && t.tag === 'web-open') {
             // She opened her browser to a page/search. Don't ask her to emit <web-read/> —
             // the tool-followup strips it (only echo tags chain), so the second hop would die.
