@@ -18844,20 +18844,28 @@ async function _needsPressure(now = Date.now()) {
     const _cand = _repairRows.filter((n) => !n.diagnosis).sort((a, b) => (b.updated_ts || 0) - (a.updated_ts || 0))[0];
     if (_cand && now - _lastDiag >= 30 * 60 * 1000) {
       db.setMeta('needs.last_diagnosis_at', String(now));
-      const _tries = (parseInt(db.getMeta(`need.${_cand.id}.diag_tries`) || '0', 10) || 0) + 1;
-      db.setMeta(`need.${_cand.id}.diag_tries`, String(_tries));
       const _sp = await runCloudOperator({ userMessage: _diag.diagnosisPrompt(_cand, _diag.preGather(_cand)), autonomous: true });
-      const _study = String((_sp && _sp.answer) || '').trim().slice(0, 2500);
-      if (_study && _diag.validateDiagnosis(_study)) {
-        require('./lib/capability_need').setDiagnosis(_cand.id, _study);
-        capn.setStatus(_cand.id, 'proposed', { nowMs: now });
-        console.log(`[needs] repair need #${_cand.id} DIAGNOSED (${(_study.match(/[\w./\\-]+\.(?:js|py|md):\d+/g) || []).length} file:line cite(s)) → proposed to the builder`);
-        try { _surfaceExternalNeeds(now); } catch {}
-      } else if (_tries >= 3) {
-        capn.setStatus(_cand.id, 'parked', { nowMs: now });
-        console.error(`[needs] repair need #${_cand.id} diagnosis failed ${_tries}x (${_study ? 'no file:line citations' : 'empty'}) — parked, named here so the failure is itself watchable`);
+      // A quota-deferred run is GOVERNANCE, not a failed diagnosis — it must not march the need
+      // toward the 3-try park (the burn-down governor flickers by the minute; #99 reached 2/3 and
+      // #102 1/3 on pure throttle flicker). Pacing already advanced above, so no hammering; the
+      // rest of the pressure pass continues untouched.
+      if (_sp && _sp.deferred) {
+        console.log(`[needs] repair need #${_cand.id} diagnosis deferred by quota — try not counted (governance, not failure)`);
       } else {
-        console.log(`[needs] repair need #${_cand.id} diagnosis ${_study ? 'rejected (no file:line citations)' : 'empty'} — retry ${_tries}/3`);
+        const _tries = (parseInt(db.getMeta(`need.${_cand.id}.diag_tries`) || '0', 10) || 0) + 1;
+        db.setMeta(`need.${_cand.id}.diag_tries`, String(_tries));
+        const _study = String((_sp && _sp.answer) || '').trim().slice(0, 2500);
+        if (_study && _diag.validateDiagnosis(_study)) {
+          require('./lib/capability_need').setDiagnosis(_cand.id, _study);
+          capn.setStatus(_cand.id, 'proposed', { nowMs: now });
+          console.log(`[needs] repair need #${_cand.id} DIAGNOSED (${(_study.match(/[\w./\\-]+\.(?:js|py|md):\d+/g) || []).length} file:line cite(s)) → proposed to the builder`);
+          try { _surfaceExternalNeeds(now); } catch {}
+        } else if (_tries >= 3) {
+          capn.setStatus(_cand.id, 'parked', { nowMs: now });
+          console.error(`[needs] repair need #${_cand.id} diagnosis failed ${_tries}x (${_study ? 'no file:line citations' : 'empty'}) — parked, named here so the failure is itself watchable`);
+        } else {
+          console.log(`[needs] repair need #${_cand.id} diagnosis ${_study ? 'rejected (no file:line citations)' : 'empty'} — retry ${_tries}/3`);
+        }
       }
     }
   } catch (e) { console.error('[needs] repair lane failed:', e.message); }

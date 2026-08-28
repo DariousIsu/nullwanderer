@@ -172,6 +172,10 @@ const ok = (c, m) => { if (c) { pass++; console.log('  \u2713', m); } else { fai
       'main.js: audit/dedup/nightly results persist durably (not console-only)');
     ok(/BAD NEWS from a completed pass/.test(main), 'main.js: a bad-news audit verdict is console.error (self_watch-mintable)');
     ok(/retireQuietRepairs\(\)/.test(main), 'main.js: the quiet-retire wire runs at the curator seam');
+    ok(/diagnosis deferred by quota — try not counted/.test(main),
+      'main.js: a quota-deferred diagnosis run does NOT burn a try (throttle flicker must never park a need)');
+    ok(/isRepairRunFor\(run, needs, \{ getNeed:/.test(main),
+      'main.js: the grandfathered-run intercept looks the row up directly (rehearsing is invisible to listOpen)');
     const sv = fs.readFileSync(path.join(ROOT, 'lib', 'status_vector.js'), 'utf8');
     ok(/Producer lanes:/.test(sv) && /idleClosedH/.test(sv), 'status_vector: producers render in block(); closures carry DURATION');
     const so = fs.readFileSync(path.join(ROOT, 'lib', 'self_ops.js'), 'utf8');
