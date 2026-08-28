@@ -368,6 +368,22 @@ function mockClient(overrides = {}) {
     ok('_BOT_WALL_RE does NOT match a real bill page', !S._BOT_WALL_RE.test('HB0606 Sponsor: Rep. Jane Doe. Title: Public Education Amendments. Status: enrolled.'));
   }
 
+  // ── #103 client-side hardening: FTS5 hyphen column-exclusion quoted away at the query seam ──
+  {
+    ok('sanitize: hyphen → space (co-sponsors erred as column-exclusion; quoting dies in the old engine\'s own strip)',
+      S.sanitizeFtsQuery('co-sponsors SB200') === 'co sponsors SB200');
+    ok('sanitize: leading hyphen neutralized (america-first shapes made "no such column: first")',
+      S.sanitizeFtsQuery('america-first policy') === 'america first policy');
+    ok('sanitize: hyphen-free query stays byte-identical',
+      S.sanitizeFtsQuery('first lady of Florida') === 'first lady of Florida');
+    ok('sanitize: breaker strip still runs first (colon stripped, hyphen spaced)',
+      S.sanitizeFtsQuery('topic: social-media contacts') === 'topic social media contacts');
+    ok('sanitize: idempotent — a second pass returns the same string',
+      S.sanitizeFtsQuery(S.sanitizeFtsQuery('co-sponsors SB200')) === 'co sponsors SB200');
+    ok('sanitize: a lone dash collapses to nothing dangerous',
+      S.sanitizeFtsQuery('a - b') === 'a b');
+  }
+
   console.log('\n' + (fail === 0 ? 'ALL PASS' : 'FAILURES') + ` - ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

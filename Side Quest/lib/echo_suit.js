@@ -314,8 +314,16 @@ const FTS_QUERY_TOOLS = new Set([
 const FTS_BREAKER_RE = /['"():^]/;
 function sanitizeFtsQuery(q) {
   const s = String(q == null ? '' : q);
-  if (!FTS_BREAKER_RE.test(s)) return s;                 // clean → untouched (byte-identical)
-  return s.replace(/['"():^]/g, ' ').replace(/\s+/g, ' ').trim();
+  const stripped = FTS_BREAKER_RE.test(s) ? s.replace(/['"():^]/g, ' ').replace(/\s+/g, ' ').trim() : s;
+  // #103 (2026-08-28, the repair loop's diagnosis at this very seam): a BARE hyphen in the query
+  // parses as FTS5 column-EXCLUSION grammar Echo-side — "co-sponsors" → co + -sponsors →
+  // "no such column: sponsors" (the e525668 lesson). QUOTING here does NOT survive: the pre-fix
+  // engine's own sanitizer strips double quotes before the grammar sees them. Hyphen → space is
+  // the shape that is safe on EVERY engine build: FTS5's tokenizer already splits hyphenated
+  // words at index time, so `co sponsors` (implicit AND) matches the same rows the phrase would.
+  // A hyphen-free query stays byte-identical.
+  if (!stripped.includes('-')) return stripped;
+  return stripped.replace(/-/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 // db_query's default budget is 5s; the app's OWN queries pass timeout_seconds:20 for the multi-million-row
@@ -589,6 +597,14 @@ class EchoSuit {
     // stays the ceiling for every interactive/agent-loop call, so a hung tool still can't stall a turn.
     const _TMO = (Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0) ? opts.timeoutMs : _TMO_DEFAULT;
     try {
+      // #103 HARDENING (2026-08-28): sanitize FTS queries at the ONE seam every caller crosses.
+      // prepareDoArgs covers only the <echo-do> tag path; the operator pick-loop and the internal
+      // helpers dispatch raw model-authored args — the p176 "no such column: first/media"
+      // specimens came through here bare. Idempotent with the tag path's earlier pass.
+      if (tag && tag.kind === 'do' && FTS_QUERY_TOOLS.has(tag.name) && tag.args && typeof tag.args.query === 'string') {
+        const _sq = sanitizeFtsQuery(tag.args.query);
+        if (_sq !== tag.args.query) tag = { ...tag, args: { ...tag.args, query: _sq } };
+      }
       // BUILD 0b (Lucas 08-21, "skip the keys — just use the stealth browsering"): web_search is
       // served from HER OWN stealth lane FIRST (pooled tabs, lib/search_lane); the engine's keyless
       // federation is the FALLBACK when the lane misses or errors. The finally block still runs on
