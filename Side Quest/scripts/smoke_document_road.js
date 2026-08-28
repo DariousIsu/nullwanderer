@@ -64,6 +64,37 @@ const m2 = road.mandate({ order: { deliverable: 'summary' }, road: { size: 'brie
 ok(/brief \(1-2 pages\)/.test(m2) && /notes\/report\.md/.test(m2), 'mandate: an unbound brief still writes to a real path');
 ok(road.BUDGET.brief === 0.75 && road.BUDGET.report === 1 && road.BUDGET.dossier === 2, 'the budget table matches the size classes');
 
+// ── S1.5 cure 1: anaphoric completion orders (the p180 live miss, verbatim) ─────────────────────
+ok(road.anaphoricOrder('yea go ahead and get that completed and pulled up on the canvas') === true, "the p180 order that the classifier missed IS an anaphoric completion order");
+ok(road.anaphoricOrder('finish it') === true && road.anaphoricOrder('can you wrap that up') === true, 'finish-it / wrap-that-up shapes hit');
+ok(road.anaphoricOrder('tell me about that') === false, 'telling is not completing — no claim');
+ok(road.anaphoricOrder('go ahead and tell me more about it') === false, 'go-ahead alone never claims');
+ok(road.anaphoricOrder('') === false && road.anaphoricOrder(null) === false, 'empty → false, never a throw');
+const now = Date.now();
+const projs = [
+  { slug: 'report-analysis-frontier-act', title: 'FRONTIER Act analysis', status: 'active', updated_ts: now - 3600e3 },
+  { slug: 'old-thing', title: 'Old', status: 'active', updated_ts: now - 3 * 86400e3 },
+  { slug: 'newest-but-done', title: 'Done', status: 'done', updated_ts: now - 60e3 },
+];
+ok(road.resolveAnaphor({ projects: projs, nowMs: now }).slug === 'report-analysis-frontier-act', "the anaphor resolves to the newest ACTIVE project in the window (done rows never win)");
+ok(road.resolveAnaphor({ projects: [projs[1]], nowMs: now }) === null, 'a stale spine resolves to NOTHING — an anaphor never binds old work');
+
+// ── S1.5 cure 2: held material + the commensurate rail ─────────────────────────────────────────
+const fakeFs = {
+  readdirSync: () => ['oberno_079_xml-the-frontier-act-final-text.pdf', '26-07-21-frontier-act-section-by-section.pdf', 'unrelated.pdf'],
+  statSync: () => ({ size: 316 * 1024 }),
+};
+const held = road.heldMaterial({ topic: 'Frontier Act', deps: { db: { getDb: () => ({ prepare: () => ({ all: () => [{ id: 7, title: 'Text - H.R.9925 - 119th Congress: FRONTIER Act', created_ts: now }] }) }) }, fs: fakeFs, downloadsDir: 'x' } });
+ok(/held document #7/.test(held) && /frontier-act-final-text\.pdf \(316KB\)/.test(held), 'held material lists documents AND downloads with sizes (space/hyphen-blind name match)');
+ok(!/unrelated\.pdf/.test(held), 'non-matching downloads stay out');
+const m3 = road.mandate({ order: { deliverable: 'report' }, road: { size: 'report', slug: 's' }, userText: 'x', held });
+ok(/YOU ALREADY HOLD this source material/.test(m3) && /COMMENSURATE with its sources/.test(m3), 'the mandate carries the held block + the commensurate rail');
+ok(!/YOU ALREADY HOLD/.test(road.mandate({ order: {}, road: { size: 'report' }, userText: 'x' })), 'no held material → no empty held block');
+
+// ── S1.5 cure 3: the swarm offer ────────────────────────────────────────────────────────────────
+ok(/FAN OUT/.test(m3) && /delegate_to_/.test(m3) && /INTEGRATE/.test(m3), 'a report-class mandate offers the swarm (delegate + integrate)');
+ok(!/FAN OUT/.test(road.mandate({ order: {}, road: { size: 'brief' }, userText: 'x' })), 'a brief never fans out');
+
 // ── wiring: the one door claims, all four organs tap ────────────────────────────────────────────
 const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/document_road'\)\.claim\(\{ order, userText, bind: _bind \}\)/.test(main), 'wiring: the intake door makes the claim with the captured bind');
@@ -74,6 +105,8 @@ ok(/task: true, autonomous: false, budgetMult: dr\.BUDGET\[road\.size\]/.test(ma
 ok(/_road && !_roadRunInFlight/.test(main) && /S1 run starting/.test(main), 'wiring S1: the road fires once per claim, one run at a time');
 ok(/that's a failure on my side, not progress/.test(main), 'wiring S1: an empty run posts the honest failure — the say-gate never goes silent');
 ok(/model: 'document-road', unprompted: 1/.test(main), 'wiring S1: delivery posts as her own follow-up message');
+ok(/anaphoricOrder\(userText\)/.test(main) && /resolveAnaphor\(\)/.test(main), 'wiring S1.5: the door falls back to the anaphor resolver before giving up');
+ok(/heldMaterial\(\{ topic:/.test(main) && /held: _held/.test(main), 'wiring S1.5: the held material rides the run mandate');
 
 console.log(`\nsmoke_document_road: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

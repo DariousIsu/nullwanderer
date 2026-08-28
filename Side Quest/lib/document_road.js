@@ -81,23 +81,91 @@ function meterIfRecent(organ, ref = null, { deps = {}, nowMs = Date.now() } = {}
 
 function claims({ deps = {} } = {}) { return _load(deps); }
 
+// ── S1.5 CURE 1: anaphoric completion orders (the p180 miss) ────────────────────────────────────
+// "yea go ahead and get that completed and pulled up on the canvas" carries no deliverable NOUN,
+// so detectDeliverableOrder (precision-over-recall) returns null and the road never saw the
+// order. A completion VERB aimed at "that/it" resolves against the project spine instead — the
+// newest ACTIVE project touched inside the window is what "that" means. Stale spine → null
+// (never bind an anaphor to old work).
+const ANAPHOR_RE = /\b(?:finish|complete|deliver|produce)\b[^.?!]{0,40}\b(?:that|it)\b|\b(?:wrap|knock)\s+(?:that|it)\s+(?:up|out)\b|\b(?:get|have)\s+(?:that|it)\s+(?:done|completed|finished|written|drafted|pulled\s+up|on\s+the\s+canvas)\b|\bpull\s+(?:that|it)\s+up\b/i;
+function anaphoricOrder(text) {
+  const s = String(text || '');
+  if (!s || s.length > 400) return false;
+  return ANAPHOR_RE.test(s);
+}
+const ANAPHOR_WINDOW_MS = 24 * 3600 * 1000;
+function resolveAnaphor({ projects = null, nowMs = Date.now() } = {}) {
+  let rows = projects;
+  if (!rows) { try { rows = require('./deliverable_projects').list(); } catch { rows = []; } }
+  const live = (rows || [])
+    .filter((p) => p && p.status === 'active' && nowMs - (p.updated_ts || 0) <= ANAPHOR_WINDOW_MS)
+    .sort((a, b) => (b.updated_ts || 0) - (a.updated_ts || 0));
+  return live[0] ? { slug: live[0].slug, title: live[0].title || live[0].slug } : null;
+}
+
+// ── S1.5 CURE 2: the held material rides the mandate (the 1,520-byte report against 520KB of
+// held sources — the writer never saw what she holds). Deterministic, bounded, fail-soft:
+// topic-tokened matches from the documents store + the downloads directory, names normalized
+// space/hyphen-blind (the 35fe34d lesson).
+function _norm(s) { return String(s || '').toLowerCase().replace(/[-_.\s]+/g, ''); }
+function _topicTokens(topic) {
+  return [...new Set(String(topic || '').toLowerCase().match(/[a-z0-9]{4,}/g) || [])]
+    .filter((t) => !['that', 'this', 'with', 'from', 'about', 'analysis', 'summary', 'report', 'complete', 'completed'].includes(t))
+    .slice(0, 4);
+}
+function heldMaterial({ topic, deps = {} } = {}) {
+  const toks = _topicTokens(topic);
+  if (!toks.length) return '';
+  const lines = [];
+  try {
+    const h = (deps.db || require('./db')).getDb();
+    const like = toks.slice(0, 2).map(() => 'title LIKE ?');
+    const rows = h.prepare(`SELECT id, title, created_ts FROM documents WHERE ${like.join(' AND ')} ORDER BY created_ts DESC LIMIT 4`)
+      .all(...toks.slice(0, 2).map((t) => `%${t}%`));
+    for (const r of rows) lines.push(`- held document #${r.id}: "${String(r.title).slice(0, 110)}"`);
+  } catch {}
+  try {
+    const fs = deps.fs || require('fs');
+    const path = require('path');
+    const dl = deps.downloadsDir || path.join(__dirname, '..', 'data', 'downloads');
+    const names = fs.readdirSync(dl).filter((n) => { const nn = _norm(n); return toks.some((t) => nn.includes(_norm(t))); }).slice(0, 6);
+    for (const n of names) {
+      let kb = 0; try { kb = Math.round(fs.statSync(path.join(dl, n)).size / 1024); } catch {}
+      lines.push(`- data/downloads/${n}${kb ? ` (${kb}KB)` : ''}`);
+    }
+  } catch {}
+  return lines.slice(0, 8).join('\n');
+}
+
 // ── S1: the in-turn document run (design D3) ────────────────────────────────────────────────────
 // The budget table keys off the size class; the mandate is PURE so the say-gate's demands are
 // pinnable. The run itself is fired by main.js on the interactive lane (autonomous:false — a
 // direct order is never quota-starved; his decision, 08-28).
 const BUDGET = { brief: 0.75, report: 1, dossier: 2 };
-function mandate({ order, road, userText } = {}) {
+function mandate({ order, road, userText, held = '' } = {}) {
   const size = (road && road.size) || 'report';
   const slug = (road && road.slug) || null;
   const sizeLine = size === 'brief' ? 'brief (1-2 pages)' : size === 'dossier' ? 'full dossier (as long as the material warrants)' : 'report (up to ~10 pages)';
+  // S1.5 cure 2: the writer is TOLD what she holds — and the commensurate rail kills the
+  // 1,520-byte-report-from-520KB-of-sources class.
+  const heldBlock = held
+    ? `\n\nYOU ALREADY HOLD this source material — READ IT with your tools and write FROM it. The document must be COMMENSURATE with its sources: a multi-hundred-KB source never yields a one-page report.\n${held}\n`
+    : '';
+  // S1.5 cure 3: report-class+ work FANS OUT — the swarm exists to be used (zero delegate calls
+  // in 7 days was the finding; "complete it this turn" means the INTEGRATED document lands, not
+  // that every section is written alone).
+  const swarmLine = size !== 'brief'
+    ? ' For a document of this size, FAN OUT: delegate section research to the Echo agent team (<echo-delegate> / the delegate_to_* tools — the legislative analyst for bill mechanics, the fact checker for claims, the historical researcher for background) and INTEGRATE their returns; completing it this turn means the integrated document lands, not that you write every section alone.'
+    : '';
   return `DELIVERABLE ORDER (the document road): ${String(userText || '').slice(0, 400)}\n\n` +
     `Write the ${sizeLine} NOW, in this run.` +
     (slug ? ` The registry project for this document is "${slug}" — update the canonical, never a parallel copy.` : '') +
     ` Save the document with the file tool (notes/${slug || 'report'}.md) or the canvas doc tool.` +
     ' Numbers come from held rows and tool results ONLY — never authored.' +
-    ' Your FINAL message is the pointer to the finished document plus a 3-6 line summary of it — or an HONEST PARTIAL naming exactly what is missing and what you ran.';
+    swarmLine + heldBlock +
+    '\nYour FINAL message is the pointer to the finished document plus a 3-6 line summary of it — or an HONEST PARTIAL naming exactly what is missing and what you ran.';
 }
 
 function _resetForTest() { _lastClaim = null; _preNotes = []; }
 
-module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, claims, mandate, BUDGET, _resetForTest, CLAIMS_KEY, CLAIMS_CAP };
+module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, claims, mandate, BUDGET, anaphoricOrder, resolveAnaphor, heldMaterial, _resetForTest, CLAIMS_KEY, CLAIMS_CAP, ANAPHOR_WINDOW_MS };

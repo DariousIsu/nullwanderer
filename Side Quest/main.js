@@ -18483,7 +18483,11 @@ async function _roadRun({ order, road, userText, sessionId }) {
   const t0 = Date.now();
   const dr = require('./lib/document_road');
   try {
-    const sp = await runCloudOperator({ userMessage: dr.mandate({ order, road, userText }), task: true, autonomous: false, budgetMult: dr.BUDGET[road.size] || 1 });
+    // S1.5 cure 2: what she HOLDS on this topic rides the mandate by name — the writer reads the
+    // sources instead of writing down the press-release facts (the 1,520-byte-report class).
+    let _held = ''; try { _held = dr.heldMaterial({ topic: (order && order.topic) || userText }); } catch {}
+    if (_held) console.log(`[road] held material riding the mandate (${_held.split('\n').length} item(s))`);
+    const sp = await runCloudOperator({ userMessage: dr.mandate({ order, road, userText, held: _held }), task: true, autonomous: false, budgetMult: dr.BUDGET[road.size] || 1 });
     const ans = String((sp && sp.answer) || '').trim();
     const msg = ans || `I started the ${String(order.deliverable || 'document')} and the run returned nothing — that's a failure on my side, not progress. It stays on my ledger and I'll retry with the material I hold.`;
     const row = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'document-road', unprompted: 1 });
@@ -18518,14 +18522,30 @@ async function _roadRun({ order, road, userText, sessionId }) {
 function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
   try {
     const ic = require('./lib/intake_contract');
-    const order = ic.detectDeliverableOrder(userText);
+    let order = ic.detectDeliverableOrder(userText);
     if (!order) {
-      // P1 SCOPE-ADD (continuity leg-B catch): "(also) fold Y into the X report" is an order
-      // about an EXISTING deliverable — no produce-verb, so it is not a deliverable order, but
-      // the spine must hear it: the item attaches as open scope and the verbatim ask joins the
-      // spec. No matching project → quiet fall-through. Fail-soft.
-      try { require('./lib/deliverable_projects').applyScopeAdd({ text: String(userText).slice(0, 300) }); } catch (e) { console.error('[projects] scope-add failed:', e.message); }
-      return;
+      // S1.5 CURE 1 (the p180 live miss): "yea go ahead and get that completed and pulled up on
+      // the canvas" has no deliverable noun — the classifier can't see it. A completion verb
+      // aimed at "that/it" resolves against the project spine (newest active project in the
+      // window) and the road claims through it; no live project → the old quiet fall-through.
+      try {
+        const _dr = require('./lib/document_road');
+        if (_dr.anaphoricOrder(userText)) {
+          const _hit = _dr.resolveAnaphor();
+          if (_hit) {
+            order = { deliverable: 'report', target: null, topic: String(_hit.title || _hit.slug).slice(0, 120), _anaphoric: true };
+            console.log(`[road] anaphoric order resolved → "${_hit.slug}" (the completion verb's "that" is the spine's newest active project)`);
+          }
+        }
+      } catch (e) { console.error('[road] anaphor resolve failed:', e.message); }
+      if (!order) {
+        // P1 SCOPE-ADD (continuity leg-B catch): "(also) fold Y into the X report" is an order
+        // about an EXISTING deliverable — no produce-verb, so it is not a deliverable order, but
+        // the spine must hear it: the item attaches as open scope and the verbatim ask joins the
+        // spec. No matching project → quiet fall-through. Fail-soft.
+        try { require('./lib/deliverable_projects').applyScopeAdd({ text: String(userText).slice(0, 300) }); } catch (e) { console.error('[projects] scope-add failed:', e.message); }
+        return;
+      }
     }
     // P1 PROJECT SPINE: every deliverable ORDER binds to its project (kin → existing row gains
     // the verbatim ask; new subject → mints, slug shared with the artifact registry) — kept or
