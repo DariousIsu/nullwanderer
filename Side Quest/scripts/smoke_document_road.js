@@ -144,7 +144,8 @@ ok(/document_road'\)\.claim\(\{ order, userText, bind: _bind \}\)/.test(main), '
 ok(/meter\(_road, 'promise', r\.id\)/.test(main), 'wiring: the promise backstop meters');
 ok(/meter\(_road, 'in-turn'\)/.test(main) && /meter\(_road, 'say-promise'\)/.test(main), 'wiring: in-turn delivery and say-promise cover both meter');
 ok(/notePreClaim\('redirect', target\.id\)/.test(main), 'wiring: the user-work redirect notes itself for the sweep');
-ok(/task: true, autonomous: false, budgetMult: dr\.BUDGET\[road\.size\]/.test(main), 'wiring S1: the run rides the INTERACTIVE lane (autonomous:false — a direct order never starves) in task mode');
+ok(/task: true, autonomous: asResume, budgetMult: dr\.BUDGET\[road\.size\]/.test(main) && /asResume = false/.test(main),
+  'wiring S1+S2: task mode with the lane rule — asResume defaults false, so a direct order rides INTERACTIVE and never starves');
 ok(/_road && !_roadRunInFlight/.test(main) && /S1 run starting/.test(main), 'wiring S1: the road fires once per claim, one run at a time');
 ok(/that's a failure on my side, not progress/.test(main), 'wiring S1: an empty run posts the honest failure — the say-gate never goes silent');
 ok(/model: 'document-road', unprompted: 1/.test(main), 'wiring S1: delivery posts as her own follow-up message');
