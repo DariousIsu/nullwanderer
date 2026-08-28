@@ -1431,10 +1431,22 @@ app.whenReady().then(() => {
   // these are idle-gated maintenance ops nobody waits on — size the budget to the bite.
   const KGJUDGE_DISPATCH_MS = (parseFloat(process.env.ZOE_KG_JUDGE_TIMEOUT_MIN) || 15) * 60 * 1000;
   const KGAPPLY_IDLE_MS = (parseFloat(process.env.ZOE_KG_APPLY_IDLE_MIN) || 5) * 60 * 1000;
+  const KGAPPLY_BREAKER_MS = (parseFloat(process.env.ZOE_KG_APPLY_BREAKER_H) || 24) * 3600 * 1000;
   let kgApplyRunning = false;
   const maybeRunAdjudicate = async () => {
     if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_KG_APPLY_ENABLED || '').trim())) return;  // crosses the merge-gate
     if (kgApplyRunning) return;
+    // THE ZERO-YIELD BREAKER (audit 2026-08-28): three passes of 500 adjudications applied NOTHING
+    // — every verdict parked, one pass HALTED(regression) — ~1,500 engine-side LLM calls at
+    // ~95-100k/h of quota, starving the repair lane and every directed run. The chain-guard law: a
+    // loop never re-runs a known-failure. A halted or zero-yield pass trips this; the drain stands
+    // down for the cool-off (or until kg.apply.breaker is cleared by hand / his engine restart
+    // fixes the regression). Halt propagation rides the same gate: while tripped, no verdicts are
+    // bought that the apply side would only park.
+    try {
+      const _br = JSON.parse(db.getMeta('kg.apply.breaker') || 'null');
+      if (_br && Date.now() - (_br.ts || 0) < KGAPPLY_BREAKER_MS) return;
+    } catch {}
     if (!echoSuit || !echoSuit.connected) return;
     if (Date.now() - lastUserTurnTs < KGAPPLY_IDLE_MS) return;   // heavy + writes the graph — never mid-conversation
     if (Date.now() - parseInt(db.getMeta('last_kg_apply_at') || '0', 10) < KGAPPLY_MIN_GAP_MS) return;  // floor
@@ -1456,6 +1468,10 @@ app.whenReady().then(() => {
         try { db.setMeta('kg.dedup.last', JSON.stringify({ ts: Date.now(), considered: rep.considered, applied: rep.applied || 0, parked: rep.parked || 0, halted: rep.halted || null })); } catch {}
         if (rep.halted) console.error(`[kg-apply] adjudication HALTED(${rep.halted}) after ${rep.applied || 0}/${rep.considered}`);
         console.log(`[kg-apply] adjudicated ${rep.considered}: applied ${rep.applied || 0}, parked ${rep.parked || 0}${rep.halted ? ` HALTED(${rep.halted})` : ''}`);
+        if (rep.halted || (rep.considered >= 50 && !(rep.applied > 0))) {
+          try { db.setMeta('kg.apply.breaker', JSON.stringify({ ts: Date.now(), reason: rep.halted ? `HALTED(${rep.halted})` : `zero yield: 0/${rep.considered} applied, ${rep.parked || 0} parked` })); } catch {}
+          console.error(`[kg-apply] BREAKER TRIPPED (${rep.halted ? `halt: ${rep.halted}` : 'zero yield'}) — the drain stands down ${Math.round(KGAPPLY_BREAKER_MS / 3600e3)}h instead of buying verdicts it can only park`);
+        }
         if (rep.applied > 0) {
           const text = `[Memory upkeep] I reviewed and reversibly merged ${rep.applied} confirmed duplicate${rep.applied === 1 ? '' : 's'} — each LLM-verified + structurally anchored, all undoable.`;
           const row = db.insertMonologue({ content: text, model: 'kg-apply', type: 'reading' });
@@ -14621,6 +14637,20 @@ async function runCloudOperator(opts) {
 
 async function _runCloudOperator({ userMessage, context, task = false, autonomous = false, maintain = false, toolNames = null, model = null, toolSpec = null, budgetMult = 1, review = false, lane = undefined }) {
   try {
+    // AUDIT TRIO #3 (2026-08-28): probe the lane BEFORE assembling the brief. The directed loop
+    // re-prepared the same briefs every ~50s (364 preps, 328 deferrals in one boot — coord blocks,
+    // held-data injection, registry docs) and deferred at the first cloud call; the prep itself fed
+    // the burn that kept the lane closed. Interactive turns (autonomous=false) NEVER probe — a live
+    // user turn outranks every lane.
+    if (autonomous && lane) {
+      try {
+        const _q = require('./lib/quota_gate').allow(lane, { quiet: true });
+        if (_q && _q.allow === false) {
+          console.log(`[operator] run skipped pre-prep — ${lane} lane closed (no brief assembled, nothing spent)`);
+          return { deferred: true, answer: '', steps: [], toolsUsed: [] };
+        }
+      } catch {}
+    }
     const operator = require('./lib/operator');
     // Per-tool timeout: a slow/hung capability (Echo down, a stalled page) can't block the turn —
     // it returns an ERROR string the agent can route around.

@@ -176,6 +176,13 @@ const ok = (c, m) => { if (c) { pass++; console.log('  \u2713', m); } else { fai
       'main.js: a quota-deferred diagnosis run does NOT burn a try (throttle flicker must never park a need)');
     ok(/isRepairRunFor\(run, needs, \{ getNeed:/.test(main),
       'main.js: the grandfathered-run intercept looks the row up directly (rehearsing is invisible to listOpen)');
+    // ── the audit trio (2026-08-28: the zero-yield burn loop) ──────────────────────────────────
+    ok(/kg\.apply\.breaker/.test(main) && /BREAKER TRIPPED/.test(main),
+      'main.js: kg-apply has the zero-yield breaker (a halted or 0-applied pass stands the drain down — no more bought-and-parked verdicts)');
+    ok(/rep\.halted \|\| \(rep\.considered >= 50 && !\(rep\.applied > 0\)\)/.test(main),
+      'main.js: the breaker trips on halt OR zero yield at real batch size');
+    ok(/run skipped pre-prep/.test(main) && /if \(autonomous && lane\)/.test(main),
+      'main.js: autonomous operator runs probe the lane BEFORE brief assembly (interactive turns never probe)');
     const sv = fs.readFileSync(path.join(ROOT, 'lib', 'status_vector.js'), 'utf8');
     ok(/Producer lanes:/.test(sv) && /idleClosedH/.test(sv), 'status_vector: producers render in block(); closures carry DURATION');
     const so = fs.readFileSync(path.join(ROOT, 'lib', 'self_ops.js'), 'utf8');
