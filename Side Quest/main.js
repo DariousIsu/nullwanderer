@@ -10427,6 +10427,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           const when = red.immediate ? 'is queued as the very next driven focus and will start within minutes' : 'is queued to start as soon as the current work concludes';
           composedUserMessage += `\n\n[${userName} just REDIRECTED your working focus to: "${red.topic}". This IS registered in your program: thread #${target.id} ${when}.${parkedNote} Say plainly that the pivot is registered${parkedNote ? ' and what was parked' : ''} — do NOT promise any actions beyond this.]`;
           console.log(`[user-work] REDIRECT registered (${red.immediate ? 'immediate' : 'queued'}) → next seed = thread #${target.id} ("${String(target.content).slice(0, 60)}")${parkedNote ? ' · previous focus parked' : ''}`);
+          // S0 road meter: the redirect fires BEFORE the intake claim in turn order, so it notes
+          // itself for the sweep (the #3962 misbind specimen is exactly what this counts).
+          try { require('./lib/document_road').notePreClaim('redirect', target.id); } catch {}
         }
         }
       }
@@ -18484,7 +18487,14 @@ function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
     // P1 PROJECT SPINE: every deliverable ORDER binds to its project (kin → existing row gains
     // the verbatim ask; new subject → mints, slug shared with the artifact registry) — kept or
     // not, the spec is HIS words and the spine keeps them. Fail-soft; booking below is unchanged.
-    try { require('./lib/deliverable_projects').bindOrder({ text: String(userText).slice(0, 400), topic: order.topic || '', kind: 'report' }); } catch (e) { console.error('[projects] order bind failed:', e.message); }
+    let _bind = null;
+    try { _bind = require('./lib/deliverable_projects').bindOrder({ text: String(userText).slice(0, 400), topic: order.topic || '', kind: 'report' }); } catch (e) { console.error('[projects] order bind failed:', e.message); }
+    // S0 THE DOCUMENT ROAD (docs/DOCUMENT_ROAD_DESIGN_2026-08-28.md; decisions 08-28: typed-only ·
+    // road-owned-only · the size table · interactive lane): the road claims the ask at the one
+    // door and meters every other owner. Measurement-only — every organ still books; the meter's
+    // counts are the evidence S3's subtractions will cite.
+    let _road = null;
+    try { _road = require('./lib/document_road').claim({ order, userText, bind: _bind }); } catch (e) { console.error('[road] claim failed:', e.message); }
     const kept = (() => {
       try { if (require('./lib/canvas_docs').lastWriteTs() >= (turnStartTs || 0)) return true; } catch {}
       try { if (require('./lib/echo_suit').lastContactWriteTs() >= (turnStartTs || 0)) return true; } catch {}
@@ -18531,12 +18541,17 @@ function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
         }
       } catch (e) { console.error('[intake] dataset recompose gate failed:', e.message); }
       console.log(`[intake] deliverable order delivered in-turn — no backstop booking (${order.deliverable})`);
+      try { if (_road) require('./lib/document_road').meter(_road, 'in-turn'); } catch {}
       return;
     }
     // her say already booked a promise this turn → the ledger is carrying it; don't double-book.
     try {
       const row = db.getDb().prepare(`SELECT COUNT(*) n FROM recheck_queue WHERE kind = 'promise' AND status = 'open' AND created_ts >= ?`).get(turnStartTs || 0);
-      if (row && row.n > 0) { console.log(`[intake] order already covered by a promise booked this turn (${order.deliverable})`); return; }
+      if (row && row.n > 0) {
+        console.log(`[intake] order already covered by a promise booked this turn (${order.deliverable})`);
+        try { if (_road) require('./lib/document_road').meter(_road, 'say-promise'); } catch {}
+        return;
+      }
     } catch {}
     const dlv = require('./lib/delivery');
     const subject = dlv.bookingSubject({ deliverable: order.deliverable, sentence: String(userText).slice(0, 160) });
@@ -18546,6 +18561,7 @@ function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
       priority: 7, dueTs: Date.now() + PROMISE_GRACE_MS, bornFrom: 'intake-backstop',
     });
     if (r && r.ok) console.log(`[intake] BOOKED promise#${r.id}${r.existing ? ' (existing)' : ''} — deliverable-order backstop: ${order.deliverable}${order.target ? ` → ${order.target}` : ''}`);
+    try { if (_road && r && r.ok) require('./lib/document_road').meter(_road, 'promise', r.id); } catch {}
   } catch (e) { console.error('[intake] order backstop failed:', e.message); }
 }
 

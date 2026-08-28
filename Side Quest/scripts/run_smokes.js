@@ -593,6 +593,7 @@ const smokes = [
   // links to the canvas funnel (all roads → canvas by construction; landing pages stay browsing).
   'smoke_meet_reroute.js',
   'smoke_meet_canvas_chat.js',      // the canvas chat post: textarea + rich-textbox shapes, toggle-safe retry (p177 intro catch)
+  'smoke_document_road.js',         // THE DOCUMENT ROAD S0: claim + owner meter + pre-claim sweep (design 2026-08-28)
   // The collaboration register (blind-week catch #1): brainstorm/feedback turns are THINKING
   // TOGETHER — converse route pinned, artifacts + bookings suppressed absent a named destination,
   // held material pulled as conversational grounding.
