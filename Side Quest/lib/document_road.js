@@ -120,6 +120,46 @@ function clearResume({ deps = {}, why = 'delivered' } = {}) {
   if (r) { try { _db(deps).setMeta(RESUME_KEY, 'null'); } catch {} console.log(`[road] S2 resume cleared (${why}): "${r.slug || '(unbound)'}"`); }
 }
 
+// ── S3a: THE ARTIFACT-ABSENCE GATE (the 128KB false blank: "we don't have a compiled roster of
+// sponsors" said over her own registered report that holds exactly that, organized as asked).
+// A say that declares an artifact ABSENT gets verified against the registry + workspace; a hit
+// posts the correction with the pointer. Detection is sentence-scoped: the absence phrase and an
+// artifact noun must share a sentence.
+const ABSENCE_CLAIM_RE = /\b(?:we|i)\s+(?:don'?t|do\s+not)\s+(?:have|hold)\b|\bthere(?:'s|\s+is)\s+no\b|\bno\s+(?:compiled|existing|such)\b|\bhaven'?t\s+(?:compiled|built|written|made)\b/i;
+const ABSENCE_NOUN_RE = /\b(?:roster|report|list|compil\w*|document|sheet|summary|write-?up|dossier|table|breakdown)\b/i;
+function artifactAbsenceClaim(say) {
+  const s = String(say || '');
+  if (!s || !ABSENCE_CLAIM_RE.test(s)) return null;
+  return s.split(/(?<=[.!?])\s+/).find((x) => ABSENCE_CLAIM_RE.test(x) && ABSENCE_NOUN_RE.test(x)) || null;
+}
+function findHeldArtifact({ topic, deps = {} } = {}) {
+  const toks = _topicTokens(topic);
+  if (toks.length < 2) return null;   // one generic token must never "find" (the suiteFor lesson)
+  const fs = deps.fs || require('fs');
+  const path = require('path');
+  const nd = deps.notesDir || path.join(__dirname, '..', 'data', 'zoe_workspace', 'notes');
+  try {
+    const rows = deps.projects || require('./deliverable_projects').list() || [];
+    for (const p of rows) {
+      const hay = _norm(`${p.title || ''} ${p.slug || ''}`);
+      if (toks.filter((t) => hay.includes(_norm(t))).length >= 2) {
+        let fp = path.join(nd, `${p.slug}.md`), kb = 0;
+        try { kb = Math.round(fs.statSync(fp).size / 1024); } catch { fp = null; }
+        return { title: p.title || p.slug, slug: p.slug, path: fp, kb };
+      }
+    }
+  } catch {}
+  try {
+    const names = fs.readdirSync(nd).filter((n) => { const nn = _norm(n); return toks.filter((t) => nn.includes(_norm(t))).length >= 2; });
+    if (names.length) {
+      const fp = path.join(nd, names[0]);
+      let kb = 0; try { kb = Math.round(fs.statSync(fp).size / 1024); } catch {}
+      return { title: names[0], slug: null, path: fp, kb };
+    }
+  } catch {}
+  return null;
+}
+
 // ── S1.7: the say-gate's SHAPE teeth (leg 3's specimen: "I have the core source material. Let me
 // read the full research paper and the Statt article to write the complete report." — a PLAN
 // posted as the final). A final is plan-shaped when it ends on forward intent and carries no
@@ -221,4 +261,4 @@ function mandate({ order, road, userText, held = '' } = {}) {
 
 function _resetForTest() { _lastClaim = null; _preNotes = []; }
 
-module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, tap, claims, mandate, BUDGET, anaphoricOrder, resolveAnaphor, heldMaterial, planShapedFinal, noteResume, pendingResume, markResumeTry, resumeDue, clearResume, _resetForTest, CLAIMS_KEY, CLAIMS_CAP, ANAPHOR_WINDOW_MS, RESUME_KEY, RESUME_PACE_MS };
+module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, tap, claims, mandate, BUDGET, anaphoricOrder, resolveAnaphor, heldMaterial, planShapedFinal, artifactAbsenceClaim, findHeldArtifact, noteResume, pendingResume, markResumeTry, resumeDue, clearResume, _resetForTest, CLAIMS_KEY, CLAIMS_CAP, ANAPHOR_WINDOW_MS, RESUME_KEY, RESUME_PACE_MS };

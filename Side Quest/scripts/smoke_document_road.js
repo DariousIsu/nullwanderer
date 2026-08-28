@@ -138,6 +138,26 @@ ok(road.resumeDue({ deps: rdeps, nowMs: now + road.RESUME_PACE_MS + 1000 }) === 
 road.clearResume({ deps: rdeps, why: 'registered delivery' });
 ok(road.pendingResume({ deps: rdeps }) === null, 'only a REGISTERED delivery clears the debt');
 
+// ── S3a: the artifact-absence gate + the want-net widening (the sponsor-roster false blank) ─────
+ok(!!road.artifactAbsenceClaim("We don't have a compiled roster of all sponsors and co-sponsors across those 69 substantive bills."),
+  "her verbatim false blank IS an artifact-absence claim");
+ok(road.artifactAbsenceClaim("I don't have time for that right now") === null, 'an absence with no artifact noun never triggers');
+ok(road.artifactAbsenceClaim('the report is attached') === null, 'no absence phrase → null');
+const fa = road.findHeldArtifact({
+  topic: 'sponsors and co-sponsors anti-China bills roster',
+  deps: {
+    projects: [{ slug: 'report-anti-china-surveillance-sponsors-utah-arizona-texas', title: 'anti-China and surveillance bills state by state with sponsors and co-sponsors' }],
+    fs: { statSync: () => ({ size: 128818 }), readdirSync: () => [] },
+    notesDir: 'x',
+  },
+});
+ok(fa && fa.slug === 'report-anti-china-surveillance-sponsors-utah-arizona-texas' && fa.kb === 126, 'the held 128KB sponsors report is FOUND from the ask tokens (2-token floor)');
+ok(road.findHeldArtifact({ topic: 'report', deps: { projects: [{ slug: 'x-report', title: 'report' }], fs: { readdirSync: () => [] }, notesDir: 'x' } }) === null,
+  'a single generic token never "finds" (the suiteFor lesson)');
+ok(!!ic.detectDeliverableOrder('I still need a list of everyone that sponsored or co sponsored those bills in each state'),
+  "the want-net now crosses the adverb: 'I STILL need a list…' claims");
+ok(ic.detectDeliverableOrder('if I ever need something I will ask') === null, 'a hypothetical want with no deliverable noun still never claims');
+
 // ── wiring: the one door claims, all four organs tap ────────────────────────────────────────────
 const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/document_road'\)\.claim\(\{ order, userText, bind: _bind \}\)/.test(main), 'wiring: the intake door makes the claim with the captured bind');
@@ -162,6 +182,9 @@ ok(/clearResume\(\{ why: 'registered delivery' \}\)/.test(main) && /noteResume\(
 ok(/resumeDue\(\)/.test(main) && /markResumeTry\(\)/.test(main) && /asResume: true/.test(main),
   'wiring S2: the paced resumer re-runs the owed document on the research lane');
 ok(/autonomous: asResume/.test(main), "wiring S2: the lane rule — direct orders interactive, resumes ride research");
+ok(/_verifyArtifactAbsenceFollowup\(finalSaid/.test(main) && /ARTIFACT false blank corrected/.test(main),
+  'wiring S3a: every reply is checked for artifact false blanks; a hit posts the correction with the pointer');
+ok(/document_road'\)\.tap\('assignment'\)/.test(main), 'wiring S3a: the assignment lane (the eighth owner door) taps the meter');
 
 console.log(`\nsmoke_document_road: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

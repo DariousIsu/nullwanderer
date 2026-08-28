@@ -10806,7 +10806,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           console.log(`[intake] topic discussed, not commanded → route=explore (offer "${projectOffer.target || '—'}", kind=${projectOffer.kind})`);
         }
       }
-      if (isAssignment) console.log(`[intake] ASSIGNMENT → ${intakeRoute ? intakeRoute.action : 'discover(regex-fallback)'}${intakeRoute && intakeRoute.deep ? ' deep' : ''}${intakeRoute && intakeRoute.priority ? ' ' + intakeRoute.priority : ''}`);
+      if (isAssignment) {
+        console.log(`[intake] ASSIGNMENT → ${intakeRoute ? intakeRoute.action : 'discover(regex-fallback)'}${intakeRoute && intakeRoute.deep ? ' deep' : ''}${intakeRoute && intakeRoute.priority ? ' ' + intakeRoute.priority : ''}`);
+        // S3a road meter: the assignment lane is the EIGHTH owner door (the sponsor-roster
+        // "proceed" rode it into a discover run) — it taps either side of the claim.
+        try { require('./lib/document_road').tap('assignment'); } catch {}
+      }
     }
   } catch (e) { console.error('[intake] gate failed:', e.message); }
 
@@ -12598,6 +12603,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // SPINE 2 step 6: if she declared an EMAIL blank without searching, actually go look for it and either
   // surface it (the §7.1 cure) or confirm the blank. Fire-and-forget.
   try { _verifyAbsenceFollowup(finalSaid, { sessionId, turnStartTs: (userTurnRow && userTurnRow.ts) || 0, evidence: _replyEvidence, userName }).catch(() => {}); } catch {}
+  // S3a THE ARTIFACT-ABSENCE GATE (2026-08-28: "we don't have a compiled roster" said over her own
+  // held 128KB sponsors report): a say declaring an artifact ABSENT verifies against the registry +
+  // workspace; a hit posts the correction with the pointer. Fire-and-forget, fail-soft.
+  try { _verifyArtifactAbsenceFollowup(finalSaid, { sessionId, userMessage }).catch(() => {}); } catch {}
   // SPINE 3: book any unkept delivery-promise so it's carried forward, not silently dropped.
   try { _bookDeliveryPromises(finalSaid, { sessionId, turnStartTs: (userTurnRow && userTurnRow.ts) || 0 }); } catch {}
   // C1 BOOKING CONTRACT (run-2, 2026-08-19): the backstop keys on HIS order, not her say — a
@@ -18429,6 +18438,26 @@ async function _verifyFactFollowup(say, { sessionId, turnStartTs = 0, evidence =
 // EMAIL absent without an external search this turn, fire ONE bounded search for the subject's email and post
 // a follow-up: FOUND → surface what she wrongly called blank (the §7.1 cure); NOT-FOUND → confirm the blank is
 // honest. Fire-and-forget + fail-soft (skip → nothing posted). Same external-gather gate as step 5.
+// S3a — the artifact-shaped sibling of the email absence verifier: "we don't have a compiled X"
+// checked against what she actually holds; a false blank posts the correction and the pointer.
+async function _verifyArtifactAbsenceFollowup(say, { sessionId, userMessage = '' } = {}) {
+  try {
+    if (!say || say === '…' || !sessionId) return;
+    const dr = require('./lib/document_road');
+    const sent = dr.artifactAbsenceClaim(say);
+    if (!sent) return;
+    const hit = dr.findHeldArtifact({ topic: `${userMessage} ${sent}` });
+    if (!hit) return;
+    const _where = hit.path ? hit.path.replace(/\\/g, '/').replace(/^.*zoe_workspace\//, 'workspace/') : 'the registry';
+    const msg = `Correction — I just said we don't have that compiled, and that was wrong. I'm holding "${String(hit.title).slice(0, 120)}"${hit.kb ? ` (${hit.kb}KB)` : ''} at ${_where}. I'll work from that canonical instead of re-pulling it.`;
+    const row = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'absence-verify', unprompted: 1 });
+    try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+    try { require('./lib/blackboard').append({ source: 'absence-verify', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
+    console.log(`[absence-verify] ARTIFACT false blank corrected → "${String(hit.title).slice(0, 80)}" (${hit.kb || '?'}KB)`);
+  } catch (e) { console.error('[absence-verify] artifact gate failed:', e.message); }
+}
+
 async function _verifyAbsenceFollowup(say, { sessionId, turnStartTs = 0, evidence = '', userName = 'you' } = {}) {
   try {
     if (!say || say === '…' || !sessionId) return;

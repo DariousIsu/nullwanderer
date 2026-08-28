@@ -52,7 +52,9 @@ const _APPROACH_BRIDGE = `(?:(?:go\\s+(?:into|to|through|over)|open(?:\\s+up)?|t
 // deferral is scheduling advice, never a decline of the commitment.
 const _DEFERRAL = `(?:sometime\\s+(?:today|tonight|soon|this\\s+\\w+)|at\\s+some\\s+point(?:\\s+(?:today|tonight))?|later\\s+(?:today|tonight|on)|when(?:ever)?\\s+you\\s+(?:get|have|find)\\s+(?:a\\s+)?(?:chance|moment|minute|sec(?:ond)?|gap|window|breather)|whenever\\s+there'?s\\s+a\\s+(?:gap|lull|window)|when\\s+things\\s+(?:quiet|slow)\\s+down|if\\s+you\\s+get\\s+a\\s+(?:chance|minute|moment)|no\\s+(?:rush|hurry)(?:\\s+on\\s+(?:it|this))?)`;
 const _ORDER_LEAD_RE = new RegExp(`(?:^|[.!;\\n]\\s*)(?:(?:ok(?:ay)?|alright|good|great|nice|perfect|yes|yeah|now|next|also|then|please|zoe)[,\\s—–:;-]+)*(?:${_DEFERRAL}[,\\s—–-]+(?:but\\s+)?)?(?:let'?s\\s+|go ahead and\\s+)?${_APPROACH_BRIDGE}${_ORDER_VERB.source}\\b`, 'i');
-const _ORDER_WANT_RE = new RegExp(`\\bi\\s+(?:want|need)\\s+(?:you\\s+to\\s+)?(?:(?:a|an|the|this|that)\\s+)?(?:\\w+\\s+){0,3}?${_ORDER_VERB.source}?`, 'i');
+// "I STILL need a list…" (the sponsor-roster miss, 08-28): up to two adverb words may sit
+// between the pronoun and want/need; the deliverable-evidence requirement still gates matches.
+const _ORDER_WANT_RE = new RegExp(`\\bi\\s+(?:\\w+\\s+){0,2}?(?:want|need)\\s+(?:you\\s+to\\s+)?(?:(?:a|an|the|this|that)\\s+)?(?:\\w+\\s+){0,3}?${_ORDER_VERB.source}?`, 'i');
 // Deliverable evidence: an explicit workspace path, the canvas, or an artifact noun.
 const _TARGET_PATH_RE = /((?:notes|docs|data)\/[\w./-]+\.[a-z]{2,4})/i;
 const _CANVAS_RE = /\bcanvas\b/i;
