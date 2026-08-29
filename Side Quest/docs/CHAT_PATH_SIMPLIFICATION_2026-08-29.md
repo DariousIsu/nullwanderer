@@ -48,6 +48,16 @@ confidence: 0..1
   ONE verdict; none re-decides. `intent: deliver` → the road claims (via the existing projects
   kin bind). `edit` → canvas-cmd. `redirect` → user-work. Low confidence → ask ONE clarifying
   question (the bias-toward-clarifying doctrine) instead of silently dropping.
+- **The conversation context the classifier reads (Lucas, 08-29: "are we factoring the rolling
+  compression into the gates concept?")**: the intent pass consumes THE SAME rolling assembly the
+  reply reads — the live verbatim turns PLUS the compact-block summaries (`context.rolling`,
+  live-proven in Sprint 2: cross-boundary recall + the [dN] verbatim dereference) — never a raw
+  last-N-turns slice. Referent resolution ("that/it", the project hint) is only as good as the
+  window behind it; a classifier with a different memory of the conversation than the reply's
+  would re-create the misbind class at a new seam. The catch-#7 authority law rides the
+  classifier prompt too: the LIVE window outranks retrieved memory when they conflict. The
+  `context.rolling.budget` lever (parked at 20k, his) is therefore also D1's recall-quality
+  knob — raising it improves referent resolution and the streamlined-chat goal in one move.
 - **Failure posture**: the cloud unreachable → the fast-path nets alone (today's behavior) — the
   pass only ever ADDS recall, never subtracts precision.
 - **Cost**: one bounded ask (~300-500 tok) per user turn that the nets don't already catch; user
