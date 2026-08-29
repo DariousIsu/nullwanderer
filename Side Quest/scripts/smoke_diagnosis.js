@@ -77,7 +77,10 @@ ok(dg.isRepairRunFor({ slug: 'need-77-x' }, [], { getNeed: () => null }) === nul
 // ── SIGNATURE FIDELITY (§52e: the first wrong diagnosis read blanking artifacts as the defect) ──
 // the matcher inverts self_watch's normalization: \d+→'N', whitespace collapsed, 90-char slice
 const rawLine = '[autonomy] chose=rehearse → need-94-i-need-a-fix-for-a-recurring-fai active — edit pick returned but FAILED VALIDATION (schema) — budget refunded';
-const blanked = rawLine.replace(/\d+/g, 'N').replace(/\s+/g, ' ').trim().slice(0, 90);   // the exact self_watch.js:99 recipe
+const blanked = require('../lib/self_watch').signatureOf(rawLine);   // the REAL recipe (§60c: head … tail)
+// §60c: a long signature preserves its TAIL — the error kind survives the slice.
+ok(/ … /.test(blanked) && /budget refunded$/.test(blanked), 'a long signature carries HEAD … TAIL — the error kind survives (the #106 mode-folding cure)');
+ok(!/ … /.test(require('../lib/self_watch').signatureOf('[watch] short line 42')), 'a short line stays whole (fold identity unchanged)');
 ok(dg._sigToRegex(blanked).test(rawLine), 'a digit-blanked, truncated signature matches its own VERBATIM source line');
 ok(dg._sigToRegex(blanked).test(rawLine.replace('need-94', 'need-101')) === true, 'the blanked N matches ANY instance number (the fold means many raw lines share one sig)');
 ok(dg._sigToRegex(blanked).test('[curator] stalled 5 long-untouched active thread(s)') === false, 'an unrelated line does not match');
@@ -105,6 +108,15 @@ ok(/never adjacent code/.test(crs), 'the section warns the model off adjacent-co
 ok(dg._countedRowsSection({ need: 'DOMMatrix is not defined' }, { deps: { db: fakeWs } }) === null, 'a non-audit signature gets no counted-rows section');
 const crBundle = dg.preGather({ need: 'I need a fix for a recurring failure in my own program: the rehearsal lane failed 101x in 7 days', born_from: 'self-watch: exhaust audit' }, { deps: { db: fakeWs, rawText: '' } });
 ok(/^THE COUNTED ROWS/.test(crBundle), 'the counted rows LEAD the audit-born bundle (the cap can never starve them)');
+
+// ── §60c: the quoted-evidence gate (#106's fabricated log quote) ────────────────────────────────
+const realLog = '[quota] research lane REOPENED after 7m closed\n[needs] repair need #104 diagnosis deferred by quota — try not counted';
+ok(dg.validateDiagnosis('Root cause: the pacing gate at lib/diagnosis.js:20 defers correctly. The raw logs show "try not counted" repeatedly, confirming governance. Minimal repair: none needed at lib/diagnosis.js:22.', { deps: { logText: realLog } }) === true,
+  'a log-attributed quote that EXISTS in the logs passes the gate');
+ok(dg.validateDiagnosis('Root cause: the budget at lib/diagnosis.js:20 interrupts queries. The raw logs show "Query exceeded the 20.0s budget" on every call. Minimal repair: raise it at lib/diagnosis.js:22.', { deps: { logText: realLog } }) === false,
+  "#106's fabricated log quote → the WHOLE diagnosis rejects (cited = actually read, for log quotes)");
+ok(dg.validateDiagnosis('Root cause: the fold at lib/diagnosis.js:20 uses "a plain literal string here" as a key. Minimal repair: hash it at lib/diagnosis.js:22.', { deps: { logText: realLog } }) === true,
+  'a quote in a sentence that never names the logs is NOT gated (only log-attributed quotes verify)');
 
 // study citations verify against the ledger (cited = actually read)
 const fakeLedger = { seen: (u) => (/known\.gov/.test(u) ? { url: u } : null) };

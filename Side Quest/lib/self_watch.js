@@ -95,8 +95,14 @@ function _ref(s, prefix) {
 }
 
 // A stable identity for "the same problem again" — prefix + shape with numbers blanked.
+// §60c: the flat head-slice CUT OFF THE ERROR KIND on long lines ("…db_query(sql:…) → {"ok") —
+// folding DISTINCT failure modes under one signature; the raw-line gather then fed a MIX and a
+// diagnosis chased the wrong mode (#106). A long line keeps its HEAD and its TAIL (where the
+// error kind lives), joined by an ellipsis the matcher treats as a bounded gap.
 function signatureOf(line) {
-  return String(line || '').replace(/\d+/g, 'N').replace(/\s+/g, ' ').trim().slice(0, 90);
+  const s = String(line || '').replace(/\d+/g, 'N').replace(/\s+/g, ' ').trim();
+  if (s.length <= 120) return s;
+  return `${s.slice(0, 70).trim()} … ${s.slice(-45).trim()}`;
 }
 
 // ── state (module-level; _reset for smokes) ───────────────────────────────────────────────────

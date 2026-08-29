@@ -93,11 +93,14 @@ function _logSection(rel, detector) {
 // artifacts literally and named the normalization ("truncated/mangled slug") as the defect.
 // Restore fidelity: invert the blanking into a matcher and hand the diagnosis the VERBATIM lines.
 function _sigToRegex(sig) {
-  const esc = String(sig || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  if (!esc) return null;
+  // §60c: a long signature is HEAD … TAIL — the ellipsis is a bounded gap, not a literal.
+  const parts = String(sig || '').trim().split(' … ');
+  if (!parts[0]) return null;
   // every 'N' may be a blanked number OR a literal N; single spaces re-widen to any whitespace;
-  // the 90-char slice may end mid-word, so the pattern is a substring match, never anchored.
-  const body = esc.replace(/N/g, '(?:N|\\d+)').replace(/ /g, '\\s+');
+  // a slice may end mid-word, so the pattern is a substring match, never anchored.
+  const body = parts
+    .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/N/g, '(?:N|\\d+)').replace(/ /g, '\\s+'))
+    .join('[\\s\\S]{0,300}?');
   try { return new RegExp(body); } catch { return null; }
 }
 function _rawLinesFor(sig, { text = null, maxLines = 4 } = {}) {
@@ -232,7 +235,7 @@ Reply in at most 1200 chars: (1) the ROOT CAUSE in 2-3 sentences, (2) the MINIMA
 // and (Lucas 08-27: real code, real citations) every repo-shaped citation must point at code that
 // EXISTS: a cited file that isn't on disk, or a line past EOF, is a hallucinated citation and
 // invalidates the whole diagnosis. Non-repo paths (node:internal, package internals) are ignored.
-function validateDiagnosis(text) {
+function validateDiagnosis(text, { deps = {} } = {}) {
   const t = String(text || '').trim();
   if (t.length < 60) return false;
   const cites = t.match(/[\w./\\-]+\.(?:js|py|md):\d+/g) || [];
@@ -247,6 +250,28 @@ function validateDiagnosis(text) {
       if (parseInt(line, 10) > body.split('\n').length) return false;        // line past EOF = hallucinated
     } catch { return false; }                                                // repo-shaped but absent = hallucinated
   }
+  // §60c THE QUOTED-EVIDENCE GATE (#106 invented "Query exceeded the 20.0s budget" and attributed
+  // it to "the raw logs"): a quote in a sentence that NAMES the logs must actually exist in the
+  // recent boot logs — §51's "cited = actually read", extended to log quotes. Sentence-scoped,
+  // whitespace-normalized substring match; unreadable logs stand the gate down (no IO reject).
+  try {
+    const claims = [];
+    for (const sent of t.split(/(?<=[.!?])\s+/)) {
+      if (!/\blogs?\b/i.test(sent)) continue;
+      for (const m of sent.matchAll(/[`"]([^`"]{12,200})[`"]/g)) claims.push(m[1]);
+    }
+    if (claims.length) {
+      const hay = (deps.logText != null ? String(deps.logText) : _newestBootLogs({ max: 3 }).map((p) => _tailOf(p, 1024 * 1024)).join('\n')).replace(/\s+/g, ' ');
+      if (hay.trim()) {
+        for (const q of claims) {
+          if (!hay.includes(q.replace(/\s+/g, ' ').trim())) {
+            console.error(`[diag] QUOTED-EVIDENCE GATE: log-attributed quote not found in the recent logs — "${q.slice(0, 80)}" — diagnosis rejected`);
+            return false;
+          }
+        }
+      }
+    }
+  } catch {}
   return true;
 }
 
