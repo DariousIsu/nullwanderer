@@ -228,7 +228,7 @@ function planShapedFinal(text) {
 // order. A completion VERB aimed at "that/it" resolves against the project spine instead — the
 // newest ACTIVE project touched inside the window is what "that" means. Stale spine → null
 // (never bind an anaphor to old work).
-const ANAPHOR_RE = /\b(?:finish|complete|deliver|produce)\b[^.?!]{0,40}\b(?:that|it)\b|\b(?:wrap|knock)\s+(?:that|it)\s+(?:up|out)\b|\b(?:get|have)\s+(?:that|it)\s+(?:done|completed|finished|written|drafted|pulled\s+up|on\s+the\s+canvas)\b|\bpull\s+(?:that|it)\s+up\b/i;
+const ANAPHOR_RE = /\b(?:finish|complete|deliver|produce)\b[^.?!]{0,40}\b(?:that|it)\b|\b(?:wrap|knock)\s+(?:that|it)\s+(?:up|out)\b|\b(?:get|have)\s+(?:that|it)\s+(?:done|completed|finished|written|drafted|pulled\s+up|on\s+the\s+canvas)\b|\bpull\s+(?:that|it)\s+up\b|\b(?:pull|put)\s+(?:it|that|this|everything)\s+(?:all\s+)?together\b/i;
 function anaphoricOrder(text) {
   const s = String(text || '');
   if (!s || s.length > 400) return false;

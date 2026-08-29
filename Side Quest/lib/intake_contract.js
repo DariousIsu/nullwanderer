@@ -26,7 +26,10 @@ const str = (v) => (v == null ? '' : String(v));
 // Interrogatives are asks, not orders (the lookup/status lanes own them).
 // "when(ever)" opens QUESTIONS ("when did the vote happen") but also DEFERRAL leads ("when you get
 // a chance, pull together…") — the run-6 catch. The lookahead carves the deferral shapes out.
-const _QUESTION_RE = /\?\s*$|^(?:who|what|where|why|how|hows|how's|is|are|was|were|do|does|did|can|could|would|should|any)\b|^when(?:ever)?\b(?!\s+(?:you\s+(?:get|have|find)|there'?s\s+a|things\s+(?:quiet|slow))\b)/i;
+// §61b (leg 5: "Can you make the final deliverable … please" died here): a leading modal + "you"
+// with NO question mark is a POLITE ORDER, not a question — it falls through to the order nets.
+// A '?'-terminated form stays a question (conservative; the trailing-? branch catches it anyway).
+const _QUESTION_RE = /\?\s*$|^(?:who|what|where|why|how|hows|how's|is|are|was|were|do|does|did|should|any)\b|^(?:can|could|would|will)\b(?!\s+you\b(?=[^?]*$))|^when(?:ever)?\b(?!\s+(?:you\s+(?:get|have|find)|there'?s\s+a|things\s+(?:quiet|slow))\b)/i;
 // The order lead: an imperative deliver-verb opening a sentence, or an explicit commitment ask.
 // F27b (boot_p54 retest): "clean up the wording in notes/x.md — smooth the phrasing in place" booked
 // NOTHING — the edit verbs were missing from this vocabulary, so an edit-shaped order only booked when
@@ -42,7 +45,7 @@ const _QUESTION_RE = /\?\s*$|^(?:who|what|where|why|how|hows|how's|is|are|was|we
 // Bare "pull" stays out (too broad) except when its object IS the full/bill text — the leg-4 live
 // order shape ("Pull the full text of Louisiana SB200 …"), lookahead-bounded so "pull back" /
 // "pull yourself together" never qualify.
-const _ORDER_VERB = /(?:finish|complete|update|build|re-?build|make|compile|compose|re-?compose|create|assemble|land|write|draft|re-?draft|produce|generate|re-?generate|refresh|deliver|present|final-?ize|put together|pull together|knock out|redo|polish|tighten|revise|rework|reword|edit|refine|smooth|trim|clean\s*up|copy-?edit|proofread|put|drop|place|post|package|pull(?=\s+(?:the\s+)?(?:full|bill|complete)\s+text))/i;
+const _ORDER_VERB = /(?:finish|complete|update|build|re-?build|make|compile|compose|re-?compose|create|assemble|land|write|draft|re-?draft|produce|generate|re-?generate|refresh|deliver|present|final-?ize|put together|pull together|(?:pull|put)\s+(?:it|that|this|everything)\s+(?:all\s+)?together|knock out|redo|polish|tighten|revise|rework|reword|edit|refine|smooth|trim|clean\s*up|copy-?edit|proofread|put|drop|place|post|package|pull(?=\s+(?:the\s+)?(?:full|bill|complete)\s+text))/i;
 // The bridge span stays inside one sentence but must cross FILENAME dots ("notes/x.md and smooth…"):
 // a dot followed by non-space is an extension dot, a dot followed by space/EOL ends the sentence.
 const _APPROACH_BRIDGE = `(?:(?:go\\s+(?:into|to|through|over)|open(?:\\s+up)?|take|grab|pull\\s+up)\\s+(?:[^.!?;\\n]|\\.(?=\\S)){0,80}?\\b(?:and|then)\\s+)?`;
@@ -51,7 +54,7 @@ const _APPROACH_BRIDGE = `(?:(?:go\\s+(?:into|to|through|over)|open(?:\\s+up)?|t
 // recognized lead. A deferred order is STILL an order: it books now and pursues later; the
 // deferral is scheduling advice, never a decline of the commitment.
 const _DEFERRAL = `(?:sometime\\s+(?:today|tonight|soon|this\\s+\\w+)|at\\s+some\\s+point(?:\\s+(?:today|tonight))?|later\\s+(?:today|tonight|on)|when(?:ever)?\\s+you\\s+(?:get|have|find)\\s+(?:a\\s+)?(?:chance|moment|minute|sec(?:ond)?|gap|window|breather)|whenever\\s+there'?s\\s+a\\s+(?:gap|lull|window)|when\\s+things\\s+(?:quiet|slow)\\s+down|if\\s+you\\s+get\\s+a\\s+(?:chance|minute|moment)|no\\s+(?:rush|hurry)(?:\\s+on\\s+(?:it|this))?)`;
-const _ORDER_LEAD_RE = new RegExp(`(?:^|[.!;\\n]\\s*)(?:(?:ok(?:ay)?|alright|good|great|nice|perfect|yes|yeah|now|next|also|then|please|zoe)[,\\s—–:;-]+)*(?:${_DEFERRAL}[,\\s—–-]+(?:but\\s+)?)?(?:let'?s\\s+|go ahead and\\s+)?${_APPROACH_BRIDGE}${_ORDER_VERB.source}\\b`, 'i');
+const _ORDER_LEAD_RE = new RegExp(`(?:^|[.!;\\n]\\s*)(?:(?:ok(?:ay)?|alright|good|great|nice|perfect|yes|yeah|now|next|also|then|please|zoe)[,\\s—–:;-]+)*(?:${_DEFERRAL}[,\\s—–-]+(?:but\\s+)?)?(?:(?:can|could|would|will)\\s+you\\s+(?:please\\s+)?)?(?:let'?s\\s+|go ahead and\\s+)?${_APPROACH_BRIDGE}${_ORDER_VERB.source}\\b`, 'i');
 // "I STILL need a list…" (the sponsor-roster miss, 08-28): up to two adverb words may sit
 // between the pronoun and want/need; the deliverable-evidence requirement still gates matches.
 const _ORDER_WANT_RE = new RegExp(`\\bi\\s+(?:\\w+\\s+){0,2}?(?:want|need)\\s+(?:you\\s+to\\s+)?(?:(?:a|an|the|this|that)\\s+)?(?:\\w+\\s+){0,3}?${_ORDER_VERB.source}?`, 'i');
@@ -62,7 +65,7 @@ const _CANVAS_RE = /\bcanvas\b/i;
 // check what carve-outs it actually has" read as topic-discussed — the order never booked and the
 // debt only survived via the slower absence lane. Bounded to full/bill/complete text (bare "text"
 // would FP on "text me" / "the text says").
-const _ARTIFACT_NOUN_RE = /\b(?:report|briefing|brief|dossier|roster|spreadsheet|sheet|list|summary|memo|write-?up|table|deck|doc(?:ument)?|note|csv|xlsx?|docx?|pdf|outline|digest|rundown|primer|recap|paper|(?:full|bill|complete)\s+text)\b/i;
+const _ARTIFACT_NOUN_RE = /\b(?:report|briefing|brief|dossier|roster|spreadsheet|sheet|list|summary|memo|write-?up|table|deck|doc(?:ument)?|note|csv|xlsx?|docx?|pdf|outline|digest|rundown|primer|recap|paper|deliverable|(?:full|bill|complete)\s+text)\b/i;
 
 /** detectDeliverableOrder(text) → { deliverable, target, topic } | null. Precision over recall:
  *  questions, status checks, and chatter never match; an order needs a lead AND evidence. */

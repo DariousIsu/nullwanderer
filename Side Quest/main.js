@@ -5949,6 +5949,18 @@ async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
 // produces the grounded content; promiseArtifactEmit lands it; the delivery claim is true by
 // construction. A CANNOT: answer is relayed plainly — never a narrated success.
 async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
+  // §61b THE CANVAS STAND-DOWN (the op-ed-listing misbind): a deliverable-shaped order belongs to
+  // THE ROAD — its four-phase run gathers, writes, registers, and points. When this door executes
+  // alone with no thread context, "pull it all together" becomes a meta-listing of unrelated
+  // materials. Road-shaped → stand down and note the meter; everything else builds as before.
+  try {
+    const _dr = require('./lib/document_road');
+    if (require('./lib/intake_contract').detectDeliverableOrder(String(order || '')) || _dr.anaphoricOrder(String(order || ''))) {
+      console.log('[canvas-cmd] road-shaped order → standing down (the document road owns delivery; the canvas door only meters)');
+      try { _dr.tap('canvas-cmd-stood-down'); } catch {}
+      return false;
+    }
+  } catch {}
   const _cuName = (() => { try { return require('./lib/interlocutor').liveName('Lucas'); } catch { return 'Lucas'; } })();   // F9: the order came from whoever's at the keyboard
   const recent = (db.getRecentTurns(10, sessionId) || []).filter((t) => t.speaker === 'user').sort((a, b) => (a.ts || 0) - (b.ts || 0)).slice(-4)
     .map((t) => `- ${String(t.content).slice(0, 300)}`).join('\n');

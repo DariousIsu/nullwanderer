@@ -170,6 +170,17 @@ ok(/roughly 5-10 pages/.test(wp) && /D-FACTS/.test(wp) && /verified X/.test(wp) 
 ok(/never authored from memory/.test(wp) && /reply IS the document/.test(wp) && /never end on what you will do next/.test(wp), "the writer's rules: numbers from material only, no preamble, no plan-tail");
 ok(road.WRITE_BUDGET.report === 6000 && road.WRITE_FLOOR.report === 3000, 'the write budget and floor match the size table');
 
+// ── §61b: the leg-5 door misses + the canvas stand-down ─────────────────────────────────────────
+ok(!!ic.detectDeliverableOrder('Can you make the final deliverable on the anti china legislation with the sponsors and co sponsors please'),
+  "'make the final deliverable' claims now (the word 'deliverable' joined the noun net — leg 5 turn 1)");
+ok(!!ic.detectDeliverableOrder('pull it all together into a document on the canvas'),
+  "'pull it all together into a document' claims (the split phrasal — leg 5 turn 2)");
+ok(road.anaphoricOrder('put that all together for me') === true, 'the anaphor net crosses the split phrasal too');
+ok(ic.detectDeliverableOrder('the deliverables were late last quarter') === null, 'a statement about deliverables with no order lead never claims');
+const mainSrc61 = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+ok(/road-shaped order → standing down/.test(mainSrc61) && /canvas-cmd-stood-down/.test(mainSrc61),
+  'wiring §61b: the canvas door stands down on a road-shaped order (the op-ed-listing misbind class)');
+
 // ── wiring: the one door claims, all four organs tap ────────────────────────────────────────────
 const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/document_road'\)\.claim\(\{ order, userText, bind: _bind \}\)/.test(main), 'wiring: the intake door makes the claim with the captured bind');
