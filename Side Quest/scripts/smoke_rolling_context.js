@@ -89,9 +89,41 @@ const turn = (id, sid, speaker, content) => ({ id, session_id: sid, speaker, con
     ok(a.messages.filter((m) => /compacted — the FULL verbatim/.test(m.content)).length === rc.MAX_BLOCKS, `only the newest ${rc.MAX_BLOCKS} blocks ride with summaries`);
   }
 
+  // ── THE CROSS-BOOT BRIDGE (08-29: the 12:34 cycle beheaded a live conversation — the new
+  // session's window started empty by design and "just go get the information" classified against
+  // a 3-turn window blind to the ComiCon ask sitting 47 minutes fresh in the store) ──────────────
+  {
+    let calls = 0;
+    const prior = [turn(50, 4, 'user', 'Could you look into ComiCon ticket options for Raegan'), turn(51, 4, 'ai_said', 'Saturday passes exist — factoring it in')];
+    prior[0].ts = 900; prior[1].ts = 950;
+    const d = makeDeps({ turns: [turn(60, 5, 'user', 'just go get the information')] });
+    d.getPrevTail = (sid, limit) => { calls++; return prior; };
+    const a = rc.assemble(d, 5);
+    ok(/CARRIED OVER FROM BEFORE A RESTART/.test(a.messages[0].content) && /ComiCon ticket options/.test(a.messages[0].content), '⭐ a fresh prior-session tail BRIDGES into the new window as one marked block');
+    ok(/Lucas: Could you look into/.test(a.messages[0].content) && /Zoe: Saturday passes/.test(a.messages[0].content), 'the bridge carries speakers verbatim, oldest first');
+    rc.assemble(d, 5);
+    ok(calls === 1, 'the bridge computes ONCE per session (saved in state, never re-queried)');
+  }
+  {
+    const stale = [turn(50, 4, 'user', 'ancient thread'), turn(51, 4, 'ai_said', 'ancient reply')];
+    stale[0].ts = 100; stale[1].ts = 200;
+    const d = makeDeps({ turns: [turn(60, 5, 'user', 'now')] });
+    d.now = () => 200 + rc.BRIDGE_HORIZON_MS + 60000;   // the newest prior turn is past the horizon
+    d.getPrevTail = () => stale;
+    const a = rc.assemble(d, 5);
+    ok(!a.messages.some((m) => /CARRIED OVER/.test(m.content)), '⭐ a STALE prior session never bridges — the cross-session-bleed cure keeps its teeth');
+  }
+  {
+    const d = makeDeps({ turns: [turn(60, 5, 'user', 'now')] });
+    const a = rc.assemble(d, 5);
+    ok(!a.messages.some((m) => /CARRIED OVER/.test(m.content)), 'no getPrevTail dep → no bridge (legacy callers unchanged)');
+  }
+
   // ── wiring greps ──────────────────────────────────────────────────────────────────────────────
   {
     const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+    ok(/getPrevTail: \(sid, limit\) => db\.prevSessionTail\(sid, limit\)/.test(src), 'wiring: rollingCtxDeps serves the prior-session tail (the cross-boot bridge supply)');
+    ok(/prevSessionTail/.test(fs.readFileSync(path.join(__dirname, '..', 'lib', 'db.js'), 'utf8')), 'wiring: db.prevSessionTail exists (earlier sessions, user/ai_said only, oldest-first)');
     ok(/const rollingCtxDeps = \(\) => \(/.test(src) && src.indexOf('const rollingCtxDeps') < src.indexOf('async function runChatTurn'), 'wiring: the deps helper is module-level, visible to runChatTurn');
     ok(/_rc\.assemble\(_rcd, currentSessionId/.test(src) && /_rc\.enabled\(_rcd\)/.test(src), 'wiring: the cloud assembly swaps in the rolling history behind the toggle');
     ok(/rollingCompactRunning/.test(src) && /maybeCompact\(deps, currentSessionId, \{ budget:/.test(src), 'wiring: the background compact tick is single-flighted, off the turn path, with the meta budget lever');

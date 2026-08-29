@@ -36,10 +36,21 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
   ok(/deliver\|edit\|redirect\|status\|question\|chatter\|control/.test(mk.lastArgs.want) && /unsure between deliver and chatter, answer chatter/.test(mk.lastArgs.want),
     'the prompt carries the closed vocabulary and the chatter bias');
   ok(/OUTRANKS ANY OTHER MEMORY/.test(mk.lastArgs.input.rule), 'the live-window authority law rides the classifier (catch #7)');
-  v = await ip.classify('x', { deps: mk({ intent: 'deliver', confidence: 0.4 }) });
-  ok(v.intent === 'clarify', 'a low-confidence deliver becomes clarify — never silent spawned work');
+  v = await ip.classify('x', { deps: mk({ intent: 'deliver', deliverable: 'report', confidence: 0.4 }) });
+  ok(v.intent === 'clarify', 'a low-confidence deliver (real artifact noun) becomes clarify — never silent spawned work');
   v = await ip.classify('x', { deps: mk({ intent: 'banana', confidence: 0.9 }) });
   ok(v.intent === 'chatter', 'an out-of-vocabulary intent clamps to chatter');
+  // THE ARTIFACT-NOUN LAW (08-29 live: "just go get the information" → deliver:information at
+  // 0.99 → an unrequested wrong-topic document, composed twice by two organs).
+  v = await ip.classify('x', { deps: mk({ intent: 'deliver', deliverable: 'information', confidence: 0.99 }) });
+  ok(v.intent === 'question', '⭐ deliver with a non-artifact deliverable ("information") DEMOTES to question — a want-to-be-told never composes');
+  v = await ip.classify('x', { deps: mk({ intent: 'deliver', deliverable: null, confidence: 0.99 }) });
+  ok(v.intent === 'question', 'deliver with NO deliverable noun demotes too (the nets have always required an artifact noun)');
+  v = await ip.classify('x', { deps: mk({ intent: 'deliver', deliverable: 'dossier', topic: 'the Frontier Act', confidence: 0.9 }) });
+  ok(v.intent === 'deliver', 'a real artifact noun (dossier) still passes as deliver');
+  ok(/question = they want to be TOLD/.test(mk.lastArgs.want) && /NEVER deliver/.test(mk.lastArgs.want), 'the prompt DEFINES question (it was in the vocabulary but never defined — the 08-29 hole)');
+  ok(/unsure between deliver and question, answer question/.test(mk.lastArgs.want), 'the prompt carries the deliver-vs-question bias');
+  ok(/bare reference you cannot resolve from the window/.test(mk.lastArgs.want), 'the prompt demands referent resolution FROM THE WINDOW, with low confidence on a miss');
   ok((await ip.classify('x', { deps: { ask: async () => null } })) === null, 'a dead cloud → null (the nets alone; the pass only adds recall)');
   // the cloud_logic validator CONTRACT (leg 7's second catch): validate receives the RAW STRING
   // and must return {valid, value} — exercise it exactly the way ask() does.
@@ -69,6 +80,9 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
   ok(/intent_pass'\)\.intentPass\(userMessage, \{ windowText: _iwin \}\)/.test(main), 'wiring: the verdict computes BEFORE the doors, over the rolling assembly');
   ok(/intent=\$\{_iv\.intent\} → standing down/.test(main) && /→ edit suppressed/.test(main), 'wiring: both canvas doors execute the verdict (create + edit)');
   ok(/intent-pass order accepted/.test(main), 'wiring: the backstop claims from a confident deliver verdict (the leak-ledger net)');
+  ok(/intent order REFUSED — "\$\{_ivNoun\}" is not an artifact noun/.test(main), 'wiring: the door refuses a non-artifact deliverable (belt behind the classify demotion)');
+  ok(/intent order REFUSED — bare\/generic topic/.test(main) && /hasSpecificTopic\(_ivTopic\)/.test(main), '⭐ wiring: a bare/generic topic never claims the road — it CLARIFIES (one question costs a turn; a guessed document cost the evening)');
+  ok(/Do NOT start any work, do NOT claim anything is being produced/.test(main), 'wiring: the clarify followup forbids spawning work while asking');
   ok(/assignment SUPPRESSED — intent=/.test(main), 'wiring: a chatter verdict de-assigns (the leg-6 false positive)');
 
   console.log(`\nsmoke_intent_pass: ${pass} passed, ${fail} failed`);

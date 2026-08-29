@@ -196,7 +196,17 @@ ok(lrows[0].attrs.state === 'AZ' && lrows[0].attrs.tags[0] === 'surveillance' &&
     // and the wrong answer got CACHED at the followup store site.
     ok(/NEVER substitute a total from any other store/.test(main) && /_dsCountInjected = \{ slug: _proj\.slug, total: _rows2\.length \}/.test(main), 'C1: the injected block bans cross-store totals and stamps the count authority');
     ok(/store stood down — dataset-backed count answer never caches/.test(main) && /followup store stood down — dataset-backed count answer never caches/.test(main), 'C1b: BOTH answer-cache store sites stand down on a dataset-backed count turn');
-    ok((main.match(/\{ countAuthority: _dsCountInjected \}/g) || []).length >= 2, 'C1: the say-layer count backstop rides BOTH say paths');
+    // NEED #108 (08-29): the old form of this pin demanded the literal `{ countAuthority:
+    // _dsCountInjected }` appear TWICE — and the second paste landed inside fireToolFollowup,
+    // a scope where the variable doesn't exist. Every follow-up died on the ReferenceError for
+    // three days. A grep-pin proves PRESENCE, never SCOPE — this pin now pins the scoped truth:
+    // the reply path passes its live value; the follow-up takes the authority as a PARAMETER.
+    ok((main.match(/\{ countAuthority: _dsCountInjected \}/g) || []).length === 1, 'C1/#108: the reply say path passes the live count authority (exactly the in-scope site)');
+    ok(/async function fireToolFollowup\(\{[^}]*countAuthority = null/.test(main), '⭐ #108: fireToolFollowup takes countAuthority as a PARAMETER (default null — never module state, never an out-of-scope read)');
+    ok(/\.trim\(\), \{ countAuthority \}\);/.test(main), '#108: the follow-up say filter reads the parameter');
+    ok(/if \(countAuthority\) console\.log\('\[answer-cache\] followup store stood down/.test(main), '#108: the follow-up cache stand-down reads the parameter too (the second out-of-scope ref)');
+    const _ftfAt = main.indexOf('async function fireToolFollowup');
+    ok(_ftfAt > 0 && !/_dsCount(Injected|Authority)/.test(main.slice(_ftfAt, _ftfAt + 30000)), '#108: NO _dsCount* reference survives inside fireToolFollowup (the scope wall holds)');
     ok(/_keys2 = \['state', 'status', 'tags', 'place', 'role', 'body'\]\.filter/.test(main), 'C1: the injected count keys follow the DATA (civic datasets render place/role, not empty legislation dims)');
     ok(/if \(_dsCountAuthority\) \{/.test(main) && /how many\|how much\|totals\?\|counts\?\|breakdown\|by state/.test(main),
       'the count injection is gated on the ONE shared authority predicate (ask-shape family + project + rows)');

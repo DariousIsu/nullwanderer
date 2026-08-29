@@ -1192,6 +1192,15 @@ function startSession() {
   return info.lastInsertRowid;
 }
 
+// The cross-boot bridge's supply (rolling_context._bridge): the newest real turns from EARLIER
+// sessions, oldest-first. The freshness gate (is the newest of these recent enough to bridge?)
+// lives in the caller — this just serves the tail.
+function prevSessionTail(sessionId, limit = 30) {
+  return getDb().prepare(`SELECT id, session_id, ts, speaker, content FROM turns
+    WHERE session_id < ? AND speaker IN ('user','ai_said')
+    ORDER BY id DESC LIMIT ?`).all(sessionId, limit).reverse();
+}
+
 // Navigation-time breadcrumb (see the browser_actions migration). Fail-soft: a logging failure
 // must never block a navigation. Pruned to the newest 2000 so the table never becomes a drain.
 function recordBrowserAction({ source = null, target = null, url = null } = {}) {
@@ -2980,6 +2989,7 @@ module.exports = {
   documentsFtsReady,
   syncDocumentsFts,
   startSession,
+  prevSessionTail,
   endSession,
   recordBrowserAction,
   insertTurn,

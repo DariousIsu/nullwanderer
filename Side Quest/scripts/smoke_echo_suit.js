@@ -386,6 +386,16 @@ function mockClient(overrides = {}) {
     const _mainSrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
     ok("wiring #107: the direct search_entities call sites sanitize at the site (no bare query reaches a bypass door)",
       !/callTool\('search_entities', \{ query: (?:ent\.mention|String\(query\)),/.test(_mainSrc) && (_mainSrc.match(/sanitizeFtsQuery\(String\((?:ent\.mention \|\| ''|query)\)\)/g) || []).length >= 2);
+    // THE ATTACH-HANG CURE (p193, 08-29: connect() never settled — zero attach lines all boot,
+    // the heartbeat saw connected=false but its retry awaited the same wedged client forever).
+    {
+      const suit = S.createSuit({ client: mockClient() });
+      await suit.connect();
+      ok('reset: abandons the wedged client entirely (fresh transport next connect)',
+        (suit.reset('attach timeout'), suit._client === null && suit.connected === false && suit.lastError === 'attach timeout'));
+    }
+    ok('wiring attach-hang: tryEchoAttach races a 45s deadline and RESETS on timeout (a hang can no longer be silent)',
+      /echo suit attach TIMED OUT \(45s\)/.test(_mainSrc) && /echoSuit\.reset\('attach timeout'\)/.test(_mainSrc) && /__attach_timeout__/.test(_mainSrc));
   }
 
   console.log('\n' + (fail === 0 ? 'ALL PASS' : 'FAILURES') + ` - ${pass} passed, ${fail} failed`);

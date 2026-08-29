@@ -29,6 +29,10 @@ const COMPACT_AT = 0.75;              // compact when the running transcript cro
 const SUMMARY_CAP = 1400;             // chars per compact-block summary
 const MAX_BLOCKS = 4;                 // older blocks collapse to a one-line doc pointer
 const TURN_CAP = 4000;                // chars per verbatim turn in the assembled window
+const BRIDGE_HORIZON_MS = 4 * 3600 * 1000;  // a prior session bridges only while its newest turn is this fresh
+const BRIDGE_TURNS = 30;              // at most this many carried-over turns
+const BRIDGE_TURN_CAP = 1000;         // chars per carried turn (context, not the live thread)
+const BRIDGE_CHAR_CAP = 40000;        // the bridge never eats more than ~40% of the default budget
 
 const str = (v) => (v == null ? '' : String(v));
 
@@ -56,13 +60,51 @@ function _tail(deps, sessionId, state, { excludeId = null } = {}) {
 }
 
 /**
- * Assemble the rolling history for the cloud call: compact blocks (oldest first) + verbatim tail
- * as role turns. Returns { messages, sizeChars, tailTurns } — messages EXCLUDES the newest user
- * turn (pass its id as excludeId); the caller appends the composed form.
+ * THE CROSS-BOOT BRIDGE (08-29: the 12:34 cycle minted a fresh session and the rolling window
+ * started empty BY DESIGN — the ComiCon ask, 47 minutes fresh in the store, was invisible to the
+ * classifier and the reply, and "just go get the information" resolved against the only thread
+ * the blind window held). A reboot must not amnesia a live conversation: when this session's
+ * window first assembles, the newest turns of the PRIOR sessions bridge in as one marked block —
+ * but only while the newest prior turn is fresh (horizon default 4h, meta
+ * `context.rolling.bridge_h` override). A stale prior session never bridges: the
+ * cross-session-bleed cure keeps its teeth; only the false boundary a reboot draws inside one
+ * live conversation is erased. Computed ONCE per session and saved in the state.
+ */
+function _bridge(deps, sessionId, state) {
+  if (typeof state.bridgeText === 'string') return state.bridgeText;
+  let text = '';
+  try {
+    if (typeof deps.getPrevTail === 'function') {
+      let horizon = BRIDGE_HORIZON_MS;
+      try { const h = parseFloat(deps.getMeta('context.rolling.bridge_h')); if (h > 0) horizon = h * 3600 * 1000; } catch {}
+      const rows = deps.getPrevTail(sessionId, BRIDGE_TURNS) || [];
+      const newest = rows.length ? Number(rows[rows.length - 1].ts || 0) : 0;
+      if (rows.length && newest >= (deps.now || Date.now)() - horizon) {
+        const lines = rows.map((t) => `${t.speaker === 'user' ? 'Lucas' : 'Zoe'}: ${str(t.content).replace(/\s+/g, ' ').slice(0, BRIDGE_TURN_CAP)}`);
+        let body = lines.join('\n');
+        while (body.length > BRIDGE_CHAR_CAP && lines.length > 2) { lines.shift(); body = lines.join('\n'); }
+        text = body;
+      }
+    }
+  } catch {}
+  state.bridgeText = text;
+  _saveState(deps, sessionId, state);
+  return text;
+}
+
+/**
+ * Assemble the rolling history for the cloud call: the cross-boot bridge (if fresh), compact
+ * blocks (oldest first), then the verbatim tail as role turns. Returns { messages, sizeChars,
+ * tailTurns } — messages EXCLUDES the newest user turn (pass its id as excludeId); the caller
+ * appends the composed form.
  */
 function assemble(deps, sessionId, { excludeId = null } = {}) {
   const state = _loadState(deps, sessionId);
   const messages = [];
+  const bridge = _bridge(deps, sessionId, state);
+  if (bridge) {
+    messages.push({ role: 'system', content: `CARRIED OVER FROM BEFORE A RESTART (the app rebooted mid-conversation; these are the newest turns of the SAME live conversation — treat them as this conversation's own history, not another session's):\n${bridge}` });
+  }
   const older = state.blocks.slice(0, -MAX_BLOCKS);
   const recent = state.blocks.slice(-MAX_BLOCKS);
   if (older.length) {
@@ -127,4 +169,4 @@ async function maybeCompact(deps, sessionId, { budget = BUDGET_CHARS } = {}) {
   return { compacted: true, docId: landed.id, fromId, toId, turns: slice.length, summaryChars: summary.length };
 }
 
-module.exports = { enabled, assemble, maybeCompact, BUDGET_CHARS, COMPACT_AT, MAX_BLOCKS, SUMMARY_CAP, _stateKey };
+module.exports = { enabled, assemble, maybeCompact, BUDGET_CHARS, COMPACT_AT, MAX_BLOCKS, SUMMARY_CAP, BRIDGE_HORIZON_MS, BRIDGE_TURNS, _stateKey };

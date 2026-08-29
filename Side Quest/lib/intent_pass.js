@@ -54,7 +54,7 @@ async function classify(text, { windowText = '', deps = {} } = {}) {
       conversation_window: String(windowText || '').slice(0, 4000),
       rule: 'THE LIVE CONVERSATION WINDOW ABOVE OUTRANKS ANY OTHER MEMORY. Classify the LATEST turn only.',
     },
-    want: 'STRICT JSON only: {"intent":"deliver|edit|redirect|status|question|chatter|control","deliverable":"<noun or null>","topic":"<short phrase or null>","referent":"<what that/it points at, or null>","size":"brief|report|dossier|null","confidence":0.0-1.0}. deliver = they want a document, list, report, or artifact produced or finished. edit = change an existing artifact in place. redirect = switch what work is focused on. status = asking how work is going. chatter = social talk, thinking aloud, or commentary about work — NOT an instruction to do it. control = stop/pause/confirm. When unsure between deliver and chatter, answer chatter.',
+    want: 'STRICT JSON only: {"intent":"deliver|edit|redirect|status|question|chatter|control","deliverable":"<noun or null>","topic":"<short phrase or null>","referent":"<what that/it points at, or null>","size":"brief|report|dossier|null","confidence":0.0-1.0}. deliver = they want a DOCUMENT-shaped artifact (a report, list, dossier, brief, table, file) produced or finished — information, an answer, or a lookup told to them in chat is NEVER deliver. question = they want to be TOLD something in chat: an answer, a fact, a lookup ("go get/find/look up the information", "what did you find") — answer it, produce nothing. edit = change an existing artifact in place. redirect = switch what work is focused on. status = asking how work is going. chatter = social talk, thinking aloud, or commentary about work — NOT an instruction to do it. control = stop/pause/confirm. Resolve referent FROM THE CONVERSATION WINDOW: what does "it/that/the information" point at? If the order\'s object is a bare reference you cannot resolve from the window, say so by setting referent to null and confidence no higher than 0.5. When unsure between deliver and chatter, answer chatter; when unsure between deliver and question, answer question.',
     // cloud_logic's validator CONTRACT: called with the RAW STRING, must return {valid, value}
     // (leg 7's second catch — a boolean predicate here made every classify fail silently).
     validate: (raw) => {
@@ -77,6 +77,15 @@ async function classify(text, { windowText = '', deps = {} } = {}) {
     confidence: Math.max(0, Math.min(1, Number(v.confidence) || 0)),
     via: 'model',
   };
+  // THE ARTIFACT-NOUN LAW (the 08-29 live miss: "just go get the information" → deliver:information
+  // at 0.99 → an unrequested wrong-topic document, twice). A deliver verdict whose deliverable is
+  // not a document-shaped noun is a want-to-be-TOLD — it demotes to question and nothing composes.
+  // The regex nets have always required an artifact noun; the model path gets the same floor.
+  if (out.intent === 'deliver') {
+    let artifact = false;
+    try { artifact = !!(out.deliverable && require('./intake_contract').artifactNoun(out.deliverable)); } catch {}
+    if (!artifact) { out.intent = 'question'; out.via = 'model:demoted-non-artifact'; }
+  }
   // Low-confidence deliver never silently spawns work — it becomes a clarify (the design's D1).
   if (out.intent === 'deliver' && out.confidence < 0.55) out.intent = 'clarify';
   return out;

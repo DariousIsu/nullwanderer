@@ -1145,6 +1145,17 @@ class EchoSuit {
     try { const c = this._client; if (c && c.transport && typeof c.transport.close === 'function') c.transport.close(); } catch {}
     this.connected = false;
   }
+
+  // THE ATTACH-HANG CURE (boot p193: connect() never settled — zero attach lines the whole boot,
+  // so the 60s heartbeat believed there was nothing to retry while every engine capability sat
+  // dead). reset() abandons the wedged client entirely: the next connect() builds a FRESH client
+  // and transport instead of re-awaiting a promise that will never resolve.
+  reset(reason = 'reset') {
+    try { const c = this._client; if (c && c.transport && typeof c.transport.close === 'function') c.transport.close(); } catch {}
+    this._client = null;
+    this.connected = false;
+    this.lastError = reason;
+  }
 }
 
 function createSuit(opts) { return new EchoSuit(opts); }

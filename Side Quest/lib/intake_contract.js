@@ -146,4 +146,8 @@ function foreignSubject(userText, { goal = '', facet = '', orgs = [] } = {}) {
   return { foreign: false, why: 'shares subject anchors with the run' };
 }
 
-module.exports = { detectDeliverableOrder, detectEditIntent, foreignSubject, statesIn, _properPhrases, _ORDER_LEAD_RE, _TARGET_PATH_RE };
+// The one artifact-noun floor, shared: the intent pass's model path demotes a "deliver" whose
+// deliverable fails this test (08-29: deliverable "information" spawned an unrequested document).
+function artifactNoun(s) { return _ARTIFACT_NOUN_RE.test(String(s || '')); }
+
+module.exports = { detectDeliverableOrder, detectEditIntent, foreignSubject, statesIn, artifactNoun, _properPhrases, _ORDER_LEAD_RE, _TARGET_PATH_RE };

@@ -197,6 +197,9 @@ const rollingCtxDeps = () => ({
   getMeta: (k) => db.getMeta(k),
   setMeta: (k, v) => db.setMeta(k, v),
   getTurnsSince: (sid, afterId) => db.getDb().prepare('SELECT id, speaker, content FROM turns WHERE session_id = ? AND id > ? ORDER BY id ASC LIMIT 400').all(sid, afterId | 0),
+  // The cross-boot bridge's supply: a reboot mints a fresh session, and without this the window
+  // starts blind to a conversation that was live minutes ago (the 08-29 12:34 cycle specimen).
+  getPrevTail: (sid, limit) => db.prevSessionTail(sid, limit),
   landDoc: ({ title, body, source, ref }) => require('./lib/doc_store').land({ title, body, source, ref }),
   complete: async (msgs) => require('./lib/ollama').complete({
     model: (() => { try { return (db.getMeta('model.replier_fallback') || 'gemma4:31b-cloud').trim(); } catch { return 'gemma4:31b-cloud'; } })(),
@@ -1883,7 +1886,24 @@ app.whenReady().then(() => {
   const pushEchoStatus = (r) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('echo:status', { connected: !!(r && r.ok), tools: (r && r.tools) || 0 }); } catch {} };
   // A failed attach NAMES ITS DOOR — the heartbeat retried a poisoned session for 25 minutes on
   // boot97 with zero log evidence because this catch was silent.
-  const tryEchoAttach = () => echoSuit.connect().then(r => { if (r.ok) console.log(`[main] echo suit attached: ${r.tools} tools`); pushEchoStatus(r); return !!r.ok; }).catch((e) => { console.error('[main] echo suit attach failed:', (e && e.message) ? e.message : String(e)); pushEchoStatus(null); return false; });
+  // p193 (08-29): connect() HUNG without settling — zero attach lines all boot, the heartbeat
+  // believed there was nothing to retry, and every engine capability sat dead beside a healthy
+  // engine. An attach that hasn't settled in 45s counts as FAILED: the wedged client is reset
+  // (fresh transport next try) and the heartbeat keeps retrying. A hang can no longer be silent.
+  const tryEchoAttach = () => {
+    let _tm = null;
+    const deadline = new Promise((res) => { _tm = setTimeout(() => res('__attach_timeout__'), 45000); _tm.unref?.(); });
+    return Promise.race([echoSuit.connect(), deadline]).then((r) => {
+      if (_tm) clearTimeout(_tm);
+      if (r === '__attach_timeout__') {
+        console.error('[main] echo suit attach TIMED OUT (45s) — resetting the client; the heartbeat retries on a fresh transport');
+        try { echoSuit.reset('attach timeout'); } catch {}
+        pushEchoStatus(null); return false;
+      }
+      if (r.ok) console.log(`[main] echo suit attached: ${r.tools} tools`);
+      pushEchoStatus(r); return !!r.ok;
+    }).catch((e) => { if (_tm) clearTimeout(_tm); console.error('[main] echo suit attach failed:', (e && e.message) ? e.message : String(e)); pushEchoStatus(null); return false; });
+  };
   setTimeout(() => {
     // Adopt the running engine, or spawn + own one, THEN attach the suit. If ensure can't bring an
     // engine up (e.g. ECHO_CWD/ECHO_PYTHON wrong on the spawn path), still try to attach in case one
@@ -13968,7 +13988,12 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
 // runaway chain is a real failure — but 4 was set when a turn meant "look one thing up". Building a
 // document is open the tab, write the contract, then go and read; four hops cannot hold that.
 const MAX_ECHO_HOPS = require('./lib/config').maxEchoHops();
-async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0, prompted = true, finalNudge = false, lastSay = '', noChain = false }) {
+// countAuthority: need #108 (verified 08-29) — the C1 count fix referenced the reply handler's
+// `_dsCountInjected`/`_dsCountAuthority` from THIS scope, where neither exists, and every
+// follow-up that reached the say stage died on the ReferenceError for three days (the body of
+// "she does the work then goes silent"). The count authority is a PARAMETER now, default null —
+// never module state, which would bleed a stale count across turns.
+async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0, prompted = true, finalNudge = false, lastSay = '', noChain = false, countAuthority = null }) {
   // TURN ISOLATION — if a newer chat turn has started since this follow-up's turn, discard it: a prior
   // turn's fire-and-forget tool result must never render into the current turn (the cross-turn bleed).
   if (io && io._gen != null && io._gen !== _chatTurnGen) { console.log(`[main] stale tool-followup discarded (gen ${io._gen} vs ${_chatTurnGen})`); return; }
@@ -14057,7 +14082,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     let sayOut = require('./lib/say_filter').filterSay((say || '')
       .replace(/<\/?(think|say)>/gi, '')
       .replace(/[ \t]+/g, ' ')
-      .trim(), { countAuthority: _dsCountInjected });
+      .trim(), { countAuthority });
     sayOut = screenLib.stripTags(filesLib.stripTags(browserLib.stripTags(sayOut)));
     sayOut = echoSuitLib.stripEchoTags(sayOut);
     sayOut = sayOut.replace(/<[^>]+>/g, '').trim();
@@ -14152,7 +14177,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
             const _ac = require('./lib/answer_cache');
             // C1b catch (08-26): THIS is the site that cached the wrong-scope parish count — the
             // followup store never checked the count authority. Dataset-backed answers never cache.
-            if (_dsCountAuthority) console.log('[answer-cache] followup store stood down — dataset-backed count answer never caches');
+            if (countAuthority) console.log('[answer-cache] followup store stood down — dataset-backed count answer never caches');
             else {
               const _lastU = db.getDb().prepare("SELECT content FROM turns WHERE session_id = ? AND speaker = 'user' ORDER BY id DESC LIMIT 1").get(sessionId);
               if (_lastU && _lastU.content) {
@@ -14275,10 +14300,10 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
           // but don't loop forever on lookups our records can't satisfy (the Glen Womack phone loop).
           console.log(`[chain-guard] no-progress ceiling hit — forcing honest miss (hop ${echoHop + 1}, noProgress ${_cs.noProgress})`);
           hopParts.push(_cg.honestMissNote(_cs, { userName }));
-          try { await fireToolFollowup({ io, channel, sessionId, echoHop: echoHop + 1, prompted, finalNudge: true, noChain: true, resultText: hopParts.join('\n\n') }); }
+          try { await fireToolFollowup({ io, channel, sessionId, echoHop: echoHop + 1, prompted, finalNudge: true, noChain: true, resultText: hopParts.join('\n\n'), countAuthority }); }
           catch (e) { console.error('[main] chain-guard forced answer failed:', e.message); }
         } else {
-          try { await fireToolFollowup({ io, channel, sessionId, resultText: hopParts.join('\n\n'), echoHop: echoHop + 1, prompted, finalNudge, lastSay: sayOut || lastSay }); }
+          try { await fireToolFollowup({ io, channel, sessionId, resultText: hopParts.join('\n\n'), echoHop: echoHop + 1, prompted, finalNudge, lastSay: sayOut || lastSay, countAuthority }); }
           catch (e) { console.error('[main] echo chain follow-up failed:', e.message); }
         }
       }
@@ -14288,7 +14313,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       // guarded against looping: answer from what returned, or say the miss plainly.
       console.log('[main] follow-up ended on a promise-say with no further work — forcing answer-or-honest-miss');
       try {
-        await fireToolFollowup({ io, channel, sessionId, echoHop: echoHop + 1, prompted, finalNudge: true,
+        await fireToolFollowup({ io, channel, sessionId, echoHop: echoHop + 1, prompted, finalNudge: true, countAuthority,
           resultText: '[THE TOOL CHAIN HAS ENDED — nothing more is running and no further results will arrive. Everything retrieved is already above. Answer Lucas NOW, in your own voice, from what is there. If it genuinely does not contain the answer, say plainly what you looked for and could not get. Do NOT say you are fetching, checking, gathering, or waiting.]' });
       } catch (e) { console.error('[main] answer-now follow-up failed:', e.message); }
     }
@@ -18689,6 +18714,24 @@ async function _roadRun({ order, road, userText, sessionId, asResume = false }) 
         require('./lib/deliverable_projects').noteCompose({ topic: order.topic || '', artifactSlug: _r.slug });
       } catch (e) { console.error('[road] registration failed (the file still landed):', e.message); }
       try { dr.clearResume({ why: 'registered delivery' }); } catch {}
+      // D2 SUBTRACTION #1a — THE ROAD PAYS ITS OWN PROMISE (08-29 live: promise#2769, booked by
+      // the same order the road was already running, woke 7 minutes after this delivery and
+      // composed a second document OVER this one — v1 destroyed, the sent pointer falsified).
+      // A registered road delivery completes the open promise rows carrying the same order.
+      try {
+        const _rq = require('./lib/recheck_queue');
+        const _norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        // Direct query, NOT openByKind — a promise inside its grace window is not yet "due" but
+        // absolutely must be paid here, or it wakes later and composes over this delivery.
+        const _openP = db.getDb().prepare(`SELECT id, detail FROM recheck_queue WHERE kind = 'promise' AND status = 'open' ORDER BY id DESC LIMIT 10`).all();
+        for (const it of _openP) {
+          let d2 = {}; try { d2 = it.detail ? JSON.parse(it.detail) : {}; } catch {}
+          if (d2 && d2.topic && _norm(d2.topic) === _norm(order.topic)) {
+            _rq.complete(it.id, { outcome: `paid-by-road-delivery ${_r.slug}` });
+            console.log(`[road] promise#${it.id} PAID by this delivery (${_r.slug}) — the pursuit will not re-compose it`);
+          }
+        }
+      } catch (e) { console.error('[road] promise-pay sweep failed:', e.message); }
       const kb = Math.round(Buffer.byteLength(doc, 'utf8') / 1024);
       const words = (doc.match(/\S+/g) || []).length;
       const lead = (doc.split(/\n+/).find((l) => l.trim() && !/^#/.test(l.trim())) || '').slice(0, 300);
@@ -18740,13 +18783,30 @@ function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
       if (!order) {
         // W1: the comprehension verdict catches what every net missed (the leak-ledger class) —
         // a confident deliver verdict claims; anything else falls through as before.
+        // 08-29 (the "just go get the information" specimen — deliver:information at 0.99 spawned
+        // an unrequested wrong-topic document, twice): the model path now crosses the SAME floors
+        // the regex nets always had. (1) ARTIFACT NOUN — a deliverable that isn't document-shaped
+        // never claims (belt; lib/intent_pass demotes it to question upstream). (2) SPECIFIC TOPIC —
+        // an order whose topic is all generics/pronouns is a bare reference; it CLARIFIES, never
+        // guesses: one short question costs one turn, a guessed document costs the evening.
         try {
           const _iv = require('./lib/intent_pass').current();
           if (_iv && _iv.intent === 'deliver' && _iv.confidence >= 0.55) {
-            order = { deliverable: _iv.deliverable || 'report', target: null, topic: (_iv.topic || _iv.referent || String(userText).slice(0, 120)), _viaIntent: true };
-            console.log(`[road] intent-pass order accepted (${order.deliverable}, conf ${_iv.confidence.toFixed(2)})`);
+            const _ivNoun = String(_iv.deliverable || 'report');
+            if (!require('./lib/intake_contract').artifactNoun(_ivNoun)) {
+              console.log(`[road] intent order REFUSED — "${_ivNoun}" is not an artifact noun (a want-to-be-told, not a document order)`);
+            } else {
+              const _ivTopic = (_iv.topic || _iv.referent || String(userText).slice(0, 120));
+              if (!require('./lib/document_road').hasSpecificTopic(_ivTopic)) {
+                console.log(`[road] intent order REFUSED — bare/generic topic ("${String(_ivTopic).slice(0, 60)}") → clarifying, never guessing`);
+                fireToolFollowup({ io: null, channel: 'chat', sessionId, resultText: `[${require('./lib/interlocutor').liveName('Lucas')} gave an order whose object you could not pin down ("${String(userText).slice(0, 120)}") — it points at something, but the conversation window doesn't tell you clearly WHICH thing. Ask them, in ONE short sentence, which thing they mean — name the open threads you can see. Do NOT start any work, do NOT claim anything is being produced.]` }).catch(() => {});
+                return;
+              }
+              order = { deliverable: _ivNoun, target: null, topic: _ivTopic, _viaIntent: true };
+              console.log(`[road] intent-pass order accepted (${order.deliverable}, conf ${_iv.confidence.toFixed(2)})`);
+            }
           }
-        } catch {}
+        } catch (e) { console.error('[road] intent-order gate failed:', e.message); }
       }
       if (!order) {
         // P1 SCOPE-ADD (continuity leg-B catch): "(also) fold Y into the X report" is an order
@@ -18983,14 +19043,31 @@ async function _surfaceOpenPromise() {
         // A pursued promise about a registered project's material composes THE PROJECT (its own
         // registered topic → resolveOrMint reuses, update in place) — never a sibling.
         let _pt = t;
+        let _standDown = null;
         try {
           const _reg2 = require('./lib/artifact_registry');
           const _kin2 = _reg2.matchKinProject(t);
           if (_kin2) {
             const _row2 = _reg2.get(_kin2.slug);
             if (_row2 && _row2.topic) { _pt = _row2.topic; console.log(`[delivery] pursuit topic kin-rebound → project "${_kin2.slug}" (sibling mint prevented)`); }
+            // D2 SUBTRACTION #1b — PROMISE→POINTER (08-29 live: this exact path re-composed over
+            // the road's registered delivery 7 minutes after it landed — v1→v2, the artifact
+            // destroyed and the already-sent pointer falsified). A pursued promise whose canonical
+            // moved AFTER the promise was booked already got its delivery — point, never compose
+            // again. A canonical older than the promise is a genuinely unpaid ask and still builds.
+            if (_row2 && Number(_row2.updated_ts || 0) >= Number(it.created_ts || 0)
+                && Number(_row2.updated_ts || 0) >= Date.now() - 24 * 3600 * 1000) _standDown = _row2;
           }
         } catch {}
+        if (_standDown) {
+          const _ageMin = Math.round((Date.now() - Number(_standDown.updated_ts)) / 60000);
+          console.log(`[delivery] promise#${it.id} STANDS DOWN — canonical "${_standDown.slug}" delivered fresh (v${_standDown.version}, ${_ageMin}m ago) — pointing, never re-composing`);
+          await _announceOffTurn(sid,
+            `[The ${what}${t ? ` on ${t}` : ''} you owed ${uname} is ALREADY DELIVERED — it is saved at ${_standDown.rel_path} (delivered ${_ageMin} minute(s) ago). If you haven't already pointed them to it this hour, tell them in ONE sentence where it is. Do NOT rebuild it, do NOT describe it beyond its title, and NEVER claim you just finished it — it was finished before this check ran.]`,
+            `That ${what}${t ? ` on ${t}` : ''} is already done — it's saved at ${_standDown.rel_path}.`,
+            'delivery-pointer');
+          return;
+        }
         outcome = await buildReportFromHeld({ io: null, channel: 'chat', sessionId: sid, userName: uname, topic: _pt });
       }
     } catch (e) { console.error('[delivery] pursue-delivery build threw:', e.message); }

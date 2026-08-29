@@ -91,6 +91,16 @@ const m3 = road.mandate({ order: { deliverable: 'report' }, road: { size: 'repor
 ok(/YOU ALREADY HOLD this source material/.test(m3) && /COMMENSURATE with its sources/.test(m3), 'the mandate carries the held block + the commensurate rail');
 ok(!/YOU ALREADY HOLD/.test(road.mandate({ order: {}, road: { size: 'report' }, userText: 'x' })), 'no held material → no empty held block');
 
+// ── §59c PORTED to held material (08-29 live: topic "just get the information" bound Texas
+// "Information Disclosure" bills through the token "information" — a wrong-topic document rode
+// the mandate and the writer dutifully wrote it) ────────────────────────────────────────────────
+ok(road.hasSpecificTopic('just get the information') === false, '⭐ an all-generic topic ("just get the information") has NO specific tokens — it binds nothing');
+ok(road.hasSpecificTopic('the information details') === false, 'generic nouns (information/details) never count as specific');
+ok(road.hasSpecificTopic('Frontier Act sponsors') === true, 'a real subject still binds');
+ok(road.heldMaterial({ topic: 'just get the information' }) === '', '⭐ heldMaterial returns NOTHING for a bare topic — no db even consulted (the empty-token early return)');
+const _heldSpec = road.heldMaterial({ topic: 'juvenile information disclosure', deps: { db: { getDb: () => ({ prepare: (q) => ({ all: (...args) => { if (args.some((a) => /%information%/.test(a))) throw new Error('generic token reached the LIKE'); return []; } }) }) }, fs: { readdirSync: () => [] } } });
+ok(_heldSpec === '', 'generic tokens are dropped BEFORE the LIKE — "information" never reaches the query');
+
 // ── S1.5 cure 3: the swarm offer ────────────────────────────────────────────────────────────────
 ok(/FAN OUT/.test(m3) && /delegate_to_/.test(m3) && /INTEGRATE/.test(m3), 'a report-class mandate offers the swarm (delegate + integrate)');
 ok(!/FAN OUT/.test(road.mandate({ order: {}, road: { size: 'brief' }, userText: 'x' })), 'a brief never fans out');
@@ -190,6 +200,11 @@ ok(/notePreClaim\('redirect', target\.id\)/.test(main), 'wiring: the user-work r
 ok(/task: true, autonomous: asResume, budgetMult: dr\.BUDGET\[road\.size\]/.test(main) && /asResume = false/.test(main),
   'wiring S1+S2: task mode with the lane rule — asResume defaults false, so a direct order rides INTERACTIVE and never starves');
 ok(/_road && !_roadRunInFlight/.test(main) && /S1 run starting/.test(main), 'wiring S1: the road fires once per claim, one run at a time');
+// D2 SUBTRACTION #1 (08-29 live proof: promise#2769 composed a second document OVER the road's
+// registered delivery 7 minutes after it landed — v1→v2, the artifact destroyed).
+ok(/paid-by-road-delivery/.test(main) && /PAID by this delivery/.test(main), '⭐ wiring D2-1a: a registered road delivery PAYS the open promise carrying the same order');
+ok(/STANDS DOWN — canonical/.test(main) && /pointing, never re-composing/.test(main), '⭐ wiring D2-1b: a pursued promise whose canonical moved after booking POINTS — it never composes a second time');
+ok(/updated_ts \|\| 0\) >= Number\(it\.created_ts/.test(main), 'wiring D2-1b: the stand-down predicate is canonical-moved-AFTER-the-promise (a genuinely unpaid ask still builds)');
 ok(/that's a failure on my side, not progress/.test(main), 'wiring S1: an empty run posts the honest failure — the say-gate never goes silent');
 ok(/model: 'document-road', unprompted: 1/.test(main), 'wiring S1: delivery posts as her own follow-up message');
 ok(/anaphoricOrder\(userText\)/.test(main) && /resolveAnaphor\(\)/.test(main), 'wiring S1.5: the door falls back to the anaphor resolver before giving up');

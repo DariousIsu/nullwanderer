@@ -249,11 +249,21 @@ function resolveAnaphor({ projects = null, nowMs = Date.now() } = {}) {
 // topic-tokened matches from the documents store + the downloads directory, names normalized
 // space/hyphen-blind (the 35fe34d lesson).
 function _norm(s) { return String(s || '').toLowerCase().replace(/[-_.\s]+/g, ''); }
+// §59c PORTED (08-29 live: topic "just get the information" bound Texas "Information Disclosure"
+// bills through the token "information" — a wrong-topic document rode the mandate): a GENERIC
+// token never binds. Only specific tokens survive; a topic that is ALL generics yields nothing.
+const _GENERIC_TOPIC_TOKENS = new Set(['that', 'this', 'with', 'from', 'about', 'analysis', 'summary', 'report', 'reports',
+  'complete', 'completed', 'just', 'info', 'information', 'details', 'detail', 'data', 'document', 'documents', 'stuff',
+  'things', 'thing', 'everything', 'update', 'updates', 'story', 'full', 'item', 'items', 'list', 'lists', 'note', 'notes',
+  'file', 'files', 'together', 'need', 'needed', 'want', 'wanted', 'please', 'quick', 'real']);
 function _topicTokens(topic) {
   return [...new Set(String(topic || '').toLowerCase().match(/[a-z0-9]{4,}/g) || [])]
-    .filter((t) => !['that', 'this', 'with', 'from', 'about', 'analysis', 'summary', 'report', 'complete', 'completed'].includes(t))
+    .filter((t) => !_GENERIC_TOPIC_TOKENS.has(t))
     .slice(0, 4);
 }
+// The door gate reads this: an order whose topic carries NO specific token is a bare reference —
+// it never claims the road; it clarifies.
+function hasSpecificTopic(topic) { return _topicTokens(topic).length > 0; }
 function heldMaterial({ topic, deps = {} } = {}) {
   const toks = _topicTokens(topic);
   if (!toks.length) return '';
@@ -309,4 +319,4 @@ function mandate({ order, road, userText, held = '' } = {}) {
 
 function _resetForTest() { _lastClaim = null; _preNotes = []; }
 
-module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, tap, claims, mandate, BUDGET, anaphoricOrder, resolveAnaphor, heldMaterial, planShapedFinal, artifactAbsenceClaim, findHeldArtifact, noteResume, pendingResume, markResumeTry, resumeDue, clearResume, swarmPlan, gatherMandate, writerPrompt, WRITE_BUDGET, WRITE_FLOOR, SWARM, _resetForTest, CLAIMS_KEY, CLAIMS_CAP, ANAPHOR_WINDOW_MS, RESUME_KEY, RESUME_PACE_MS };
+module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, tap, claims, mandate, BUDGET, anaphoricOrder, resolveAnaphor, heldMaterial, hasSpecificTopic, planShapedFinal, artifactAbsenceClaim, findHeldArtifact, noteResume, pendingResume, markResumeTry, resumeDue, clearResume, swarmPlan, gatherMandate, writerPrompt, WRITE_BUDGET, WRITE_FLOOR, SWARM, _resetForTest, CLAIMS_KEY, CLAIMS_CAP, ANAPHOR_WINDOW_MS, RESUME_KEY, RESUME_PACE_MS };
