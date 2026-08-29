@@ -41,6 +41,17 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
   v = await ip.classify('x', { deps: mk({ intent: 'banana', confidence: 0.9 }) });
   ok(v.intent === 'chatter', 'an out-of-vocabulary intent clamps to chatter');
   ok((await ip.classify('x', { deps: { ask: async () => null } })) === null, 'a dead cloud → null (the nets alone; the pass only adds recall)');
+  // the cloud_logic validator CONTRACT (leg 7's second catch): validate receives the RAW STRING
+  // and must return {valid, value} — exercise it exactly the way ask() does.
+  const vd = mk({ intent: 'chatter', confidence: 0.8 });
+  await ip.classify('x', { deps: vd });
+  const realValidate = mk.lastArgs.validate;
+  let vr = realValidate('Sure! Here is the JSON: {"intent":"deliver","deliverable":"report","confidence":0.9}');
+  ok(vr && vr.valid === true && vr.value.intent === 'deliver', 'the validator parses JSON out of a chatty raw string and returns {valid, value}');
+  vr = realValidate('I could not classify that.');
+  ok(vr && vr.valid === false && typeof vr.error === 'string', 'a JSON-less raw string returns {valid:false, error} — never a bare boolean');
+  vr = realValidate('{"intent":"banana","confidence":0.9}');
+  ok(vr && vr.valid === false, 'an out-of-vocabulary intent fails validation (the repair retry gets a real error)');
 
   // ── one verdict per turn ──────────────────────────────────────────────────────────────────────
   ip._resetForTest();

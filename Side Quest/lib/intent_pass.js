@@ -55,7 +55,17 @@ async function classify(text, { windowText = '', deps = {} } = {}) {
       rule: 'THE LIVE CONVERSATION WINDOW ABOVE OUTRANKS ANY OTHER MEMORY. Classify the LATEST turn only.',
     },
     want: 'STRICT JSON only: {"intent":"deliver|edit|redirect|status|question|chatter|control","deliverable":"<noun or null>","topic":"<short phrase or null>","referent":"<what that/it points at, or null>","size":"brief|report|dossier|null","confidence":0.0-1.0}. deliver = they want a document, list, report, or artifact produced or finished. edit = change an existing artifact in place. redirect = switch what work is focused on. status = asking how work is going. chatter = social talk, thinking aloud, or commentary about work — NOT an instruction to do it. control = stop/pause/confirm. When unsure between deliver and chatter, answer chatter.',
-    validate: (o) => !!(o && INTENTS.has(o.intent) && typeof o.confidence === 'number'),
+    // cloud_logic's validator CONTRACT: called with the RAW STRING, must return {valid, value}
+    // (leg 7's second catch — a boolean predicate here made every classify fail silently).
+    validate: (raw) => {
+      try {
+        const m = String(raw || '').match(/\{[\s\S]*\}/);
+        if (!m) return { valid: false, error: 'no JSON object in the response' };
+        const o = JSON.parse(m[0]);
+        if (!o || !INTENTS.has(o.intent) || typeof o.confidence !== 'number') return { valid: false, error: 'missing or out-of-vocabulary intent/confidence' };
+        return { valid: true, value: o };
+      } catch (e) { return { valid: false, error: e.message }; }
+    },
   });
   if (!v) return null;
   const out = {
