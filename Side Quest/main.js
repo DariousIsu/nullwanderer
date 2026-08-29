@@ -5960,6 +5960,13 @@ async function buildCanvasFromOrder({ io, channel, sessionId, order }) {
       try { _dr.tap('canvas-cmd-stood-down'); } catch {}
       return false;
     }
+    // W1: the one verdict rules the door — a social/status/question turn never builds a canvas
+    // doc (leg 6: "do some work on your systems" got a canvas edit).
+    const _iv = require('./lib/intent_pass').current();
+    if (_iv && ['chatter', 'question', 'status', 'clarify', 'control'].includes(_iv.intent)) {
+      console.log(`[canvas-cmd] intent=${_iv.intent} → standing down (no artifact was ordered)`);
+      return false;
+    }
   } catch {}
   const _cuName = (() => { try { return require('./lib/interlocutor').liveName('Lucas'); } catch { return 'Lucas'; } })();   // F9: the order came from whoever's at the keyboard
   const recent = (db.getRecentTurns(10, sessionId) || []).filter((t) => t.speaker === 'user').sort((a, b) => (a.ts || 0) - (b.ts || 0)).slice(-4)
@@ -6084,6 +6091,14 @@ async function _classifyCanvasEditIntent(userMessage) {
     });
     if (!v) return null;                                   // infra/parse failure — caller may fall back to the offline path
     if (v.edit && v.instruction) {
+      // W1: the one verdict rules the edit branch too (leg 6's stale-doc edit on a social turn).
+      try {
+        const _iv = require('./lib/intent_pass').current();
+        if (_iv && ['chatter', 'question', 'status', 'clarify', 'control'].includes(_iv.intent)) {
+          console.log(`[canvas-cmd] intent=${_iv.intent} → edit suppressed (nothing was ordered)`);
+          return null;
+        }
+      } catch {}
       console.log(`[canvas-cmd] classifier read the intent: "${v.instruction}"`);
       // S1.7 road meter: the canvas-cmd classifier is the SEVENTH owner door (leg 3: it read
       // "present the final report" as an in-place edit) — it taps the meter either side of the claim.
@@ -10345,6 +10360,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // was classified as a REDIRECT → new seed thread #3867 + thread #3868 minted — the false
       // loop eating its own cure order). "Finish/finalize the paper" is a COMPLETION order for
       // work already gathered, never a pivot to new research; run the conductor and stop here.
+      // W1 THE ONE INTENT PASS (docs/CHAT_PATH_SIMPLIFICATION_2026-08-29.md): one verdict per
+      // turn, computed here before any door decides; the doors below EXECUTE it via current().
+      // Reads the same rolling assembly the reply reads (§62b). Cloud down → null → nets alone.
+      try {
+        let _iwin = '';
+        try {
+          const rc = require('./lib/rolling_context');
+          const _rcd = rollingCtxDeps();
+          if (rc.enabled(_rcd)) { const a = rc.assemble(_rcd, sessionId); _iwin = ((a && a.messages) || []).map((m) => `${m.role}: ${m.content}`).join('\n').slice(-4000); }
+        } catch {}
+        await require('./lib/intent_pass').intentPass(userMessage, { windowText: _iwin });
+      } catch (e) { console.error('[intent] pass failed (doors run on nets alone):', e.message); }
       if (PAPER_VERB_RE.test(userMessage)) {
         directedStopHandled = true;
         const _pm = userMessage.match(PAPER_TOPIC_RE);
@@ -10818,6 +10845,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           console.log(`[intake] topic discussed, not commanded → route=explore (offer "${projectOffer.target || '—'}", kind=${projectOffer.kind})`);
         }
       }
+      // W1: a chatter/question verdict de-assigns — leg 6's "do some work on your systems"
+      // (social) routed task and acked an assignment that never existed.
+      try {
+        const _iv = require('./lib/intent_pass').current();
+        if (isAssignment && _iv && ['chatter', 'question', 'status', 'clarify'].includes(_iv.intent)) {
+          console.log(`[intake] assignment SUPPRESSED — intent=${_iv.intent} (conversation, not an order)`);
+          isAssignment = false;
+        }
+      } catch {}
       if (isAssignment) {
         console.log(`[intake] ASSIGNMENT → ${intakeRoute ? intakeRoute.action : 'discover(regex-fallback)'}${intakeRoute && intakeRoute.deep ? ' deep' : ''}${intakeRoute && intakeRoute.priority ? ' ' + intakeRoute.priority : ''}`);
         // S3a road meter: the assignment lane is the EIGHTH owner door (the sponsor-roster
@@ -18698,6 +18734,17 @@ function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
           }
         }
       } catch (e) { console.error('[road] anaphor resolve failed:', e.message); }
+      if (!order) {
+        // W1: the comprehension verdict catches what every net missed (the leak-ledger class) —
+        // a confident deliver verdict claims; anything else falls through as before.
+        try {
+          const _iv = require('./lib/intent_pass').current();
+          if (_iv && _iv.intent === 'deliver' && _iv.confidence >= 0.55) {
+            order = { deliverable: _iv.deliverable || 'report', target: null, topic: (_iv.topic || _iv.referent || String(userText).slice(0, 120)), _viaIntent: true };
+            console.log(`[road] intent-pass order accepted (${order.deliverable}, conf ${_iv.confidence.toFixed(2)})`);
+          }
+        } catch {}
+      }
       if (!order) {
         // P1 SCOPE-ADD (continuity leg-B catch): "(also) fold Y into the X report" is an order
         // about an EXISTING deliverable — no produce-verb, so it is not a deliverable order, but
