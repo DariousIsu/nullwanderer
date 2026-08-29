@@ -19042,6 +19042,16 @@ async function _needsPressure(now = Date.now()) {
       run = null;
     }
   } catch (e) { console.error('[needs] repair-run intercept failed:', e.message); }
+  // §55b THE MIS-SUITE DISCARD (the 101x cure's second half): a live run whose suite would NOT be
+  // re-chosen by the specificity-fixed matcher is flailing against a stranger's code — discard it.
+  // The need row stays as-is and re-opens against an honestly-fitting suite, or none.
+  try {
+    if (run && run.suite && run.goal && !capn.suiteFor(run.goal, [run.suite])) {
+      require('./lib/rehearsal_driver').discard();
+      console.log(`[needs] mis-suited run "${run.slug}" discarded — suite "${run.suite}" shares no specific token with its goal (the 101x class)`);
+      run = null;
+    }
+  } catch (e) { console.error('[needs] mis-suite check failed:', e.message); }
   // M2.5.6 STALE-NEED REAPER: park OPEN needs that have sat past the reap age without ever being
   // built (self-watch needs are exempt — they stay as self-repair targets). Keeps the pressure lane
   // pointed at live work instead of a growing pile of never-buildable inquiry/external needs.

@@ -151,6 +151,23 @@ function _findImplicated(needText, { maxFiles = 3 } = {}) {
   return hits;
 }
 
+// §59b THE COUNTED ROWS (the #104 wrong diagnosis): an exhaust-audit signature ("the rehearsal
+// lane failed 101x in 7 days") is a SUMMARY SENTENCE — the mechanism lives in the rows the audit
+// counted, which sat unqueried while the diagnosis constructed a story from adjacent code. For an
+// audit-born lane-failure need, the bundle LEADS with the distinct failure notes (deterministic).
+function _countedRowsSection(need, { deps = {} } = {}) {
+  const m = String((need && need.need) || '').match(/the (\w[\w-]*) lane failed (\d+)x/i);
+  if (!m) return null;
+  try {
+    const db = ((deps && deps.db) || require('./db')).getDb();
+    const cut = Date.now() - 7 * 24 * 3600e3;
+    const rows = db.prepare("SELECT substr(note,1,160) n, COUNT(*) c, MAX(target) t FROM workstreams WHERE status='failed' AND lane=? AND finished_ts>? GROUP BY n ORDER BY c DESC LIMIT 5").all(m[1], cut);
+    if (!rows.length) return null;
+    return `THE COUNTED ROWS (workstreams, lane='${m[1]}', failed, 7d — these ARE the ${m[2]} failures; diagnose THIS mechanism, never adjacent code):\n` +
+      rows.map((r) => `- ${r.c}x "${r.n}" (latest target: ${r.t})`).join('\n');
+  } catch { return null; }
+}
+
 /**
  * The deterministic evidence bundle for a repair need. Parses the born_from signature
  * (self-audit:<detector>:<file>); a self-watch signature has no file → the implicated-code
@@ -163,6 +180,8 @@ function preGather(need, { deps = {} } = {}) {
   const m = bf.match(/^self-audit:([^:]+):(.+)$/);
   if (m) { detector = m[1]; rel = _safeRel(m[2]); }
   const sections = [];
+  // §59b: audit-born lane-failure needs lead with THE COUNTED ROWS — the mechanism, not the summary.
+  const cr = _countedRowsSection(need, { deps }); if (cr) sections.push(cr);
   // Signature fidelity FIRST (self-watch needs): the verbatim lines outrank everything else in the
   // bundle — the cap must never starve them (the §52b lesson, where the cap ate the real files).
   const sw = bf.match(/^self-watch:\s*(.+)$/);
@@ -248,4 +267,4 @@ function verifyStudyCitations(study, { deps = {} } = {}) {
   return { ok: verified.length >= 1, verified, unverified, reason: verified.length ? null : 'cited URLs were never actually read (no site-ledger record)' };
 }
 
-module.exports = { isRepairNeed, isRepairRunFor, preGather, diagnosisPrompt, validateDiagnosis, verifyStudyCitations, _findImplicated, _sigTokens, _sigToRegex, _rawLinesFor, _safeRel, BUNDLE_CAP };
+module.exports = { isRepairNeed, isRepairRunFor, preGather, diagnosisPrompt, validateDiagnosis, verifyStudyCitations, _findImplicated, _sigTokens, _sigToRegex, _rawLinesFor, _countedRowsSection, _safeRel, BUNDLE_CAP };

@@ -154,17 +154,23 @@ function harvest(text, { bornFrom = null, deps = {}, nowMs = Date.now() } = {}) 
 // Format words expand to the vocabulary suite FILENAMES actually use — "read XLS files" must
 // find smoke_sheet_extract even though they share zero literal tokens. Small and extendable.
 const _ALIASES = { xls: ['sheet', 'spreadsheet', 'extract'], xlsx: ['sheet', 'spreadsheet', 'extract'], csv: ['sheet', 'spreadsheet'], spreadsheet: ['sheet'], pdf: ['extract', 'doc'], email: ['mail'], webpage: ['web'], website: ['web'] };
+// §55b (the 101x cure): need-81 ("access to STATE legislative bill metadata") bound to
+// smoke_avatar_STATE.js on the lone generic token 'state' — program-state vs US-state — and the
+// run flailed against a stranger's code 101 times in 7 days. A single GENERIC token never binds
+// a suite; one SPECIFIC token or two tokens still do (smoke_calendar for a calendar need stays).
+const _GENERIC_SUITE_TOKENS = new Set(['state', 'data', 'lane', 'test', 'tests', 'check', 'run', 'live', 'main', 'self', 'file', 'files', 'page', 'user', 'time', 'queue', 'list', 'store', 'cache', 'core', 'info', 'text']);
 function suiteFor(need, suiteNames = []) {
   const nt = _tokens(need);
   for (const w of [...nt]) if (_ALIASES[w]) for (const a of _ALIASES[w]) nt.add(a);
-  let best = null, bestHits = 0;
+  let best = null, bestScore = 0;
   for (const name of suiteNames) {
     const ft = new Set((str(name).toLowerCase().match(/[a-z]{3,}/g) || []).filter((w) => w !== 'smoke'));
-    let hits = 0;
-    for (const w of ft) if (nt.has(w)) hits++;
-    if (hits > bestHits) { bestHits = hits; best = name; }
+    const hits = [...ft].filter((w) => nt.has(w));
+    const specific = hits.filter((w) => !_GENERIC_SUITE_TOKENS.has(w));
+    const score = (specific.length >= 1 || hits.length >= 2) ? hits.length + specific.length : 0;
+    if (score > bestScore) { bestScore = score; best = name; }
   }
-  return bestHits >= 1 ? best : null;
+  return bestScore > 0 ? best : null;
 }
 
 // ── the decider's state line (part 2 consumes this) ──────────────────────────────────────────

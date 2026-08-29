@@ -65,6 +65,13 @@ try {
     'suiteFor: site-plan need maps to smoke_site_ledger');
   ok(CN.suiteFor('a quantum entanglement synthesizer', SUITES) === null,
     'suiteFor: nothing fits → honest null (park for Lucas, never iterate against an unrelated bar)');
+  // §55b: the 101x specimen — one GENERIC cross-domain token never binds a suite.
+  ok(CN.suiteFor('access to state legislative bill metadata', ['smoke_avatar_state.js']) === null,
+    "suiteFor: the need-81 pairing is REFUSED (the lone generic 'state' bound a bill need to avatar code for 101 failures)");
+  ok(CN.suiteFor('calendar sync for meetings', ['smoke_calendar.js']) === 'smoke_calendar.js',
+    'suiteFor: one SPECIFIC token still binds (calendar → smoke_calendar)');
+  ok(CN.suiteFor('the state ledger cache for bills', ['smoke_state_cache.js']) === 'smoke_state_cache.js',
+    'suiteFor: TWO tokens bind even when both are generic (state+cache — signal beats the floor)');
 
   // ── the state line ──
   const lines = CN.manifestLines({ nowMs: T0 + 7200000 });

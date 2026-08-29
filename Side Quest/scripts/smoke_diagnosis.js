@@ -93,6 +93,19 @@ ok(/digit-blanked/.test(dg.diagnosisPrompt(swNeed, swBundle)) && /NEVER the defe
   'the self-watch prompt names the normalization so artifacts are never diagnosed as corruption');
 ok(!/digit-blanked/.test(dg.diagnosisPrompt(need, bundle)), 'a self-audit prompt carries no signature note (nothing was blanked)');
 
+// ── §59b: audit-born needs carry THE COUNTED ROWS (the #104 wrong-diagnosis cure) ───────────────
+const fakeWs = { getDb: () => ({ prepare: () => ({ all: () => [
+  { n: 'edit pick returned but FAILED VALIDATION (schema) — budget refunded', c: 98, t: 'need-81-access-to-state-legislative-bill' },
+  { n: 'test threw: sandbox lost', c: 3, t: 'need-81-access-to-state-legislative-bill' },
+] }) }) };
+const crs = dg._countedRowsSection({ need: 'I need a fix for a recurring failure in my own program: the rehearsal lane failed 101x in 7 days' }, { deps: { db: fakeWs } });
+ok(/THE COUNTED ROWS \(workstreams, lane='rehearsal'/.test(crs) && /98x "edit pick returned but FAILED VALIDATION/.test(crs),
+  'an audit-born lane-failure need gets the COUNTED ROWS — the mechanism, not the summary sentence');
+ok(/never adjacent code/.test(crs), 'the section warns the model off adjacent-code construction (the #104 class)');
+ok(dg._countedRowsSection({ need: 'DOMMatrix is not defined' }, { deps: { db: fakeWs } }) === null, 'a non-audit signature gets no counted-rows section');
+const crBundle = dg.preGather({ need: 'I need a fix for a recurring failure in my own program: the rehearsal lane failed 101x in 7 days', born_from: 'self-watch: exhaust audit' }, { deps: { db: fakeWs, rawText: '' } });
+ok(/^THE COUNTED ROWS/.test(crBundle), 'the counted rows LEAD the audit-born bundle (the cap can never starve them)');
+
 // study citations verify against the ledger (cited = actually read)
 const fakeLedger = { seen: (u) => (/known\.gov/.test(u) ? { url: u } : null) };
 const vc1 = dg.verifyStudyCitations('Pattern: use X. Sources: https://known.gov/how and https://never-read.example/post', { deps: { siteLedger: fakeLedger } });

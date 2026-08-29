@@ -183,6 +183,8 @@ const ok = (c, m) => { if (c) { pass++; console.log('  \u2713', m); } else { fai
       'main.js: the breaker trips on halt OR zero yield at real batch size');
     ok(/run skipped pre-prep/.test(main) && /if \(autonomous && lane\)/.test(main),
       'main.js: autonomous operator runs probe the lane BEFORE brief assembly (interactive turns never probe)');
+    ok(/mis-suited run "\$\{run\.slug\}" discarded/.test(main),
+      'main.js: a live run whose suite fails the specificity-fixed matcher is discarded (the 101x bleed stops)');
     const sv = fs.readFileSync(path.join(ROOT, 'lib', 'status_vector.js'), 'utf8');
     ok(/Producer lanes:/.test(sv) && /idleClosedH/.test(sv), 'status_vector: producers render in block(); closures carry DURATION');
     const so = fs.readFileSync(path.join(ROOT, 'lib', 'self_ops.js'), 'utf8');
