@@ -382,6 +382,10 @@ function mockClient(overrides = {}) {
       S.sanitizeFtsQuery(S.sanitizeFtsQuery('co-sponsors SB200')) === 'co sponsors SB200');
     ok('sanitize: a lone dash collapses to nothing dangerous',
       S.sanitizeFtsQuery('a - b') === 'a b');
+    // #107 (the organ's real finding): two direct callTool sites bypassed dispatch()'s sanitizer.
+    const _mainSrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+    ok("wiring #107: the direct search_entities call sites sanitize at the site (no bare query reaches a bypass door)",
+      !/callTool\('search_entities', \{ query: (?:ent\.mention|String\(query\)),/.test(_mainSrc) && (_mainSrc.match(/sanitizeFtsQuery\(String\((?:ent\.mention \|\| ''|query)\)\)/g) || []).length >= 2);
   }
 
   console.log('\n' + (fail === 0 ? 'ALL PASS' : 'FAILURES') + ` - ${pass} passed, ${fail} failed`);

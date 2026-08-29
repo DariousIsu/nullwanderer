@@ -4813,7 +4813,7 @@ ipcMain.handle('creator:research', async (_e, { docJson, web = true } = {}) => {
       // --- direct DB match (typed, name-overlap gated)
       let results = [];
       try {
-        const d = toolJson(await echoSuit.client().callTool('search_entities', { query: ent.mention, top_k: 5 }));
+        const d = toolJson(await echoSuit.client().callTool('search_entities', { query: require('./lib/echo_suit').sanitizeFtsQuery(String(ent.mention || '')), top_k: 5 }));   // #107: this direct call bypasses dispatch()'s sanitizer — sanitize at the site
         results = (d && (d.result || d)) || [];
         if (!Array.isArray(results)) results = [];
       } catch (e) { results = []; }
@@ -7270,7 +7270,7 @@ ipcMain.handle('kg:search', async (_e, { query } = {}) => {
     if (!query || String(query).trim().length < 2) return { ok: true, hits: [] };
     if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
     const callTool = pollCallTool();
-    const payload = await callTool('search_entities', { query: String(query), top_k: 8 });
+    const payload = await callTool('search_entities', { query: require('./lib/echo_suit').sanitizeFtsQuery(String(query)), top_k: 8 });   // #107: direct poll-client call — sanitize at the site
     const hits = kgView.searchHits(payload).map(h => ({ ...h, color: kgView.colorFor(h.entity_type) }));
     return { ok: true, hits };
   } catch (e) { console.error('[kg] search failed:', e.message); return { ok: false, error: e.message }; }
