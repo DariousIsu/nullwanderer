@@ -113,6 +113,18 @@ function setStatus(id, status, { deps = {}, nowMs = Date.now() } = {}) {
 }
 // Store a Stage-2 repair diagnosis ON the need row (census wire 4) — the escalate-to-builder card
 // reads it from here, and it survives the rehearsal-run meta being replaced (the C3 lesson).
+// THE VERIFIED/REJECTED CHANNEL (2026-08-28): the outside check's verdict lives ON the need's
+// meta so the proposed card can carry it — a rejected diagnosis must never air as a clean
+// build-me card (#102's artifact-read and #104's adjacent-code story both aired verdict-blind).
+function setVerdict(id, verdict, note = '', { deps = {}, nowMs = Date.now() } = {}) {
+  const v = String(verdict || '').toLowerCase();
+  if (v !== 'verified' && v !== 'rejected') return false;
+  try { _db(deps).setMeta(`need.${Number(id) || 0}.verdict`, JSON.stringify({ v, note: String(note).slice(0, 240), ts: nowMs })); return true; } catch { return false; }
+}
+function getVerdict(id, { deps = {} } = {}) {
+  try { return JSON.parse(_db(deps).getMeta(`need.${Number(id) || 0}.verdict`) || 'null'); } catch { return null; }
+}
+
 function setDiagnosis(id, text, { deps = {}, nowMs = Date.now() } = {}) {
   try {
     const r = _db(deps).getDb().prepare('UPDATE capability_needs SET diagnosis = ?, updated_ts = ? WHERE id = ?').run(str(text).slice(0, 2500), nowMs, Number(id) || 0);
@@ -191,4 +203,4 @@ function slugFor(id, needText) {
   return base.slice(0, 40).replace(/-+$/, '') || `need-${id}`;
 }
 
-module.exports = { detect, record, listOpen, get, setStatus, setDiagnosis, harvest, suiteFor, slugFor, manifestLines };
+module.exports = { detect, record, listOpen, get, setStatus, setDiagnosis, setVerdict, getVerdict, harvest, suiteFor, slugFor, manifestLines };

@@ -73,6 +73,12 @@ try {
   ok(CN.suiteFor('the state ledger cache for bills', ['smoke_state_cache.js']) === 'smoke_state_cache.js',
     'suiteFor: TWO tokens bind even when both are generic (state+cache — signal beats the floor)');
 
+  // ── the verified/rejected channel (the #102/#104 verdict-blind cards) ──
+  ok(CN.setVerdict(101, 'verified', 'cites line-exact; build landed') === true, 'setVerdict: verified stores');
+  ok(CN.getVerdict(101).v === 'verified' && /line-exact/.test(CN.getVerdict(101).note), 'getVerdict: round-trips with the note');
+  ok(CN.setVerdict(104, 'rejected', 'adjacent-code story; the counted rows say schema-fail') === true && CN.getVerdict(104).v === 'rejected', 'a rejection stores');
+  ok(CN.setVerdict(99, 'plausible') === false && CN.getVerdict(99) === null, 'an unknown verdict word is refused (verified|rejected only)');
+
   // ── the state line ──
   const lines = CN.manifestLines({ nowMs: T0 + 7200000 });
   ok(lines.length === 3 && /\[need #\d+\]/.test(lines[0]) && /named 2h ago/.test(lines[0]),

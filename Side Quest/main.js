@@ -19167,7 +19167,14 @@ function _surfaceExternalNeeds(now = Date.now()) {
     if (!rows.length && !proposed.length) return;
     let msg = rows.length ? require('./lib/need_triage').renderExternalAsk(rows) : '';
     if (proposed.length) {
-      const pLines = proposed.map((r) => `• need #${r.id}: ${String(r.need).replace(/\s+/g, ' ').slice(0, 140)}${r.diagnosis ? `\n  diagnosis: ${String(r.diagnosis).replace(/\s+/g, ' ').slice(0, 280)}` : ''}`).join('\n');
+      // THE VERIFIED/REJECTED CHANNEL (2026-08-28): the outside check's verdict rides the card —
+      // a REJECTED diagnosis airs with its rejection note leading, never as a clean build-me card.
+      const _vd = (id) => { try { return require('./lib/capability_need').getVerdict(id); } catch { return null; } };
+      const pLines = proposed.map((r) => {
+        const v = _vd(r.id);
+        const tag = v ? (v.v === 'verified' ? ' ✓ VERIFIED by the outside check' : ` ⚠ REJECTED by the outside check${v.note ? ` — ${v.note}` : ''} (do not build from this diagnosis)`) : '';
+        return `• need #${r.id}: ${String(r.need).replace(/\s+/g, ' ').slice(0, 140)}${tag}${r.diagnosis ? `\n  diagnosis: ${String(r.diagnosis).replace(/\s+/g, ' ').slice(0, 280)}` : ''}`;
+      }).join('\n');
       msg = `${msg ? `${msg}\n\n` : ''}WORKED AND WAITING ON YOU — findings I've diagnosed or proven green, needing a builder or an adoption call (they re-air weekly until resolved):\n${pLines}`;
     }
     const sid = currentSessionId;
