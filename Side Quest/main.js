@@ -8711,6 +8711,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   }
   if (attachmentText) {
     composedUserMessage = `${composedUserMessage}\n\n--- Attachments ---\n${attachmentText}`;
+  }
+  // W1 THE ONE INTENT PASS (docs/CHAT_PATH_SIMPLIFICATION_2026-08-29.md): one verdict per turn,
+  // computed UNCONDITIONALLY here at the spine's top — every door downstream EXECUTES it via
+  // current(). Reads the same rolling assembly the reply reads (§62b). Cloud down → null → nets.
+  // (First wiring sat inside the directed-stop region and skipped turn shapes — the leg-7 catch.)
+  try {
+    let _iwin = '';
+    try {
+      const rc = require('./lib/rolling_context');
+      const _rcd = rollingCtxDeps();
+      if (rc.enabled(_rcd)) { const a = rc.assemble(_rcd, sessionId); _iwin = ((a && a.messages) || []).map((m) => `${m.role}: ${m.content}`).join('\n').slice(-4000); }
+    } catch {}
+    await require('./lib/intent_pass').intentPass(userMessage, { windowText: _iwin });
+  } catch (e) { console.error('[intent] pass failed (doors run on nets alone):', e.message); }
+  if (attachmentText) {
     // The reply CONTRACT for an attachment turn: acknowledge the landing and answer about THE
     // ATTACHMENT — "this document"/"this file" in his message means what he just attached, never
     // a prior working document. A silent or absent acknowledgment is a failure.
@@ -10360,18 +10375,6 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // was classified as a REDIRECT → new seed thread #3867 + thread #3868 minted — the false
       // loop eating its own cure order). "Finish/finalize the paper" is a COMPLETION order for
       // work already gathered, never a pivot to new research; run the conductor and stop here.
-      // W1 THE ONE INTENT PASS (docs/CHAT_PATH_SIMPLIFICATION_2026-08-29.md): one verdict per
-      // turn, computed here before any door decides; the doors below EXECUTE it via current().
-      // Reads the same rolling assembly the reply reads (§62b). Cloud down → null → nets alone.
-      try {
-        let _iwin = '';
-        try {
-          const rc = require('./lib/rolling_context');
-          const _rcd = rollingCtxDeps();
-          if (rc.enabled(_rcd)) { const a = rc.assemble(_rcd, sessionId); _iwin = ((a && a.messages) || []).map((m) => `${m.role}: ${m.content}`).join('\n').slice(-4000); }
-        } catch {}
-        await require('./lib/intent_pass').intentPass(userMessage, { windowText: _iwin });
-      } catch (e) { console.error('[intent] pass failed (doors run on nets alone):', e.message); }
       if (PAPER_VERB_RE.test(userMessage)) {
         directedStopHandled = true;
         const _pm = userMessage.match(PAPER_TOPIC_RE);

@@ -82,6 +82,7 @@ async function intentPass(text, { windowText = '', deps = {}, nowMs = Date.now()
     catch (e) { console.error('[intent] classify failed (nets alone this turn):', e.message); }
   }
   if (verdict) console.log(`[intent] ${verdict.intent}${verdict.deliverable ? `:${verdict.deliverable}` : ''} (${verdict.via}, conf ${verdict.confidence.toFixed(2)})${verdict.referent ? ` — referent: ${String(verdict.referent).slice(0, 60)}` : ''}`);
+  else console.log('[intent] no verdict (classifier unavailable) — the nets alone govern this turn');
   _last = { text: String(text || ''), ts: nowMs, verdict: verdict || null };
   return verdict;
 }
