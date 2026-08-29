@@ -57,7 +57,7 @@ const KIND_FACETS = {
 };
 const normKind = (k) => (['entity', 'topical', 'forecast', 'argument'].includes(k) ? k : 'entity');
 
-function planInput({ goal = '', targets = [], facet = '', deep = false, estimate = '', kind = 'entity', databases = DEFAULT_DATABASES, thesis = '', hostileReader = '', preflight = '' } = {}) {
+function planInput({ goal = '', targets = [], facet = '', deep = false, estimate = '', kind = 'entity', databases = DEFAULT_DATABASES, thesis = '', hostileReader = '', preflight = '', askContext = '' } = {}) {
   const o = {
     goal: oneLine(goal, 800),
     kind: normKind(kind),
@@ -74,6 +74,9 @@ function planInput({ goal = '', targets = [], facet = '', deep = false, estimate
   // P0 PREFLIGHT (research_preflight.run → guidance): the earned method + toolkit + quant questions
   // + known gaps. Multi-line by design — the planner must HONOR it, so it rides the input verbatim.
   if (str(preflight).trim()) o.preflightGuidance = str(preflight).slice(0, 2500);
+  // D1 COMPLETION (08-29, trace#104841): the conversation that created the goal. Without it the
+  // composer received a bare title and confabulated a business contract about the requester.
+  if (str(askContext).trim()) o.askContext = str(askContext).slice(0, 1800);
   return o;
 }
 
@@ -88,6 +91,7 @@ function planWant(kind = 'entity') {
 - estimate: copy the provided estimate string (or your own brief estimate if none).
 - In approach or facets, name at least ONE QUANTITATIVE sub-question this research should answer with a COMPUTED number or probability (a cross-tab, a flow total, a base rate, an explicit likelihood) — research that never computes is a summary, not an analysis.
 - THE REQUESTER IS THE AUDIENCE, NEVER THE SUBJECT: a goal phrased "research X for <name>" or "over the course of the night for <name>" means DELIVER X to that person — it never means investigate that person, their finances, or their affairs. Plan the requester as a research subject ONLY when the goal explicitly and unambiguously names them as the thing to be researched. (Measured failure: "financial forensic investigation for Lucas" was planned as an investigation OF Lucas.)
+- If askContext is provided, it is THE ACTUAL CONVERSATION that created this goal: the objective must restate what THAT ask requests, name only subjects present in the goal or askContext, and NEVER introduce metrics, percentages, dollar figures, deadlines, or horizons the ask does not contain. An invented specific is a fabrication, not initiative. (Measured failure: a goal of "forecasting scenarios" with no context was planned as "15% market share by year three" — every number from nowhere.)
 - If preflightGuidance is provided, HONOR it: fold its method into approach, keep its tool choices and quantitative questions, and carry its named capability gaps honestly (plan around them, never paper over them).`;
   if (k === 'topical') {
     return `${common}
@@ -132,6 +136,34 @@ function planValidator(raw) {
     if (!obj.objective && !obj.approach && !(obj.targets && obj.targets.length)) return { valid: false, error: 'plan empty' };
     return { valid: true, value: obj };
   } catch (e) { return { valid: false, error: e.message }; }
+}
+
+// THE NO-INVENTED-SPECIFICS GATE (08-29, trace#104841: a goal-only input drew an objective with
+// "15% market share by year three" and "the next five years" — every number confabulated; the
+// prompt rule above did NOT hold). Deterministic: every percentage, dollar figure, or time-horizon
+// in the OBJECTIVE must appear in the ask (goal/askContext/facet/targets) or the system-computed
+// estimate. Preflight guidance is deliberately NOT in the allowed pool — method text must never
+// donate numbers to a contract. Scoped to the objective (the contract's face); the approach may
+// legitimately propose computing new numbers.
+const _SPECIFICS_RE = /\$\s?[\d,.]+\s*(?:[km]illion|[bt]rillion|[kmbt])?|\b\d+(?:\.\d+)?\s*%|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(?:years?|months?|quarters?|weeks?)\b|\b(?:year|month|quarter)\s+(?:one|two|three|four|five|\d+)\b/gi;
+function _inventedSpecifics(objective, ctx = {}) {
+  const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ');
+  const hay = norm(`${ctx.goal || ''} ${ctx.askContext || ''} ${ctx.facet || ''} ${(ctx.targets || []).join(' ')} ${ctx.estimate || ''}`);
+  const found = [];
+  for (const s of (String(objective || '').match(_SPECIFICS_RE) || [])) {
+    if (!hay.includes(norm(s))) found.push(s.trim());
+  }
+  return [...new Set(found)];
+}
+// Factory: the ctx-aware validator cloud_logic's repair retry can act on. Parse first, then gate.
+function planValidatorFor(ctx = {}) {
+  return (raw) => {
+    const base = planValidator(raw);
+    if (!base.valid) return base;
+    const invented = _inventedSpecifics(base.value.objective, ctx);
+    if (invented.length) return { valid: false, error: `the objective invents specifics not present in the ask: ${invented.join('; ')} — restate the objective ONLY from the goal/askContext, with no numbers the ask does not contain` };
+    return base;
+  };
 }
 
 // Coerce ANY plan-ish object into the canonical shape, filling gaps from what we already know. Used on
@@ -319,6 +351,6 @@ function applyDeltaToIntended(intended = [], verdict = {}) {
 
 module.exports = {
   DEFAULT_DATABASES, KIND_FACETS,
-  planInput, planWant, planValidator, normalizePlan, fallbackPlan, renderPlanPage,
+  planInput, planWant, planValidator, planValidatorFor, _inventedSpecifics, normalizePlan, fallbackPlan, renderPlanPage,
   revalidateInput, revalidateWant, revalidateValidator, applyPlanDelta, applyDeltaToIntended,
 };

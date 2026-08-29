@@ -58,7 +58,7 @@ async function _resolveModel(models, cloud) {
   if (m) { _modelCache = m; _modelCacheAt = Date.now(); }
   return m;
 }
-async function _complete(messages, { temperature = 0.2, num_predict = 1500, model: modelOverride = null, think = undefined } = {}) {   // default 400→1500 (starvation audit: 400 sat below the reasoning floor and cut structured output mid-line; explicit caller numPredict still wins)
+async function _complete(messages, { temperature = 0.2, num_predict = 1500, model: modelOverride = null, think = undefined, lane = undefined } = {}) {   // default 400→1500 (starvation audit: 400 sat below the reasoning floor and cut structured output mid-line; explicit caller numPredict still wins)
   let models, ollama;
   try { models = require('./models'); ollama = require('./ollama'); } catch { return null; }
   const cloud = (models.sources() || []).find(s => s.tier === 'cloud' && s.token);
@@ -76,6 +76,9 @@ async function _complete(messages, { temperature = 0.2, num_predict = 1500, mode
       // research_plan on gpt-oss) otherwise buries its structured answer in message.thinking and
       // the validator parses chain-of-thought. undefined → transport default (unchanged).
       ...(typeof think === 'boolean' ? { think } : {}),
+      // Explicit lane beats the ambient spend tier (08-29: the intent pass inherited a governed
+      // tier and the comprehension of a LIVE user turn was quota-starved — twice, once causally).
+      ...(lane ? { lane } : {}),
       options: { temperature, top_p: 0.9, num_ctx: win.num_ctx, num_predict }
     });
     return { text: text || '', model };
@@ -245,7 +248,7 @@ function _budgetInc() {
  *   validate (raw)=>{valid,value,error}; omit for default-JSON parsing
  *   deps     { complete, now, dailyCap, maxInputChars, noCache, skipBudget } — test seams
  */
-async function ask({ task, v = 1, input = {}, keyInput = null, want = '', validate = null, model = null, numPredict = null, think = undefined, deps = {} } = {}) {
+async function ask({ task, v = 1, input = {}, keyInput = null, want = '', validate = null, model = null, numPredict = null, think = undefined, lane = null, deps = {} } = {}) {
   if (!task) return null;
   const now = deps.now || Date.now();
   const complete = deps.complete || _complete;
@@ -255,6 +258,7 @@ async function ask({ task, v = 1, input = {}, keyInput = null, want = '', valida
   if (model) cOpts.model = model;
   if (numPredict) cOpts.num_predict = numPredict;
   if (typeof think === 'boolean') cOpts.think = think;   // reasoning-model tasks pass think:false → clean structured output
+  if (lane) cOpts.lane = lane;                           // e.g. the intent pass rides 'interactive' — never the ambient tier
   const cap = deps.dailyCap || dailyCap();
   const maxChars = deps.maxInputChars || DEFAULT_MAX_INPUT_CHARS;
   const inputStr = _packInput(input, maxChars);

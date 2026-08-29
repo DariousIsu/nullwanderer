@@ -51,6 +51,17 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
   ok(/question = they want to be TOLD/.test(mk.lastArgs.want) && /NEVER deliver/.test(mk.lastArgs.want), 'the prompt DEFINES question (it was in the vocabulary but never defined — the 08-29 hole)');
   ok(/unsure between deliver and question, answer question/.test(mk.lastArgs.want), 'the prompt carries the deliver-vs-question bias');
   ok(/bare reference you cannot resolve from the window/.test(mk.lastArgs.want), 'the prompt demands referent resolution FROM THE WINDOW, with low confidence on a miss');
+  ok(mk.lastArgs.lane === 'interactive', '⭐ the classifier rides the INTERACTIVE lane — a live turn\'s comprehension is never quota-starved (the two 08-29 nulls)');
+
+  // ── D1 COMPLETION: the extractor executes the verdict (lib/open_threads.groundGoal) ──────────
+  const ot = require('../lib/open_threads');
+  ok(ot.groundGoal('gather enough data to run forecasting scenarios for Lucas', 'polling data for the St. Petersburg FL mayoral race') ===
+    'gather enough data to run forecasting scenarios for Lucas — re: polling data for the St. Petersburg FL mayoral race',
+    '⭐ a bare goal gains the verdict\'s referent — the object survives the boundary (the #4109 wound)');
+  ok(ot.groundGoal('track the St. Petersburg mayoral polling', 'St. Petersburg mayoral race polling') === 'track the St. Petersburg mayoral polling',
+    'a goal already naming the referent is never double-appended');
+  ok(ot.groundGoal('do the thing', '') === 'do the thing' && ot.groundGoal('do the thing', 'that information') === 'do the thing',
+    'no grounding, or an all-generic referent, leaves the goal untouched (fail-open)');
   ok((await ip.classify('x', { deps: { ask: async () => null } })) === null, 'a dead cloud → null (the nets alone; the pass only adds recall)');
   // the cloud_logic validator CONTRACT (leg 7's second catch): validate receives the RAW STRING
   // and must return {valid, value} — exercise it exactly the way ask() does.
@@ -83,6 +94,10 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
   ok(/intent order REFUSED — "\$\{_ivNoun\}" is not an artifact noun/.test(main), 'wiring: the door refuses a non-artifact deliverable (belt behind the classify demotion)');
   ok(/intent order REFUSED — bare\/generic topic/.test(main) && /hasSpecificTopic\(_ivTopic\)/.test(main), '⭐ wiring: a bare/generic topic never claims the road — it CLARIFIES (one question costs a turn; a guessed document cost the evening)');
   ok(/Do NOT start any work, do NOT claim anything is being produced/.test(main), 'wiring: the clarify followup forbids spawning work while asking');
+  // D1 completion wiring: the three remaining re-deciders now execute the verdict.
+  ok(/grounding: \(\(\) => \{ try \{ const _gv = require\('\.\/lib\/intent_pass'\)\.current\(\)/.test(main), 'wiring D1: the open-threads extractor receives the verdict referent as grounding');
+  ok(/the turn's resolved referent \("\$\{_verdictForeign\}"\) shares nothing with run #/.test(main), 'wiring D1: the correction net stands down on zero referent overlap (the #3996 misfacet)');
+  ok(/askContext: _askCtx/.test(main) && /planValidatorFor\(ctx\)/.test(main), 'wiring D1: the seeder feeds the ask conversation to the plan composer, behind the no-invented-specifics gate');
   ok(/assignment SUPPRESSED — intent=/.test(main), 'wiring: a chatter verdict de-assigns (the leg-6 false positive)');
 
   console.log(`\nsmoke_intent_pass: ${pass} passed, ${fail} failed`);

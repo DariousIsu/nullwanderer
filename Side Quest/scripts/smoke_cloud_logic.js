@@ -27,6 +27,15 @@ const lastTrace = (task) => db.getDb().prepare('SELECT * FROM cloud_traces WHERE
     ok(t1 && t1.accepted === 1 && t1.valid === 1, 'trace logged, accepted');
     ok(t1 && t1.input_json && t1.input_json.includes('"a":1'), 'trace stored the packaged input (training data)');
 
+    // 1b. THE LANE THREAD-THROUGH (08-29: a bare ask inherited the ambient spend tier and the
+    // intent pass was quota-starved on a live user turn). An explicit lane rides cOpts → complete.
+    let laneSeen = 'unset';
+    const lanec = async (msgs, opts) => { laneSeen = (opts && opts.lane) || null; return { text: '{"score":1}', model: 'test' }; };
+    await cl.ask({ task: 'lane-t', input: { z: 1 }, want: 'JSON', lane: 'interactive', deps: { complete: lanec, skipBudget: true, noCache: true } });
+    ok(laneSeen === 'interactive', 'ask({lane}) forwards the lane to the completion (explicit beats ambient)');
+    await cl.ask({ task: 'lane-t2', input: { z: 2 }, want: 'JSON', deps: { complete: lanec, skipBudget: true, noCache: true } });
+    ok(laneSeen === null, 'no lane passed → none forwarded (the ambient default is untouched)');
+
     // 2. custom validator (the {same:boolean} shape the curator uses)
     const samec = async () => ({ text: 'sure — {"same": true}', model: 't' });
     const vSame = (raw) => { try { const o = JSON.parse(raw.match(/\{[\s\S]*?\}/)[0]); return { valid: typeof o.same === 'boolean', value: { same: o.same }, error: 'x' }; } catch (e) { return { valid: false, error: e.message }; } };

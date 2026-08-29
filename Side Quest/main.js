@@ -10733,8 +10733,26 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       let _foreignAsk = null;
       try { _foreignAsk = require('./lib/intake_contract').foreignSubject(userMessage, activeRun); } catch { _foreignAsk = null; }
       if (_foreignAsk && _foreignAsk.foreign) console.log(`[facet-gate] correction net stood down — ${_foreignAsk.why}; the turn routes as its own ask, not a mutation of run #${fid}`);
+      // D1 COMPLETION (08-29): the C2 gate needs proper-noun anchors, so "gather enough to run your
+      // own forecasting scenarios" (no anchors) slipped it and became the MASSACHUSETTS run's facet.
+      // The verdict's resolved referent is the missing anchor: zero token overlap with the run's
+      // scope → this turn is not a correction of that run.
+      let _verdictForeign = null;
+      try {
+        const _iv2 = require('./lib/intent_pass').current();
+        const _refTxt = _iv2 && (_iv2.referent || _iv2.topic) ? String(_iv2.referent || _iv2.topic) : '';
+        if (_refTxt) {
+          const _rStop = new Set(['that', 'this', 'data', 'information', 'enough', 'about', 'with', 'from', 'their', 'them', 'research']);
+          const _rtoks = (_refTxt.toLowerCase().match(/[a-z0-9]{4,}/g) || []).filter((t) => !_rStop.has(t));
+          if (_rtoks.length) {
+            const _runTxt = `${activeRun.goal || ''} ${activeRun.facet || ''} ${(activeRun.orgs || []).join(' ')}`.toLowerCase();
+            if (!_rtoks.some((t) => _runTxt.includes(t))) _verdictForeign = _refTxt.slice(0, 80);
+          }
+        }
+      } catch {}
+      if (_verdictForeign) console.log(`[facet-gate] correction net stood down — the turn's resolved referent ("${_verdictForeign}") shares nothing with run #${fid}'s scope`);
       const corr = require('./lib/correction');
-      const decision = (_heldProductAsk || (_foreignAsk && _foreignAsk.foreign)) ? null : await corr.classify(userMessage, { activeRun });
+      const decision = (_heldProductAsk || (_foreignAsk && _foreignAsk.foreign) || _verdictForeign) ? null : await corr.classify(userMessage, { activeRun });
       const plan = decision ? corr.applyPlan(decision, activeRun) : { changed: false };
       if (plan.changed) {
         try {
@@ -13780,7 +13798,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   openThreadsLib.extractFromUserTurn({
     userMessage,
     sourceTurnId: userTurnRow ? userTurnRow.id : null,
-    userName
+    userName,
+    // D1 completion: the verdict's resolved referent grounds the minted goal, so the object of a
+    // pronoun-laden ask ("enough", "it") survives the boundary instead of dying into a bare title.
+    grounding: (() => { try { const _gv = require('./lib/intent_pass').current(); return _gv && (_gv.referent || _gv.topic) ? String(_gv.referent || _gv.topic).slice(0, 140) : null; } catch { return null; } })()
   }).then(stored => {
     if (stored && stored.length > 0) {
       console.log('[main] open_threads extracted:', stored.map(s => `[${s.id}] ${s.content}`));
@@ -16810,8 +16831,19 @@ async function _autonomicSchedulerTick() {
                 }
               } catch (e) { console.error('[preflight] re-entry audit failed (plan proceeds without):', e.message); }
             } catch (e) { console.error('[preflight] failed (plan proceeds without):', e.message); }
+            // D1 COMPLETION (08-29, trace#104841): the plan composer received {goal:"<bare title>",
+            // facet:""} and NOTHING else — so it confabulated a business contract about the
+            // requester. The thread's source turn is durable; the conversation around it now rides
+            // the plan input as askContext, so the objective grounds in the ACTUAL ask.
+            const _askCtx = (() => {
+              try {
+                const _st = cand.source_turn_id; if (!_st) return '';
+                const _rows = db.getDb().prepare(`SELECT speaker, content FROM turns WHERE id BETWEEN ? AND ? AND speaker IN ('user','ai_said') ORDER BY id`).all(_st - 6, _st + 2);
+                return _rows.map((r) => `${r.speaker === 'user' ? 'Lucas' : 'Zoe'}: ${String(r.content).replace(/\s+/g, ' ').slice(0, 300)}`).join('\n').slice(0, 1800);
+              } catch { return ''; }
+            })();
             let _uwPlan = null;
-            try { _uwPlan = await generateResearchPlan(f || cand, { goal: cand.content, targets: [], facet: '', deep: true, kind: _kind, preflight: _pfGuidance }); }
+            try { _uwPlan = await generateResearchPlan(f || cand, { goal: cand.content, targets: [], facet: '', deep: true, kind: _kind, preflight: _pfGuidance, askContext: _askCtx }); }
             catch (e) { console.error('[user-work] plan gen failed:', e.message); }
             // CONTRACT → CANVAS (parity with the DISCOVER branch, ~main.js:8800). A research thread seeded
             // HERE must ALSO mint its living contract document — the doc that holds the current research
@@ -18157,12 +18189,12 @@ async function condenseComplete(messages, { numPredict = 2500 } = {}) {
 // editable by the correction handler) and rendered as page 1 at finalize. Fail-safe: cloud down → a
 // fully deterministic fallback plan (a plan ALWAYS exists). Run on the FAST editor model (like intake),
 // so a reasoning model can't burn the budget on hidden thinking and return empty.
-async function generateResearchPlan(focus, { goal = '', targets = [], facet = '', deep = false, kind = 'entity', preflight = '' } = {}) {
+async function generateResearchPlan(focus, { goal = '', targets = [], facet = '', deep = false, kind = 'entity', preflight = '', askContext = '' } = {}) {
   const rp = require('./lib/research_plan');
   const est = require('./lib/estimate');
   let estimate = '';
   try { estimate = est.estimateRun({ orgCount: (targets || []).length, deep }).human; if (estimate === '(nothing to do)') estimate = ''; } catch {}
-  const ctx = { goal, targets, facet, deep, estimate, kind, preflight };
+  const ctx = { goal, targets, facet, deep, estimate, kind, preflight, askContext };
   let plan = null;
   try {
     // The PLAN shapes the whole project — author it on the deep reasoner with headroom (cloud-leverage
@@ -18171,7 +18203,10 @@ async function generateResearchPlan(focus, { goal = '', targets = [], facet = ''
     const cloud = require('./lib/cloud_logic');
     const raw = await cloud.ask({
       task: 'research_plan', v: 1, model: planModel, numPredict: config.deepNumPredict(),
-      input: rp.planInput(ctx), want: rp.planWant(ctx.kind), validate: rp.planValidator
+      // planValidatorFor(ctx) = THE NO-INVENTED-SPECIFICS GATE: an objective naming percentages,
+      // dollar figures, or horizons absent from the ask is rejected and re-driven (trace#104841's
+      // "15% market share by year three" dies at birth). The prompt rule alone did not hold.
+      input: rp.planInput(ctx), want: rp.planWant(ctx.kind), validate: rp.planValidatorFor(ctx)
     });
     if (raw) plan = rp.normalizePlan(raw, ctx);
   } catch (e) { console.error('[plan] cloud generate failed:', e.message); }

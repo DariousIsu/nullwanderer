@@ -48,7 +48,9 @@ function fastPath(text) {
 async function classify(text, { windowText = '', deps = {} } = {}) {
   const ask = deps.ask || require('./cloud_logic').ask;
   const v = await ask({
-    task: 'intent_pass', v: 1, numPredict: 220, think: false,
+    // 'interactive' is NEVER deferred (quota.js TIER) — the comprehension of a live user turn must
+    // not lose to idle graph-walking (08-29: two quota nulls, one causal in the #4109 confabulation).
+    task: 'intent_pass', v: 1, numPredict: 220, think: false, lane: 'interactive',
     input: {
       latest_turn: String(text || '').slice(0, 600),
       conversation_window: String(windowText || '').slice(0, 4000),

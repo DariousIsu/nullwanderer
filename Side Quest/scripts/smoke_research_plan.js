@@ -171,5 +171,23 @@ ok(/# Research plan/.test(rp.renderPlanPage({ objective: 'just an objective' }))
   ok(rp.planInput({ goal: 'g', thesis: 'T', hostileReader: 'H' }).hostileReader === 'H', 'planInput carries a thesis + hostile reader when set');
 }
 
+// ── D1 COMPLETION + THE NO-INVENTED-SPECIFICS GATE (08-29, trace#104841: a goal-only input drew
+// "15% market share by year three" / "the next five years" — every number confabulated) ──────────
+{
+  const ctx = { goal: 'gather enough data to run forecasting scenarios for Lucas', askContext: 'Lucas: find the most up to date polling numbers for the St. Petersburg FL mayoral race and the Florida gubernatorial race\nZoe: hitting the web now' };
+  ok(rp.planInput(ctx).askContext.includes('St. Petersburg'), 'planInput carries the askContext (the conversation that created the goal)');
+  ok(rp.planInput({ goal: 'g' }).askContext === undefined, 'no askContext → the field is omitted (payload stays small)');
+  ok(/askContext is provided, it is THE ACTUAL CONVERSATION/.test(rp.planWant()) && /NEVER introduce metrics, percentages, dollar figures/.test(rp.planWant()), 'planWant carries the grounding rail on the COMMON contract');
+  const confab = JSON.stringify({ objective: "Collect data on Lucas to compute the baseline projected annual revenue growth rate for the next five years and the probability that Lucas's market share will exceed 15% by the end of year three.", approach: 'a', targets: ['t'] });
+  const vd = rp.planValidatorFor(ctx)(confab);
+  ok(vd.valid === false && /invents specifics/.test(vd.error) && /15\s*%|15%/.test(vd.error), '⭐ the confabulated contract (trace#104841 shape) is REJECTED — the repair retry gets the named inventions');
+  const grounded = JSON.stringify({ objective: 'Gather current polling for the St. Petersburg FL mayoral race and the Florida gubernatorial race, then build scenario forecasts for both.', approach: 'a', targets: ['t'] });
+  ok(rp.planValidatorFor(ctx)(grounded).valid === true, 'a grounded objective passes the gate untouched');
+  const withAskedNumber = JSON.stringify({ objective: 'Compute win probabilities using the last five years of Florida election results.', approach: 'a', targets: ['t'] });
+  ok(rp.planValidatorFor({ ...ctx, askContext: ctx.askContext + '\nLucas: use the last five years of results' })(withAskedNumber).valid === true, 'a specific the ASK contains is never flagged');
+  ok(rp._inventedSpecifics('growth of 12% within two quarters', { goal: 'plain goal' }).length === 2, '_inventedSpecifics catches percents and word-number horizons');
+  ok(rp.planValidatorFor({})('not json at all').valid === false, 'the factory still fails cleanly on unparseable raw');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

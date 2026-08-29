@@ -123,7 +123,25 @@ function extractFromUserTurn(args) {
   _extractChain = p.catch(() => {});
   return p;
 }
-async function _extractFromUserTurn({ userMessage, sourceTurnId, userName }) {
+// D1 COMPLETION (08-29, the #4109 confabulation): the extractor was a re-decider — it read the raw
+// turn alone, so "gather enough to run your own forecasting scenarios" minted a thread whose OBJECT
+// (the two Florida races, held anaphorically in "enough") died at this boundary, and the plan
+// composer downstream filled the vacuum with an invented business contract. The intent verdict's
+// resolved referent now GROUNDS every minted goal: a bare title gains "— re: <referent>" so the
+// object survives every later handoff. Deterministic, fail-open (no verdict → old behavior).
+const _GROUND_STOP = new Set(['that', 'this', 'data', 'information', 'enough', 'about', 'with', 'from', 'their', 'them']);
+function groundGoal(cleaned, grounding) {
+  const c = String(cleaned || '');
+  const g = String(grounding || '').trim();
+  if (!g) return c;
+  const toks = (g.toLowerCase().match(/[a-z0-9]{4,}/g) || []).filter((t) => !_GROUND_STOP.has(t));
+  if (!toks.length) return c;
+  const cl = c.toLowerCase();
+  if (toks.some((t) => cl.includes(t))) return c;   // already grounded — never double-append
+  return `${c} — re: ${g}`.slice(0, 300);
+}
+
+async function _extractFromUserTurn({ userMessage, sourceTurnId, userName, grounding = null }) {
   if (!userMessage || userMessage.trim().length < 4) return [];
 
   let raw = '';
@@ -166,9 +184,10 @@ async function _extractFromUserTurn({ userMessage, sourceTurnId, userName }) {
       console.log(`[open_threads] candidate deduped (NOOP → #${decision.targetId || '?'}): ${cleaned.slice(0, 60)}`);
       continue;
     }
-    const row = db.insertOpenThread({ content: cleaned, sourceTurnId });
-    inserted.push({ id: row.id, content: cleaned, ts: row.ts });
-    activeNorms.add(normalize(cleaned));
+    const grounded = groundGoal(cleaned, grounding);
+    const row = db.insertOpenThread({ content: grounded, sourceTurnId });
+    inserted.push({ id: row.id, content: grounded, ts: row.ts });
+    activeNorms.add(normalize(grounded));
   }
   return inserted;
 }
@@ -442,6 +461,7 @@ function detectAndCountMentions(text, activeThreads) {
 
 module.exports = {
   extractFromUserTurn,
+  groundGoal,
   isUnboundedGoal,
   isAutonomousMapping,
   matchCarriedThread,
