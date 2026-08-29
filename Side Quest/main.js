@@ -18562,55 +18562,101 @@ async function _roadRun({ order, road, userText, sessionId, asResume = false }) 
     // sources instead of writing down the press-release facts (the 1,520-byte-report class).
     let _held = ''; try { _held = dr.heldMaterial({ topic: (order && order.topic) || userText }); } catch {}
     if (_held) console.log(`[road] held material riding the mandate (${_held.split('\n').length} item(s))`);
-    // S2 lane rule (his decision): a DIRECT order rides interactive; a RESUME rides research
-    // (autonomous — the pre-prep probe applies, and a deferral just waits for the next pace).
-    const sp = await runCloudOperator({ userMessage: dr.mandate({ order, road, userText, held: _held }), task: true, autonomous: asResume, budgetMult: dr.BUDGET[road.size] || 1 });
+    // ── PHASE A: THE GATHER SWARM (his design, 08-29) — the road ITSELF fans out engine-side
+    // agents by size class; deterministic, never model-volition (the operator has no delegate
+    // door and the chat lane never chose to). Fire now, harvest after the operator gather.
+    const _spawned = [];
+    try {
+      if (echoSuit && echoSuit.connected) {
+        for (const s of dr.swarmPlan(road.size, (order && order.topic) || userText)) {
+          try {
+            const env = '\n\nYour final reply IS the return value. End with: FOUND: <one line each> · NOT FOUND: <gaps> · SOURCES: <urls/records>.';
+            const r = await echoSuit.dispatch({ kind: 'do', name: 'spawn_agent_async', args: { prompt: s.prompt + env, name: s.agent } });
+            const runId = require('./lib/review_fanout').parseRunId(r && r.text);
+            if (runId) { _spawned.push({ agent: s.agent, runId }); console.log(`[road] swarm: ${s.agent} spawned (run ${runId})`); }
+            else console.log(`[road] swarm: ${s.agent} spawn returned no run id — writing without it`);
+          } catch (e) { console.error(`[road] swarm spawn failed (${s.agent}):`, e.message); }
+        }
+      }
+    } catch {}
+    // ── PHASE B: the operator GATHERS a digest — the writer's turn owns ALL prose. Lane rule:
+    // a DIRECT order rides interactive; a RESUME rides research (a deferral waits the next pace).
+    const sp = await runCloudOperator({ userMessage: dr.gatherMandate({ order, road, userText, held: _held }), task: true, autonomous: asResume, budgetMult: dr.BUDGET[road.size] || 1 });
     if (asResume && sp && sp.deferred) { console.log('[road] S2 resume deferred by quota — the debt stands, next pace retries'); return; }
-    let ans = String((sp && sp.answer) || '').trim();
-    // S1.7 SAY-GATE v2 (leg-3 catch): a non-empty final that is a PLAN ("let me read X to write
-    // the report") is not a deliverable — ONE re-drive with the specimen quoted back and a bigger
-    // budget; a second plan-shaped final degrades to a framed honest partial. Never a third run.
-    if (ans && dr.planShapedFinal(ans)) {
-      console.log('[road] say-gate v2: plan-shaped final → ONE re-drive (the mandate requires the deliverable, not the plan)');
-      try {
-        const sp2 = await runCloudOperator({
-          userMessage: dr.mandate({ order, road, userText, held: _held }) +
-            `\n\nYOUR PREVIOUS RUN ENDED ON A PLAN, not the deliverable — it said: "${ans.slice(0, 220)}". Do NOT plan again. EXECUTE now: read the named material with your tools and WRITE THE WHOLE DOCUMENT in this run; the final message is the pointer to the finished document, or the honest partial.`,
-          task: true, autonomous: asResume, budgetMult: (dr.BUDGET[road.size] || 1) * 1.5,
-        });
-        const ans2 = String((sp2 && sp2.answer) || '').trim();
-        if (ans2 && !dr.planShapedFinal(ans2)) ans = ans2;
-        else if (ans2) ans = `Honest partial — my run twice ended on a plan instead of the document. Where it actually stands: ${ans2.slice(0, 600)}`;
-        try { dr.meter(road, 'redrive'); } catch {}
-      } catch (e) { console.error('[road] re-drive failed:', e.message); }
+    const digest = String((sp && sp.answer) || '').trim();
+    // ── PHASE C: HARVEST the swarm — bounded window; a late agent is skipped honestly.
+    const deposits = [];
+    const _HARVEST_DEADLINE = t0 + 6 * 60 * 1000;
+    for (const s of _spawned) {
+      let out = null;
+      while (Date.now() < _HARVEST_DEADLINE) {
+        try {
+          const r = await echoSuit.dispatch({ kind: 'do', name: 'get_agent_output', args: { run_id: s.runId } });
+          out = require('./lib/review_fanout').parseRunOutput(r && r.text);
+          if (out && out.length > 40) break;
+          out = null;
+        } catch {}
+        await new Promise((res) => setTimeout(res, 20000));
+      }
+      if (out) { deposits.push(`— ${s.agent} —\n${String(out).slice(0, 8000)}`); console.log(`[road] swarm: ${s.agent} deposited (${String(out).length}ch)`); }
+      else console.log(`[road] swarm: ${s.agent} did not return inside the window — writing without it`);
     }
-    const msg = ans || `I started the ${String(order.deliverable || 'document')} and the run returned nothing — that's a failure on my side, not progress. It stays on my ledger and I'll retry with the material I hold.`;
+    // ── PHASE D: THE WRITER'S TURN — one pure-writing call, FRONTIER model first, the document
+    // as the ENTIRE output (chat replies ran 30-83 tokens; the conductor capped at 900 — the
+    // program had never given the frontier model a writer-shaped turn).
+    const _chain = [...new Set([require('./lib/config').subconsciousModel(), process.env.ZOE_PAPER_MODEL, 'gemma4:31b-cloud'].filter(Boolean))];
+    const _budget = dr.WRITE_BUDGET[road.size] || 6000;
+    const _floor = dr.WRITE_FLOOR[road.size] || 3000;
+    const _write = async (extra) => {
+      for (const model of _chain) {
+        try {
+          const t = String(await require('./lib/ollama').complete({ model, messages: [{ role: 'user', content: dr.writerPrompt({ order, road, userText, digest, deposits, held: _held }) + (extra || '') }], options: { temperature: 0.4, num_predict: _budget }, lane: 'directed', think: false, timeoutMs: 480000 }) || '').trim();
+          if (t) return { model, text: t };
+        } catch (e) { console.error(`[road] writer's turn failed on ${model}:`, e.message); }
+      }
+      return null;
+    };
+    let w = await _write('');
+    if (w && w.text.length < _floor) {
+      console.log(`[road] writer's turn came back thin (${w.text.length}ch < floor ${_floor}) → ONE commensurate re-drive`);
+      const w2 = await _write(`\n\nYOUR DRAFT WAS TOO THIN (${w.text.length} chars) for the material provided. The document must be COMMENSURATE with its sources — write the FULL ${road.size}.`);
+      if (w2 && w2.text.length > w.text.length) w = w2;
+    }
+    const doc = (w && w.text) || '';
+    let msg;
+    if (doc) {
+      // Deterministic delivery: the ROAD writes the file, registers it, and points — the pointer
+      // cannot be fabricated because the same code that saved the file composes the pointer.
+      const _reg = require('./lib/artifact_registry');
+      const _r = _reg.resolveOrMint({ topic: order.topic || String(userText).slice(0, 120), kind: 'report' });
+      const rel = `notes/${_r.slug}.md`;
+      const abs = require('path').join(__dirname, 'data', 'zoe_workspace', 'notes', `${_r.slug}.md`);
+      try { require('fs').mkdirSync(require('path').dirname(abs), { recursive: true }); } catch {}
+      require('fs').writeFileSync(abs, doc, 'utf8');
+      try {
+        _reg.record({ slug: _r.slug, relPath: rel, title: `Report — ${String(order.topic || order.deliverable || '').slice(0, 80)}`, topic: order.topic || '' });
+        require('./lib/deliverable_projects').noteCompose({ topic: order.topic || '', artifactSlug: _r.slug });
+      } catch (e) { console.error('[road] registration failed (the file still landed):', e.message); }
+      try { dr.clearResume({ why: 'registered delivery' }); } catch {}
+      const kb = Math.round(Buffer.byteLength(doc, 'utf8') / 1024);
+      const words = (doc.match(/\S+/g) || []).length;
+      const lead = (doc.split(/\n+/).find((l) => l.trim() && !/^#/.test(l.trim())) || '').slice(0, 300);
+      const _who = _spawned.filter((s) => deposits.some((d) => d.startsWith(`— ${s.agent}`))).map((s) => s.agent.replace(/_/g, ' ')).join(', ');
+      msg = `The ${String(order.deliverable || 'document')} is done — saved at ${rel} (${kb}KB, ~${words} words${_who ? `, with section research from ${_who}` : ''}).${w.text.length < _floor ? ' It ran thinner than the sources warrant — flagged for a follow-up pass.' : ''}\n\n${lead}`;
+      console.log(`[road] WRITER'S TURN delivered: ${rel} (${kb}KB, ${words}w, model ${w.model}, ${deposits.length}/${_spawned.length} deposit(s), ${Math.round((Date.now() - t0) / 1000)}s)`);
+      try { dr.meter(road, 'writer-turn'); } catch {}
+    } else {
+      msg = `I started the ${String(order.deliverable || 'document')} and the writing pass returned nothing — that's a failure on my side, not progress. It stays on my ledger and I'll retry with the material I hold.`;
+      try { dr.noteResume({ slug: road.slug, ask: (order && order.topic) || String(userText).slice(0, 200), note: digest ? `digest gathered (${digest.length}ch); writer empty` : 'gather and writer both empty', size: road.size }); } catch {}
+      console.log(`[road] WRITER'S TURN EMPTY — honest failure posted, debt recorded (${Math.round((Date.now() - t0) / 1000)}s)`);
+      try { dr.meter(road, 'road-run-empty'); } catch {}
+    }
     if (sessionId) {
       const row = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'document-road', unprompted: 1 });
       try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
       try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
       try { require('./lib/blackboard').append({ source: 'document-road', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
     } else console.log(`[road] (no session) run outcome: ${msg.slice(0, 160)}`);
-    try { dr.meter(road, ans ? 'road-run' : 'road-run-empty'); } catch {}
-    // Root-A identity: a file the run landed in notes/ registers so the artifact has identity
-    // and update-in-place keeps working (same contract as the kept-branch registration).
-    try {
-      const _fw = require('./lib/files').lastWrite();
-      if (_fw && _fw.ts >= t0 && /[\\/]notes[\\/][^\\/]+\.md$/i.test(_fw.path || '')) {
-        const _reg = require('./lib/artifact_registry');
-        const _r = _reg.resolveOrMint({ topic: order.topic || String(userText).slice(0, 120), kind: 'report' });
-        _reg.record({ slug: _r.slug, relPath: 'notes/' + require('path').basename(_fw.path), title: `Report — ${String(order.topic || order.deliverable || '').slice(0, 80)}`, topic: order.topic || '' });
-        try { require('./lib/deliverable_projects').noteCompose({ topic: order.topic || '', artifactSlug: _r.slug }); } catch {}
-        console.log(`[road] S1 delivered + registered: ${_fw.path} (${Math.round((Date.now() - t0) / 1000)}s)`);
-        // S2: a REGISTERED delivery is the only thing that pays the debt — a bare pointer claim
-        // never clears it (leg 1's fabricated "saved at notes/…" is why).
-        try { dr.clearResume({ why: 'registered delivery' }); } catch {}
-      } else {
-        console.log(`[road] S1 ${ans ? 'answered — pointer/partial posted (no notes/ file this run)' : 'EMPTY RUN — honest failure posted'} (${Math.round((Date.now() - t0) / 1000)}s)`);
-        // S2: anything short of a registered artifact records the debt; the paced resumer pays it.
-        try { dr.noteResume({ slug: road.slug, ask: (order && order.topic) || String(userText).slice(0, 200), note: ans ? ans.slice(0, 200) : 'empty run', size: road.size }); } catch {}
-      }
-    } catch {}
   } catch (e) {
     console.error('[road] S1 run failed:', e.message);
     try {

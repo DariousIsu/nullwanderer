@@ -120,6 +120,54 @@ function clearResume({ deps = {}, why = 'delivered' } = {}) {
   if (r) { try { _db(deps).setMeta(RESUME_KEY, 'null'); } catch {} console.log(`[road] S2 resume cleared (${why}): "${r.slug || '(unbound)'}"`); }
 }
 
+// ── THE GATHER SWARM + THE WRITER'S TURN (Lucas's design, 08-29) ────────────────────────────────
+// "Why aren't cheaper models gathering everything and depositing it where it can be written?"
+// Phase A: the road ITSELF fans out engine-side agents by size class (deterministic — the model
+// never has to choose to delegate). Phase D: ONE pure-writing frontier call whose entire output
+// IS the document — the program had never once given the frontier model a writer-shaped turn
+// (chat replies 30-83 tokens; the conductor capped at 900).
+const WRITE_BUDGET = { brief: 1500, report: 6000, dossier: 12000 };
+const WRITE_FLOOR = { brief: 800, report: 3000, dossier: 6000 };
+const _SWARM_REPORT = [
+  { agent: 'legislative_analyst', ask: 'Analyze the bill mechanics and key provisions: definitions, thresholds, requirements, enforcement, scope, and committee posture.' },
+  { agent: 'fact_checker', ask: 'Verify the key factual claims: sponsors and co-sponsors, dates, statuses, referrals, and any numbers in circulation.' },
+];
+const SWARM = {
+  brief: [],
+  report: _SWARM_REPORT,
+  dossier: [
+    ..._SWARM_REPORT,
+    { agent: 'historical_researcher', ask: 'Establish the background and precedents: prior related legislation, its fate, and the policy lineage.' },
+    { agent: 'opposition_researcher', ask: 'Collect the counter-arguments, opposition, vetoes, and criticisms on record.' },
+  ],
+};
+function swarmPlan(size, topic) {
+  return (SWARM[size] || []).map((s) => ({ agent: s.agent, prompt: `${s.ask}\nTopic: ${String(topic || '').slice(0, 200)}` }));
+}
+
+// Phase B's operator mandate: GATHER AND DIGEST — the writer's turn owns all prose.
+function gatherMandate({ order, road, userText, held = '' } = {}) {
+  const heldBlock = held ? `\nYOU ALREADY HOLD this source material — read it with your tools:\n${held}\n` : '';
+  return `GATHER for a document (the document road): ${String(userText || '').slice(0, 400)}\n${heldBlock}` +
+    'Do NOT write the document — a dedicated writing pass follows this run. Your job is the DIGEST: ' +
+    'read the held material and the stores, and return the raw substance the writer needs — the facts, ' +
+    'numbers (with their sources), structure, key quotes, and per-section bullet points. Dense and complete ' +
+    'beats polished. Your FINAL message IS the digest.';
+}
+
+// Phase D's writing prompt: material in-context, the document as the ENTIRE output.
+function writerPrompt({ order, road, userText, digest = '', deposits = [], held = '' } = {}) {
+  const size = (road && road.size) || 'report';
+  const sizeLine = size === 'brief' ? 'a tight 1-2 page brief' : size === 'dossier' ? 'a full dossier — as long as the material warrants' : 'a thorough report (roughly 5-10 pages)';
+  return `Write ${sizeLine} in Markdown, now, as your ENTIRE reply.\n\nTHE ORDER: ${String(userText || '').slice(0, 400)}\n\n` +
+    (deposits.length ? `SECTION RESEARCH (from the agent team):\n${deposits.join('\n\n')}\n\n` : '') +
+    (digest ? `THE GATHERED DIGEST:\n${digest}\n\n` : '') +
+    (held ? `HELD SOURCE MATERIAL (already acquired):\n${held}\n\n` : '') +
+    'Rules: every number and named fact comes from the material above — never authored from memory. ' +
+    'The document must be COMMENSURATE with its sources. Start directly with the title heading — no preamble, ' +
+    'no plan, no meta-commentary, and never end on what you will do next. The reply IS the document.';
+}
+
 // ── S3a: THE ARTIFACT-ABSENCE GATE (the 128KB false blank: "we don't have a compiled roster of
 // sponsors" said over her own registered report that holds exactly that, organized as asked).
 // A say that declares an artifact ABSENT gets verified against the registry + workspace; a hit
@@ -261,4 +309,4 @@ function mandate({ order, road, userText, held = '' } = {}) {
 
 function _resetForTest() { _lastClaim = null; _preNotes = []; }
 
-module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, tap, claims, mandate, BUDGET, anaphoricOrder, resolveAnaphor, heldMaterial, planShapedFinal, artifactAbsenceClaim, findHeldArtifact, noteResume, pendingResume, markResumeTry, resumeDue, clearResume, _resetForTest, CLAIMS_KEY, CLAIMS_CAP, ANAPHOR_WINDOW_MS, RESUME_KEY, RESUME_PACE_MS };
+module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, tap, claims, mandate, BUDGET, anaphoricOrder, resolveAnaphor, heldMaterial, planShapedFinal, artifactAbsenceClaim, findHeldArtifact, noteResume, pendingResume, markResumeTry, resumeDue, clearResume, swarmPlan, gatherMandate, writerPrompt, WRITE_BUDGET, WRITE_FLOOR, SWARM, _resetForTest, CLAIMS_KEY, CLAIMS_CAP, ANAPHOR_WINDOW_MS, RESUME_KEY, RESUME_PACE_MS };

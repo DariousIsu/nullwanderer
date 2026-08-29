@@ -158,6 +158,18 @@ ok(!!ic.detectDeliverableOrder('I still need a list of everyone that sponsored o
   "the want-net now crosses the adverb: 'I STILL need a list…' claims");
 ok(ic.detectDeliverableOrder('if I ever need something I will ask') === null, 'a hypothetical want with no deliverable noun still never claims');
 
+// ── the gather swarm + the writer's turn (his design, 08-29) ────────────────────────────────────
+ok(road.swarmPlan('brief', 'x').length === 0, 'a brief never fans out');
+const plan = road.swarmPlan('report', 'the FRONTIER Act');
+ok(plan.length === 2 && plan[0].agent === 'legislative_analyst' && /FRONTIER Act/.test(plan[0].prompt), 'a report fans out the analyst + fact checker with the topic riding');
+ok(road.swarmPlan('dossier', 'x').length === 4, 'a dossier adds the historian and opposition researcher');
+const gm = road.gatherMandate({ order: {}, road: { size: 'report' }, userText: 'finish it', held: '- a.pdf' });
+ok(/Do NOT write the document/.test(gm) && /DIGEST/.test(gm) && /a\.pdf/.test(gm), 'the gather mandate demands a digest, never prose, with the held material riding');
+const wp = road.writerPrompt({ order: {}, road: { size: 'report' }, userText: 'the order', digest: 'D-FACTS', deposits: ['— fact_checker —\nverified X'], held: '- b.pdf' });
+ok(/roughly 5-10 pages/.test(wp) && /D-FACTS/.test(wp) && /verified X/.test(wp) && /b\.pdf/.test(wp), "the writer's prompt carries the digest, the deposits, and the held list IN-CONTEXT");
+ok(/never authored from memory/.test(wp) && /reply IS the document/.test(wp) && /never end on what you will do next/.test(wp), "the writer's rules: numbers from material only, no preamble, no plan-tail");
+ok(road.WRITE_BUDGET.report === 6000 && road.WRITE_FLOOR.report === 3000, 'the write budget and floor match the size table');
+
 // ── wiring: the one door claims, all four organs tap ────────────────────────────────────────────
 const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/document_road'\)\.claim\(\{ order, userText, bind: _bind \}\)/.test(main), 'wiring: the intake door makes the claim with the captured bind');
@@ -173,9 +185,15 @@ ok(/anaphoricOrder\(userText\)/.test(main) && /resolveAnaphor\(\)/.test(main), '
 ok(/heldMaterial\(\{ topic:/.test(main) && /held: _held/.test(main), 'wiring S1.5: the held material rides the run mandate');
 ok(/typed finalize order → the road/.test(main) && /conductor fallback/.test(main), 'wiring S1.6: a typed finalize order rides the road; the conductor is the fail-soft fallback');
 ok(/THE DOCUMENT ROAD RUN HAS STARTED/.test(main), 'wiring S1.6: the control note tells the say-side the road run is live (no pivot, no promises)');
-ok(/planShapedFinal\(ans\)/.test(main) && /ONE re-drive/.test(main) && /YOUR PREVIOUS RUN ENDED ON A PLAN/.test(main),
-  'wiring S1.7: a plan-shaped final gets exactly one re-drive with the specimen quoted back');
-ok(/twice ended on a plan/.test(main), 'wiring S1.7: a second plan degrades to a framed honest partial — never a third run');
+ok(/spawn_agent_async', args: \{ prompt: s\.prompt \+ env, name: s\.agent \}/.test(main) && /get_agent_output/.test(main),
+  'wiring PHASE A/C: the road itself spawns the swarm and harvests deposits (deterministic, never model-volition)');
+ok(/gatherMandate\(\{ order, road, userText, held: _held \}\)/.test(main), 'wiring PHASE B: the operator gathers a DIGEST — the writer owns all prose');
+ok(/subconsciousModel\(\), process\.env\.ZOE_PAPER_MODEL/.test(main) && /num_predict: _budget/.test(main),
+  "wiring PHASE D: the writer's turn runs the FRONTIER model first with a document-sized output budget");
+ok(/came back thin/.test(main) && /COMMENSURATE with its sources — write the FULL/.test(main),
+  'wiring PHASE D: a thin draft gets exactly one commensurate re-drive');
+ok(/writeFileSync\(abs, doc, 'utf8'\)/.test(main) && /cannot be fabricated because the same code that saved the file composes the pointer/.test(main),
+  'wiring PHASE D: delivery is DETERMINISTIC — the road writes the file and composes the pointer itself');
 ok(/document_road'\)\.tap\('canvas-cmd'\)/.test(main), 'wiring S1.7: the canvas-cmd door (the seventh owner) taps the meter');
 ok(/clearResume\(\{ why: 'registered delivery' \}\)/.test(main) && /noteResume\(\{ slug: road\.slug/.test(main),
   'wiring S2: only a registered delivery pays the debt; every lesser outcome records it');
