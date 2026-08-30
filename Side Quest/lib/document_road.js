@@ -260,7 +260,10 @@ function _norm(s) { return String(s || '').toLowerCase().replace(/[-_.\s]+/g, ''
 const _GENERIC_TOPIC_TOKENS = new Set(['that', 'this', 'with', 'from', 'about', 'analysis', 'summary', 'report', 'reports',
   'complete', 'completed', 'just', 'info', 'information', 'details', 'detail', 'data', 'document', 'documents', 'stuff',
   'things', 'thing', 'everything', 'update', 'updates', 'story', 'full', 'item', 'items', 'list', 'lists', 'note', 'notes',
-  'file', 'files', 'together', 'need', 'needed', 'want', 'wanted', 'please', 'quick', 'real']);
+  'file', 'files', 'together', 'need', 'needed', 'want', 'wanted', 'please', 'quick', 'real',
+  // 08-30: DESTINATION/FRESHNESS words are never subjects — "put the list on the canvas" minted
+  // the garbage slug "report-canvas" because 'canvas' counted as specific.
+  'canvas', 'scratch', 'fresh', 'blank', 'make', 'working', 'page', 'doc']);
 function _topicTokens(topic) {
   return [...new Set(String(topic || '').toLowerCase().match(/[a-z0-9]{4,}/g) || [])]
     .filter((t) => !_GENERIC_TOPIC_TOKENS.has(t))

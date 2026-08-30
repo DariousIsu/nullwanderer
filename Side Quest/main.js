@@ -18869,7 +18869,18 @@ function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
             if (!require('./lib/intake_contract').artifactNoun(_ivNoun)) {
               console.log(`[road] intent order REFUSED — "${_ivNoun}" is not an artifact noun (a want-to-be-told, not a document order)`);
             } else {
-              const _ivTopic = (_iv.topic || _iv.referent || String(userText).slice(0, 120));
+              let _ivTopic = (_iv.topic || _iv.referent || String(userText).slice(0, 120));
+              // REFERENT-FIRST BIND (08-30 live: "cleaner header formatting" on the parish doc —
+              // the verdict KNEW the referent ("parish document") but the bind ran on the
+              // formatting topic, kin missed, and a sibling minted. When the referent kin-matches
+              // an existing project, the ask is ABOUT that artifact: the referent IS the topic and
+              // the phrasing rides as spec.)
+              try {
+                if (_iv.referent && String(_iv.referent) !== String(_ivTopic)) {
+                  const _kinR = require('./lib/artifact_registry').matchKinProject(String(_iv.referent));
+                  if (_kinR) { console.log(`[road] referent-first bind — "${String(_iv.referent).slice(0, 60)}" kin-matches "${_kinR.slug}"; the topic phrasing rides as spec`); _ivTopic = String(_iv.referent).slice(0, 140); }
+                }
+              } catch {}
               if (!require('./lib/document_road').hasSpecificTopic(_ivTopic)) {
                 console.log(`[road] intent order REFUSED — bare/generic topic ("${String(_ivTopic).slice(0, 60)}") → clarifying, never guessing`);
                 fireToolFollowup({ io: null, channel: 'chat', sessionId, resultText: `[${require('./lib/interlocutor').liveName('Lucas')} gave an order whose object you could not pin down ("${String(userText).slice(0, 120)}") — it points at something, but the conversation window doesn't tell you clearly WHICH thing. Ask them, in ONE short sentence, which thing they mean — name the open threads you can see. Do NOT start any work, do NOT claim anything is being produced.]` }).catch(() => {});

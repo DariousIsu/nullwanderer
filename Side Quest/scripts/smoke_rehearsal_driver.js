@@ -382,6 +382,24 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
   }
 
   // CODE-MODEL routing (Lucas 2026-08-06: "run all programming related calls through kimi 2.7 code")
+// --- NEED #113 (verified 08-30): a schema-invalid pick FEEDS ITS REJECTION FORWARD — the model
+// was respinning blind (five refunds on the same schema error, the need-84 stall) because the
+// next attempt saw only the squeezed test output, never WHY the last pick failed. ---
+{
+  const { deps } = freshDeps();
+  // Simulate cloud_logic faithfully: call the validate with garbage raw (it fails), return null.
+  deps.ask = async (o) => {
+    if (o && o.task === 'rehearsal_iterate' && typeof o.validate === 'function') o.validate('I think the best edit would be to change the loop.');
+    return null;
+  };
+  drv.start({ slug: 'v', goal: 'make the parse smoke cover the header row end to end', suite: 'smoke_parse.js', files: ['lib/x.js'], deps });
+  const r = await drv.iterate({ deps });
+  ok(r.status === 'active' && /rejection reason rides the next attempt/.test(r.note), '#113: the refund note names the feed-forward, not just the squeeze');
+  const run = drv.load({ deps });
+  ok(/YOUR PREVIOUS EDIT-PICK WAS REJECTED/.test(run.lastResult) && /Return ONLY the valid JSON pick shape/.test(run.lastResult),
+    '⭐ #113: the validation error + raw head ride run.lastResult — the next attempt sees WHY');
+}
+
 {
   const cfg = require('../lib/config');
   ok(cfg.codeModel() === 'kimi-k2.7-code' || process.env.ZOE_CODE_MODEL, 'config.codeModel defaults to kimi-k2.7-code (ZOE_CODE_MODEL overrides)');

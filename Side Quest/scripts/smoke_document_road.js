@@ -97,6 +97,10 @@ ok(!/YOU ALREADY HOLD/.test(road.mandate({ order: {}, road: { size: 'report' }, 
 ok(road.hasSpecificTopic('just get the information') === false, '⭐ an all-generic topic ("just get the information") has NO specific tokens — it binds nothing');
 ok(road.hasSpecificTopic('the information details') === false, 'generic nouns (information/details) never count as specific');
 ok(road.hasSpecificTopic('Frontier Act sponsors') === true, 'a real subject still binds');
+// 08-30: DESTINATION words are never subjects ("put the list on the canvas" minted "report-canvas").
+ok(road.hasSpecificTopic('the list on the canvas') === false, '⭐ "canvas" is a destination, not a subject — the garbage-slug class');
+ok(road.hasSpecificTopic('a fresh scratch page') === false, 'freshness/destination words never bind alone');
+ok(road.hasSpecificTopic('fresh scratch document listing Louisiana parishes') === true, 'a destination-phrased order with a REAL subject still binds');
 ok(road.heldMaterial({ topic: 'just get the information' }) === '', '⭐ heldMaterial returns NOTHING for a bare topic — no db even consulted (the empty-token early return)');
 const _heldSpec = road.heldMaterial({ topic: 'juvenile information disclosure', deps: { db: { getDb: () => ({ prepare: (q) => ({ all: (...args) => { if (args.some((a) => /%information%/.test(a))) throw new Error('generic token reached the LIKE'); return []; } }) }) }, fs: { readdirSync: () => [] } } });
 ok(_heldSpec === '', 'generic tokens are dropped BEFORE the LIKE — "information" never reaches the query');
@@ -208,6 +212,8 @@ ok(/_road && !_roadRunInFlight/.test(main) && /S1 run starting/.test(main), 'wir
 ok(/paid-by-road-delivery/.test(main) && /PAID by this delivery/.test(main), '⭐ wiring D2-1a: a registered road delivery PAYS the open promise carrying the same order');
 ok(/STANDS DOWN — canonical/.test(main) && /pointing, never re-composing/.test(main), '⭐ wiring D2-1b: a pursued promise whose canonical moved after booking POINTS — it never composes a second time');
 ok(/updated_ts \|\| 0\) >= Number\(it\.created_ts/.test(main), 'wiring D2-1b: the stand-down predicate is canonical-moved-AFTER-the-promise (a genuinely unpaid ask still builds)');
+ok(/referent-first bind — "\$\{String\(_iv\.referent\)\.slice\(0, 60\)\}" kin-matches/.test(main) && /matchKinProject\(String\(_iv\.referent\)\)/.test(main),
+  '⭐ wiring 08-30: an intent order whose REFERENT kin-matches an existing project binds THERE — the topic phrasing rides as spec (the parish-formatting sibling mint)');
 ok(/that's a failure on my side, not progress/.test(main), 'wiring S1: an empty run posts the honest failure — the say-gate never goes silent');
 ok(/model: 'document-road', unprompted: 1/.test(main), 'wiring S1: delivery posts as her own follow-up message');
 ok(/anaphoricOrder\(userText\)/.test(main) && /resolveAnaphor\(\)/.test(main), 'wiring S1.5: the door falls back to the anaphor resolver before giving up');

@@ -206,6 +206,11 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
   run.iteration++;
   const ask = (deps.ask) || require('./cloud_logic').ask;
   let pick = null, _pickThrew = null;
+  // NEED #113 (verified 08-30): a schema-invalid pick refunded and respun with the model seeing
+  // only the squeezed test output — never WHY its last pick failed. Capture the validation error
+  // here so the refund path can feed it forward and log the raw head (the missing observability).
+  let _lastValErr = null;
+  const _valCapture = (raw) => { const r = validateEditPick(raw); if (r && !r.valid) _lastValErr = { error: r.error, head: String(raw || '').slice(0, 300) }; return r; };
   try {
     pick = await ask({
       task: 'rehearsal_iterate', v: 1,
@@ -219,7 +224,7 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
       // CODE MODEL (Lucas 2026-08-06): edit picking is programming work — route it to the code
       // slot (benched: only kimi-k2.7-code never missed an exact-edit precision case).
       model: (deps.model) || require('./config').codeModel(),
-      want: EDIT_WANT, validate: validateEditPick, numPredict: 1400, think: false,
+      want: EDIT_WANT, validate: _valCapture, numPredict: 1400, think: false,
     });
   } catch (e) { _pickThrew = e; console.error('[rehearsal-driver] edit pick failed:', e.message); }
   if (!pick) {
@@ -232,13 +237,19 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
     // run — the same deferral as budget-spent, resumable, never a silent kill.
     run.iteration--;
     run.noopStreak = (run.noopStreak || 0) + 1;
+    // NEED #113: the next attempt must see WHY this one failed — feed the validation error (and
+    // the raw head, logged for the human) forward on run.lastResult, which the pick input reads.
+    if (!_pickThrew && _lastValErr) {
+      console.error(`[rehearsal-driver] schema-invalid pick (${_lastValErr.error}) — raw head: "${_lastValErr.head.replace(/\s+/g, ' ').slice(0, 160)}"`);
+      run.lastResult = `${str(run.lastResult || '').slice(0, 3000)}\n\n[YOUR PREVIOUS EDIT-PICK WAS REJECTED: ${_lastValErr.error}. Your output began: "${_lastValErr.head.slice(0, 200)}". Return ONLY the valid JSON pick shape this time — no prose, no fences.]`;
+    }
     if (run.noopStreak >= NOOP_STREAK_CAP) {
       return _parkOrStick(run, `${run.noopStreak} consecutive no-op picks (schema-invalid or cloud) — parked to stop the free spin; resumable`, deps, nowMs);
     }
     _save(run, deps);
     return { ok: false, status: 'active', note: _pickThrew
       ? 'cloud unavailable — budget refunded, run stays active'
-      : 'edit pick returned but FAILED VALIDATION (schema) — budget refunded; the squeezed test output rides the next attempt' };
+      : 'edit pick returned but FAILED VALIDATION (schema) — budget refunded; the rejection reason rides the next attempt' };
   }
   run.noopStreak = 0;   // a pick landed — the free-spin streak is over
 
