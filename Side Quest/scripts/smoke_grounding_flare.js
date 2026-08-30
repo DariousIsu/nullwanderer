@@ -69,5 +69,15 @@ ok(/name: 'spawn_agent_async', args: \{ name: agent, prompt: gf\.flarePrompt\([^
 ok(/resultText: gf\.followupText\(\{ topic: topic \|\| need, deposits, userName \}\)/.test(mainSrc), 'main: the harvest posts through fireToolFollowup with the antifab followup');
 ok(/if \(!deposits\.length\) \{ console\.log\('\[flare\] zero deposits — nothing to post'\); return; \}/.test(mainSrc), 'main: zero deposits → log only, never a noise followup');
 
+// ── the first-fire lessons (08-30 drive 4: one flare → three followup says; agents chased our own file) ──
+const _standIdx = mainSrc.indexOf('referent is a HELD artifact');
+const _gateIdx = mainSrc.indexOf('const gate = gf.shouldFire(');
+ok(_standIdx > -1 && /findHeldArtifact\(\{ topic: topic \|\| need \}\)/.test(mainSrc), '⭐ held-artifact stand-down: a question about our own artifact never flares (the pull-up owns it)');
+ok(_standIdx > -1 && _gateIdx > _standIdx, 'stand-down runs BEFORE the pace gate — a stood-down flare never burns the pace slot');
+ok(/function _markRunConsumed\(runId, who\)/.test(mainSrc) && /ac\.markDone\(\{ runId, tool: e\.tool, hash: e\.hash, at: e\.at \}, store\)/.test(mainSrc),
+  '⭐ double-delivery cure: a harvested run is marked done (dedupe keeps working; the tick never re-posts it)');
+ok(/_markRunConsumed\(s\.runId, 'flare'\)/.test(mainSrc) && /_markRunConsumed\(s\.runId, 'road'\)/.test(mainSrc),
+  'both harvests mark their runs — flare AND road; an un-harvested run stays pending (agent-consume is the late-agent backstop)');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

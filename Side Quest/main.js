@@ -18705,6 +18705,22 @@ function _bookDeliveryPromises(say, { sessionId, turnStartTs = 0 } = {}) {
 // posts the pointer or an HONEST PARTIAL as her follow-up message — never silence, never a bare
 // ack (the say-gate; an empty run posts an honest failure). The promise booking still runs
 // alongside — S3 subtracts it once the meter proves the road delivers.
+// THE DOUBLE-DELIVERY CURE (first-fire lesson, 08-30 drive 4): every chat-lane spawn_agent_async is
+// auto-registered for consumption (echo_suit B1), so a run the road/flare ALREADY harvested was
+// re-posted raw by _agentConsumeTick — one flare produced three followup says. A harvested run is
+// moved to the done ledger (dedupe read-through keeps working); a run the harness FAILED to harvest
+// stays pending, so agent-consume remains the honest late-agent backstop.
+function _markRunConsumed(runId, who) {
+  try {
+    const ac = require('./lib/agent_consume');
+    const store = { get: (k) => db.getMeta(k), set: (k, v) => db.setMeta(k, v) };
+    const e = ac.pending(store).find((x) => x && x.runId === runId);
+    if (!e) return;
+    ac.markDone({ runId, tool: e.tool, hash: e.hash, at: e.at }, store);
+    console.log(`[${who}] run ${runId} marked consumed — the harvest owns its delivery (no double-post)`);
+  } catch {}
+}
+
 // ── THE GROUNDING FLARE (swarm substrate T1, docs/SWARM_SUBSTRATE_2026-08-30.md W1) — fired by
 // cognition's answering-from-the-model branch via deps.onModelAnswer. The reply is never blocked:
 // 1-2 cluster specialists chase it (spawn_agent_async, quiet research-flare canvas tab), and the
@@ -18718,6 +18734,14 @@ async function _flareRun({ sessionId, io, channel, userName, userMessage, need, 
   const gf = require('./lib/grounding_flare');
   if (_flareInFlight) { console.log('[flare] one already in flight — skipped'); return; }
   if (!echoSuit || !echoSuit.connected) { console.log('[flare] engine not connected — skipped'); return; }
+  // HELD-ARTIFACT STAND-DOWN (first-fire lesson, 08-30 drive 4): the ladder calls a question about
+  // OUR OWN artifact a "general-knowledge miss" (the report is no graph entity), and the flare then
+  // spends agents searching public records for our own workspace file. The pull-up/absence lanes own
+  // that referent — a held-artifact hit stands the flare down before the pace slot is spent.
+  try {
+    const _held = require('./lib/document_road').findHeldArtifact({ topic: topic || need });
+    if (_held) { console.log(`[flare] referent is a HELD artifact (${_held.slug || _held.title}) — the pull-up owns it, no flare`); return; }
+  } catch {}
   const gate = gf.shouldFire({ getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v) });
   if (!gate.fire) { console.log(`[flare] ${gate.why} — skipped`); return; }
   _flareInFlight = true;
@@ -18747,8 +18771,10 @@ async function _flareRun({ sessionId, io, channel, userName, userMessage, need, 
         } catch {}
         await new Promise((res) => setTimeout(res, 20000));
       }
-      if (out) { deposits.push(`— ${s.agent} —\n${String(out).slice(0, 4000)}`); console.log(`[flare] ${s.agent} deposited (${String(out).length}ch)`); }
-      else console.log(`[flare] ${s.agent} did not return inside the window`);
+      if (out) {
+        deposits.push(`— ${s.agent} —\n${String(out).slice(0, 4000)}`); console.log(`[flare] ${s.agent} deposited (${String(out).length}ch)`);
+        _markRunConsumed(s.runId, 'flare');   // the harvest owns delivery — agent-consume must not re-post it
+      } else console.log(`[flare] ${s.agent} did not return inside the window`);
     }
     if (!deposits.length) { console.log('[flare] zero deposits — nothing to post'); return; }
     if (sessionId && io) await fireToolFollowup({ io, channel, sessionId, resultText: gf.followupText({ topic: topic || need, deposits, userName }) });
@@ -18802,8 +18828,10 @@ async function _roadRun({ order, road, userText, sessionId, asResume = false }) 
         } catch {}
         await new Promise((res) => setTimeout(res, 20000));
       }
-      if (out) { deposits.push(`— ${s.agent} —\n${String(out).slice(0, 8000)}`); console.log(`[road] swarm: ${s.agent} deposited (${String(out).length}ch)`); }
-      else console.log(`[road] swarm: ${s.agent} did not return inside the window — writing without it`);
+      if (out) {
+        deposits.push(`— ${s.agent} —\n${String(out).slice(0, 8000)}`); console.log(`[road] swarm: ${s.agent} deposited (${String(out).length}ch)`);
+        _markRunConsumed(s.runId, 'road');   // the writer's turn owns delivery — agent-consume must not re-post it
+      } else console.log(`[road] swarm: ${s.agent} did not return inside the window — writing without it`);
     }
     // ── PHASE D: THE WRITER'S TURN — one pure-writing call, FRONTIER model first, the document
     // as the ENTIRE output (chat replies ran 30-83 tokens; the conductor capped at 900 — the
