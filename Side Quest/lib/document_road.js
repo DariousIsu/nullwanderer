@@ -169,6 +169,12 @@ function writerPrompt({ order, road, userText, digest = '', deposits = [], held 
     (digest ? `THE GATHERED DIGEST:\n${digest}\n\n` : '') +
     (held ? `HELD SOURCE MATERIAL (already acquired):\n${held}\n\n` : '') +
     'Rules: every number and named fact comes from the material above — never authored from memory. ' +
+    // W1 citation format (his 08-30 read of the first dossier: "the sources being inline instead
+    // of proper citation makes it a little hard to read"): numbered markers in the prose, one
+    // Sources section at the end — never bare URLs scattered through the body.
+    'Cite with numbered markers — [1], [2] — placed at the claims they support, and end the document ' +
+    'with a "Sources" section listing each numbered source once (name/record, plus the URL where one exists); ' +
+    'never scatter bare URLs through the body text. ' +
     'The document must be COMMENSURATE with its sources. Start directly with the title heading — no preamble, ' +
     'no plan, no meta-commentary, and never end on what you will do next. The reply IS the document.';
 }

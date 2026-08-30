@@ -10360,7 +10360,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               const _rows = db.getDb().prepare(`SELECT content FROM turns WHERE session_id = ? AND speaker IN ('user','ai_said') ORDER BY id DESC LIMIT 6`).all(sessionId);
               _ctxTerms = require('./lib/graph_walk').extractProperNouns(_rows.map((r) => r.content).join('\n')).slice(0, 5);
             } catch {}
-            const res = await require('./lib/cognition').answerGrounded({ userMessage, grounding, object: recallResult && recallResult.object, userName, scope: _scope, deps: { contextTerms: _ctxTerms, forecast: () => lastForecast } });
+            const res = await require('./lib/cognition').answerGrounded({ userMessage, grounding, object: recallResult && recallResult.object, userName, scope: _scope, deps: { contextTerms: _ctxTerms, forecast: () => lastForecast,
+              // THE GROUNDING FLARE (swarm substrate T1): the answering-from-the-model branch
+              // hands the harness this hook — the flare chases the reply, never blocks it.
+              onModelAnswer: ({ need, topic, kind }) => { _flareRun({ sessionId, io, channel, userName, userMessage, need, topic, kind }).catch((e) => console.error('[flare] kick failed:', e.message)); } } });
             if (res && res.say) {
               const _voice = ad.buildVoiceBlock(res.say, userName);
               composedUserMessage = `${composedUserMessage}\n\n${_voice}`;
@@ -18702,6 +18705,58 @@ function _bookDeliveryPromises(say, { sessionId, turnStartTs = 0 } = {}) {
 // posts the pointer or an HONEST PARTIAL as her follow-up message — never silence, never a bare
 // ack (the say-gate; an empty run posts an honest failure). The promise booking still runs
 // alongside — S3 subtracts it once the meter proves the road delivers.
+// ── THE GROUNDING FLARE (swarm substrate T1, docs/SWARM_SUBSTRATE_2026-08-30.md W1) — fired by
+// cognition's answering-from-the-model branch via deps.onModelAnswer. The reply is never blocked:
+// 1-2 cluster specialists chase it (spawn_agent_async, quiet research-flare canvas tab), and the
+// harvest posts ONE followup — enrichment when the deposits confirm what she said, a correction
+// when they don't (the antifab posture rides the followup instruction, lib/grounding_flare).
+// Zero deposits → log only, never a noise followup. Pacing + the swarm.flare kill switch live in
+// grounding_flare.shouldFire; a suppressed or skipped flare still logs, so the red line in the
+// console never stands without its flare line beside it (the W1 acceptance).
+let _flareInFlight = false;
+async function _flareRun({ sessionId, io, channel, userName, userMessage, need, topic, kind }) {
+  const gf = require('./lib/grounding_flare');
+  if (_flareInFlight) { console.log('[flare] one already in flight — skipped'); return; }
+  if (!echoSuit || !echoSuit.connected) { console.log('[flare] engine not connected — skipped'); return; }
+  const gate = gf.shouldFire({ getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v) });
+  if (!gate.fire) { console.log(`[flare] ${gate.why} — skipped`); return; }
+  _flareInFlight = true;
+  const t0 = Date.now();
+  try {
+    const spawned = [];
+    for (const agent of gf.pickSpecialists({ kind, topic, need, userMessage })) {
+      try {
+        const r = await echoSuit.dispatch({ kind: 'do', name: 'spawn_agent_async', args: { name: agent, prompt: gf.flarePrompt({ userMessage, need, topic }), canvas_tab: gf.FLARE_TAB } });
+        const runId = require('./lib/review_fanout').parseRunId(r && r.text);
+        if (runId) { spawned.push({ agent, runId }); console.log(`[flare] swarm: ${agent} spawned (run ${runId})`); }
+        else console.log(`[flare] swarm: ${agent} spawn returned no run id`);
+      } catch (e) { console.error(`[flare] swarm spawn failed (${agent}):`, e.message); }
+    }
+    if (!spawned.length) { console.log('[flare] nothing spawned — the chase is off this turn'); return; }
+    // Harvest — bounded window, same posture as the road: a late agent is skipped honestly.
+    const deposits = [];
+    const _DEADLINE = t0 + 5 * 60 * 1000;
+    for (const s of spawned) {
+      let out = null;
+      while (Date.now() < _DEADLINE) {
+        try {
+          const r = await echoSuit.dispatch({ kind: 'do', name: 'get_agent_output', args: { run_id: s.runId } });
+          out = require('./lib/review_fanout').parseRunOutput(r && r.text);
+          if (out && out.length > 40) break;
+          out = null;
+        } catch {}
+        await new Promise((res) => setTimeout(res, 20000));
+      }
+      if (out) { deposits.push(`— ${s.agent} —\n${String(out).slice(0, 4000)}`); console.log(`[flare] ${s.agent} deposited (${String(out).length}ch)`); }
+      else console.log(`[flare] ${s.agent} did not return inside the window`);
+    }
+    if (!deposits.length) { console.log('[flare] zero deposits — nothing to post'); return; }
+    if (sessionId && io) await fireToolFollowup({ io, channel, sessionId, resultText: gf.followupText({ topic: topic || need, deposits, userName }) });
+    console.log(`[flare] landed: ${deposits.length}/${spawned.length} deposit(s), ${Math.round((Date.now() - t0) / 1000)}s`);
+  } catch (e) { console.error('[flare] run failed:', e.message);
+  } finally { _flareInFlight = false; }
+}
+
 let _roadRunInFlight = false;
 async function _roadRun({ order, road, userText, sessionId, asResume = false }) {
   const t0 = Date.now();

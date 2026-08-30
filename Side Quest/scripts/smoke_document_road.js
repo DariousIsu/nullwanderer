@@ -185,6 +185,9 @@ ok(/Do NOT write the document/.test(gm) && /DIGEST/.test(gm) && /a\.pdf/.test(gm
 const wp = road.writerPrompt({ order: {}, road: { size: 'report' }, userText: 'the order', digest: 'D-FACTS', deposits: ['— fact_checker —\nverified X'], held: '- b.pdf' });
 ok(/roughly 5-10 pages/.test(wp) && /D-FACTS/.test(wp) && /verified X/.test(wp) && /b\.pdf/.test(wp), "the writer's prompt carries the digest, the deposits, and the held list IN-CONTEXT");
 ok(/never authored from memory/.test(wp) && /reply IS the document/.test(wp) && /never end on what you will do next/.test(wp), "the writer's rules: numbers from material only, no preamble, no plan-tail");
+// W1 citation format (his 08-30 read of the first dossier: inline sources are hard to read)
+ok(/numbered markers — \[1\], \[2\]/.test(wp) && /"Sources" section/.test(wp), "W1: the writer cites with numbered markers and closes on a Sources section");
+ok(/never scatter bare URLs through the body/.test(wp), 'W1: bare URLs are banned from the body text');
 ok(road.WRITE_BUDGET.report === 6000 && road.WRITE_FLOOR.report === 3000, 'the write budget and floor match the size table');
 
 // ── §61b: the leg-5 door misses + the canvas stand-down ─────────────────────────────────────────

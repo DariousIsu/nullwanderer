@@ -560,6 +560,11 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   // something we should hold and don't.
   if (scope === 'general' && !object) {
     console.log(`[cognition] general-knowledge miss on "${String(need0).slice(0, 60)}" → answering from the model, not refusing`);
+    // THE GROUNDING FLARE (swarm substrate T1): this is the doctrine's one red line — the reply
+    // speaks from the model. The hook chases it with 1-2 engine cluster specialists; deposits
+    // land minutes later through the followup lane as enrichment or correction. Fire-and-forget:
+    // the reply itself is never blocked, and a hook failure never breaks the turn.
+    try { if (deps.onModelAnswer) deps.onModelAnswer({ need: need0, topic: (it && it.topic) || null, kind: (it && it.kind) || null }); } catch (e) { console.error('[cognition] flare hook failed:', e.message); }
     return null;
   }
   // ERROR-VS-EMPTY at the closer: "I checked X" may only cover lanes that ran CLEAN. A lane whose

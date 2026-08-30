@@ -307,6 +307,27 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
     ok(r3 && !r3.lookupFailed && /couldn't pin down/.test(r3.say) && !/errored/.test(r3.say), 'all-clean empties keep the classic honest miss (no phantom error note)');
   }
 
+  // 15) THE GROUNDING FLARE HOOK (swarm substrate T1, 08-30): the answering-from-the-model branch
+  // — general scope, no object, every tier empty → return null (the writer answers; never a
+  // refusal) AND deps.onModelAnswer fires with the need + topic, so the red line is CHASED.
+  {
+    let flared = null;
+    const r = await cog.answerGrounded({ userMessage: 'what are the laws of thermodynamics?', grounding: '', scope: 'general', deps: {
+      ask: async () => 'NEED: the laws of thermodynamics',
+      intent: { kind: 'other', topic: 'laws of thermodynamics', needs_fresh: false },
+      dispatch: emptyDispatch, retrieveTurns: async () => [], wikiLookup: async () => [], routeNeed: async () => ({ ok: false }),
+      webSearch: async () => ({ results: [] }), excavate: async () => ({ found: false }), writeBack: async () => {},
+      onModelAnswer: (x) => { flared = x; },
+    } });
+    ok(r === null, 'general-knowledge miss → null (the writer answers from the model, never a refusal)');
+    ok(flared && /thermodynamics/.test(String(flared.need || '')) && flared.topic === 'laws of thermodynamics',
+      '⭐ T1 flare hook: fires on the model-answer branch with the need + topic (the red line is chased)');
+    // and the hook NEVER fires on a satisfied turn — a grounded answer has nothing to chase
+    let flared2 = null;
+    await cog.answerGrounded({ userMessage: 'who is in his cabinet?', grounding: 'cabinet: Marco Rubio, Lee Zeldin', deps: { retrieveTurns: async () => [], ask: askMock, dispatch: dispatchMock, onModelAnswer: (x) => { flared2 = x; } } });
+    ok(flared2 === null, 'flare hook: silent on a grounded answer (only the model-answer branch flares)');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
