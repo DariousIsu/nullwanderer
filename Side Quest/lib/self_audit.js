@@ -90,6 +90,18 @@ function detectZeroCallerExports(corpus) {
       // treats `$` as part of the identifier, which is the correct boundary.
       const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const rx = new RegExp(`(?<![\\w$])${esc}(?![\\w$])`);
+      // NEED #110 (verified 08-29): this scan skips the defining file, so a CONSTANT used only
+      // inside its own module (DEFAULT_TTL_S — two internal uses + a smoke pin) read as "dark".
+      // An UPPER_SNAKE export its own module references beyond the export line is WIRED, never
+      // flagged; a constant referenced nowhere at all (not even internally) is still genuinely
+      // dead and still flags. Functions keep the full external-caller scan unchanged.
+      if (/^[A-Z][A-Z0-9_]*$/.test(name)) {
+        // Strip the export list AND the declaration itself — only a genuine USE excuses.
+        const ownBody = corpus.files[f].text
+          .replace(/module\.exports\s*=\s*\{[\s\S]*?\}/, '')
+          .replace(new RegExp(`(?:const|let|var)\\s+${esc}\\s*=`, 'g'), '');
+        if (rx.test(ownBody)) continue;
+      }
       let live = false, smokeOnly = false;
       for (const [p, { text }] of Object.entries(corpus.files)) {
         if (p === f) continue;

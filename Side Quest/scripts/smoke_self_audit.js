@@ -49,6 +49,9 @@ const F = (t, mtimeMs = Date.now()) => ({ text: t, mtimeMs });
         // liarOrgan (lib/liar.js) is deliberately caller-less too — it counts in zero-caller totals.
         'main.js': F("const { usedExport } = require('./lib/dark'); usedExport();"),
         'scripts/smoke_dark.js': F("require('../lib/dark').darkExport();", now - 30 * 24 * 3600e3),
+        // 8. #110 (verified 08-29): WIRED_CONST is used inside its own module as a default — never
+        // dark; DEAD_CONST is referenced nowhere at all — still genuinely dead, still flags.
+        'lib/consts.js': F('const WIRED_CONST = 6 * 3600;\nconst DEAD_CONST = 42;\nfunction ttl(x = WIRED_CONST) { return x; }\nmodule.exports = { WIRED_CONST, DEAD_CONST, ttl };'),
       },
     };
 
@@ -58,6 +61,8 @@ const F = (t, mtimeMs = Date.now()) => ({ text: t, mtimeMs });
     const zc = by('zero-caller-export');
     ok(zc.some((f) => f.name === 'darkExport') && zc.some((f) => f.name === 'liarOrgan') && !zc.some((f) => f.name === 'usedExport'), 'zero-caller: darkExport + liarOrgan flagged, usedExport (live caller) not');
     ok(/smoke-only/.test(zc.find((f) => f.name === 'darkExport').text), 'zero-caller: smoke-only coverage named (the setProvider class)');
+    ok(!zc.some((f) => f.name === 'WIRED_CONST'), '⭐ #110: a constant used inside its own module is WIRED, never dark (the DEFAULT_TTL_S false positive)');
+    ok(zc.some((f) => f.name === 'DEAD_CONST'), '#110: a constant referenced nowhere at all still flags — the excuse is internal USE, not constant-ness');
     ok(by('unread-meta-key').length === 1 && by('unread-meta-key')[0].name === 'dead.key', 'meta: dead.key flagged; read.key + dynamic-prefix focus.7.plan not');
     ok(by('orphan-env-flag').length === 1 && by('orphan-env-flag')[0].name === 'ZOE_SECRET_KNOB', 'env: undocumented flag flagged, documented one not');
     ok(by('advertised-lane').length === 1 && by('advertised-lane')[0].name === 'ghost-lane', 'lanes: promised-never-emitted flagged, emitted one not');
@@ -89,11 +94,11 @@ const F = (t, mtimeMs = Date.now()) => ({ text: t, mtimeMs });
       record: (text, { bornFrom }) => { needsMade.push({ text, bornFrom, open: true }); return { id: needsMade.length, deduped: false }; },
     };
     const p1 = sa.runPass({ deps: { capabilityNeed: cnFix }, nowMs: now, corpus });
-    ok(p1.findings.length === 8 && p1.mintable.length === 0 && p1.minted === null, `pass 1: ${p1.findings.length} findings recorded, NOTHING mints (one-pass noise never does)`);
+    ok(p1.findings.length === 9 && p1.mintable.length === 0 && p1.minted === null, `pass 1: ${p1.findings.length} findings recorded, NOTHING mints (one-pass noise never does)`);
     const p2 = sa.runPass({ deps: { capabilityNeed: cnFix }, nowMs: now + 3600e3, corpus });
     ok(p2.mintable.length === 0, 'pass 2 only 1h later: recurrence needs ≥20h gap — still nothing mintable');
     const p3 = sa.runPass({ deps: { capabilityNeed: cnFix }, nowMs: now + 21 * 3600e3, corpus });
-    ok(p3.mintable.length === 8 && p3.minted && p3.minted.id === 1, 'pass 3 (+21h): all recurred → exactly ONE minted (per-pass cap)');
+    ok(p3.mintable.length === 9 && p3.minted && p3.minted.id === 1, 'pass 3 (+21h): all recurred → exactly ONE minted (per-pass cap)');
     ok(needsMade[0].bornFrom.startsWith('self-audit:'), `minted need born_from carries the audit signature (${needsMade[0].bornFrom})`);
     const p4 = sa.runPass({ deps: { capabilityNeed: cnFix }, nowMs: now + 42 * 3600e3, corpus });
     ok(p4.minted && needsMade.length === 2, 'pass 4: second mint (still under the 2-open cap)');
@@ -103,7 +108,7 @@ const F = (t, mtimeMs = Date.now()) => ({ text: t, mtimeMs });
     console.log('C) obs summary + clock');
     bus.flush();
     const evs = bus.latest({ lanes: ['audit'], kinds: ['self_audit'], limit: 10 });
-    ok(evs.length >= 5 && /self-audit: 8 finding/.test(evs[evs.length - 1].text), `every pass leaves one obs summary (${evs[evs.length - 1].text.slice(0, 80)}…)`);
+    ok(evs.length >= 5 && /self-audit: 9 finding/.test(evs[evs.length - 1].text), `every pass leaves one obs summary (${evs[evs.length - 1].text.slice(0, 80)}…)`);
     ok(sa.due({ nowMs: now + 63 * 3600e3 }) === false, 'due(): just ran → not due');
     ok(sa.due({ nowMs: now + 63 * 3600e3 + sa.DUE_MS + 1 }) === true, 'due(): 24h later → due');
 
