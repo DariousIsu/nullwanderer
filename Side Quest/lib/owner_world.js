@@ -162,4 +162,30 @@ function resolve(mention, { deps = {} } = {}) {
   return null;
 }
 
-module.exports = { seed, ensureSchema, upsert, addEdge, get, resolve, mint, SEED_OBJECTS, SEED_EDGES };
+// THE OWNER-ANCHOR LAW's lenient door (08-29: "Rainey Center" failed resolve()'s exact match
+// against the stored "Rainey Center for Public Policy" and the disambiguator offered congressmen
+// and Ma Rainey instead). Space/hyphen/punct-blind CONTAINMENT either way, with a floor so a tiny
+// fragment ("center") can never claim the owner's world: the mention needs ≥2 tokens or ≥8 chars.
+function resolveLoose(mention, { deps = {} } = {}) {
+  const exact = resolve(mention, { deps });
+  if (exact) return exact;
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const m = norm(mention);
+  if (!m || (m.length < 8 && !m.includes(' '))) return null;
+  let rows = [];
+  try { rows = _db(deps).getDb().prepare('SELECT * FROM owner_world').all(); } catch { return null; }
+  for (const r of rows) {
+    const obj = _hydrate(r);
+    if (!obj) continue;
+    for (const cand of [obj.name, ...(obj.aliases || [])]) {
+      const c = norm(cand);
+      // Both directions floored: a short alias ("Zo") must never match inside a long mention.
+      if (c && (c.includes(m) || (m.includes(c) && (c.length >= 8 || c.includes(' '))))) {
+        return { status: 'resolved', loose: true, object: { id: obj.coord, entity_type: obj.type, summary: obj.summary, namespace: obj.namespace, ownerWorld: true } };
+      }
+    }
+  }
+  return null;
+}
+
+module.exports = { seed, ensureSchema, upsert, addEdge, get, resolve, resolveLoose, mint, SEED_OBJECTS, SEED_EDGES };

@@ -8745,6 +8745,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     } catch {}
     await require('./lib/intent_pass').intentPass(userMessage, { windowText: _iwin });
   } catch (e) { console.error('[intent] pass failed (doors run on nets alone):', e.message); }
+  // THE CLARIFICATION CHANNEL (08-29 live: the answer to "which Rainey?" — "the place that we
+  // work" — was consumed by the artifact-router as a canvas-edit instruction on an unrelated doc.
+  // An ambiguity ASK arms clarify.pending; the NEXT user turn answers it FIRST and resumes the
+  // ORIGINAL ask; the artifact doors stand down for that turn. 10-minute TTL, single-shot.)
+  let _clarifyResume = null;
+  try {
+    const _cp = JSON.parse(db.getMeta('clarify.pending') || 'null');
+    if (_cp && _cp.ts && Date.now() - _cp.ts < 10 * 60 * 1000) {
+      _clarifyResume = _cp;
+      db.setMeta('clarify.pending', '');
+      composedUserMessage += `\n\n[THIS TURN ANSWERS your pending which-one question about "${_cp.mention}". ${userName || 'Lucas'}'s answer: "${String(userMessage).slice(0, 200)}". Resolve which entity they mean from that answer and FULFILL THE ORIGINAL ASK: "${_cp.originalAsk}". Do NOT treat their answer as a new standalone instruction.]`;
+      console.log(`[clarify] pending resolved — the turn answers the "${String(_cp.mention).slice(0, 40)}" question; resuming the original ask`);
+    } else if (_cp) { db.setMeta('clarify.pending', ''); }
+  } catch {}
   if (attachmentText) {
     // The reply CONTRACT for an attachment turn: acknowledge the landing and answer about THE
     // ATTACHMENT — "this document"/"this file" in his message means what he just attached, never
@@ -9422,13 +9436,30 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // For a CONCEPT collision (e.g. "the AI arms race" + a junk namesake), don't dump disambiguation on
     // him — GROUND it herself: look it up → create a verified node (citation) or an unverified concept →
     // proceed on that. (Lucas's resolve-or-create spec.)
-    const action = cg.disambiguationAction({ status: 'ambiguous', candidates: amb.candidateObjs || [] });
+    let action = cg.disambiguationAction({ status: 'ambiguous', candidates: amb.candidateObjs || [] });
+    // THE OWNER-ANCHOR LAW (08-29 live: "which Rainey?" asked about the place Lucas WORKS — the
+    // graph held 21 Rainey namesakes, 1930s congressmen and Ma Rainey among them, while the owner
+    // world held the org all along). A mention that resolves into the owner's own world NEVER
+    // disambiguates against strangers — his world outranks every namesake. The manifest already
+    // resolves owner-world-first for grounding; the reply proceeds on that.
+    let _ownerHit = null;
+    try { _ownerHit = require('./lib/owner_world').resolveLoose(amb.mention); } catch {}
+    if (_ownerHit) {
+      console.log(`[main] ambiguity ASK stood down — "${amb.mention}" anchors to the OWNER WORLD (${(_ownerHit.object && _ownerHit.object.id) || 'owner'}) — never a which-one question`);
+      action = 'ground-skip';
+    } else if (action === 'ask' && /\b(?:center|centre|institute|foundation|committee|council|caucus|university|college|company|corp(?:oration)?|association|agency|department|bureau)\b/i.test(amb.mention)) {
+      // Type-aware belt: an org-shaped mention never offers PEOPLE as its candidates.
+      console.log(`[main] ambiguity ASK → GROUND — "${amb.mention}" is org-shaped; person namesakes are never its candidates`);
+      action = 'ground';
+    }
     if (action === 'ask') {
       console.log(`[main] ambiguous entity "${amb.mention}" → ASK (${amb.candidates.length} distinct people)`);
       followupFired = true;
       try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked about "${amb.mention}", but you hold more than one distinct person/entity by that name: ${amb.candidates.join('; ')}. You genuinely can't tell which one they mean. Ask them which one — name the options briefly. Do NOT guess or answer about either yet. One or two sentences, your voice.]` }); }
       catch (e) { console.error('[main] ambiguity ASK failed:', e.message); }
-    } else {
+      // The clarification channel arms: the NEXT user turn answers this, resuming the original ask.
+      try { db.setMeta('clarify.pending', JSON.stringify({ mention: amb.mention, candidates: (amb.candidates || []).slice(0, 6), originalAsk: String(userMessage).slice(0, 300), ts: Date.now() })); } catch {}
+    } else if (action !== 'ground-skip') {
       try {
         const g = await cg.groundAndCreate(amb.mention, { deps: {
           search: (m) => webSearch(m),
@@ -13329,6 +13360,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // deictic rewrite of a thinking turn into a doc edit was the register's worst leak.
             if (collabTurn && !collabArtifactsOk && (verdict.intent === 'canvas_edit' || verdict.intent === 'canvas_create')) {
               console.log(`[collab] artifact-router ${verdict.intent} SUPPRESSED — thinking-together turn, no destination named`);
+              verdict = { intent: 'none' };
+            }
+            // THE CLARIFICATION CHANNEL (08-29: "the place that we work" — the answer to a pending
+            // which-one question — became a canvas edit on an unrelated doc). A clarify-resume turn
+            // answers the question; it is never an artifact order.
+            if (_clarifyResume && verdict.intent !== 'none') {
+              console.log(`[clarify] artifact-router ${verdict.intent} SUPPRESSED — this turn answers the pending which-one question, not an artifact order`);
               verdict = { intent: 'none' };
             }
             if (verdict.intent !== 'none' && !_pullupSuppressed) {

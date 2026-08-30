@@ -203,19 +203,25 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
       { role: 'user', content: continuityPrompt }
     ];
 
-    const parser = new TagStreamParser({
-      onSayToken: (token) => {
-        try { win.webContents.send('chat:say-token', { t: token, s: 'continuity' }); } catch {}
-      }
-    });
-
-    await streamChat({
-      model: MODEL,
-      messages,
-      onToken: (chunk) => parser.feed(chunk)
-    });
-
-    const { thought: _ctThought, say, post, truncated } = parser.finalize();
+    // CLOUD-FIRST (08-29: the five-say spiral was WRITTEN by local gemma4:12b — the last-resort
+    // model authoring her unprompted voice, against the standing cloud-first rule; its thinness is
+    // part of why the beats repeated). The utility cloud voice writes these; the local extraction
+    // model is the outage fallback only. Fresh parser per attempt so a failed stream leaves no junk.
+    const _voiceModel = (() => { try { const m = String(db.getMeta('model.continuity_voice') || '').trim(); if (m) return m; } catch {} try { return String(db.getMeta('model.replier_fallback') || 'gemma4:31b-cloud').trim(); } catch { return 'gemma4:31b-cloud'; } })();
+    let _fin = null, _usedModel = null;
+    for (const _m of [...new Set([_voiceModel, MODEL])]) {
+      const parser = new TagStreamParser({
+        onSayToken: (token) => {
+          try { win.webContents.send('chat:say-token', { t: token, s: 'continuity' }); } catch {}
+        }
+      });
+      try {
+        await streamChat({ model: _m, messages, onToken: (chunk) => parser.feed(chunk) });
+        _fin = parser.finalize(); _usedModel = _m; break;
+      } catch (e) { console.log(`[continuity] voice model ${_m} failed (${String(e.message).slice(0, 80)}) — ${_m === MODEL ? 'no fallback left, silent beat' : 'falling to the local fallback'}`); }
+    }
+    if (!_fin) return;
+    const { thought: _ctThought, say, post, truncated } = _fin;
     // post rides the thought scan (2026-08-15 deep-dive F1): a tag after </say> executes, never vanishes
     const thought = _ctThought ? (post ? `${_ctThought}\n${post}` : _ctThought) : (post || '');
     let trimmedSay = (say || '').trim();
@@ -237,7 +243,7 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
           .map(t => t.content);
         keep = gate.shouldKeep(thought, recent);
       } catch (e) { console.error('[continuity] thought gate failed (keeping):', e.message); }
-      if (keep.keep) db.insertTurn({ sessionId, speaker: 'ai_thought', content: keep.text || thought, model: MODEL, truncated });
+      if (keep.keep) db.insertTurn({ sessionId, speaker: 'ai_thought', content: keep.text || thought, model: _usedModel || MODEL, truncated });
       else console.log(`[continuity] thought suppressed (${keep.reason})`);
     }
 
@@ -254,6 +260,31 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
         if (s.size >= 3) for (const p of recent) { if (jac(s, sig(p)) > 0.5) { repetitive = true; break; } }
       } catch {}
       if (repetitive) console.log('[continuity] suppressed repetitive utterance (too similar to a recent reply)');
+    }
+    // THE INTENTION-SAY BREAKER (08-29 live: FIVE unprompted says in eight minutes — "I still owe
+    // you the St. Pete mayor's race… let me actually pull it… stop circling" — each a paraphrase
+    // sliding under the 0.5-Jaccard bar, none followed by an action; two of them narrated that
+    // narrating isn't doing). An intention announced once is a check-in; announced again with the
+    // same debt subject it is a LOOP: the repeat internalizes into the inquiry lane (act) and
+    // stays silent. A genuinely new check-in shares no debt subject and passes untouched.
+    if (trimmedSay && !isPlaceholder && !repetitive
+        && /\b(?:i'?ll|i will|i owe|i've been|i'm going to|let me|i need to|time to|going to)\b/i.test(trimmedSay)) {
+      try {
+        const STOP = new Set(['that', 'this', 'have', 'been', 'without', 'actually', 'several', 'turns', 'saying', 'telling', 'going', 'pull', 'need', 'owe', 'owed', 'still', 'instead', 'sitting', 'circling', 'delivering', 'talking', 'about', 'just', 'time', 'stop', 'keep', 'lucas', 'them', 'their']);
+        const spec = (s) => new Set(String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length >= 4 && !STOP.has(w)));
+        const mine = spec(trimmedSay);
+        const priors = db.getRecentTurns(40).filter(t => t.speaker === 'ai_said' && t.unprompted && (Date.now() - Number(t.ts)) <= 3 * 3600 * 1000).map(t => t.content);
+        for (const p of priors) {
+          const ps = spec(p);
+          const shared = [...mine].filter(w => ps.has(w));
+          if (shared.length >= 3) {
+            repetitive = true;
+            console.log(`[continuity] intention-say suppressed — same debt ("${shared.slice(0, 3).join(' ')}") already announced with no action since; internalizing to the inquiry lane`);
+            try { const seed = require('./internal_action').tensionToInquiry(trimmedSay); if (seed) require('./inquiry').open({ question: seed, bornFrom: 'intention-loop-breaker' }); } catch {}
+            break;
+          }
+        }
+      } catch (e) { console.error('[continuity] intention breaker failed (say proceeds):', e.message); }
     }
 
     // IMPORTANCE GATE (mirrors the heartbeat): a commitment re-examination is usually
@@ -304,7 +335,7 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
       : { allow: false, reason: isPlaceholder || !trimmedSay ? 'empty' : 'guarded' });
     if (willSurface) {
       const saidRow = db.insertTurn({
-        sessionId, speaker: 'ai_said', content: trimmedSay, model: MODEL, truncated, unprompted: 1
+        sessionId, speaker: 'ai_said', content: trimmedSay, model: _usedModel || MODEL, truncated, unprompted: 1
       });
       // RECORD THE OUTCOME she just gave, rather than blindly refreshing. confirmCommitment alone was
       // why nothing ever left 'held': engaging with a commitment renewed it even when what she said was

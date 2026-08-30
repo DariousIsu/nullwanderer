@@ -54,6 +54,30 @@ ow.seed({});
 ok(db.getDb().prepare('SELECT COUNT(*) c FROM owner_world').get().c === 7, 'seed: idempotent — no duplicate objects on re-seed');
 ok(db.getDb().prepare('SELECT COUNT(*) c FROM owner_world_edges').get().c === 8, 'seed: idempotent — no duplicate edges');
 
+// ── THE OWNER-ANCHOR LAW (08-29 live: "which Rainey?" asked about the place Lucas works — the
+// interceptor never consulted this store; 21 graph namesakes incl. Ma Rainey were offered) ───────
+ok(ow.resolveLoose('Rainey Center for Public Policy', {}) && ow.resolveLoose('Rainey Center for Public Policy', {}).object.id === 'org:work/rainey-center',
+  '⭐ resolveLoose: the full formal name anchors to the org (containment past the stored short name)');
+ok(ow.resolveLoose('the rainey-center', {}) && ow.resolveLoose('the rainey-center', {}).object.id === 'org:work/rainey-center',
+  'resolveLoose: hyphen/case/article-blind');
+ok(ow.resolveLoose('center', {}) === null, 'resolveLoose: a tiny fragment never claims the owner world (the floor)');
+ok(ow.resolveLoose('Zo', {}) && ow.resolveLoose('Zo', {}).object.id === 'self:zoe/core', 'resolveLoose: exact alias still wins first (short aliases via resolve, never containment)');
+
+// ── the 08-29 wave wiring (the interceptor consults the owner world; the clarification channel;
+// the intention-say breaker; the continuity voice rides cloud-first) ─────────────────────────────
+{
+  const fs2 = require('fs'), path2 = require('path');
+  const mainSrc = fs2.readFileSync(path2.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/ambiguity ASK stood down — "\$\{amb\.mention\}" anchors to the OWNER WORLD/.test(mainSrc), '⭐ wiring: the ambiguity interceptor consults the owner world BEFORE asking (his world outranks namesakes)');
+  ok(/is org-shaped; person namesakes are never its candidates/.test(mainSrc), 'wiring: an org-shaped mention grounds instead of offering people');
+  ok(/db\.setMeta\('clarify\.pending', JSON\.stringify\(\{ mention: amb\.mention/.test(mainSrc), 'wiring: an ambiguity ASK arms clarify.pending');
+  ok(/THIS TURN ANSWERS your pending which-one question/.test(mainSrc) && /FULFILL THE ORIGINAL ASK/.test(mainSrc), '⭐ wiring: the next turn resolves the pending question and resumes the ORIGINAL ask');
+  ok(/artifact-router \$\{verdict\.intent\} SUPPRESSED — this turn answers the pending which-one question/.test(mainSrc), 'wiring: the artifact doors stand down on a clarify-resume turn (the canvas-edit hijack)');
+  const contSrc = fs2.readFileSync(path2.join(__dirname, '..', 'lib', 'continuity.js'), 'utf8');
+  ok(/intention-say suppressed — same debt/.test(contSrc) && /intention-loop-breaker/.test(contSrc), '⭐ wiring: a re-announced debt with no action since is suppressed and internalized (the five-say spiral)');
+  ok(/model\.continuity_voice/.test(contSrc) && /gemma4:31b-cloud/.test(contSrc) && /falling to the local fallback/.test(contSrc), 'wiring: the continuity voice rides cloud-first; local is the outage fallback only');
+}
+
 try { fs.unlinkSync(tmp); } catch {}
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
