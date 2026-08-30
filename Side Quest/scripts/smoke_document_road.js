@@ -171,7 +171,10 @@ ok(ic.detectDeliverableOrder('if I ever need something I will ask') === null, 'a
 // ── the gather swarm + the writer's turn (his design, 08-29) ────────────────────────────────────
 ok(road.swarmPlan('brief', 'x').length === 0, 'a brief never fans out');
 const plan = road.swarmPlan('report', 'the FRONTIER Act');
-ok(plan.length === 2 && plan[0].agent === 'legislative_analyst' && /FRONTIER Act/.test(plan[0].prompt), 'a report fans out the analyst + fact checker with the topic riding');
+// 08-30: the names are the ENGINE REGISTRY'S, hyphenated — the underscored tool-name forms were
+// rejected by spawn_agent_async on every call the swarm ever made (zero successes in the log).
+ok(plan.length === 2 && plan[0].agent === 'legislative-analyst' && /FRONTIER Act/.test(plan[0].prompt), 'a report fans out the analyst + fact checker with the topic riding');
+ok(road.swarmPlan('dossier', 't').every((s) => /^[a-z]+(?:-[a-z]+)+$/.test(s.agent)), '⭐ every swarm agent name is the registry\'s HYPHENATED form — never the underscored tool-name (the character that killed every spawn)');
 ok(road.swarmPlan('dossier', 'x').length === 4, 'a dossier adds the historian and opposition researcher');
 const gm = road.gatherMandate({ order: {}, road: { size: 'report' }, userText: 'finish it', held: '- a.pdf' });
 ok(/Do NOT write the document/.test(gm) && /DIGEST/.test(gm) && /a\.pdf/.test(gm), 'the gather mandate demands a digest, never prose, with the held material riding');

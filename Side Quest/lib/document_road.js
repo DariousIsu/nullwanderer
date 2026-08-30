@@ -128,17 +128,22 @@ function clearResume({ deps = {}, why = 'delivered' } = {}) {
 // (chat replies 30-83 tokens; the conductor capped at 900).
 const WRITE_BUDGET = { brief: 1500, report: 6000, dossier: 12000 };
 const WRITE_FLOOR = { brief: 800, report: 3000, dossier: 6000 };
+// AGENT NAMES ARE THE ENGINE REGISTRY'S, HYPHENATED (08-30: every swarm spawn since birth died
+// "no run id" — the names here were lifted from the MCP delegate TOOL names, which are forced to
+// underscores; the engine's list_agents registry is hyphenated, and spawn_agent_async rejected
+// every call. Zero successful spawn_agent_async invocations existed in the whole trajectory log.
+// THE HYPHEN, AGAIN — the same character that broke FTS quoting and the artifact-name matches.)
 const _SWARM_REPORT = [
-  { agent: 'legislative_analyst', ask: 'Analyze the bill mechanics and key provisions: definitions, thresholds, requirements, enforcement, scope, and committee posture.' },
-  { agent: 'fact_checker', ask: 'Verify the key factual claims: sponsors and co-sponsors, dates, statuses, referrals, and any numbers in circulation.' },
+  { agent: 'legislative-analyst', ask: 'Analyze the bill mechanics and key provisions: definitions, thresholds, requirements, enforcement, scope, and committee posture.' },
+  { agent: 'fact-checker', ask: 'Verify the key factual claims: sponsors and co-sponsors, dates, statuses, referrals, and any numbers in circulation.' },
 ];
 const SWARM = {
   brief: [],
   report: _SWARM_REPORT,
   dossier: [
     ..._SWARM_REPORT,
-    { agent: 'historical_researcher', ask: 'Establish the background and precedents: prior related legislation, its fate, and the policy lineage.' },
-    { agent: 'opposition_researcher', ask: 'Collect the counter-arguments, opposition, vetoes, and criticisms on record.' },
+    { agent: 'historical-researcher', ask: 'Establish the background and precedents: prior related legislation, its fate, and the policy lineage.' },
+    { agent: 'opposition-researcher', ask: 'Collect the counter-arguments, opposition, vetoes, and criticisms on record.' },
   ],
 };
 function swarmPlan(size, topic) {
