@@ -52,6 +52,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
   ok(/unsure between deliver and question, answer question/.test(mk.lastArgs.want), 'the prompt carries the deliver-vs-question bias');
   ok(/bare reference you cannot resolve from the window/.test(mk.lastArgs.want), 'the prompt demands referent resolution FROM THE WINDOW, with low confidence on a miss');
   ok(mk.lastArgs.lane === 'interactive', '⭐ the classifier rides the INTERACTIVE lane — a live turn\'s comprehension is never quota-starved (the two 08-29 nulls)');
+  ok(mk.lastArgs.numPredict === 320, 'the verdict JSON always fits — 220 truncated a long-referent classification (trace#104823)');
 
   // ── D1 COMPLETION: the extractor executes the verdict (lib/open_threads.groundGoal) ──────────
   const ot = require('../lib/open_threads');

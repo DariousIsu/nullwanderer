@@ -50,7 +50,9 @@ async function classify(text, { windowText = '', deps = {} } = {}) {
   const v = await ask({
     // 'interactive' is NEVER deferred (quota.js TIER) — the comprehension of a live user turn must
     // not lose to idle graph-walking (08-29: two quota nulls, one causal in the #4109 confabulation).
-    task: 'intent_pass', v: 1, numPredict: 220, think: false, lane: 'interactive',
+    // 320 (was 220): trace#104823 shows a truncated verdict JSON failing validation when a long
+    // topic/referent rides — the classifier's whole output must always fit.
+    task: 'intent_pass', v: 1, numPredict: 320, think: false, lane: 'interactive',
     input: {
       latest_turn: String(text || '').slice(0, 600),
       conversation_window: String(windowText || '').slice(0, 4000),

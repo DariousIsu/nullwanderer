@@ -78,6 +78,12 @@ const TIER = {
 // Fraction of the pool each tier is allowed to consume. Interactive keeps a reserve nothing else can
 // touch: at 99% spent she must still be able to answer.
 const TIER_FLOOR = { interactive: 0.00, directed: 0.03, research: 0.10, idle: 0.15 };
+// THE BURST RULE (2026-08-29, Lucas: "we have zero quota constraints" — dashboard 48.3% used with
+// ~24h to reset while the pace gate deferred every autonomous lane; the pool does not roll over, so
+// pacing a pool that is AHEAD of schedule defends quota that will simply expire). The window is the
+// provider's weekly cycle; ahead = usage % lagging elapsed % by a clear margin (no flapping).
+const WINDOW_H = 168;
+const BURST_AHEAD_MARGIN = 0.10;
 
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
@@ -216,6 +222,18 @@ function check({ lane = 'idle', st = null, spentLastHour = 0, estimate = 0 } = {
   // consciousness dedication: the wondering organs (interest foci, focus-wonder self-dialogue,
   // self-exploration) all spend on the idle lane, and 0.20 throttled them first and hardest.
   // The measured week: pool ended half unused; the FLOOR reserves below still protect his chat.
+  // THE BURST RULE: when the pool is clearly AHEAD of the window's schedule, the pace gate passes —
+  // spentLastHour counts ALL lanes, so a hot interactive hour was locking research/idle out of
+  // surplus that expires at reset. The FLOOR reserves above already returned before this line, so
+  // his chat reserve survives every burst; falling behind schedule re-engages pacing automatically.
+  const elapsedPct = 1 - Math.min(1, st.hoursLeft / WINDOW_H);
+  if (elapsedPct - st.usedPct >= BURST_AHEAD_MARGIN) {
+    return {
+      allow: true, burst: true,
+      reason: `burst: pool ahead of schedule (${Math.round(st.usedPct * 100)}% used vs ${Math.round(elapsedPct * 100)}% of the window elapsed) — floors still armed`,
+      usedPct: st.usedPct, pacePerHour: st.pacePerHour,
+    };
+  }
   const ENDGAME_H = 36;
   const base = tier === 'research' ? 0.60 : 0.40;
   const ramp = st.hoursLeft < ENDGAME_H ? (1 - st.hoursLeft / ENDGAME_H) : 0;   // 0 → 1 across the final window
@@ -240,4 +258,4 @@ function describe(st) {
     + `${st.hoursLeft.toFixed(1)}h to reset · sustainable ${Math.round(st.pacePerHour).toLocaleString()}/h`;
 }
 
-module.exports = { state, check, describe, weightFor, costOf, TIER, TIER_FLOOR, HOUR, NAMED_WEIGHTS, DEFAULT_WEIGHT };
+module.exports = { state, check, describe, weightFor, costOf, TIER, TIER_FLOOR, HOUR, NAMED_WEIGHTS, DEFAULT_WEIGHT, WINDOW_H, BURST_AHEAD_MARGIN };

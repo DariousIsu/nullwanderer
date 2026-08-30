@@ -60,11 +60,12 @@ ok(later.pacePerHour < live.pacePerHour, '…and the sustainable rate TIGHTENS a
     'past its floor, idle is off regardless of how quiet it has been — a floor is not a rate');
 }
 {
-  // EARLIER in the period the floor is not in play, so the PACE gate is what does the work. Same
-  // 41,944 tok/h burn, 50% used, 48h left → sustainable 10,416 tok/h, idle share 20% ≈ 2,083.
-  const mid = q.state({ limit: POOL, markPct: 0.50, markAt: NOW, spentSince: 0, resetAt: NOW + 48 * H, now: NOW });
+  // BEHIND schedule the floor is not in play, so the PACE gate is what does the work. (Was 50%
+  // used / 48h left — that shape is AHEAD of the weekly schedule and now legitimately BURSTS per
+  // the 08-29 rule, so this pin's state moved to 80% used, genuinely behind, where pacing governs.)
+  const mid = q.state({ limit: POOL, markPct: 0.80, markAt: NOW, spentSince: 0, resetAt: NOW + 48 * H, now: NOW });
   const r = q.check({ lane: 'idle', st: mid, spentLastHour: 60_000, estimate: 62 });
-  ok(!r.allow && /over burn-down pace/.test(r.reason), '⭐ mid-period, the same burn is stopped by PACE');
+  ok(!r.allow && /over burn-down pace/.test(r.reason), '⭐ behind schedule, the same burn is stopped by PACE');
   ok(/48\.0h to reset/.test(r.reason) && /left/.test(r.reason), 'and the refusal shows the arithmetic, not just "denied"');
   ok(q.check({ lane: 'idle', st: mid, spentLastHour: 100, estimate: 62 }).allow,
     'a quiet idle lane still runs — this paces, it does not switch things off');
@@ -92,7 +93,9 @@ ok(later.pacePerHour < live.pacePerHour, '…and the sustainable rate TIGHTENS a
 // user-assigned research. A heavy BACKGROUND hour that pauses idle/research must NOT pause his project
 // (the measured Applied Digital #3792 bug: deferred tick after tick at 110k/h while background ran).
 {
-  const mid = q.state({ limit: POOL, markPct: 0.50, markAt: NOW, spentSince: 0, resetAt: NOW + 48 * H, now: NOW });
+  // (0.50/48h was AHEAD of the weekly schedule and now bursts by the 08-29 rule — these states
+  // moved to 0.80/48h, genuinely behind, where the pace gate is still the law.)
+  const mid = q.state({ limit: POOL, markPct: 0.80, markAt: NOW, spentSince: 0, resetAt: NOW + 48 * H, now: NOW });
   const heavyHour = 999_999;   // far over any sustainable pace
   ok(!q.check({ lane: 'idle', st: mid, spentLastHour: heavyHour }).allow, 'a heavy hour pace-throttles IDLE (subconscious yields first)');
   ok(!q.check({ lane: 'research', st: mid, spentLastHour: heavyHour }).allow, 'a heavy hour pace-throttles autonomous RESEARCH');
@@ -118,23 +121,41 @@ ok(q.check({ lane: 'nonsense', st: live, spentLastHour: 60_000 }).allow === fals
 // --- USE-IT-OR-LOSE-IT (2026-08-15): the endgame ramp spends the surplus instead of stranding it ---
 {
   // Same relative burn — half the sustainable rate — far from the reset vs inside the final window.
-  const far = q.state({ limit: POOL, markPct: 0.5, markAt: NOW, spentSince: 0, resetAt: NOW + 48 * H, now: NOW });
+  // (These states are BEHIND schedule by design — an ahead pool bursts per the 08-29 rule, which
+  // supersedes the ramp exactly when the surplus would expire anyway.)
+  const far = q.state({ limit: POOL, markPct: 0.80, markAt: NOW, spentSince: 0, resetAt: NOW + 48 * H, now: NOW });
   const burnFar = far.pacePerHour * 0.5;
   ok(!q.check({ lane: 'idle', st: far, spentLastHour: burnFar }).allow,
-    'ramp: far from the reset the base idle share (20%) still governs — half-pace burn is over it');
+    'ramp: far from the reset the base idle share still governs — half-pace burn is over it');
   const near = q.state({ limit: POOL, markPct: 0.5, markAt: NOW, spentSince: 0, resetAt: NOW + 12 * H, now: NOW });
   const burnNear = near.pacePerHour * 0.5;
   ok(q.check({ lane: 'idle', st: near, spentLastHour: burnNear }).allow,
     '⭐ ramp: 12h from the reset the same half-pace burn is ALLOWED — expiring surplus opens the throttle');
-  const last = q.state({ limit: POOL, markPct: 0.5, markAt: NOW, spentSince: 0, resetAt: NOW + 1 * H, now: NOW });
+  const last = q.state({ limit: POOL, markPct: 0.895, markAt: NOW, spentSince: 0, resetAt: NOW + 1 * H, now: NOW });
   ok(q.check({ lane: 'research', st: last, spentLastHour: last.pacePerHour * 0.9 }).allow,
     'ramp: in the final hour research may burn ~the full sustainable rate (share → ~95%)');
   ok(!q.check({ lane: 'research', st: last, spentLastHour: last.pacePerHour * 0.97 }).allow,
-    'ramp: …but never past it — the cap tops out below 100% of sustainable');
+    'ramp: …but never past it — behind schedule the cap tops out below 100% of sustainable');
   // The FLOOR is untouched by the ramp: a nearly-empty pool still hard-stops background work.
   const empty = q.state({ limit: POOL, markPct: 0.995, markAt: NOW, spentSince: 0, resetAt: NOW + 1 * H, now: NOW });
   ok(!q.check({ lane: 'idle', st: empty, spentLastHour: 0, estimate: 10 }).allow,
     '⭐ ramp never touches the FLOOR — at 99.5% used, idle stays stopped and the chat reserve survives');
+}
+
+// --- ⭐ THE BURST RULE (08-29, Lucas: "we have zero quota constraints" at 48% used / 24h left):
+// an ahead-of-schedule pool is surplus that EXPIRES at reset — pacing it is waste ----------------
+{
+  const ahead = q.state({ limit: POOL, markPct: 0.482, markAt: NOW, spentSince: 0, resetAt: NOW + 24 * H, now: NOW });
+  const r = q.check({ lane: 'research', st: ahead, spentLastHour: 500_000, estimate: 1000 });
+  ok(r.allow && r.burst === true && /ahead of schedule/.test(r.reason), '⭐ 48% used with 24h left → research BURSTS past the hourly pace (the live 08-29 bind, replayed)');
+  ok(q.check({ lane: 'idle', st: ahead, spentLastHour: 500_000, estimate: 10 }).allow, 'idle bursts too — the surplus expires either way');
+  const barelyAhead = q.state({ limit: POOL, markPct: 0.66, markAt: NOW, spentSince: 0, resetAt: NOW + 48 * H, now: NOW });
+  ok(!q.check({ lane: 'idle', st: barelyAhead, spentLastHour: 60_000, estimate: 62 }).allow,
+    'inside the margin (66% vs 71% elapsed) → no burst, pacing governs — the rule never flaps');
+  const floorCase = q.state({ limit: POOL, markPct: 0.86, markAt: NOW, spentSince: 0, resetAt: NOW + 1 * H, now: NOW });
+  ok(!q.check({ lane: 'idle', st: floorCase, spentLastHour: 0, estimate: 10 }).allow,
+    '⭐ the FLOOR precedes the burst — 86% used never bursts idle past its 85% stop; the chat reserve survives every burst');
+  ok(q.WINDOW_H === 168 && q.BURST_AHEAD_MARGIN === 0.10, 'the window and margin are named constants, exported for audit');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

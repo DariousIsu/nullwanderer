@@ -61,10 +61,12 @@ async function _resolveModel(models, cloud) {
 async function _complete(messages, { temperature = 0.2, num_predict = 1500, model: modelOverride = null, think = undefined, lane = undefined } = {}) {   // default 400→1500 (starvation audit: 400 sat below the reasoning floor and cut structured output mid-line; explicit caller numPredict still wins)
   let models, ollama;
   try { models = require('./models'); ollama = require('./ollama'); } catch { return null; }
+  // The two silent-null doors named (08-29: an [intent] null left NO trace row and NO log line —
+  // a fast logless null is only these two paths, and silence was undiagnosable).
   const cloud = (models.sources() || []).find(s => s.tier === 'cloud' && s.token);
-  if (!cloud) return null;
+  if (!cloud) { try { console.log('[cloud_logic] null: no cloud source with a token this instant'); } catch {} return null; }
   const model = modelOverride || await _resolveModel(models, cloud);
-  if (!model) return null;
+  if (!model) { try { console.log('[cloud_logic] null: model resolution failed this instant'); } catch {} return null; }
   // Same window argument as streamCloud — this path carries the GROUNDED ANSWER DRAFT (cognition →
   // ask → here), so an 8192 input window is where retrieved grounding was quietly losing its tail.
   const win = await require('./cloud_window').resolve({ model, base: cloud.base, token: cloud.token });

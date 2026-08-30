@@ -35,6 +35,10 @@ const lastTrace = (task) => db.getDb().prepare('SELECT * FROM cloud_traces WHERE
     ok(laneSeen === 'interactive', 'ask({lane}) forwards the lane to the completion (explicit beats ambient)');
     await cl.ask({ task: 'lane-t2', input: { z: 2 }, want: 'JSON', deps: { complete: lanec, skipBudget: true, noCache: true } });
     ok(laneSeen === null, 'no lane passed → none forwarded (the ambient default is untouched)');
+    // 08-29: a logless null was undiagnosable — the two silent-null doors now name themselves.
+    const clSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'cloud_logic.js'), 'utf8');
+    ok(/null: no cloud source with a token this instant/.test(clSrc) && /null: model resolution failed this instant/.test(clSrc),
+      'the two silent-null paths in _complete log their cause (a fast null is never anonymous again)');
 
     // 2. custom validator (the {same:boolean} shape the curator uses)
     const samec = async () => ({ text: 'sure — {"same": true}', model: 't' });
