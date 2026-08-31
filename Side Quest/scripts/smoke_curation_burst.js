@@ -88,6 +88,13 @@ ok(/tool failure/.test(cb.burstNote({ deposit: _mdSpecimen })), 'the markdown fa
 const _mdSuccess = '**FILED:** keeter pair (shared email madeline.keeter@gmail.com)\n**SKIPPED:** none · **ERRORS:** none';
 ok(/filed 1 duplicate proposal\b/.test(cb.burstNote({ deposit: _mdSuccess })), 'a markdown-bold SUCCESS deposit still counts its filings right');
 
+// ── the H2-header envelope (fourth shape lesson, run 2704033b — THE ACCEPTANCE SWEEP: the model
+// wrote "## FILED (14 DUPLICATE_OF proposals)" with no colon; the colon-bound parser called a
+// 14-filing sweep "empty" while the 14 rows sat verified in tenant_rainey.relation_proposals) ──
+const _h2Specimen = 'Sweep complete. Here is the final report.\n\n## FILED (14 DUPLICATE_OF proposals)\n- Mark Johnson pair\n- Madeline Keeter ×2\n\n## SKIPPED\n- staged endpoints\n\n## ERRORS (verbatim)\n- propose_relation: "bad parameter" (recovered by reversing)';
+ok(/filed 14 duplicate proposals/.test(cb.burstNote({ deposit: _h2Specimen })), '⭐ the acceptance-sweep specimen counts its declared 14 (header count outranks line counting)');
+ok(cb.sweepFailed(_h2Specimen) === false, 'a filing sweep with partial errors is never a failure (the slot stays spent)');
+
 // ── wiring (main.js): the drain call site, the quiet tab, the consume mark, monologue-not-chat ─
 const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 const _adjIdx = mainSrc.indexOf("[adjudicate] pass failed");

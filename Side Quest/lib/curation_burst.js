@@ -86,23 +86,53 @@ function curatorPrompt({ seedRows = [], firedAt = Date.now() } = {}) {
 // inside the markers, captured "** none —…", failed the none-check, and the monologue claimed
 // "filed 2 duplicate proposals" over a zero-work sweep (the DB delta caught the lie). A prompt
 // rule ("end with exactly") is a request; a tolerant parser is the gate.
-function _normalize(deposit) { return String(deposit || '').replace(/\*\*/g, '').replace(/__/g, '').replace(/`/g, ''); }
+function _normalize(deposit) { return String(deposit || '').replace(/\*\*/g, '').replace(/__/g, '').replace(/`/g, '').replace(/^#+\s*/gm, ''); }
+
+// FOURTH shape lesson (08-31 run 2704033b, the acceptance sweep): the model restyled the envelope
+// again — "## FILED (14 DUPLICATE_OF proposals)" as a markdown H2 with a parenthetical count and
+// NO COLON — and the colon-bound parser called a 14-filing sweep "empty" while the 14 rows sat
+// verified in tenant_rainey.relation_proposals. The cure: parse SECTIONS by word boundary, colon
+// optional; a count in the header line outranks body-line counting.
+function _sections(deposit) {
+  const s = _normalize(deposit);
+  // A section starts at a line start OR after a '·' separator (the one-line envelope);
+  // its head is the rest of that line up to the next '·'.
+  const head = (name) => {
+    const m = new RegExp(`(?:^|\\n|·)\\s*${name}\\b:?([^\\n·]*)`, 'i').exec(s);
+    return m ? m[1].trim() : null;
+  };
+  const body = (name) => {
+    // The head's [^\n]* must NOT consume the trailing newline — the lookahead needs it to see
+    // the next section's line start (regexes here run without the m flag, so ^ is string-start).
+    const m = new RegExp(`(?:^|\\n|·)\\s*${name}\\b:?[^\\n]*([\\s\\S]*?)(?=(?:\\n|·)\\s*(?:FILED|SKIPPED|ERRORS)\\b|$)`, 'i').exec(s);
+    return m ? (m[1] || '').trim() : null;
+  };
+  return { filedHead: head('FILED'), filedBody: body('FILED'), errorsHead: head('ERRORS'), errorsBody: body('ERRORS') };
+}
+
+function _filedCount(deposit) {
+  const { filedHead, filedBody } = _sections(deposit);
+  if (filedHead === null) return 0;
+  const inline = `${filedHead} ${filedBody || ''}`.trim();
+  if (/^\(?\s*(none\b|nothing\b|0\b)/i.test(inline)) return 0;
+  const headNum = /\((\d+)\b/.exec(filedHead) || /^\s*(\d+)\b/.exec(filedHead);
+  if (headNum) return parseInt(headNum[1], 10);
+  // No declared count: the head's own inline filing (if any) + one per body line.
+  const bodyLines = (filedBody || '').split('\n').filter((l) => l.trim()).length;
+  return (/\S/.test(filedHead) ? 1 : 0) + bodyLines;
+}
 
 function sweepFailed(deposit) {
-  const s = _normalize(deposit);
-  const m = /ERRORS:\s*([\s\S]*)$/.exec(s);
-  const errs = m ? m[1].trim() : '';
-  const filedEmpty = !/FILED:/.test(s) || /FILED:\s*(none|nothing|0)\b/i.test(s);
-  return Boolean(filedEmpty && errs && !/^(none|nothing)\b/i.test(errs));
+  const { errorsHead, errorsBody } = _sections(deposit);
+  const errs = `${errorsHead || ''} ${errorsBody || ''}`.trim();
+  return Boolean(_filedCount(deposit) === 0 && errs && !/^\(?\s*(none\b|nothing\b|verbatim\)?\s*$)/i.test(errs));
 }
 
 // The deposit lands in the MONOLOGUE, never the chat (the unprompted-channel law — a curation
 // triage is housekeeping, not a discovered connection). This note is that monologue line.
 function burstNote({ deposit = '', agent = AGENT } = {}) {
   if (sweepFailed(deposit)) return `[Curation] The ${agent}'s sweep hit a system-wide tool failure — nothing was actually swept; the slot is returned and the next drain retries.`;
-  const m = /FILED:\s*([\s\S]*?)(?:SKIPPED:|$)/.exec(_normalize(deposit));
-  const filedTxt = m ? m[1].trim() : '';
-  const n = filedTxt && !/^(none|nothing|0)\b/i.test(filedTxt) ? filedTxt.split('\n').filter((l) => l.trim()).length : 0;
+  const n = _filedCount(deposit);
   return n
     ? `[Curation] The ${agent} swept the person records and filed ${n} duplicate proposal${n === 1 ? '' : 's'} for the gates to judge — I hold no pen there.`
     : `[Curation] The ${agent} swept the person records; nothing worth proposing this pass — an honest empty sweep.`;
