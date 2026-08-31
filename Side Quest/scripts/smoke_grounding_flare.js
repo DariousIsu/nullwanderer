@@ -62,6 +62,14 @@ const cog = fs.readFileSync(path.join(__dirname, '..', 'lib', 'cognition.js'), '
 const _redLine = cog.indexOf('answering from the model, not refusing');
 ok(_redLine > -1 && cog.indexOf('deps.onModelAnswer', _redLine) > -1 && cog.indexOf('deps.onModelAnswer', _redLine) < cog.indexOf('return null', _redLine) + 400,
   'cognition: the flare hook rides the exact answering-from-the-model branch, before its return');
+// W2b breadth (his 08-31 order): shape 1 — the first draft answering with NO grounding — is the
+// COMMON answer-from-model class, and it now flares too (hook gated on `if (!g)`, so a grounded
+// draft answer never fires it).
+const _s1 = cog.indexOf('if (!g) {');
+ok(_s1 > -1 && _s1 < _redLine && cog.indexOf('deps.onModelAnswer', _s1) < cog.indexOf('return { say: step.answer', _s1),
+  '⭐ breadth: the shape-1 hook rides the ungrounded first-draft answer, before its return');
+ok(process.env.ZOE_FLARE_PACE_S === undefined && gf.FLARE_PACE_MS === 90 * 1000,
+  'breadth: the pace floor defaults to 90s (env ZOE_FLARE_PACE_S tunes it) — a flare for pretty much every ungrounded turn');
 const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/onModelAnswer: \(\{ need, topic, kind \}\) => \{ _flareRun\(/.test(mainSrc), 'main: answerGrounded deps carry the hook → _flareRun (fire-and-forget)');
 ok(/name: 'spawn_agent_async', args: \{ name: agent, prompt: gf\.flarePrompt\([^)]*\), canvas_tab: gf\.FLARE_TAB \}/.test(mainSrc),

@@ -138,7 +138,11 @@ const _SWARM_REPORT = [
   { agent: 'fact-checker', ask: 'Verify the key factual claims: sponsors and co-sponsors, dates, statuses, referrals, and any numbers in circulation.' },
 ];
 const SWARM = {
-  brief: [],
+  // Brief-class fans out too (his 08-31 breadth order): one fact-checker — even a 1-2 pager
+  // deserves verified sponsors/dates/statuses, and the call is cheap on the retrieval models.
+  brief: [
+    { agent: 'fact-checker', ask: 'Verify the key factual claims: sponsors and co-sponsors, dates, statuses, referrals, and any numbers in circulation.' },
+  ],
   report: _SWARM_REPORT,
   dossier: [
     ..._SWARM_REPORT,

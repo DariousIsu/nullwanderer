@@ -488,7 +488,16 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
     if (!g) step = { need: topic };
     else return { say: step.answer, enriched: false, enrichSource: null };
   }
-  if (step.answer) return { say: step.answer, enriched: false, enrichSource: null };
+  if (step.answer) {
+    // W2b BREADTH (his 08-31 order: swarms for pretty much everything — cheap retrieval models):
+    // the COMMON answer-from-model class is the FIRST draft answering with NO grounding behind it
+    // (the QEC evidence: this shape dominates; the red-line branch below is the rare shape 2).
+    // Same hook, same chase — the reply is never blocked, the flare verifies behind it.
+    if (!g) {
+      try { if (deps.onModelAnswer) deps.onModelAnswer({ need: it.topic || String(userMessage).slice(0, 120), topic: it.topic || null, kind: it.kind || null }); } catch (e) { console.error('[cognition] flare hook failed:', e.message); }
+    }
+    return { say: step.answer, enriched: false, enrichSource: null };
+  }
   if (!step.need) return null;
   const need0 = step.need;
   // ENRICH escalation: OUR graph → Wikipedia (reliable, keyless — the who/what/current-X recovery) →

@@ -21,7 +21,9 @@
 'use strict';
 
 const FLARE_TAB = 'research-flare';
-const FLARE_PACE_MS = 5 * 60 * 1000;
+// Pace floor 5min → 90s default, env-tunable (his 08-31 breadth order: "swarms should be for
+// pretty much everything — those calls are very cheap on the small fast retrieval models").
+const FLARE_PACE_MS = (parseFloat(process.env.ZOE_FLARE_PACE_S) || 90) * 1000;
 const KILL_KEY = 'swarm.flare';
 const PACE_KEY = 'flare.last_ts';
 

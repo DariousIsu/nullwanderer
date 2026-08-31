@@ -107,7 +107,7 @@ ok(_heldSpec === '', 'generic tokens are dropped BEFORE the LIKE — "informatio
 
 // ── S1.5 cure 3: the swarm offer ────────────────────────────────────────────────────────────────
 ok(/FAN OUT/.test(m3) && /delegate_to_/.test(m3) && /INTEGRATE/.test(m3), 'a report-class mandate offers the swarm (delegate + integrate)');
-ok(!/FAN OUT/.test(road.mandate({ order: {}, road: { size: 'brief' }, userText: 'x' })), 'a brief never fans out');
+ok(!/FAN OUT/.test(road.mandate({ order: {}, road: { size: 'brief' }, userText: 'x' })), 'a brief mandate keeps the operator solo — the Phase-A spawn covers verification');
 
 // ── S1.6: the leg-2 catches (the "present" verb, the claim fold, the conductor fold-in) ─────────
 const ic = require('../lib/intake_contract');
@@ -173,7 +173,7 @@ ok(!!ic.detectDeliverableOrder('I still need a list of everyone that sponsored o
 ok(ic.detectDeliverableOrder('if I ever need something I will ask') === null, 'a hypothetical want with no deliverable noun still never claims');
 
 // ── the gather swarm + the writer's turn (his design, 08-29) ────────────────────────────────────
-ok(road.swarmPlan('brief', 'x').length === 0, 'a brief never fans out');
+ok(road.swarmPlan('brief', 'x').length === 1 && road.swarmPlan('brief', 'x')[0].agent === 'fact-checker', 'a brief fans out ONE fact-checker (his 08-31 breadth order — cheap calls, verified claims)');
 const plan = road.swarmPlan('report', 'the FRONTIER Act');
 // 08-30: the names are the ENGINE REGISTRY'S, hyphenated — the underscored tool-name forms were
 // rejected by spawn_agent_async on every call the swarm ever made (zero successes in the log).
