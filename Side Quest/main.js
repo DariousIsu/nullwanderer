@@ -18860,7 +18860,7 @@ async function _curationBurst(source, curatorKey = 'people') {
       db.setMeta(cur.paceKey, '0');
       console.log('[curation-burst] sweep died of tool failure — pace slot returned, next drain retries');
     }
-    const note = cb.burstNote({ deposit: String(out), agent: cur.agent });
+    const note = cb.burstNote({ deposit: String(out), agent: cur.agent, sweeps: cur.sweeps });
     try {
       const row = db.insertMonologue({ content: note, model: 'curation-burst', type: 'reading' });
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: note, type: 'reading' });

@@ -102,9 +102,10 @@ function _sections(deposit) {
     return m ? m[1].trim() : null;
   };
   const body = (name) => {
-    // The head's [^\n]* must NOT consume the trailing newline — the lookahead needs it to see
-    // the next section's line start (regexes here run without the m flag, so ^ is string-start).
-    const m = new RegExp(`(?:^|\\n|·)\\s*${name}\\b:?[^\\n]*([\\s\\S]*?)(?=(?:\\n|·)\\s*(?:FILED|SKIPPED|ERRORS)\\b|$)`, 'i').exec(s);
+    // The head part must consume NEITHER the trailing newline NOR a '·' — the lookahead needs
+    // them to see the next section, and a one-line envelope's extra filings live between '·'s
+    // (regexes here run without the m flag, so ^ is string-start).
+    const m = new RegExp(`(?:^|\\n|·)\\s*${name}\\b:?[^\\n·]*([\\s\\S]*?)(?=(?:\\n|·)\\s*(?:FILED|SKIPPED|ERRORS)\\b|$)`, 'i').exec(s);
     return m ? (m[1] || '').trim() : null;
   };
   return { filedHead: head('FILED'), filedBody: body('FILED'), errorsHead: head('ERRORS'), errorsBody: body('ERRORS') };
@@ -117,25 +118,35 @@ function _filedCount(deposit) {
   if (/^\(?\s*(none\b|nothing\b|0\b)/i.test(inline)) return 0;
   const headNum = /\((\d+)\b/.exec(filedHead) || /^\s*(\d+)\b/.exec(filedHead);
   if (headNum) return parseInt(headNum[1], 10);
-  // No declared count: the head's own inline filing (if any) + one per body line.
+  // No declared count: the head's own inline filing (if any) + one per body line OR per
+  // '·'-separated body segment (the one-line envelope carries extra filings between '·'s —
+  // the p205 people sweep filed 2 that way and the line-counter saw 1).
   const bodyLines = (filedBody || '').split('\n').filter((l) => l.trim()).length;
-  return (/\S/.test(filedHead) ? 1 : 0) + bodyLines;
+  const bodySegs = (filedBody || '').split('·').filter((seg) => seg.trim() && !/^\s*(none|nothing)\b/i.test(seg)).length;
+  return (/\S/.test(filedHead) ? 1 : 0) + Math.max(bodyLines, bodySegs);
 }
+
+// SYSTEMIC failure only (p205 lesson: document-curator's single "document not found" error on an
+// otherwise-honest empty sweep was called "system-wide" and its slot returned — over-classified;
+// harmless but a false say). The proven systemic signatures gate the failure verdict now.
+const _SYSTEMIC_RE = /store not initialized|not initialized|system-?wide|unreachable|environment failure|every (read )?tool/i;
 
 function sweepFailed(deposit) {
   const { errorsHead, errorsBody } = _sections(deposit);
   const errs = `${errorsHead || ''} ${errorsBody || ''}`.trim();
-  return Boolean(_filedCount(deposit) === 0 && errs && !/^\(?\s*(none\b|nothing\b|verbatim\)?\s*$)/i.test(errs));
+  const skippedAll = /SKIPPED:?[^·\n]*\b(all|every)\b[^·\n]*(tool failure|store|unavailable)/i.test(_normalize(deposit));
+  return Boolean(_filedCount(deposit) === 0 && errs && !/^\(?\s*(none\b|nothing\b|verbatim\)?\s*$)/i.test(errs)
+    && (_SYSTEMIC_RE.test(errs) || skippedAll));
 }
 
 // The deposit lands in the MONOLOGUE, never the chat (the unprompted-channel law — a curation
 // triage is housekeeping, not a discovered connection). This note is that monologue line.
-function burstNote({ deposit = '', agent = AGENT } = {}) {
+function burstNote({ deposit = '', agent = AGENT, sweeps = 'the person records' } = {}) {
   if (sweepFailed(deposit)) return `[Curation] The ${agent}'s sweep hit a system-wide tool failure — nothing was actually swept; the slot is returned and the next drain retries.`;
   const n = _filedCount(deposit);
   return n
-    ? `[Curation] The ${agent} swept the person records and filed ${n} duplicate proposal${n === 1 ? '' : 's'} for the gates to judge — I hold no pen there.`
-    : `[Curation] The ${agent} swept the person records; nothing worth proposing this pass — an honest empty sweep.`;
+    ? `[Curation] The ${agent} swept ${sweeps} and filed ${n} proposal${n === 1 ? '' : 's'} for the gates to judge — I hold no pen there.`
+    : `[Curation] The ${agent} swept ${sweeps}; nothing worth proposing this pass — an honest empty sweep.`;
 }
 
 // ── THE CURATOR REGISTRY (W3, his 08-31 order: "run the other three curators through the same
@@ -144,16 +155,18 @@ function burstNote({ deposit = '', agent = AGENT } = {}) {
 // its slice with its own tools; per-table seed SQL can come later, studied not guessed). One
 // shared kill switch (the tier dies as one), per-curator pace + kick keys.
 const CURATORS = {
-  people: { agent: AGENT, paceKey: PACE_KEY, kickKey: KICK_KEY, seedSql: SEED_SQL, prompt: curatorPrompt },
+  people: { agent: AGENT, paceKey: PACE_KEY, kickKey: KICK_KEY, seedSql: SEED_SQL, prompt: curatorPrompt, sweeps: 'the person records' },
   document: {
-    agent: 'document-curator', paceKey: 'curator.document.last_ts', kickKey: 'curation.kick.document', seedSql: null,
-    prompt: ({ firedAt = Date.now() } = {}) => `CURATION SWEEP (fired ${new Date(firedAt).toISOString()}) — documents cluster. You PROPOSE, the gates decide; you hold no pen. `
-      + 'FIRST WORKLIST (known orphan artifacts, 08-30): "report-just-get-information", "report-cleaner-header-formatting", "report-canvas" — find each (search, recent_documents), judge orphanhood, and recommend retirement in the deposit with evidence; retirement is the operator\'s act, never yours. '
-      + 'THEN sweep recent documents for superseded canonicals (propose_link kind "supersedes" with the rationale) and absent provenance (get_sources_for empty → name the unsourced claims). Never archive or edit anything. '
+    agent: 'document-curator', paceKey: 'curator.document.last_ts', kickKey: 'curation.kick.document', seedSql: null, sweeps: 'the document corpus',
+    // The 08-30 orphan trio was this slice's first draft — p205 first fire proved those are
+    // ZOE-SIDE workspace artifacts the engine corpus cannot see ("not found in corpus" ×3,
+    // honestly). They ride the down-window chores; this curator's beat is the ENGINE corpus.
+    prompt: ({ firedAt = Date.now() } = {}) => `CURATION SWEEP (fired ${new Date(firedAt).toISOString()}) — documents cluster (the ENGINE corpus). You PROPOSE, the gates decide; you hold no pen. `
+      + 'Sweep recent documents (recent_documents, search_documents_semantic) for: superseded canonicals — two documents on one topic where the newer plainly replaces the older → propose_link(kind "supersedes") with the rationale; and absent provenance — a document making factual claims where get_sources_for returns nothing → name the document and the unsourced claims in the deposit. Never archive or edit anything. '
       + 'End with exactly: FILED: <one line per proposal with evidence> · SKIPPED: <item + why> · ERRORS: <tool errors verbatim, or none>.',
   },
   civic: {
-    agent: 'civic-curator', paceKey: 'curator.civic.last_ts', kickKey: 'curation.kick.civic', seedSql: null,
+    agent: 'civic-curator', paceKey: 'curator.civic.last_ts', kickKey: 'curation.kick.civic', seedSql: null, sweeps: 'the civic rosters',
     prompt: ({ firedAt = Date.now() } = {}) => `CURATION SWEEP (fired ${new Date(firedAt).toISOString()}) — civic cluster. You PROPOSE, the gates decide; you hold no pen. `
       + 'THE PLACE-KEY LAW rides every judgment: roster rows key on PLACE — same-named chambers in different places are different bodies, never duplicates. '
       + 'Sweep a slice of local-government roster entities (search_entities for parish/county/city council and commission bodies): flag staleness (a member\'s own newer facts contradict the row), miskeyed rows (a member on the wrong place\'s body), and thin rosters. '
@@ -161,7 +174,7 @@ const CURATORS = {
       + 'End with exactly: FILED: <proposals with evidence> · SKIPPED: <item + why> · ERRORS: <tool errors verbatim, or none>.',
   },
   owner: {
-    agent: 'owner-curator', paceKey: 'curator.owner.last_ts', kickKey: 'curation.kick.owner', seedSql: null,
+    agent: 'owner-curator', paceKey: 'curator.owner.last_ts', kickKey: 'curation.kick.owner', seedSql: null, sweeps: 'the owner orbit',
     prompt: ({ firedAt = Date.now() } = {}) => `CURATION SWEEP (fired ${new Date(firedAt).toISOString()}) — the OWNER ORBIT, small and high-trust. You PROPOSE, the gates decide; you hold no pen. `
       + 'Sweep the orbit anchors and their neighborhoods: "Rainey Center for Public Policy", "LAMP" (the network — never the band or a civic namesake), and the owner\'s records (Lucas Overby; FEC H4FL13077 is the anchor). '
       + 'Hunt orbit duplicates bearing SHARED HARD IDENTIFIERS (email, FEC id, ocd id) → propose_relation DUPLICATE_OF (allow_open_type=true) with the identifier in relation_metadata. Anchor drift and alias gaps are FLAGGED in the deposit, never merged by you. '

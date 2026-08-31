@@ -68,7 +68,7 @@ ok(/^CURATION SWEEP \(fired \d{4}-/.test(p1) && cb.curatorPrompt({ seedRows: [],
 
 // ── the deposit note: counts honestly, lands as monologue text ────────────────────────────────
 const n1 = cb.burstNote({ deposit: 'FILED: keeter pair (shared email) \nkeeter pair 2 (suffix) \nSKIPPED: none · ERRORS: none' });
-ok(/filed 2 duplicate proposals/.test(n1) && /gates to judge/.test(n1), 'a filing sweep is counted and credits the gates');
+ok(/filed 2 proposals/.test(n1) && /gates to judge/.test(n1), 'a filing sweep is counted and credits the gates');
 ok(/honest empty sweep/.test(cb.burstNote({ deposit: 'FILED: none · SKIPPED: all too thin · ERRORS: none' })), 'an empty sweep is said honestly, never dressed up');
 
 // ── the failed-sweep detector (first-fire lesson, 08-31 p202: every tool bounced on engine
@@ -86,13 +86,13 @@ const _mdSpecimen = 'Sweep complete — blocked at the gate by a systemic store 
 ok(cb.sweepFailed(_mdSpecimen) === true, '⭐ the live markdown specimen (run 542857bd) is detected as a FAILED sweep');
 ok(/tool failure/.test(cb.burstNote({ deposit: _mdSpecimen })), 'the markdown failure never becomes a "filed N proposals" claim (the say-do catch)');
 const _mdSuccess = '**FILED:** keeter pair (shared email madeline.keeter@gmail.com)\n**SKIPPED:** none · **ERRORS:** none';
-ok(/filed 1 duplicate proposal\b/.test(cb.burstNote({ deposit: _mdSuccess })), 'a markdown-bold SUCCESS deposit still counts its filings right');
+ok(/filed 1 proposal\b/.test(cb.burstNote({ deposit: _mdSuccess })), 'a markdown-bold SUCCESS deposit still counts its filings right');
 
 // ── the H2-header envelope (fourth shape lesson, run 2704033b — THE ACCEPTANCE SWEEP: the model
 // wrote "## FILED (14 DUPLICATE_OF proposals)" with no colon; the colon-bound parser called a
 // 14-filing sweep "empty" while the 14 rows sat verified in tenant_rainey.relation_proposals) ──
 const _h2Specimen = 'Sweep complete. Here is the final report.\n\n## FILED (14 DUPLICATE_OF proposals)\n- Mark Johnson pair\n- Madeline Keeter ×2\n\n## SKIPPED\n- staged endpoints\n\n## ERRORS (verbatim)\n- propose_relation: "bad parameter" (recovered by reversing)';
-ok(/filed 14 duplicate proposals/.test(cb.burstNote({ deposit: _h2Specimen })), '⭐ the acceptance-sweep specimen counts its declared 14 (header count outranks line counting)');
+ok(/filed 14 proposals/.test(cb.burstNote({ deposit: _h2Specimen })), '⭐ the acceptance-sweep specimen counts its declared 14 (header count outranks line counting)');
 ok(cb.sweepFailed(_h2Specimen) === false, 'a filing sweep with partial errors is never a failure (the slot stays spent)');
 
 // ── wiring (main.js): the drain call site, the quiet tab, the consume mark, monologue-not-chat ─
@@ -113,6 +113,15 @@ ok(/spawn returned no run id — /.test(fnBody), 'a run-id-less spawn response i
 ok(/curation\.kick/.test(mainSrc) && /_curationBurst\('operator-kick', k\)/.test(mainSrc) && /CURATOR_KEYS\.filter/.test(mainSrc),
   'the operator kick watcher is armed for ALL FOUR knobs (the acceptance-drive doors)');
 
+// ── the p205 four-sweep specimens (the whole roster's first fire) ─────────────────────────────
+const _p205People = 'FILED: Madeline Keeter [undercover-excursion] DUPLICATE_OF Madeline Keeter (Shared email) · David Smith [c509449e] DUPLICATE_OF David Smith [c509449e-070c] (Matching OCD ID) · SKIPPED: Aaron Berger (No entities found) · ERRORS: none';
+ok(/filed 2 proposals/.test(cb.burstNote({ deposit: _p205People })), '⭐ p205: the one-line ·-separated TWO-filing envelope counts 2 (segments, not just lines)');
+const _p205Doc = 'FILED: none · SKIPPED: report-just-get-information (not found in corpus) · SKIPPED: report-canvas (not found in corpus) · ERRORS: get_document (doc_id: 13491) "document not found"';
+ok(cb.sweepFailed(_p205Doc) === false, '⭐ p205: a single not-found error on an honest empty sweep is NOT systemic — the slot stays spent');
+ok(/honest empty sweep/.test(cb.burstNote({ deposit: _p205Doc, agent: 'document-curator', sweeps: 'the document corpus' })) && /the document corpus/.test(cb.burstNote({ deposit: _p205Doc, agent: 'document-curator', sweeps: 'the document corpus' })),
+  'p205: the note names the CLUSTER it swept, never "person records" for a document sweep');
+ok(new Set(cb.CURATOR_KEYS.map((k) => cb.CURATORS[k].sweeps)).size === 4, 'each curator sweeps its own named cluster');
+
 // ── W3: the curator registry — one funnel, four noticing organs ───────────────────────────────
 ok(JSON.stringify(cb.CURATOR_KEYS) === '["people","document","civic","owner"]', '⭐ W3: the registry holds the four curators, people first');
 ok(cb.CURATORS.people.agent === cb.AGENT && cb.CURATORS.people.paceKey === cb.PACE_KEY && cb.CURATORS.people.kickKey === cb.KICK_KEY && cb.CURATORS.people.seedSql === cb.SEED_SQL,
@@ -126,8 +135,8 @@ for (const k of ['document', 'civic', 'owner']) {
     `${k}: nonce + the rail + the envelope ride the task spec`);
   ok(cb.CURATORS[k].prompt({ firedAt: 1000 }) !== cb.CURATORS[k].prompt({ firedAt: 2000 }), `${k}: the fired-stamp keeps every input unique (no corpse-reuse)`);
 }
-ok(/report-just-get-information/.test(cb.CURATORS.document.prompt({})) && /retirement is the operator/.test(cb.CURATORS.document.prompt({})),
-  'document: the 08-30 orphan worklist is the directed slice; retirement stays the operator\'s act');
+ok(/ENGINE corpus/.test(cb.CURATORS.document.prompt({})) && /supersedes/.test(cb.CURATORS.document.prompt({})) && /get_sources_for/.test(cb.CURATORS.document.prompt({})),
+  'document: aimed at the ENGINE corpus (p205 proved the Zoe-side orphan trio unreachable) — supersession + provenance');
 ok(/PLACE-KEY LAW/.test(cb.CURATORS.civic.prompt({})) && /different bodies, never duplicates/.test(cb.CURATORS.civic.prompt({})),
   'civic: the place-key law rides the spec (the body-key trap)');
 ok(/H4FL13077/.test(cb.CURATORS.owner.prompt({})) && /SHARED HARD IDENTIFIERS/.test(cb.CURATORS.owner.prompt({})) && /never re-file/.test(cb.CURATORS.owner.prompt({})),
