@@ -56,6 +56,8 @@ ok(/FILED: .*SKIPPED: .*ERRORS:/.test(p1), 'the deposit envelope is pinned (FILE
 ok(!/merge_entities|decide_resolution_proposal|update_contact|delete_relation/.test(p1), 'the spec never names a pen tool');
 const p0 = cb.curatorPrompt({ seedRows: [] });
 ok(/pick your own slice/.test(p0) && /degree-0 person orphans/.test(p0), 'an unseeded sweep still works — the curator picks its slice');
+ok(/^CURATION SWEEP \(fired \d{4}-/.test(p1) && cb.curatorPrompt({ seedRows: [], firedAt: 1000 }) !== cb.curatorPrompt({ seedRows: [], firedAt: 2000 }),
+  '⭐ the fired-stamp nonce: every fire\'s input is unique, so the B1 dedupe can never serve a failed run\'s corpse to a retry');
 
 // ── the deposit note: counts honestly, lands as monologue text ────────────────────────────────
 const n1 = cb.burstNote({ deposit: 'FILED: keeter pair (shared email) \nkeeter pair 2 (suffix) \nSKIPPED: none · ERRORS: none' });
@@ -84,6 +86,7 @@ ok(/_markRunConsumed\(runId, 'curation'\)/.test(fnBody), 'double-delivery cure: 
 ok(/insertMonologue/.test(fnBody) && !/fireToolFollowup/.test(fnBody), '⭐ the deposit lands in the MONOLOGUE, never the chat (the unprompted-channel law)');
 ok(/agent-consume is the backstop/.test(fnBody), 'a late curator is left to the agent-consume backstop, honestly');
 ok(/if \(cb\.sweepFailed\(out\)\) \{/.test(fnBody) && /db\.setMeta\(cb\.PACE_KEY, '0'\)/.test(fnBody), '⭐ a tool-failure sweep RETURNS its pace slot — the next drain retries');
+ok(/spawn returned no run id — /.test(fnBody), 'a run-id-less spawn response is logged with its head (the silent dedupe read-through never hides again)');
 ok(/curation\.kick/.test(mainSrc) && /_curationBurst\('operator-kick'\)/.test(mainSrc), 'the operator kick watcher is armed (the acceptance-drive door)');
 
 // ── the engine-side manifest: registered, proposer-only whitelist ─────────────────────────────

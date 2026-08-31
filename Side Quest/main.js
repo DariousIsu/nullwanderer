@@ -18824,6 +18824,7 @@ async function _curationBurst(source) {
     try {
       const r = await echoSuit.dispatch({ kind: 'do', name: 'spawn_agent_async', args: { name: cb.AGENT, prompt: cb.curatorPrompt({ seedRows }), canvas_tab: cb.CURATOR_TAB } });
       runId = require('./lib/review_fanout').parseRunId(r && r.text);
+      if (!runId && r && r.text) console.log(`[curation-burst] spawn returned no run id — ${String(r.text).slice(0, 140)}`);
     } catch (e) { console.error(`[curation-burst] swarm spawn failed (${cb.AGENT}):`, e.message); }
     if (!runId) { console.log('[curation-burst] nothing spawned — the sweep is off this drain'); return; }
     console.log(`[curation-burst] swarm: ${cb.AGENT} spawned (run ${runId}, ${seedRows.length} seed row(s), ${source})`);

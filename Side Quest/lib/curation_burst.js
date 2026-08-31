@@ -46,13 +46,17 @@ function shouldFire({ getMeta, setMeta, now = Date.now() } = {}) {
 
 // The task spec: the rail leads, the counted rows ride, the deposit envelope closes. An unseeded
 // sweep (seed query failed or clean table) still works — the curator picks its own slice.
-function curatorPrompt({ seedRows = [] } = {}) {
+// The fired-stamp is a NONCE, not decoration (second first-fire lesson, 08-31 p203): the B1
+// agent-consume dedupe is input-hashed with a 1h window, and a deterministic prompt meant a
+// retry after a failed sweep was served the failed run's own corpse ("reusing run e55873ad…").
+// Pacing owns anti-hammer for this lane; the stamp makes every fire's input unique.
+function curatorPrompt({ seedRows = [], firedAt = Date.now() } = {}) {
   const seed = seedRows.length
     ? 'THE COUNTED ROWS — duplicate-suspect person names from the entities table this drain '
       + '(base name | row count | entity ids | stored names), deterministic:\n'
       + seedRows.map((r) => `- ${r.base} | ${r.c} | ids ${r.ids} | ${String(r.names || '').slice(0, 220)}`).join('\n')
     : 'No seed rows landed this sweep — pick your own slice: search for bracket-suffixed person names ("Name [source]") and degree-0 person orphans.';
-  return 'CURATION SWEEP — people cluster. You PROPOSE, the gates decide; you hold no pen. '
+  return `CURATION SWEEP (fired ${new Date(firedAt).toISOString()}) — people cluster. You PROPOSE, the gates decide; you hold no pen. `
     + 'Work the slice below at cluster context.\n\n' + seed + '\n\n'
     + 'For each suspect group: pull the records (get_entity, get_contact, kg_neighborhood), confirm same-human '
     + 'with evidence (shared email, office, FEC id, the import-suffix pattern), check list_resolution_proposals '
