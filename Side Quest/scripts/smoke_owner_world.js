@@ -73,6 +73,11 @@ ok(ow.resolveLoose('Zo', {}) && ow.resolveLoose('Zo', {}).object.id === 'self:zo
   ok(/db\.setMeta\('clarify\.pending', JSON\.stringify\(\{ mention: amb\.mention/.test(mainSrc), 'wiring: an ambiguity ASK arms clarify.pending');
   ok(/THIS TURN ANSWERS your pending which-one question/.test(mainSrc) && /FULFILL THE ORIGINAL ASK/.test(mainSrc), '⭐ wiring: the next turn resolves the pending question and resumes the ORIGINAL ask');
   ok(/artifact-router \$\{verdict\.intent\} SUPPRESSED — this turn answers the pending which-one question/.test(mainSrc), 'wiring: the artifact doors stand down on a clarify-resume turn (the canvas-edit hijack)');
+  // need#119 audit (08-30): the engine's propose_entity schema is {name, entity_type, summary?,
+  // entity_subtype?, confidence?} — a `source` kwarg was a guaranteed pydantic rejection on every
+  // ground-door fire. Provenance now rides the summary; the schema-breaking kwarg must stay dead.
+  ok(/name: 'propose_entity'/.test(mainSrc) && !/name: 'propose_entity', args: \{[^\n]*\bsource: node\.source \|\|/.test(mainSrc), '⭐ need#119: no propose_entity call passes the rejected `source` kwarg (provenance rides the summary)');
+  ok(/\(source: \$\{node\.source\}\)/.test(mainSrc), 'need#119: the ground-door create still carries provenance — folded into the summary text');
   const contSrc = fs2.readFileSync(path2.join(__dirname, '..', 'lib', 'continuity.js'), 'utf8');
   ok(/intention-say suppressed — same debt/.test(contSrc) && /intention-loop-breaker/.test(contSrc), '⭐ wiring: a re-announced debt with no action since is suppressed and internalized (the five-say spiral)');
   ok(/model\.continuity_voice/.test(contSrc) && /gemma4:31b-cloud/.test(contSrc) && /falling to the local fallback/.test(contSrc), 'wiring: the continuity voice rides cloud-first; local is the outage fallback only');

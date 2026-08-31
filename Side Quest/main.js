@@ -9463,7 +9463,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       try {
         const g = await cg.groundAndCreate(amb.mention, { deps: {
           search: (m) => webSearch(m),
-          create: (node) => echoSuit.dispatch({ kind: 'do', name: 'propose_entity', args: { name: node.name, entity_type: node.entity_type || 'concept', summary: node.summary || '', source: node.source || '' } }),
+          // need#119 audit (08-30): the engine's propose_entity takes {name, entity_type, summary?,
+          // entity_subtype?, confidence?} — a `source` kwarg is a guaranteed pydantic rejection
+          // (route-obs FIRST ERROR, every ground-door fire). Provenance rides the summary instead.
+          create: (node) => echoSuit.dispatch({ kind: 'do', name: 'propose_entity', args: { name: node.name, entity_type: node.entity_type || 'concept', summary: [node.summary || '', node.source ? `(source: ${node.source})` : ''].filter(Boolean).join(' ').trim() } }),
         } });
         if (g && g.node) {
           const line = g.verified
