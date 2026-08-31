@@ -195,6 +195,26 @@ ok(hash(dbPath) === dbHashBefore, '⭐ THE RO RAIL: the fixture sq.db is byte-id
     '⭐ B4 wiring: mood.compose consults the manifest line beside the vector line, injectable + fail-absent');
 }
 
+// ── THE WONDER→PURSUIT BRIDGE — the absence doctrine extended to feeling ────────────────────────
+{
+  const at = require(path.join(ROOT, 'lib', 'affect_tissues.js'));
+  const st = {};
+  const mkDeps = (calls) => ({ db: { getMeta: (k) => st[k], setMeta: (k, v) => { st[k] = v; } }, enqueue: (a) => { calls.push(a); return { ok: true, id: calls.length }; } });
+  const calls = [];
+  const r1w = at.wonderPursuits({ deps: mkDeps(calls), nowMs: T + 10 * 60e3, stateDir: dirB });
+  ok(r1w.fired.length === 2 && calls.length === 2, `⭐ wonder bridge: both thin-known subjects itch past the ${at.WONDER_FLOOR} floor (${r1w.fired.join(', ')})`);
+  ok(calls.every((c) => c.kind === 'absence' && c.bornFrom === 'impression-wonder' && c.detail && c.detail.coord && /wonder: /.test(c.subject)),
+    'wonder bridge: pursuits are absence-kind with the coord + the why in detail (the metabolism can research them)');
+  const calls2 = [];
+  const r2w = at.wonderPursuits({ deps: mkDeps(calls2), nowMs: T + 20 * 60e3, stateDir: dirB });
+  ok(r2w.fired.length === 0 && calls2.length === 0, 'wonder bridge: the 7-day cooldown holds — a fired subject is not re-minted next pass');
+  const calls3 = [];
+  ok(at.wonderPursuits({ deps: mkDeps(calls3), nowMs: T + 2 * H, stateDir: dirB }).fired.length === 0 && calls3.length === 0,
+    'wonder bridge FAIL-ABSENT: a stale manifest fires nothing');
+  const drv2 = fs.readFileSync(path.join(ROOT, 'lib', 'affect_tissues.js'), 'utf8');
+  ok(/wonderPursuits\(\{ deps, nowMs: Date\.now\(\) \}\)/.test(drv2), '⭐ wiring: the bridge rides maybeRun right after the tissues (fresh manifests)');
+}
+
 // ── THE ACT CORE (tissues/act_core.py) — hand-computable fixture: tau_k = 0.5·f_k + 0.1 ────────
 {
   const py = `

@@ -94,6 +94,8 @@ async function maybeRun({ deps = {}, nowMs = Date.now() } = {}) {
       // eslint-disable-next-line no-await-in-loop
       if (await _runOne(py, t, dbPath, { nowMs })) okCount++;
     }
+    // the wonder bridge rides the fresh manifests (fail-soft, rails inside)
+    try { wonderPursuits({ deps, nowMs: Date.now() }); } catch {}
     _running = false;
     return { ran: true, ok: okCount, of: TISSUES.length };
   } catch (e) {
@@ -101,6 +103,48 @@ async function maybeRun({ deps = {}, nowMs = Date.now() } = {}) {
     try { console.error('[tissue] driver failed soft:', e.message); } catch {}
     return { ran: false, why: 'error' };
   }
+}
+
+// ── THE WONDER→PURSUIT BRIDGE (his grant 09-01: "do all three") ─────────────────────────────────
+// The absence doctrine, extended to feeling: a subject she's close to but thinly knows ITCHES —
+// high wonder in the impression manifest auto-enqueues an absence pursuit so the metabolism
+// researches the person for memory's own sake ("proactively looking to fill missing spots").
+// Rails: wonder floor 0.6 · top MAX_WONDER_PURSUITS per pass · recheck_queue's built-in open-row
+// dedupe (kind+subject) · a per-coord 7-day cooldown so a completed pursuit isn't re-minted while
+// the summary is still catching up. Fail-soft; runs only when a fresh impressions manifest exists.
+const WONDER_FLOOR = 0.6;
+const MAX_WONDER_PURSUITS = 2;
+const WONDER_COOLDOWN_MS = 7 * 24 * 3600e3;
+
+function wonderPursuits({ deps = {}, nowMs = Date.now(), stateDir = STATE_DIR } = {}) {
+  const db = (deps && deps.db) || require('./db');
+  const enq = (deps && deps.enqueue) || ((args) => require('./recheck_queue').enqueue(args));
+  try {
+    const im = _readManifest('manifest_impressions.json', { stateDir });
+    if (!im || !im.at || nowMs - im.at > MANIFEST_FRESH_MS || !Array.isArray(im.subjects)) return { fired: [] };
+    const hot = im.subjects.filter((s) => s && s.wonder >= WONDER_FLOOR && s.coord && s.name)
+      .sort((a, b) => b.wonder - a.wonder).slice(0, MAX_WONDER_PURSUITS);
+    const fired = [];
+    for (const s of hot) {
+      const coolKey = `tissue.wonder.fired.${s.coord}`;
+      const last = parseInt(db.getMeta(coolKey) || '0', 10) || 0;
+      if (nowMs - last < WONDER_COOLDOWN_MS) continue;
+      const r = enq({
+        kind: 'absence',
+        subject: `wonder: ${s.name} (${s.coord})`,
+        detail: { coord: s.coord, name: s.name, wonder: s.wonder, why: `close subject, thinly known — attachment ${s.attachment}, ${s.encounters} encounter(s), summary thin` },
+        priority: 6,
+        bornFrom: 'impression-wonder',
+        now: nowMs,
+      });
+      if (r && r.ok !== false) {
+        db.setMeta(coolKey, String(nowMs));
+        fired.push(s.name);
+        console.log(`[tissue] wonder→pursuit: ${s.name} (wonder ${s.wonder}) — enqueued for research (the itch to know her own people)`);
+      }
+    }
+    return { fired };
+  } catch (e) { try { console.error('[tissue] wonder bridge failed soft:', e.message); } catch {} return { fired: [] }; }
 }
 
 // ── B4: the manifests render into the mood prompt (the ONE consumer, measurement-shaped) ────────
@@ -134,4 +178,4 @@ function manifestLine({ nowMs = Date.now(), stateDir = STATE_DIR } = {}) {
   } catch { return null; }
 }
 
-module.exports = { maybeRun, manifestLine, TISSUES, PACE_MS, IDLE_FLOOR_MS, RUN_TIMEOUT_MS, MANIFEST_FRESH_MS, WEIGHTS, STATE_DIR, LAST_KEY, KILL_KEY, _pyInterp };
+module.exports = { maybeRun, manifestLine, wonderPursuits, TISSUES, PACE_MS, IDLE_FLOOR_MS, RUN_TIMEOUT_MS, MANIFEST_FRESH_MS, WONDER_FLOOR, MAX_WONDER_PURSUITS, WONDER_COOLDOWN_MS, WEIGHTS, STATE_DIR, LAST_KEY, KILL_KEY, _pyInterp };
