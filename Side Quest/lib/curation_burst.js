@@ -41,15 +41,15 @@ ORDER BY MAX(folded) DESC, COUNT(*) DESC, base LIMIT 12`;
 // One gate, three doors: kill switch first (no pace burn), the operator kick second (consumed on
 // read, stamps pace), the drain-pace floor last. Stamps only on fire — a skipped burst never
 // steals the next drain's slot.
-function shouldFire({ getMeta, setMeta, now = Date.now() } = {}) {
+function shouldFire({ getMeta, setMeta, now = Date.now(), kickKey = KICK_KEY, paceKey = PACE_KEY } = {}) {
   if (String(getMeta(KILL_KEY) || '') === 'off') return { fire: false, why: `kill switch (${KILL_KEY}=off)` };
-  if (String(getMeta(KICK_KEY) || '') === '1') {
-    setMeta(KICK_KEY, ''); setMeta(PACE_KEY, String(now));
+  if (String(getMeta(kickKey) || '') === '1') {
+    setMeta(kickKey, ''); setMeta(paceKey, String(now));
     return { fire: true, why: 'operator kick' };
   }
-  const last = parseInt(getMeta(PACE_KEY) || '0', 10) || 0;
+  const last = parseInt(getMeta(paceKey) || '0', 10) || 0;
   if (now - last < PACE_MS) return { fire: false, why: `paced (last sweep ${Math.round((now - last) / 60000)}min ago, floor ${Math.round(PACE_MS / 3600000)}h)` };
-  setMeta(PACE_KEY, String(now));
+  setMeta(paceKey, String(now));
   return { fire: true, why: 'drain pace due' };
 }
 
@@ -138,4 +138,37 @@ function burstNote({ deposit = '', agent = AGENT } = {}) {
     : `[Curation] The ${agent} swept the person records; nothing worth proposing this pass — an honest empty sweep.`;
 }
 
-module.exports = { AGENT, CURATOR_TAB, KILL_KEY, PACE_KEY, KICK_KEY, PACE_MS, SEED_SQL, shouldFire, curatorPrompt, burstNote, sweepFailed };
+// ── THE CURATOR REGISTRY (W3, his 08-31 order: "run the other three curators through the same
+// funnel") — one funnel, four noticing organs. people keeps its original keys/seed byte-for-byte;
+// document/civic/owner ride DIRECTED slices v1 (an unseeded sweep still works — the curator finds
+// its slice with its own tools; per-table seed SQL can come later, studied not guessed). One
+// shared kill switch (the tier dies as one), per-curator pace + kick keys.
+const CURATORS = {
+  people: { agent: AGENT, paceKey: PACE_KEY, kickKey: KICK_KEY, seedSql: SEED_SQL, prompt: curatorPrompt },
+  document: {
+    agent: 'document-curator', paceKey: 'curator.document.last_ts', kickKey: 'curation.kick.document', seedSql: null,
+    prompt: ({ firedAt = Date.now() } = {}) => `CURATION SWEEP (fired ${new Date(firedAt).toISOString()}) — documents cluster. You PROPOSE, the gates decide; you hold no pen. `
+      + 'FIRST WORKLIST (known orphan artifacts, 08-30): "report-just-get-information", "report-cleaner-header-formatting", "report-canvas" — find each (search, recent_documents), judge orphanhood, and recommend retirement in the deposit with evidence; retirement is the operator\'s act, never yours. '
+      + 'THEN sweep recent documents for superseded canonicals (propose_link kind "supersedes" with the rationale) and absent provenance (get_sources_for empty → name the unsourced claims). Never archive or edit anything. '
+      + 'End with exactly: FILED: <one line per proposal with evidence> · SKIPPED: <item + why> · ERRORS: <tool errors verbatim, or none>.',
+  },
+  civic: {
+    agent: 'civic-curator', paceKey: 'curator.civic.last_ts', kickKey: 'curation.kick.civic', seedSql: null,
+    prompt: ({ firedAt = Date.now() } = {}) => `CURATION SWEEP (fired ${new Date(firedAt).toISOString()}) — civic cluster. You PROPOSE, the gates decide; you hold no pen. `
+      + 'THE PLACE-KEY LAW rides every judgment: roster rows key on PLACE — same-named chambers in different places are different bodies, never duplicates. '
+      + 'Sweep a slice of local-government roster entities (search_entities for parish/county/city council and commission bodies): flag staleness (a member\'s own newer facts contradict the row), miskeyed rows (a member on the wrong place\'s body), and thin rosters. '
+      + 'propose_relation only with matching place keys and evidence in relation_metadata; staleness flags ride the deposit. '
+      + 'End with exactly: FILED: <proposals with evidence> · SKIPPED: <item + why> · ERRORS: <tool errors verbatim, or none>.',
+  },
+  owner: {
+    agent: 'owner-curator', paceKey: 'curator.owner.last_ts', kickKey: 'curation.kick.owner', seedSql: null,
+    prompt: ({ firedAt = Date.now() } = {}) => `CURATION SWEEP (fired ${new Date(firedAt).toISOString()}) — the OWNER ORBIT, small and high-trust. You PROPOSE, the gates decide; you hold no pen. `
+      + 'Sweep the orbit anchors and their neighborhoods: "Rainey Center for Public Policy", "LAMP" (the network — never the band or a civic namesake), and the owner\'s records (Lucas Overby; FEC H4FL13077 is the anchor). '
+      + 'Hunt orbit duplicates bearing SHARED HARD IDENTIFIERS (email, FEC id, ocd id) → propose_relation DUPLICATE_OF (allow_open_type=true) with the identifier in relation_metadata. Anchor drift and alias gaps are FLAGGED in the deposit, never merged by you. '
+      + 'Check list_resolution_proposals FIRST — never re-file. One well-evidenced filing outranks ten maybes; SKIP loudly when in doubt. '
+      + 'End with exactly: FILED: <proposals with identifiers> · SKIPPED: <item + why> · ERRORS: <tool errors verbatim, or none>.',
+  },
+};
+const CURATOR_KEYS = Object.keys(CURATORS);
+
+module.exports = { AGENT, CURATOR_TAB, KILL_KEY, PACE_KEY, KICK_KEY, PACE_MS, SEED_SQL, CURATORS, CURATOR_KEYS, shouldFire, curatorPrompt, burstNote, sweepFailed };

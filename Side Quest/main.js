@@ -984,9 +984,13 @@ app.whenReady().then(() => {
           }
         } catch (e) { console.error('[adjudicate] pass failed:', e.message); }
       }
-      // W2 (swarm substrate §T3): the people-curator rides this drain as a proposer burst —
-      // fire-and-forget so the pass never waits on a sweep; its own kill/pace gates apply.
-      _curationBurst('nightly-drain').catch((e) => console.error('[curation-burst] drain kick failed:', e.message));
+      // W2+W3 (swarm substrate §T3): the four curators ride this drain as proposer bursts —
+      // SEQUENTIAL (one in flight, drain pace) and fire-and-forget as a set, so the pass never
+      // waits on a sweep; each curator's own kill/pace gates apply.
+      (async () => {
+        const _cb = require('./lib/curation_burst');
+        for (const _ck of _cb.CURATOR_KEYS) await _curationBurst('nightly-drain', _ck);
+      })().catch((e) => console.error('[curation-burst] drain kick failed:', e.message));
       // (The RECURSIVE AUDITOR auto-cleaner used to run here on the 20h curation cadence — it is now
       // DECOUPLED onto its own fast, write-triggered tick: maybeRunAudit / AUDIT_CHECK_MS below.)
       // PROMOTION (short-term → long-term): consolidate the day's new short-term documents into Echo
@@ -1313,12 +1317,16 @@ app.whenReady().then(() => {
   };
   setInterval(() => { maybeRunDedup().catch(() => {}); }, DEDUP_CHECK_MS).unref?.();
 
-  // W2 operator kick watcher: meta curation.kick='1' fires a curation burst on the next tick —
-  // the acceptance-drive door (the burst's kill switch still applies; the knob self-clears in
-  // shouldFire). Guarded here so a quiet knob costs one meta read per 5 min, nothing more.
+  // W2+W3 operator kick watcher: each curator has its own kick knob (people keeps the original
+  // curation.kick; the others ride curation.kick.<key>) — '1' fires that curator's burst on the
+  // next tick (the acceptance-drive door; kill switch still applies; knobs self-clear in
+  // shouldFire). Due curators run sequentially — one in flight is the drain-pace law.
   setInterval(() => {
     try {
-      if (String(db.getMeta('curation.kick') || '') === '1') _curationBurst('operator-kick').catch((e) => console.error('[curation-burst] kick failed:', e.message));
+      const _cb = require('./lib/curation_burst');
+      const due = _cb.CURATOR_KEYS.filter((k) => String(db.getMeta(_cb.CURATORS[k].kickKey) || '') === '1');
+      if (!due.length) return;
+      (async () => { for (const k of due) await _curationBurst('operator-kick', k); })().catch((e) => console.error('[curation-burst] kick failed:', e.message));
     } catch {}
   }, 5 * 60 * 1000).unref?.();
   // PULLER CLOSE-THE-LOOP — after an email bounces, the Puller proposes a next-pattern flip (a pending
@@ -18806,28 +18814,31 @@ async function _flareRun({ sessionId, io, channel, userName, userMessage, need, 
 // housekeeping, not a discovered connection. Gates (kill switch swarm.curators, drain pace,
 // the self-clearing curation.kick knob) live in lib/curation_burst.
 let _curationBurstInFlight = false;
-async function _curationBurst(source) {
+async function _curationBurst(source, curatorKey = 'people') {
   const cb = require('./lib/curation_burst');
+  const cur = cb.CURATORS[curatorKey] || cb.CURATORS.people;
   if (_curationBurstInFlight) { console.log('[curation-burst] one already in flight — skipped'); return; }
   if (!echoSuit || !echoSuit.connected) { console.log('[curation-burst] engine not connected — skipped'); return; }
-  const gate = cb.shouldFire({ getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v) });
-  if (!gate.fire) { console.log(`[curation-burst] ${gate.why} — skipped (${source})`); return; }
+  const gate = cb.shouldFire({ getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v), kickKey: cur.kickKey, paceKey: cur.paceKey });
+  if (!gate.fire) { console.log(`[curation-burst] ${cur.agent}: ${gate.why} — skipped (${source})`); return; }
   _curationBurstInFlight = true;
   const t0 = Date.now();
   try {
     let seedRows = [];
-    try {
-      const q = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql: cb.SEED_SQL, timeout_seconds: 30 } });
-      if (q && q.ok) seedRows = ((JSON.parse(q.text) || {}).rows) || [];
-    } catch (e) { console.error('[curation-burst] seed query failed (sweep rides unseeded):', e.message); }
+    if (cur.seedSql) {
+      try {
+        const q = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql: cur.seedSql, timeout_seconds: 30 } });
+        if (q && q.ok) seedRows = ((JSON.parse(q.text) || {}).rows) || [];
+      } catch (e) { console.error('[curation-burst] seed query failed (sweep rides unseeded):', e.message); }
+    }
     let runId = null;
     try {
-      const r = await echoSuit.dispatch({ kind: 'do', name: 'spawn_agent_async', args: { name: cb.AGENT, prompt: cb.curatorPrompt({ seedRows }), canvas_tab: cb.CURATOR_TAB } });
+      const r = await echoSuit.dispatch({ kind: 'do', name: 'spawn_agent_async', args: { name: cur.agent, prompt: cur.prompt({ seedRows }), canvas_tab: cb.CURATOR_TAB } });
       runId = require('./lib/review_fanout').parseRunId(r && r.text);
       if (!runId && r && r.text) console.log(`[curation-burst] spawn returned no run id — ${String(r.text).slice(0, 140)}`);
-    } catch (e) { console.error(`[curation-burst] swarm spawn failed (${cb.AGENT}):`, e.message); }
+    } catch (e) { console.error(`[curation-burst] swarm spawn failed (${cur.agent}):`, e.message); }
     if (!runId) { console.log('[curation-burst] nothing spawned — the sweep is off this drain'); return; }
-    console.log(`[curation-burst] swarm: ${cb.AGENT} spawned (run ${runId}, ${seedRows.length} seed row(s), ${source})`);
+    console.log(`[curation-burst] swarm: ${cur.agent} spawned (run ${runId}, ${seedRows.length} seed row(s), ${source})`);
     // Harvest — bounded with drain-lane patience; a curator that outlives the window stays in the
     // agent-consume pending ledger, so the late-agent backstop still delivers it honestly.
     let out = null;
@@ -18841,15 +18852,15 @@ async function _curationBurst(source) {
       } catch {}
       await new Promise((res) => setTimeout(res, 30000));
     }
-    if (!out) { console.log(`[curation-burst] ${cb.AGENT} did not return inside the window — agent-consume is the backstop`); return; }
+    if (!out) { console.log(`[curation-burst] ${cur.agent} did not return inside the window — agent-consume is the backstop`); return; }
     _markRunConsumed(runId, 'curation');
     // A tool-failure sweep did no work — return the pace slot so the next drain retries
     // (the deposit's own ERRORS envelope is the detector; see lib/curation_burst.sweepFailed).
     if (cb.sweepFailed(out)) {
-      db.setMeta(cb.PACE_KEY, '0');
+      db.setMeta(cur.paceKey, '0');
       console.log('[curation-burst] sweep died of tool failure — pace slot returned, next drain retries');
     }
-    const note = cb.burstNote({ deposit: String(out) });
+    const note = cb.burstNote({ deposit: String(out), agent: cur.agent });
     try {
       const row = db.insertMonologue({ content: note, model: 'curation-burst', type: 'reading' });
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: note, type: 'reading' });

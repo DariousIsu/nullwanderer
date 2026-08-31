@@ -98,8 +98,9 @@ ok(cb.sweepFailed(_h2Specimen) === false, 'a filing sweep with partial errors is
 // ── wiring (main.js): the drain call site, the quiet tab, the consume mark, monologue-not-chat ─
 const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 const _adjIdx = mainSrc.indexOf("[adjudicate] pass failed");
-const _drainIdx = mainSrc.indexOf("_curationBurst('nightly-drain')");
-ok(_adjIdx > -1 && _drainIdx > _adjIdx && _drainIdx - _adjIdx < 600, '⭐ the burst rides the nightly dedup drain, AFTER the adjudication consumer');
+const _drainIdx = mainSrc.indexOf("_curationBurst('nightly-drain'");
+ok(_adjIdx > -1 && _drainIdx > _adjIdx && _drainIdx - _adjIdx < 800, '⭐ the burst rides the nightly dedup drain, AFTER the adjudication consumer');
+ok(/for \(const _ck of _cb\.CURATOR_KEYS\) await _curationBurst\('nightly-drain', _ck\)/.test(mainSrc), 'W3: ALL FOUR curators ride the drain, sequentially (one in flight = drain pace)');
 const _fnStart = mainSrc.indexOf('async function _curationBurst');
 const _fnEnd = mainSrc.indexOf('let _roadRunInFlight', _fnStart);
 const fnBody = _fnStart > -1 && _fnEnd > _fnStart ? mainSrc.slice(_fnStart, _fnEnd) : '';
@@ -107,9 +108,43 @@ ok(/canvas_tab: cb\.CURATOR_TAB/.test(fnBody), 'quiet canvas (rail 3): the spawn
 ok(/_markRunConsumed\(runId, 'curation'\)/.test(fnBody), 'double-delivery cure: a harvested sweep is marked consumed');
 ok(/insertMonologue/.test(fnBody) && !/fireToolFollowup/.test(fnBody), '⭐ the deposit lands in the MONOLOGUE, never the chat (the unprompted-channel law)');
 ok(/agent-consume is the backstop/.test(fnBody), 'a late curator is left to the agent-consume backstop, honestly');
-ok(/if \(cb\.sweepFailed\(out\)\) \{/.test(fnBody) && /db\.setMeta\(cb\.PACE_KEY, '0'\)/.test(fnBody), '⭐ a tool-failure sweep RETURNS its pace slot — the next drain retries');
+ok(/if \(cb\.sweepFailed\(out\)\) \{/.test(fnBody) && /db\.setMeta\(cur\.paceKey, '0'\)/.test(fnBody), '⭐ a tool-failure sweep RETURNS its pace slot (per curator) — the next drain retries');
 ok(/spawn returned no run id — /.test(fnBody), 'a run-id-less spawn response is logged with its head (the silent dedupe read-through never hides again)');
-ok(/curation\.kick/.test(mainSrc) && /_curationBurst\('operator-kick'\)/.test(mainSrc), 'the operator kick watcher is armed (the acceptance-drive door)');
+ok(/curation\.kick/.test(mainSrc) && /_curationBurst\('operator-kick', k\)/.test(mainSrc) && /CURATOR_KEYS\.filter/.test(mainSrc),
+  'the operator kick watcher is armed for ALL FOUR knobs (the acceptance-drive doors)');
+
+// ── W3: the curator registry — one funnel, four noticing organs ───────────────────────────────
+ok(JSON.stringify(cb.CURATOR_KEYS) === '["people","document","civic","owner"]', '⭐ W3: the registry holds the four curators, people first');
+ok(cb.CURATORS.people.agent === cb.AGENT && cb.CURATORS.people.paceKey === cb.PACE_KEY && cb.CURATORS.people.kickKey === cb.KICK_KEY && cb.CURATORS.people.seedSql === cb.SEED_SQL,
+  'people keeps its original keys and seed byte-for-byte (the proven funnel untouched)');
+ok(cb.CURATOR_KEYS.every((k) => /^[a-z]+(?:-[a-z]+)+$/.test(cb.CURATORS[k].agent)), '⭐ §70: all four agents are registry-hyphenated');
+ok(new Set(cb.CURATOR_KEYS.map((k) => cb.CURATORS[k].paceKey)).size === 4 && new Set(cb.CURATOR_KEYS.map((k) => cb.CURATORS[k].kickKey)).size === 4,
+  'per-curator pace + kick keys are distinct (no shared slots)');
+for (const k of ['document', 'civic', 'owner']) {
+  const p = cb.CURATORS[k].prompt({ firedAt: 1000 });
+  ok(/^CURATION SWEEP \(fired \d{4}-/.test(p) && /You PROPOSE, the gates decide/.test(p) && /FILED: .*SKIPPED: .*ERRORS:/.test(p),
+    `${k}: nonce + the rail + the envelope ride the task spec`);
+  ok(cb.CURATORS[k].prompt({ firedAt: 1000 }) !== cb.CURATORS[k].prompt({ firedAt: 2000 }), `${k}: the fired-stamp keeps every input unique (no corpse-reuse)`);
+}
+ok(/report-just-get-information/.test(cb.CURATORS.document.prompt({})) && /retirement is the operator/.test(cb.CURATORS.document.prompt({})),
+  'document: the 08-30 orphan worklist is the directed slice; retirement stays the operator\'s act');
+ok(/PLACE-KEY LAW/.test(cb.CURATORS.civic.prompt({})) && /different bodies, never duplicates/.test(cb.CURATORS.civic.prompt({})),
+  'civic: the place-key law rides the spec (the body-key trap)');
+ok(/H4FL13077/.test(cb.CURATORS.owner.prompt({})) && /SHARED HARD IDENTIFIERS/.test(cb.CURATORS.owner.prompt({})) && /never re-file/.test(cb.CURATORS.owner.prompt({})),
+  'owner: anchored to the owner-anchor, identifier-gated, never re-files');
+
+// ── the three new engine manifests: registered, proposer-only ─────────────────────────────────
+const _agentsDir = 'C:\\Users\\azrae\\Desktop\\NX ECHO\\nx-echo\\data\\agents\\';
+for (const nm of ['document-curator', 'civic-curator', 'owner-curator']) {
+  const p = _agentsDir + nm + '.toml';
+  ok(fs.existsSync(p), `registration: the ${nm} manifest stands in the engine registry`);
+  if (fs.existsSync(p)) {
+    const t = fs.readFileSync(p, 'utf8');
+    ok(!/"merge_entities"|"decide_resolution_proposal"|"update_contact"|"update_document"|"archive_document"|"delete_relation"|"resolve_entity_conflict"|"save_document"|"move_document"/.test(t),
+      `⭐ THE ONE RAIL: ${nm} holds no pen tool`);
+  }
+}
+ok(!/"propose_entity"/.test(fs.readFileSync(_agentsDir + 'owner-curator.toml', 'utf8')), '⭐ the owner world never grows from a sweep — owner-curator cannot mint entities');
 
 // ── the engine-side manifest: registered, proposer-only whitelist ─────────────────────────────
 const manifestPath = 'C:\\Users\\azrae\\Desktop\\NX ECHO\\nx-echo\\data\\agents\\people-curator.toml';
