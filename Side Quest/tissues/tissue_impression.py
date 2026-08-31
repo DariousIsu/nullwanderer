@@ -33,6 +33,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from affect_common import clamp, open_ro, save_json, vad_score
+from affect_common import tokens as _tokens
 
 TURN_WINDOW = 400                       # bounded: most recent turns scanned per pass
 ENCOUNTER_HALF_LIFE_MS = 7 * 24 * 3600 * 1000
@@ -105,9 +106,20 @@ def impress(subj, turns, wdb, now_ms):
     wonder = round(recency * (1 - richness), 3)
 
     words = sorted(set(top_words), key=lambda t: -abs(t[1]))[:4]
+    # B5-lite: the subject's EPA FUNDAMENTAL — who they are to her, in affect-control terms — from
+    # the first identity word her own world-summary uses ("The daughter, 12, cheer." → 'daughter' →
+    # the dictionary EPA). Deterministic word-match only; no identity word in the dictionary → null,
+    # honestly absent. The event-deflection half of B5 (verbs → behavior words) is a later slice.
+    epa = None
+    for tok in _tokens(subj["summary"], cap=30):
+        row = wdb.execute("SELECT e, p, a FROM epa WHERE kind='identity' AND term=?", (tok,)).fetchone()
+        if row:
+            epa = {"e": round(row[0], 2), "p": round(row[1], 2), "a": round(row[2], 2), "word": tok}
+            break
     return {
         "coord": subj["coord"],
         "name": subj["names"][0],
+        "epa": epa,
         "valence": valence,
         "arousal": arousal,
         "attachment": attachment,
@@ -118,7 +130,7 @@ def impress(subj, turns, wdb, now_ms):
             f"(turn ids {', '.join(str(i) for i in reason_ids[-5:])})",
             ("tone carried by: " + ", ".join(f"{w} {v:+.2f}" for w, v in words)) if words
             else "no lexicon reading on the encounter text (valence rests at 0 honestly)",
-        ],
+        ] + ([f"identity '{epa['word']}' from her world-summary → EPA fundamental (usfullsurveyor2015)"] if epa else []),
     }
 
 

@@ -47,6 +47,9 @@ const dirA = path.join(tmp, 'a'), dirB = path.join(tmp, 'b');
   mono.run(3, T - 35 * 60e3, 'great wonderful strides reported again');
   db.prepare("INSERT INTO owner_world (coord,type,namespace,name,aliases,summary) VALUES (?,?,?,?,?,?)")
     .run('person:owner/alice', 'person', 'owner', 'Alice', '[]', 'The daughter, 12, cheer.');
+  db.prepare("INSERT INTO owner_world (coord,type,namespace,name,aliases,summary) VALUES (?,?,?,?,?,?)")
+    .run('pet:owner/rex', 'pet', 'owner', 'Rex', '[]', 'The good dog.');
+  db.prepare("INSERT INTO turns (id,session_id,ts,speaker,content) VALUES (104,1,?, 'user', 'Rex came along to the park')").run(T - 12 * 60e3);
   db.close();
 }
 // ── fixture weights db (a dozen VAD terms is a lexicon in miniature) ────────────────────────────
@@ -80,6 +83,7 @@ const dirA = path.join(tmp, 'a'), dirB = path.join(tmp, 'b');
   const epaIns = w.prepare('INSERT INTO epa VALUES (?,?,?,?,?)');
   epaIns.run('identity', 'friend', 2.0, 1.0, 0.5);
   epaIns.run('identity', 'stranger', 0.0, 0.0, 0.0);
+  epaIns.run('identity', 'daughter', 2.4, 0.8, 1.2);
   epaIns.run('behavior', 'greet', 1.5, 0.5, 0.5);
   epaIns.run('modifier', 'calm', 0.2, 0.2, 0.2);
   epaIns.run('modifier', 'tense', -1.0, 0.5, 1.5);
@@ -134,6 +138,12 @@ ok(alice.attachment > 0, `impression: attachment grows from real contact × owne
 ok(alice.wonder > 0.4, `impression: a thin summary + fresh contact itches to be researched (wonder ${alice.wonder})`);
 ok(alice.reasons.length >= 2 && /turn ids 102/.test(alice.reasons[0]) && /tone carried by/.test(alice.reasons[1]),
   '⭐ impression: reasons are MANDATORY and name the encounters + the words');
+// B5-lite (09-01, built during the hold): the EPA fundamental from her own world-summary's identity word
+ok(alice.epa && alice.epa.word === 'daughter' && alice.epa.e === 2.4, `⭐ B5-lite: Alice carries her EPA fundamental via the identity word 'daughter' (e=${alice.epa && alice.epa.e})`);
+ok(alice.reasons.some((r) => /identity 'daughter'/.test(r)), 'B5-lite: the EPA carries its reason (the word and the dictionary)');
+const rex = manI.subjects.find((s) => s.coord === 'pet:owner/rex');
+ok(!!rex && rex.epa === null, 'B5-lite: no identity word in the dictionary → epa null, honestly absent (never guessed)');
+ok(rex.valence === 0 && /valence rests at 0 honestly/.test(rex.reasons[1]), 'impression: a lexicon-silent encounter leaves valence at 0 with the honest reason');
 const r5 = run('tissue_impression.py', dirB, T);
 ok(r5.status === 0 && fs.readFileSync(path.join(dirA, 'manifest_impressions.json'), 'utf8') === fs.readFileSync(path.join(dirB, 'manifest_impressions.json'), 'utf8'),
   '⭐ REPLAY DETERMINISM: impression manifest identical byte for byte');
