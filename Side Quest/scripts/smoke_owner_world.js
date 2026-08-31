@@ -80,6 +80,11 @@ ok(ow.resolveLoose('Zo', {}) && ow.resolveLoose('Zo', {}).object.id === 'self:zo
     ok(typeof ip.recentReferents === 'function' && ip.recentReferents().length === 0, 'intent_pass: the referent ledger starts empty');
     ok(/referent joins the topic/.test(mainSrc) && /_iv\.referent/.test(mainSrc),
       '⭐ wiring: a verdict referent with a proper noun the topic lacks JOINS the project topic at the road claim (the Griffin-less donor slug)');
+    // Thread #4142 (08-31): "build an echo entity and list from the attached document" was closed
+    // "answered inline in chat" — a WRITE order triaged as a chat answer; the intention looped
+    // twice with nothing built. Not-project-scale skips the overnight machinery, never execution.
+    ok(/_engineAction = \/\\b\(build\|create\|make\|register\|ingest\|add\)/.test(mainSrc) && /a WRITE ORDER — staying seeded for execution/.test(mainSrc),
+      '⭐ wiring: an engine WRITE order is never closed "answered inline" — it stays seeded for execution');
   }
   ok(/is org-shaped; person namesakes are never its candidates/.test(mainSrc), 'wiring: an org-shaped mention grounds instead of offering people');
   ok(/db\.setMeta\('clarify\.pending', JSON\.stringify\(\{ mention: amb\.mention/.test(mainSrc), 'wiring: an ambiguity ASK arms clarify.pending');

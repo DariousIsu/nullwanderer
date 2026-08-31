@@ -16873,7 +16873,15 @@ async function _autonomicSchedulerTick() {
             // 'none' (the EXISTING "not driver-drainable, waiting on conversation" disposition at ~14461 —
             // it stays open + pending + rescuable via the explicit-redirect override), and end the tick so
             // the thread is answered inline in chat instead. Fail-OPEN when the cloud is down (_d null).
-            if (_d && _d.isProject === false) {
+            // THE WRITE-ORDER EXEMPTION (08-31, thread #4142: "build an echo entity and list from
+            // the attached document" was closed "answered inline in chat" — an ENGINE WRITE order
+            // triaged as a chat answer, so her "building it now" says had NO work item underneath
+            // and the intention looped twice with nothing built). Not-project-scale is a correct
+            // reason to skip the OVERNIGHT machinery, never a reason to skip EXECUTION: an action
+            // order (build/create/register + entity/contact/record) stays seeded so the driver
+            // actually performs the write.
+            const _engineAction = /\b(build|create|make|register|ingest|add)\b[\s\S]{0,50}\b(entit(?:y|ies)|contact|record|node|list)\b/i.test(String(cand.content || ''));
+            if (_d && _d.isProject === false && !_engineAction) {
               try { focusLib.clear('not-project-scale'); } catch {}
               try { db.setMeta(`thread.${cand.id}.lane`, 'none'); } catch {}
               try { db.touchOpenThread(cand.id, 'quick lookup — answered inline in chat, not a standing project (not autonomously seeded)', { keepStatus: true }); } catch {}
@@ -16881,6 +16889,7 @@ async function _autonomicSchedulerTick() {
               _saveSchedState(state);
               return;
             }
+            if (_d && _d.isProject === false && _engineAction) console.log(`[user-work] #${cand.id} not project-scale but a WRITE ORDER — staying seeded for execution (a build order is never "answered inline")`);
             try { db.setMeta(`focus.${cand.id}.kind`, _kind); } catch {}
             console.log(`[user-work] #${cand.id} kind=${_kind}${_kind === 'entity' ? '' : ' (was hardcoded entity)'}`);
             // P0 PREFLIGHT (ADAPTIVE_RESEARCH_DESIGN, the universal step-0): "do I know the best
