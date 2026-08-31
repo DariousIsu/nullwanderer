@@ -1921,6 +1921,15 @@ app.whenReady().then(() => {
         pushEchoStatus(null); return false;
       }
       if (r.ok) console.log(`[main] echo suit attached: ${r.tools} tools`);
+      else {
+        // p208 (08-31): connect() settled NOT-OK every beat for 25 minutes — this branch was
+        // SILENT (p193's cure covered the hang, not the graceful refusal) and the poisoned
+        // transport was never reset, so the same dead client quiet-failed forever beside a
+        // healthy engine. A settled failure NAMES ITSELF and gets a fresh transport, same as
+        // the timeout path.
+        console.error(`[main] echo suit attach settled NOT-OK: ${JSON.stringify(r || null).slice(0, 200)} — resetting the client; the heartbeat retries on a fresh transport`);
+        try { echoSuit.reset('attach not-ok'); } catch {}
+      }
       pushEchoStatus(r); return !!r.ok;
     }).catch((e) => { if (_tm) clearTimeout(_tm); console.error('[main] echo suit attach failed:', (e && e.message) ? e.message : String(e)); pushEchoStatus(null); return false; });
   };

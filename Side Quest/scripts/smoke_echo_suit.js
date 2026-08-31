@@ -396,6 +396,11 @@ function mockClient(overrides = {}) {
     }
     ok('wiring attach-hang: tryEchoAttach races a 45s deadline and RESETS on timeout (a hang can no longer be silent)',
       /echo suit attach TIMED OUT \(45s\)/.test(_mainSrc) && /echoSuit\.reset\('attach timeout'\)/.test(_mainSrc) && /__attach_timeout__/.test(_mainSrc));
+    // p208 (08-31): connect() settled NOT-OK every beat for 25 minutes beside a HEALTHY engine —
+    // the ok:false branch was silent (p193 cured only the hang) and never reset the poisoned
+    // transport, so the same dead client quiet-failed forever. Both halves pinned.
+    ok('wiring attach-not-ok: a settled NOT-OK attach NAMES ITSELF and resets the client (the quiet-fail sibling of the hang cure)',
+      /echo suit attach settled NOT-OK/.test(_mainSrc) && /echoSuit\.reset\('attach not-ok'\)/.test(_mainSrc));
   }
 
   console.log('\n' + (fail === 0 ? 'ALL PASS' : 'FAILURES') + ` - ${pass} passed, ${fail} failed`);

@@ -124,9 +124,15 @@ function groundingBlock({ sessionId, text = '', mode = 'collab', _notesDir = nul
           let body = '';
           try { body = fs2.readFileSync(p2.join(dir, e.n), 'utf8'); } catch { continue; }
           const hay = `${e.n}\n${body}`.toLowerCase();
-          let score = 0;
+          let score = 0, billHit = false;
           for (const t2 of otherToks) if (hay.includes(t2)) score++;
-          for (const bt of billToks) if (new RegExp(`\\b${bt}\\b`, 'i').test(hay)) score += 2;
+          for (const bt of billToks) if (new RegExp(`\\b${bt}\\b`, 'i').test(hay)) { score += 2; billHit = true; }
+          // THE IDENTIFIER GATE (08-31 live: "any updates on SB20 anywhere?" grounded a donor-
+          // contribution note because BOTH matched only the generics "updates"+"anywhere" — two
+          // generic tokens reached the ≥2 floor while the bill number matched NOTHING). When the
+          // ask carries an identifier, a note match REQUIRES the identifier; generic words can
+          // support a match, never substitute for it. (suiteFor's law, sixth organ.)
+          if (billToks.length && !billHit) continue;
           // On a body-score TIE, prefer the more on-topic FILENAME, then the newer file — so the exact
           // recent target (directed-4079-dossier) wins over an older sibling that ties on generic terms.
           if (score > bestScore || (score === bestScore && score > 0 && (e.fn > bestFn || (e.fn === bestFn && e.mt > bestMt)))) {

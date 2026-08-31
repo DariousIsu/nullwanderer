@@ -47,17 +47,24 @@ ok(/IN THIS REPLY/.test(d) && /Do NOT create or edit any artifact/.test(d) && /l
 {
   const db = require('../lib/db'); db.init();
   const sid = db.startSession();
+  // HERMETIC NOTES (08-31: the early recall pins scanned the LIVE workspace notes — the gate went
+  // red when a real note matched the ask's generics ("updates"+"anywhere" in the day's donor
+  // report); an offline-deterministic suite must never depend on the day's workspace). Every
+  // pre-homecoming call rides an isolated empty dir.
+  const fsE = require('fs');
+  const ndirEmpty = path.join(os.tmpdir(), `sq_collab_empty_${process.pid}`);
+  fsE.mkdirSync(ndirEmpty, { recursive: true });
   const doc = db.insertDocument({ title: 'LA Data Centers Op-Ed draft', body: 'The polling intro shows voters care about jobs, bills, taxes. The Entergy agreement and the Meta facility deal deliver exactly those: local hiring floors, rate protections, parish tax shares.', source: 'smoke', origin: null });
   db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: `Got it — doc#${doc.id}, the op-ed. Looking at the bridge.`, model: 'smoke' });
-  const gb = cl.groundingBlock({ sessionId: sid, text: 'help me sharpen the transition from the polling intro to the agreements' });
+  const gb = cl.groundingBlock({ sessionId: sid, text: 'help me sharpen the transition from the polling intro to the agreements' , _notesDir: ndirEmpty });
   ok(gb && new RegExp(`doc#${doc.id}`).test(gb) && /Entergy/.test(gb), 'grounding pulls the session-named doc with a real excerpt');
   ok(gb && /think WITH this/.test(gb) && gb.length < 2600, 'the block is framed for thinking and bounded');
-  ok(cl.groundingBlock({ sessionId: 999999991, text: 'zzqx unmatchable terms qqzz' }) === null, 'nothing matched → null (fail-empty, no fabricated grounding)');
+  ok(cl.groundingBlock({ sessionId: 999999991, text: 'zzqx unmatchable terms qqzz' , _notesDir: ndirEmpty }) === null, 'nothing matched → null (fail-empty, no fabricated grounding)');
 
   // ── recall mode: held-source homecoming (the run-8 residual) ──────────────────────────────────
   const sheet = db.insertDocument({ title: 'Anti-China 2026 sponsors sheet', body: 'LA SB200 co-sponsors, Senate: Allain, Barrow, Cathey, Selders (D-14, died 2026-07-07), Stine, Womack. The Selders co-sponsorship predates his death.', source: 'smoke-sheet', origin: null });
   db.syncDocumentsFts();   // the index backfills on a tick in production — sync so FTS is the path under test
-  const rb = cl.groundingBlock({ sessionId: 0, text: 'whose name is on the SB200 co-sponsorship we tracked down?', mode: 'recall' });
+  const rb = cl.groundingBlock({ sessionId: 0, text: 'whose name is on the SB200 co-sponsorship we tracked down?', mode: 'recall' , _notesDir: ndirEmpty });
   ok(rb && new RegExp(`doc#${sheet.id}`).test(rb) && /Selders/.test(rb), 'RUN-8 RESIDUAL: the SB200 question reaches the held sheet by FTS (Selders in the excerpt)');
   ok(rb && /Answer FROM these documents/.test(rb) && /NEVER fill the gap/.test(rb), 'the recall frame orders answer-from-held or honest-miss');
 
@@ -65,13 +72,24 @@ ok(/IN THIS REPLY/.test(d) && /Do NOT create or edit any artifact/.test(d) && /l
   const stranger = db.insertDocument({ title: 'LA 2018 session archive — SB200 (Hewitt)', body: 'Louisiana 2018 regular session: SB200 by Hewitt, water infrastructure funding. Committee referrals and fiscal notes from the 2018 archive.', source: 'smoke-archive', origin: null });
   const wide = db.insertDocument({ title: 'MO SB2000 omnibus', body: 'Missouri SB2000 omnibus package covering unrelated transport items.', source: 'smoke-archive', origin: null });
   db.syncDocumentsFts();
-  const rb2 = cl.groundingBlock({ sessionId: 0, text: 'what is the status of SB200 in the anti china sweep?', mode: 'recall' });
+  const rb2 = cl.groundingBlock({ sessionId: 0, text: 'what is the status of SB200 in the anti china sweep?', mode: 'recall' , _notesDir: ndirEmpty });
   ok(rb2 && rb2.indexOf(`doc#${wide.id}`) === -1, '⭐ a bill number is an IDENTIFIER: sb200 never matches SB2000 (the prefix-star widening is gone)');
   {
     const iSheet = rb2 ? rb2.indexOf(`doc#${sheet.id}`) : -1, iStr = rb2 ? rb2.indexOf(`doc#${stranger.id}`) : -1;
     ok(iSheet > -1 && (iStr === -1 || iSheet < iStr), '⭐ THE HEWITT SPECIMEN: the thread\'s instance (2026 anti-china) LEADS the fan — the 2018 SB200 never dominates');
   }
-  ok(cl.groundingBlock({ sessionId: 0, text: 'any updates on SB20 anywhere?', mode: 'recall' }) === null, 'sb20 never rides INTO sb200 documents (no substring widening either direction)');
+  ok(cl.groundingBlock({ sessionId: 0, text: 'any updates on SB20 anywhere?', mode: 'recall' , _notesDir: ndirEmpty }) === null, 'sb20 never rides INTO sb200 documents (no substring widening either direction)');
+  // THE IDENTIFIER GATE (08-31 live: the day's real donor note matched "updates"+"anywhere" — two
+  // generics reached the ≥2 floor while SB20 matched NOTHING, and the gate went red on the live
+  // workspace). An ask carrying a bill identifier never grounds a note that lacks it.
+  {
+    const gdir = path.join(os.tmpdir(), `sq_collab_gen_${process.pid}`);
+    fsE.mkdirSync(gdir, { recursive: true });
+    fsE.writeFileSync(path.join(gdir, 'donor_note.md'), 'No contributions broken down by amount anywhere in the materials. Updates pending review of the ledger.');
+    ok(cl.groundingBlock({ sessionId: 0, text: 'any updates on SB20 anywhere?', mode: 'recall', _notesDir: gdir }) === null,
+      '⭐ identifier gate: generic tokens (updates/anywhere) never substitute for the bill number a note lacks (the sixth organ of the single-token disease)');
+    try { fsE.rmSync(gdir, { recursive: true, force: true }); } catch {}
+  }
 
   // ── held-source homecoming: the notes deliverable IS the answer (the run-8 root, cured 08-22) ──
   const fs2 = require('fs');
