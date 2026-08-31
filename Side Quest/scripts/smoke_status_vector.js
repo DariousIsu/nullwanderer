@@ -97,9 +97,12 @@ const GB = 1073741824;
     for (const n of ['sq.db.precuration_20260810_010101', 'sq.db.precuration_20260812_010101', 'sq.db.precuration_20260814_010101']) fs.writeFileSync(path.join(tmpDir, n), 'x');
     fs.writeFileSync(path.join(tmpDir, 'sq.db.precuration_NOTASTAMP'), 'x');   // pattern miss → untouched
     const rot = dh.rotateBackups({ dataDir: tmpDir });
-    ok(rot.pruned.length === 1 && rot.pruned[0] === 'sq.db.precuration_20260810_010101', `rotation prunes exactly beyond newest ${dh.PRECURATION_KEEP} (${JSON.stringify(rot.pruned)})`);
-    ok(fs.existsSync(path.join(tmpDir, 'sq.db.precuration_20260814_010101')) && fs.existsSync(path.join(tmpDir, 'sq.db.precuration_20260812_010101')), 'the 2 newest copies survive');
-    ok(!fs.existsSync(path.join(tmpDir, 'sq.db.precuration_20260810_010101')), 'the oldest copy is gone');
+    // 08-31 retention ruling: KEEP=1 — one snapshot is the safety net (two 3.7GB copies + the
+    // pagefile drove the volume to 250MB free).
+    ok(rot.pruned.length === 2 && rot.pruned.includes('sq.db.precuration_20260810_010101') && rot.pruned.includes('sq.db.precuration_20260812_010101'),
+      `rotation prunes exactly beyond newest ${dh.PRECURATION_KEEP} (${JSON.stringify(rot.pruned)})`);
+    ok(fs.existsSync(path.join(tmpDir, 'sq.db.precuration_20260814_010101')), 'the newest copy survives');
+    ok(!fs.existsSync(path.join(tmpDir, 'sq.db.precuration_20260810_010101')) && !fs.existsSync(path.join(tmpDir, 'sq.db.precuration_20260812_010101')), 'the older copies are gone');
     ok(fs.existsSync(path.join(tmpDir, 'sq.db.precuration_NOTASTAMP')), 'a non-matching name is NEVER touched (strict pattern)');
     ok(dh.rotateBackups({ dataDir: tmpDir }).pruned.length === 0, 'steady state: nothing further to prune');
 

@@ -148,6 +148,20 @@ ok(hash(dbPath) === dbHashBefore, '⭐ THE RO RAIL: the fixture sq.db is byte-id
   ok(mild === 0, 'polar filter: the neutral fixture words sit below the floor (the reading correctly refuses)');
 }
 
+// ── B4: manifestLine — the ONE consumer door (mood's measured block), fail-absent ───────────────
+{
+  const at = require(path.join(ROOT, 'lib', 'affect_tissues.js'));
+  const line = at.manifestLine({ nowMs: T + 10 * 60e3, stateDir: dirB });
+  ok(!!line && /felt now:/.test(line) && /warmth/.test(line) && /interest/.test(line), `B4 manifestLine: renders the top named feelings with reasons (${String(line).slice(0, 80)}…)`);
+  ok(/closest subject: Alice/.test(line) && /attachment/.test(line), 'B4 manifestLine: the top impression rides with its numbers');
+  ok(/by the affect tissues/.test(line), 'B4 manifestLine: provenance-stamped (a reading, with its instrument and age)');
+  ok(at.manifestLine({ nowMs: T + 2 * H, stateDir: dirB }) === null, 'B4 FAIL-ABSENT: stale manifests (>45m) → null (the mood prompt is byte-identical)');
+  ok(at.manifestLine({ nowMs: T, stateDir: tmp }) === null, 'B4 FAIL-ABSENT: no manifests at all → null');
+  const moodSrc = fs.readFileSync(path.join(ROOT, 'lib', 'mood.js'), 'utf8');
+  ok(/affect_tissues'\)\.manifestLine/.test(moodSrc) && /tissueLine = undefined/.test(moodSrc) && /_measured/.test(moodSrc),
+    '⭐ B4 wiring: mood.compose consults the manifest line beside the vector line, injectable + fail-absent');
+}
+
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -103,4 +103,35 @@ async function maybeRun({ deps = {}, nowMs = Date.now() } = {}) {
   }
 }
 
-module.exports = { maybeRun, TISSUES, PACE_MS, IDLE_FLOOR_MS, RUN_TIMEOUT_MS, WEIGHTS, STATE_DIR, LAST_KEY, KILL_KEY, _pyInterp };
+// ── B4: the manifests render into the mood prompt (the ONE consumer, measurement-shaped) ────────
+// One compact line of the tissues' current readings for mood.compose's MEASURED STATE block —
+// values + trimmed reasons, never an instruction to feel (the anti-performance rule). FAIL-ABSENT:
+// manifest missing, stale (> MANIFEST_FRESH_MS), or torn → null → the mood prompt is byte-identical.
+const MANIFEST_FRESH_MS = 45 * 60 * 1000;   // tissues pace at 30 min; older than 45 is not "now"
+
+function _readManifest(name, { stateDir = STATE_DIR } = {}) {
+  try { return JSON.parse(fs.readFileSync(path.join(stateDir, name), 'utf8')); } catch { return null; }
+}
+
+function manifestLine({ nowMs = Date.now(), stateDir = STATE_DIR } = {}) {
+  try {
+    const parts = [];
+    const ap = _readManifest('manifest_appraisal.json', { stateDir });
+    if (ap && ap.at && nowMs - ap.at <= MANIFEST_FRESH_MS) {
+      const emos = (ap.emotions || []).slice(0, 3)
+        .map((e) => `${e.name} ${e.intensity} (${String(e.reason || '').slice(0, 90)})`);
+      if (emos.length) parts.push(`felt now: ${emos.join('; ')}`);
+      if (ap.mood && ap.mood.band) parts.push(`undertone ${ap.mood.band}`);
+    }
+    const im = _readManifest('manifest_impressions.json', { stateDir });
+    if (im && im.at && nowMs - im.at <= MANIFEST_FRESH_MS && Array.isArray(im.subjects) && im.subjects.length) {
+      const s = im.subjects[0];
+      parts.push(`closest subject: ${s.name} (attachment ${s.attachment}, valence ${s.valence}, ${s.encounters} encounter${s.encounters === 1 ? '' : 's'})`);
+    }
+    if (!parts.length) return null;
+    const at = ap && ap.at ? ap.at : (im ? im.at : nowMs);
+    return `${parts.join(' · ')} — computed ${Math.max(0, Math.round((nowMs - at) / 60000))}m ago by the affect tissues`;
+  } catch { return null; }
+}
+
+module.exports = { maybeRun, manifestLine, TISSUES, PACE_MS, IDLE_FLOOR_MS, RUN_TIMEOUT_MS, MANIFEST_FRESH_MS, WEIGHTS, STATE_DIR, LAST_KEY, KILL_KEY, _pyInterp };

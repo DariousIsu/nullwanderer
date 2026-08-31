@@ -146,7 +146,7 @@ function buildBlock(mood, userName = 'Lucas') {
 // Cultivate a fresh mood from her recent lived experience + the mood she was already in (slow drift).
 // genFn (CLOUD reasoner) / recentRows / prevMood / setFn / nowTs injectable so this runs with no model
 // or db in tests. Grounded: evolves only from real experience, never invents events.
-async function compose({ genFn = null, recentRows = null, prevMood = null, setFn = null, getFn = null, nowTs = null, userName = 'Lucas', name = 'Zoe', stateLine = undefined } = {}) {
+async function compose({ genFn = null, recentRows = null, prevMood = null, setFn = null, getFn = null, nowTs = null, userName = 'Lucas', name = 'Zoe', stateLine = undefined, tissueLine = undefined } = {}) {
   const prev = prevMood || current({ getFn }) || null;
   // W5 SLICE 1 (2026-08-20): the mood RENDERS FROM the measured internal-state vector. One compact
   // readings line (drives + affect, with provenance) grounds the cloud's warm prose in instruments
@@ -154,6 +154,13 @@ async function compose({ genFn = null, recentRows = null, prevMood = null, setFn
   // byte-identical to before the slice. Injectable for smoke.
   const _stateLine = stateLine !== undefined ? stateLine
     : (() => { try { return require('./internal_state').readingsLine({ nowMs: nowTs || Date.now() }); } catch { return null; } })();
+  // B4 (2026-08-31, docs/AFFECT_SUBSTRATE_RESEARCH_2026-08-31.md): the affect-tissue manifests join
+  // the same measured block — named feelings WITH their reasons (a win, his actual words, real
+  // machine stress) and the closest-subject impression. Same contract: measurements to be felt,
+  // never performed; manifest absent/stale → null → byte-identical prompt.
+  const _tissueLine = tissueLine !== undefined ? tissueLine
+    : (() => { try { return require('./affect_tissues').manifestLine({ nowMs: nowTs || Date.now() }); } catch { return null; } })();
+  const _measured = [_stateLine, _tissueLine].filter(Boolean).join('\n');
   const experience = (recentRows || []).map(r => {
     const who = r.speaker === 'user' ? userName : (r.speaker && r.speaker.startsWith('ai') ? name : (r.type || 'note'));
     return `- (${who}) ${_clean(r.content).slice(0, 200)}`;
@@ -164,9 +171,9 @@ async function compose({ genFn = null, recentRows = null, prevMood = null, setFn
 
 HOW ${name.toUpperCase()} FELT BEFORE:
 ${prevLine}
-${_stateLine ? `
+${_measured ? `
 HER MEASURED STATE RIGHT NOW (readings from her real instruments — GROUND the mood in these; they are measurements to be felt in her own words, never numbers to recite or orders to perform):
-${_stateLine}
+${_measured}
 ` : ''}
 RECENT LIVED EXPERIENCE (real — conversations and her own thoughts):
 ${experience}

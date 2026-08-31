@@ -71,7 +71,10 @@ function _emitAnomaly(type, level, text, { deps = {}, nowMs = Date.now() } = {})
 // newest PRECURATION_KEEP copies and deletes older ones, STRICTLY the sq.db.precuration_<stamp>
 // pattern (timestamped names sort chronologically) — never any other file, never the live store.
 // Runs on the tick; prunes log + emit obs (lane 'db', kind 'rotation').
-const PRECURATION_KEEP = 2;
+// KEEP dropped 2 → 1 (Lucas's 08-31 retention ruling, the 250MB-free night): at ~3.7GB per copy
+// the DB outgrew a two-deep pile — ONE snapshot is the safety net, and the write-site keep in
+// main.js aligns to the same number so copies can't stack between ticks.
+const PRECURATION_KEEP = 1;
 const PRECURATION_RE = /^sq\.db\.precuration_\d{8}_\d{6}$/;
 function rotateBackups({ deps = {}, nowMs = Date.now(), dataDir = null } = {}) {
   try {

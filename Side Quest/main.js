@@ -818,7 +818,9 @@ app.whenReady().then(() => {
     try {
       const dir = path.dirname(db.DB_PATH), pre = path.basename(db.DB_PATH) + '.precuration_';
       const baks = fs.readdirSync(dir).filter((f) => f.startsWith(pre)).sort();
-      for (const old of baks.slice(0, -5)) { try { fs.unlinkSync(path.join(dir, old)); } catch {} }
+      // keep 1, matching db_health.PRECURATION_KEEP (08-31 retention ruling) — at ~3.7GB/copy a
+      // deeper pile is what drove the volume to 250MB free.
+      for (const old of baks.slice(0, -1)) { try { fs.unlinkSync(path.join(dir, old)); } catch {} }
     } catch {}
   };
   // Perception beat: leave a first-person note in the sheep panel of what the pass tidied, so the

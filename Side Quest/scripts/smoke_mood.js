@@ -179,12 +179,21 @@ const recentRows = [
     const st = {};
     const setFn = (k, v) => { st[k] = v; };
     const LINE = 'novelty-starvation high (0.82); time-alone high (0.75) — measured 5m ago';
-    await mood.compose({ genFn: capture, recentRows: [], setFn, getFn: () => null, stateLine: LINE });
+    await mood.compose({ genFn: capture, recentRows: [], setFn, getFn: () => null, stateLine: LINE, tissueLine: null });
     ok(seenPrompt.includes(LINE), 'Slice 1: the measured readings line rides the compose prompt');
     ok(/measurements to be felt/.test(seenPrompt), '…framed as readings to feel, never numbers to recite or orders to perform');
+    // B4 (2026-08-31): the affect-tissue manifest line joins the SAME measured block — both lines
+    // together, either alone, and full fail-absent when both are missing.
+    const TLINE = 'felt now: warmth 0.31 (his turn#14812 read warmth); undertone even · closest subject: Alice (attachment 0.23, valence 0.83, 1 encounter) — computed 4m ago by the affect tissues';
     seenPrompt = '';
-    await mood.compose({ genFn: capture, recentRows: [], setFn, getFn: () => null, stateLine: null });
-    ok(!/MEASURED STATE/.test(seenPrompt), 'Slice 1 FAIL-ABSENT: no vector → the prompt carries no state section (byte-identical to pre-slice)');
+    await mood.compose({ genFn: capture, recentRows: [], setFn, getFn: () => null, stateLine: LINE, tissueLine: TLINE });
+    ok(seenPrompt.includes(LINE) && seenPrompt.includes(TLINE), 'B4: the tissue manifest line rides BESIDE the vector line in one measured block');
+    seenPrompt = '';
+    await mood.compose({ genFn: capture, recentRows: [], setFn, getFn: () => null, stateLine: null, tissueLine: TLINE });
+    ok(seenPrompt.includes(TLINE) && /MEASURED STATE/.test(seenPrompt), 'B4: the tissue line alone still grounds the block (vector absent)');
+    seenPrompt = '';
+    await mood.compose({ genFn: capture, recentRows: [], setFn, getFn: () => null, stateLine: null, tissueLine: null });
+    ok(!/MEASURED STATE/.test(seenPrompt), 'FAIL-ABSENT: no vector AND no manifests → the prompt carries no state section (byte-identical to pre-slice)');
   }
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
