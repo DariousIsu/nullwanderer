@@ -17,17 +17,26 @@ const KICK_KEY = 'curation.kick';      // operator knob: '1' → fire once, self
 const PACE_MS = (parseFloat(process.env.ZOE_CURATOR_PACE_HRS) || 12) * 60 * 60 * 1000;
 
 // THE COUNTED ROWS seed (the §59b law: evidence is queried, never storied) — duplicate-suspect
-// person names, bracket-suffix-blind. The import disease writes "Name [source-fragment]" variants
-// beside the bare name (the Keeter case: one bare + five suffixed rows); stripping at ' [' folds
-// them onto one base so the collision count is deterministic before any model ever looks.
+// person names. The import disease writes "Name [source-fragment]" variants beside the bare name
+// (the Keeter case: one bare + five suffixed rows). But a bracket suffix is only NOISE when it is
+// import-text; an FEC/bioguide ID in brackets ([P00017020], [H2CO01165]) is a PER-PERSON identity
+// marker — the curator's own kick-3 flag: distinct IDs sharing a name are distinct humans, not
+// dupes. So only a suffix containing a lowercase letter folds — detected as "differs from its own
+// upper()" because the engine's db_query AST gate refuses GLOB (proven live) and LIKE is
+// case-blind. Groups that actually contain suffixed variants rank first, so the import disease
+// outranks mere name-twins in the worklist (proven: keeter c=6 rides the refined top-12; the
+// catalano-class FEC twins dropped out).
 const SEED_SQL = `WITH p AS (
   SELECT id, name,
-         lower(trim(CASE WHEN instr(name, ' [') > 0 THEN substr(name, 1, instr(name, ' [') - 1) ELSE name END)) AS base
+         CASE WHEN instr(name, ' [') > 0 AND substr(name, instr(name, ' [')) <> upper(substr(name, instr(name, ' [')))
+              THEN lower(trim(substr(name, 1, instr(name, ' [') - 1)))
+              ELSE lower(trim(name)) END AS base,
+         (instr(name, ' [') > 0 AND substr(name, instr(name, ' [')) <> upper(substr(name, instr(name, ' [')))) AS folded
   FROM entities WHERE entity_type = 'person'
 )
 SELECT base, COUNT(*) AS c, group_concat(id) AS ids, group_concat(name, ' | ') AS names
 FROM p GROUP BY base HAVING COUNT(*) >= 2
-ORDER BY COUNT(*) DESC, base LIMIT 12`;
+ORDER BY MAX(folded) DESC, COUNT(*) DESC, base LIMIT 12`;
 
 // One gate, three doors: kill switch first (no pace burn), the operator kick second (consumed on
 // read, stamps pace), the drain-pace floor last. Stamps only on fire — a skipped burst never

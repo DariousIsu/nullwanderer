@@ -44,6 +44,13 @@ ok(/^WITH p AS/.test(cb.SEED_SQL.trim()) && !/INSERT|UPDATE|DELETE|DROP/i.test(c
 ok(/entity_type = 'person'/.test(cb.SEED_SQL), 'seed scopes to person entities');
 ok(/instr\(name, ' \['\)/.test(cb.SEED_SQL) && /HAVING COUNT\(\*\) >= 2/.test(cb.SEED_SQL) && /LIMIT 12/.test(cb.SEED_SQL),
   '⭐ §59b: the seed strips the import bracket-suffix (the Keeter pattern) and bounds the worklist');
+// Kick-3's flag fed back (the curator, store-blind, still improved its own seed): an ID-shaped
+// suffix ([P00017020]) is identity, never noise — only lowercase-bearing import text folds, and
+// suffix-bearing groups outrank bare name-twins. GLOB is refused by the engine's db_query gate
+// (proven live), so lowercase-detection rides `<> upper(...)`.
+ok(/<> upper\(substr\(name, instr\(name, ' \['\)\)\)/.test(cb.SEED_SQL) && !/GLOB/.test(cb.SEED_SQL),
+  '⭐ the fold is case-tested WITHOUT GLOB (the engine gate refuses it) — ID suffixes never fold');
+ok(/ORDER BY MAX\(folded\) DESC/.test(cb.SEED_SQL), 'import-suffix groups outrank bare name-twins in the worklist (keeter makes the cut)');
 
 // ── the task spec: the rail leads, the rows ride, the envelope closes ─────────────────────────
 const rows = [{ base: 'madeline keeter', c: 6, ids: '1783441,1785003', names: 'Madeline Keeter | Madeline Keeter [insightly legislator]' }];
