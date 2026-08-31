@@ -18820,6 +18820,17 @@ async function _flareRun({ sessionId, io, channel, userName, userMessage, need, 
       if (_fiv && _fiv.referent && !/(?<![A-Za-z])[A-Z][a-z]+/.test(String(topic || need || ''))) {
         topic = `${String(_fiv.referent).slice(0, 100)}${topic ? ` — ${topic}` : ''}`;
         console.log(`[flare] referent rides the chase — topic anchored to "${String(_fiv.referent).slice(0, 60)}"`);
+      } else {
+        // PARTIAL-NAME EXPANSION (08-31, the second Griffin flare): the need said "Griffin donor
+        // breakdown" — a proper noun, so the bare-anchor above stood down — and the analyst chased
+        // FEC candidate NAMESAKES while the thread meant Kenneth Griffin. When a recent thread
+        // referent CONTAINS the need's text and is fuller, the fuller name rides the chase.
+        const _hay = String(topic || need || '').trim();
+        if (_hay) {
+          const _hre = new RegExp(`\\b${_hay.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+          const _fuller = require('./lib/intent_pass').recentReferents().find((r) => String(r).length > _hay.length && _hre.test(String(r)));
+          if (_fuller) { topic = String(_fuller).slice(0, 140); console.log(`[flare] partial name expanded — "${_hay.slice(0, 40)}" rides as "${String(_fuller).slice(0, 60)}"`); }
+        }
       }
     } catch {}
     const spawned = [];

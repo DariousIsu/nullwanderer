@@ -74,6 +74,8 @@ const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/onModelAnswer: \(\{ need, topic, kind \}\) => \{ _flareRun\(/.test(mainSrc), 'main: answerGrounded deps carry the hook → _flareRun (fire-and-forget)');
 ok(/referent rides the chase — topic anchored/.test(mainSrc) && /_fiv\.referent && !\/\(\?<!\[A-Za-z\]\)\[A-Z\]\[a-z\]\+\//.test(mainSrc),
   '⭐ the referent rides the flare: a pronoun-question with no proper noun in need/topic anchors to the intent verdict\'s referent (the wasted-Griffin fire)');
+ok(/partial name expanded — /.test(mainSrc) && /String\(r\)\.length > _hay\.length && _hre\.test\(String\(r\)\)/.test(mainSrc),
+  '⭐ partial-name expansion: a need the thread\'s fuller referent CONTAINS rides as the FULL name ("Griffin" chased FEC namesakes while the thread meant Kenneth Griffin)');
 ok(/name: 'spawn_agent_async', args: \{ name: agent, prompt: gf\.flarePrompt\([^)]*\), canvas_tab: gf\.FLARE_TAB \}/.test(mainSrc),
   '⭐ quiet canvas (rail 3): every flare spawn passes the designated research-flare tab');
 ok(/resultText: gf\.followupText\(\{ topic: topic \|\| need, deposits, userName \}\)/.test(mainSrc), 'main: the harvest posts through fireToolFollowup with the antifab followup');
