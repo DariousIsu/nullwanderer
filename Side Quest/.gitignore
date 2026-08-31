@@ -31,3 +31,7 @@ boot_*.err
 .last_boot_log
 # Claude Code worktrees (session-local)
 .claude/worktrees/
+
+# Python bytecode (the tissues + vendored cores compile on run)
+__pycache__/
+*.pyc
