@@ -26,12 +26,19 @@ const PACE_MS = (parseFloat(process.env.ZOE_CURATOR_PACE_HRS) || 12) * 60 * 60 *
 // case-blind. Groups that actually contain suffixed variants rank first, so the import disease
 // outranks mere name-twins in the worklist (proven: keeter c=6 rides the refined top-12; the
 // catalano-class FEC twins dropped out).
+// PAREN suffixes fold too (08-31 Hooper audit: "Ed Hooper (FL)" + "Ed Hooper (US-FL)" +
+// "Ed Hooper [0e375630]" are ONE senator sharing one ocd id, invisible to a bracket-only fold).
+// Cross-state same-names will group — the curator's identifier/place-key discipline decides
+// (proven: it skipped every ID-distinct group and said why).
 const SEED_SQL = `WITH p AS (
   SELECT id, name,
-         CASE WHEN instr(name, ' [') > 0 AND substr(name, instr(name, ' [')) <> upper(substr(name, instr(name, ' [')))
-              THEN lower(trim(substr(name, 1, instr(name, ' [') - 1)))
-              ELSE lower(trim(name)) END AS base,
-         (instr(name, ' [') > 0 AND substr(name, instr(name, ' [')) <> upper(substr(name, instr(name, ' [')))) AS folded
+         CASE
+           WHEN instr(name, ' (') > 0 AND (instr(name, ' [') = 0 OR instr(name, ' (') < instr(name, ' ['))
+             THEN lower(trim(substr(name, 1, instr(name, ' (') - 1)))
+           WHEN instr(name, ' [') > 0 AND substr(name, instr(name, ' [')) <> upper(substr(name, instr(name, ' [')))
+             THEN lower(trim(substr(name, 1, instr(name, ' [') - 1)))
+           ELSE lower(trim(name)) END AS base,
+         (instr(name, ' (') > 0 OR (instr(name, ' [') > 0 AND substr(name, instr(name, ' [')) <> upper(substr(name, instr(name, ' ['))))) AS folded
   FROM entities WHERE entity_type = 'person'
 )
 SELECT base, COUNT(*) AS c, group_concat(id) AS ids, group_concat(name, ' | ') AS names

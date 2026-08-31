@@ -51,6 +51,7 @@ ok(/instr\(name, ' \['\)/.test(cb.SEED_SQL) && /HAVING COUNT\(\*\) >= 2/.test(cb
 ok(/<> upper\(substr\(name, instr\(name, ' \['\)\)\)/.test(cb.SEED_SQL) && !/GLOB/.test(cb.SEED_SQL),
   '⭐ the fold is case-tested WITHOUT GLOB (the engine gate refuses it) — ID suffixes never fold');
 ok(/ORDER BY MAX\(folded\) DESC/.test(cb.SEED_SQL), 'import-suffix groups outrank bare name-twins in the worklist (keeter makes the cut)');
+ok(/instr\(name, ' \('\) > 0/.test(cb.SEED_SQL), '⭐ the seed folds PAREN suffixes too (08-31: the Ed Hooper (FL)/(US-FL)/[ocd] triple shares one ocd id, invisible to a bracket-only fold)');
 
 // ── the task spec: the rail leads, the rows ride, the envelope closes ─────────────────────────
 const rows = [{ base: 'madeline keeter', c: 6, ids: '1783441,1785003', names: 'Madeline Keeter | Madeline Keeter [insightly legislator]' }];

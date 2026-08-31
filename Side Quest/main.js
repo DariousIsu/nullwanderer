@@ -6246,7 +6246,9 @@ async function buildCanvasEditFromOrder({ io, channel, sessionId, order }) {
 // Land a HELD product (found by the pull-up gate) on the canvas and hand it over honestly: what it
 // is, when it was made, where it came from — never a regenerated substitute. The sibling of
 // buildReportFromHeld: that one COMPOSES from held material; this one RETRIEVES a finished product.
+let _lastPullup = null;   // {subject, ts} — the correction re-drive's anchor (08-31 Hooper audit)
 async function presentHeldProduct({ io, channel, sessionId, hit, alternates = [], subject }) {
+  _lastPullup = { subject: String(subject || ''), ts: Date.now() };
   const _cuName = (() => { try { return require('./lib/interlocutor').liveName('Lucas'); } catch { return 'Lucas'; } })();   // F9: address whoever's at the keyboard
   let title = '', markdown = '', ref = '';
   try {
@@ -13451,8 +13453,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                 // tokensOf now strips generic verbs/connectors too (the #17067 fabrication) — so a subject that
                 // reduces to only generic words ("the list we put together") yields ZERO tokens, the title gate
                 // below holds (`_stoks.length &&`), and we honest-miss instead of landing a wrong doc.
-                const _stoks = _pl.tokensOf(verdict.subject || userMessage);
-                const _titleHit = (h) => _stoks.length && _stoks.some((w) => String(h.title || '').toLowerCase().includes(w));
+                // TITLE GATE v2 (08-31 Hooper audit): two word-boundary hits for a multi-word
+                // subject — one shared surname landed a namesake memorial as "the Hooper file".
+                const _titleHit = (h) => _pl.titleMatches(verdict.subject || userMessage, h.title);
                 const _match = _phits.find(_titleHit);
                 if (_match) {
                   presentHeldProduct({ io, channel, sessionId, hit: _match, alternates: _phits.filter((h) => h !== _match && _titleHit(h)), subject: verdict.subject || userMessage.slice(0, 120) })
@@ -13529,8 +13532,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // carries a subject token, scanning past fresher body-only decoys; otherwise fall through so a
         // fresh build is offered rather than a wrong doc substituted.
         const _plL = require('./lib/product_ledger');
-        const _stoksL = _plL.tokensOf(_pask.subject);
-        const _titleHitL = (h) => _stoksL.length && _stoksL.some((w) => String(h.title || '').toLowerCase().includes(w));
+        // TITLE GATE v2 (08-31 Hooper audit) — same floor as the router door.
+        const _titleHitL = (h) => _plL.titleMatches(_pask.subject, h.title);
         const _matchL = _phits.find(_titleHitL);
         if (_matchL) {
           followupFired = true;
@@ -13849,6 +13852,29 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const _refine = _intake.mints ? (() => { try { return openThreadsLib.routeRefinement(userMessage, db.getActiveOpenThreads(50, { newestFirst: true })); } catch { return null; } })() : null;
   if (!_intake.mints) {
     console.log(`[intake] type=${_intake.type} (${_intake.via}) — no thread extraction: ${String(userMessage).slice(0, 60)}`);
+    // CORRECTION RE-DRIVE (08-31 Hooper audit): "No, Ed Hooper the FL state Sen" typed as a bare
+    // ack and routed explore — a brainstorm OFFER answered a referent CORRECTION, and the graph
+    // lookup never re-ran. A negation-led short turn carrying a proper noun, within 10min of a
+    // pull-up presentation, IS the corrected referent: re-drive the SAME pull-up with the new
+    // subject (title gate v2 applies) — an offer never answers a correction.
+    try {
+      const _corrM = /^\s*(?:no|nope|not that|wrong|negative)[,.!\s-]+(.{3,120})$/i.exec(String(userMessage).trim());
+      const _corrPayload = _corrM ? _corrM[1].trim() : '';
+      if (_corrPayload && /(?<![A-Za-z])[A-Z][a-z]+/.test(_corrPayload) && _lastPullup && Date.now() - _lastPullup.ts < 10 * 60 * 1000) {
+        console.log(`[pull-up] correction re-drive — corrected subject "${_corrPayload.slice(0, 80)}" (was "${String(_lastPullup.subject).slice(0, 60)}")`);
+        const _plC = require('./lib/product_ledger');
+        let _chits = [];
+        try { _chits = _plC.searchProducts({ db, query: _corrPayload, notesDir: filesLib.resolvePath('notes'), limit: 3 }); } catch {}
+        const _cMatch = _chits.find((h) => _plC.titleMatches(_corrPayload, h.title));
+        if (_cMatch) {
+          presentHeldProduct({ io, channel, sessionId, hit: _cMatch, alternates: [], subject: _corrPayload })
+            .catch((e) => console.error('[pull-up] correction present failed:', e.message));
+        } else {
+          _lastPullup = { subject: _corrPayload, ts: Date.now() };
+          fireToolFollowup({ io, channel, sessionId, resultText: `[${userName || 'Lucas'} corrected the referent: they mean "${_corrPayload.slice(0, 100)}" — and NO held product's title matches it. Say plainly that you don't have a made product for that exact subject and offer to build it fresh now; NEVER substitute a namesake or lookalike document, and NEVER guess a reason it's missing.]` }).catch(() => {});
+        }
+      }
+    } catch (e) { console.error('[pull-up] correction re-drive failed:', e.message); }
   } else if (_refine) {
     try { db.touchOpenThread(_refine.targetId, `refined by ${userName || 'Lucas'}: ${String(userMessage).slice(0, 80)}`); } catch {}
     try {
@@ -19263,7 +19289,19 @@ async function _surfaceOpenPromise() {
     try {
       const _ftoks = require('./lib/artifact_registry').tokensOf(t);
       const _hasProper = /(?<![A-Za-z])[A-Z][a-z]{2,}/.test(t);
-      if (_ftoks.length < 3 && !_hasProper) {
+      const _hasDigit = /\d/.test(t);
+      let _fragment = _ftoks.length < 3 && !_hasProper;
+      // 08-31 Hooper-audit upgrade: a MULTI-token verb-led clause with no proper noun and no
+      // digit is still a say-fragment — "entries looks like enough see whether structure holds"
+      // had 7 tokens, sailed the <3 floor, and composed a 5.8KB junk-named doc at 08:06. A real
+      // subject in this domain names someone or something (a capitalized word or a number) —
+      // unless the topic kin-matches a project we actually keep (the "cleaner header formatting"
+      // class stays alive through its kin bind).
+      if (!_fragment && !_hasProper && !_hasDigit) {
+        let _kin = null; try { _kin = require('./lib/artifact_registry').matchKinProject(t); } catch {}
+        if (!_kin) _fragment = true;
+      }
+      if (_fragment) {
         rq.complete(it.id, { outcome: 'mis-extracted-fragment' });
         console.log(`[delivery] promise#${it.id} topic "${t.slice(0, 60)}" is a say-fragment (${_ftoks.length} content token(s), no proper noun) — retired, nothing composes`);
         return;

@@ -136,5 +136,32 @@ ok(/hold REFUSED as vague/.test(main) && /IN THE NOTE'S OWN WORDS/.test(main), '
   ok(reg.matchKinProject('hows iowa doing') === null, 'b3(a) guard: bare state smalltalk never binds (below the 2-token floor)');
 }
 
+// ── THE HOOPER AUDIT WAVE (08-31): title gate v2 + the correction re-drive + the fragment
+// upgrade. Live spiral: "biography on FL District 21 Senator Ed Hooper" → a districts-map PDF
+// claimed as "a bio built yesterday", then a NAMESAKE memorial bill landed on canvas as "That's
+// the Hooper file", then his correction was typed ack → routed explore → a brainstorm offer. ──
+{
+  const pl = require('../lib/product_ledger');
+  ok(pl.titleMatches('ed hooper document', 'Bill — SJR1048: A RESOLUTION to honor the memory of Carmon Thomas Hooper III of Brownsville') === false,
+    '⭐ title gate v2: ONE shared surname is a NAMESAKE, never an identity — the memorial bill no longer matches');
+  ok(pl.titleMatches('ed hooper document', 'Ed Hooper — Florida Senate District 21 Biography') === true,
+    'title gate v2: the real bio title carries BOTH name words (word-boundary)');
+  ok(pl.titleMatches('ed hooper', 'Committee members honored at the event') === false,
+    "title gate v2: 'ed' never rides inside 'honorED' — word boundaries, not substrings");
+  ok(pl.titleMatches('keeter', 'Report — Madeline Keeter outreach') === true,
+    'title gate v2: a single-word subject keeps its single word-boundary match');
+  ok(pl.titleMatches('the list we put together', 'Minnesota levy tables') === false,
+    'title gate v2: an all-generic subject matches nothing (the #17067 guard holds)');
+  const mainSrc2 = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/_pl\.titleMatches\(verdict\.subject \|\| userMessage, h\.title\)/.test(mainSrc2) && /_plL\.titleMatches\(_pask\.subject, h\.title\)/.test(mainSrc2),
+    'wiring: BOTH pull-up doors ride title gate v2');
+  ok(/correction re-drive — corrected subject/.test(mainSrc2) && /_lastPullup = \{ subject: String\(subject \|\| ''\), ts: Date\.now\(\) \}/.test(mainSrc2),
+    '⭐ wiring: a negation-led correction after a pull-up RE-DRIVES the pull-up with the corrected subject (an offer never answers a correction)');
+  ok(/NEVER substitute a namesake or lookalike document, and NEVER guess a reason it's missing/.test(mainSrc2),
+    'wiring: the correction miss is honest — no namesake substitute, no speculated absence reason');
+  ok(/_hasDigit = \/\\d\/\.test\(t\)/.test(mainSrc2) && /matchKinProject\(t\)/.test(mainSrc2) && /_fragment = true/.test(mainSrc2),
+    '⭐ fragment upgrade: a multi-token no-proper no-digit topic composes NOTHING unless it kin-matches a kept project (the entries-looks-like-enough junk doc)');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

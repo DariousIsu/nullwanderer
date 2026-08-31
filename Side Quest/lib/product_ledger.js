@@ -134,6 +134,26 @@ function tokensOf(subject) {
   return out.slice(0, 8);
 }
 
+// TITLE GATE v2 (08-31, the Hooper audit): the old gate was `.some()` over tokensOf — ONE
+// surname token landed a memorial bill for a NAMESAKE on the canvas ("That's the Hooper file",
+// doc#45837 = Carmon Thomas Hooper III; the alternates were Kyler Hooper of Gatlinburg). Two
+// cures in one: (1) a multi-word subject must put TWO of its words in the title — one shared
+// word is a namesake, never an identity; (2) words match at WORD BOUNDARIES, never substrings
+// ('ed' must not ride 'honorED'), and 2-char words count — 'Ed' is a real first name the
+// 3-char tokenizer drops. A single-word subject keeps the single word-boundary match (it can
+// do no better). Zero usable words → false → the caller's honest-miss line runs.
+const _TITLE_STOP_2CH = new Set(['of', 'to', 'in', 'on', 'at', 'by', 'we', 'me', 'my', 'it', 'is', 'be', 'as', 'an', 'or', 'if', 'do', 'no', 'so', 'up', 'us', 'he', 'go', 'am']);
+function titleMatches(subject, title) {
+  const t = str(title).toLowerCase();
+  if (!t) return false;
+  const seen = new Set();
+  const words = (str(subject).toLowerCase().match(/[a-z][a-z0-9'-]+/g) || [])
+    .filter((w) => !_TITLE_STOP_2CH.has(w) && !(w.length >= 3 && tokensOf(w).length === 0) && !seen.has(w) && seen.add(w) !== undefined);
+  if (!words.length) return false;
+  const hits = words.filter((w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(t));
+  return hits.length >= Math.min(2, words.length);
+}
+
 /**
  * searchProducts({ db, query, notesDir?, limit?, now? }) → ranked hits over the product stores:
  *   documents table (non-news, non-conversation, non-web_page — ingested pages are her READING,
@@ -231,4 +251,4 @@ function searchProducts({ db, query, notesDir = null, limit = 3, now = Date.now(
   return reordered.slice(0, Math.max(1, limit));
 }
 
-module.exports = { detectAsk, detectAskLoose, searchProducts, tokensOf, isDirectedTask };
+module.exports = { detectAsk, detectAskLoose, searchProducts, tokensOf, titleMatches, isDirectedTask };
