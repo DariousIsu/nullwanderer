@@ -69,6 +69,18 @@ ok(ow.resolveLoose('Zo', {}) && ow.resolveLoose('Zo', {}).object.id === 'self:zo
   const fs2 = require('fs'), path2 = require('path');
   const mainSrc = fs2.readFileSync(path2.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/ambiguity ASK stood down — "\$\{amb\.mention\}" anchors to the OWNER WORLD/.test(mainSrc), '⭐ wiring: the ambiguity interceptor consults the owner world BEFORE asking (his world outranks namesakes)');
+  // THE THREAD-REFERENT ANCHOR (08-31 Griffin fail): "which Griffin?" offered three graph
+  // strangers while the thread's own verdicts held "Kenneth Griffin" (who wasn't in the graph
+  // at all). The thread's referent history is consulted before any which-one question.
+  ok(/anchors to the THREAD's own referent/.test(mainSrc) && /recentReferents\(\)\.find/.test(mainSrc),
+    '⭐ wiring: a mention contained in a RECENT resolved referent anchors to the thread, never a which-one against strangers');
+  {
+    const ip = require('../lib/intent_pass');
+    ip._resetForTest();
+    ok(typeof ip.recentReferents === 'function' && ip.recentReferents().length === 0, 'intent_pass: the referent ledger starts empty');
+    ok(/referent joins the topic/.test(mainSrc) && /_iv\.referent/.test(mainSrc),
+      '⭐ wiring: a verdict referent with a proper noun the topic lacks JOINS the project topic at the road claim (the Griffin-less donor slug)');
+  }
   ok(/is org-shaped; person namesakes are never its candidates/.test(mainSrc), 'wiring: an org-shaped mention grounds instead of offering people');
   ok(/db\.setMeta\('clarify\.pending', JSON\.stringify\(\{ mention: amb\.mention/.test(mainSrc), 'wiring: an ambiguity ASK arms clarify.pending');
   ok(/THIS TURN ANSWERS your pending which-one question/.test(mainSrc) && /FULFILL THE ORIGINAL ASK/.test(mainSrc), '⭐ wiring: the next turn resolves the pending question and resumes the ORIGINAL ask');

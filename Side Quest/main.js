@@ -9469,6 +9469,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (_ownerHit) {
       console.log(`[main] ambiguity ASK stood down — "${amb.mention}" anchors to the OWNER WORLD (${(_ownerHit.object && _ownerHit.object.id) || 'owner'}) — never a which-one question`);
       action = 'ground-skip';
+    } else if (action === 'ask' && (() => {
+      // THE THREAD-REFERENT ANCHOR (08-31 Griffin fail): "which Griffin — Elizabeth, Reinecke,
+      // or Christopher?" was asked while the thread's OWN intent verdicts had resolved "Kenneth
+      // Griffin" an hour earlier (and the real referent wasn't even IN the graph — every offered
+      // candidate was a stranger). A mention contained in a recent resolved referent anchors to
+      // THAT — the thread's own referent outranks every namesake, same law as the owner world.
+      try {
+        const _mre = new RegExp(`\\b${String(amb.mention).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+        const _thr = require('./lib/intent_pass').recentReferents().find((r) => _mre.test(String(r)));
+        if (_thr) { console.log(`[main] ambiguity ASK stood down — "${amb.mention}" anchors to the THREAD's own referent ("${String(_thr).slice(0, 60)}") — never a which-one against strangers`); return true; }
+      } catch {}
+      return false;
+    })()) {
+      action = 'ground-skip';
     } else if (action === 'ask' && /\b(?:center|centre|institute|foundation|committee|council|caucus|university|college|company|corp(?:oration)?|association|agency|department|bureau)\b/i.test(amb.mention)) {
       // Type-aware belt: an org-shaped mention never offers PEOPLE as its candidates.
       console.log(`[main] ambiguity ASK → GROUND — "${amb.mention}" is org-shaped; person namesakes are never its candidates`);
@@ -19087,6 +19101,17 @@ function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
                 if (_iv.referent && String(_iv.referent) !== String(_ivTopic)) {
                   const _kinR = require('./lib/artifact_registry').matchKinProject(String(_iv.referent));
                   if (_kinR) { console.log(`[road] referent-first bind — "${String(_iv.referent).slice(0, 60)}" kin-matches "${_kinR.slug}"; the topic phrasing rides as spec`); _ivTopic = String(_iv.referent).slice(0, 140); }
+                }
+              } catch {}
+              // THE REFERENT JOINS THE PROJECT'S NAME (08-31 Griffin fail): the donor project
+              // minted as "what find elected officals would attractive donor" — none of HIS
+              // words for it ("Griffin donor breakdown") — so every later update ask kin-missed
+              // and a sibling would mint. When the verdict's referent carries a proper noun the
+              // topic lacks, it leads the topic, so slug/title/kin vocabulary hold the name.
+              try {
+                if (_iv.referent) {
+                  const _refProper = (String(_iv.referent).match(/(?<![A-Za-z])[A-Z][a-z]+/g) || []).filter((w) => !new RegExp(`\\b${w}\\b`, 'i').test(String(_ivTopic)));
+                  if (_refProper.length) { _ivTopic = `${String(_iv.referent).slice(0, 80)} — ${_ivTopic}`.slice(0, 160); console.log(`[road] referent joins the topic — "${_refProper.join(' ')}" rides the project's name`); }
                 }
               } catch {}
               if (!require('./lib/document_road').hasSpecificTopic(_ivTopic)) {

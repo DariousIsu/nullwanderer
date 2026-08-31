@@ -95,6 +95,17 @@ async function classify(text, { windowText = '', deps = {} } = {}) {
   return out;
 }
 
+// THE THREAD-REFERENT LEDGER (08-31, the Griffin fail): "which Griffin — Elizabeth, Reinecke,
+// or Christopher?" was asked in a thread where this very organ had resolved "Kenneth Griffin"
+// an hour earlier — the ambiguity interceptor consulted the graph's namesakes but never the
+// thread's own referent history. Recent resolved referents are the conversation's anchors;
+// a which-one question checks them BEFORE offering strangers (the conversational sibling of
+// the owner-anchor law: the thread's own referent outranks every namesake).
+const _referents = [];
+function recentReferents({ nowMs = Date.now(), windowMs = 60 * 60 * 1000 } = {}) {
+  return _referents.filter((r) => nowMs - r.ts < windowMs).map((r) => r.referent);
+}
+
 // One verdict per turn: computed once, cached by text, read by every door via current().
 let _last = null;
 async function intentPass(text, { windowText = '', deps = {}, nowMs = Date.now() } = {}) {
@@ -106,6 +117,7 @@ async function intentPass(text, { windowText = '', deps = {}, nowMs = Date.now()
   }
   if (verdict) console.log(`[intent] ${verdict.intent}${verdict.deliverable ? `:${verdict.deliverable}` : ''} (${verdict.via}, conf ${verdict.confidence.toFixed(2)})${verdict.referent ? ` — referent: ${String(verdict.referent).slice(0, 60)}` : ''}`);
   else console.log('[intent] no verdict (classifier unavailable) — the nets alone govern this turn');
+  if (verdict && verdict.referent) { _referents.push({ referent: verdict.referent, ts: nowMs }); if (_referents.length > 8) _referents.shift(); }
   _last = { text: String(text || ''), ts: nowMs, verdict: verdict || null };
   return verdict;
 }
@@ -116,4 +128,4 @@ function current({ nowMs = Date.now() } = {}) {
 
 function _resetForTest() { _last = null; }
 
-module.exports = { fastPath, classify, intentPass, current, INTENTS, FRESH_MS, _resetForTest };
+module.exports = { fastPath, classify, intentPass, current, recentReferents, INTENTS, FRESH_MS, _resetForTest };
