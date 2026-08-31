@@ -62,9 +62,24 @@ function curatorPrompt({ seedRows = [] } = {}) {
     + 'End with exactly: FILED: <one line per proposal with its evidence> · SKIPPED: <group + why> · ERRORS: <tool errors verbatim, or none>.';
 }
 
+// A sweep that died of system-wide tool failure did NO work — it must return its pace slot so
+// the next drain retries instead of quietly burning 12h on a zero-work run (first-fire lesson,
+// 08-31 p202: the kick fired ~5min into engine store-init warm-up; every tool bounced "Store not
+// initialized" and the honest deposit carried it). Detection rides the deposit's OWN envelope:
+// nothing filed AND a non-none ERRORS segment. A sweep that filed anything keeps its slot —
+// work happened, partial errors are the curator's honest margin, not a failure.
+function sweepFailed(deposit) {
+  const s = String(deposit || '');
+  const m = /ERRORS:\s*([\s\S]*)$/.exec(s);
+  const errs = m ? m[1].trim() : '';
+  const filedEmpty = !/FILED:/.test(s) || /FILED:\s*(none|nothing|0)\b/i.test(s);
+  return Boolean(filedEmpty && errs && !/^(none|nothing)\b/i.test(errs));
+}
+
 // The deposit lands in the MONOLOGUE, never the chat (the unprompted-channel law — a curation
 // triage is housekeeping, not a discovered connection). This note is that monologue line.
 function burstNote({ deposit = '', agent = AGENT } = {}) {
+  if (sweepFailed(deposit)) return `[Curation] The ${agent}'s sweep hit a system-wide tool failure — nothing was actually swept; the slot is returned and the next drain retries.`;
   const m = /FILED:\s*([\s\S]*?)(?:SKIPPED:|$)/.exec(String(deposit));
   const filedTxt = m ? m[1].trim() : '';
   const n = filedTxt && !/^(none|nothing|0)\b/i.test(filedTxt) ? filedTxt.split('\n').filter((l) => l.trim()).length : 0;
@@ -73,4 +88,4 @@ function burstNote({ deposit = '', agent = AGENT } = {}) {
     : `[Curation] The ${agent} swept the person records; nothing worth proposing this pass — an honest empty sweep.`;
 }
 
-module.exports = { AGENT, CURATOR_TAB, KILL_KEY, PACE_KEY, KICK_KEY, PACE_MS, SEED_SQL, shouldFire, curatorPrompt, burstNote };
+module.exports = { AGENT, CURATOR_TAB, KILL_KEY, PACE_KEY, KICK_KEY, PACE_MS, SEED_SQL, shouldFire, curatorPrompt, burstNote, sweepFailed };

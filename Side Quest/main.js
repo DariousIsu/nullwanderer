@@ -18842,6 +18842,12 @@ async function _curationBurst(source) {
     }
     if (!out) { console.log(`[curation-burst] ${cb.AGENT} did not return inside the window — agent-consume is the backstop`); return; }
     _markRunConsumed(runId, 'curation');
+    // A tool-failure sweep did no work — return the pace slot so the next drain retries
+    // (the deposit's own ERRORS envelope is the detector; see lib/curation_burst.sweepFailed).
+    if (cb.sweepFailed(out)) {
+      db.setMeta(cb.PACE_KEY, '0');
+      console.log('[curation-burst] sweep died of tool failure — pace slot returned, next drain retries');
+    }
     const note = cb.burstNote({ deposit: String(out) });
     try {
       const row = db.insertMonologue({ content: note, model: 'curation-burst', type: 'reading' });

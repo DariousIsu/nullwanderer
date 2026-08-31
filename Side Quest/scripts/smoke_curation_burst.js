@@ -62,6 +62,15 @@ const n1 = cb.burstNote({ deposit: 'FILED: keeter pair (shared email) \nkeeter p
 ok(/filed 2 duplicate proposals/.test(n1) && /gates to judge/.test(n1), 'a filing sweep is counted and credits the gates');
 ok(/honest empty sweep/.test(cb.burstNote({ deposit: 'FILED: none · SKIPPED: all too thin · ERRORS: none' })), 'an empty sweep is said honestly, never dressed up');
 
+// ── the failed-sweep detector (first-fire lesson, 08-31 p202: every tool bounced on engine
+// store-init warm-up; the honest deposit carried it and the pace slot was quietly burned) ──────
+const _failedSpecimen = 'FILED: none · SKIPPED: all groups due to system-wide tool failure · ERRORS: "Store not initialized. Start the server via echo.main:main …"';
+ok(cb.sweepFailed(_failedSpecimen) === true, '⭐ the live specimen (p202 first fire) is detected as a failed sweep');
+ok(cb.sweepFailed('FILED: none · SKIPPED: all too thin · ERRORS: none') === false, 'a clean empty sweep is NOT a failure (its slot stays spent)');
+ok(cb.sweepFailed('FILED: keeter pair (shared email) · SKIPPED: none · ERRORS: one get_contact timeout') === false, 'a sweep that filed keeps its slot — partial errors are honest margin, not failure');
+ok(/tool failure/.test(cb.burstNote({ deposit: _failedSpecimen })) && /slot is returned/.test(cb.burstNote({ deposit: _failedSpecimen })),
+  'the failed-sweep note says failure, never "honest empty sweep"');
+
 // ── wiring (main.js): the drain call site, the quiet tab, the consume mark, monologue-not-chat ─
 const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 const _adjIdx = mainSrc.indexOf("[adjudicate] pass failed");
@@ -74,6 +83,7 @@ ok(/canvas_tab: cb\.CURATOR_TAB/.test(fnBody), 'quiet canvas (rail 3): the spawn
 ok(/_markRunConsumed\(runId, 'curation'\)/.test(fnBody), 'double-delivery cure: a harvested sweep is marked consumed');
 ok(/insertMonologue/.test(fnBody) && !/fireToolFollowup/.test(fnBody), '⭐ the deposit lands in the MONOLOGUE, never the chat (the unprompted-channel law)');
 ok(/agent-consume is the backstop/.test(fnBody), 'a late curator is left to the agent-consume backstop, honestly');
+ok(/if \(cb\.sweepFailed\(out\)\) \{/.test(fnBody) && /db\.setMeta\(cb\.PACE_KEY, '0'\)/.test(fnBody), '⭐ a tool-failure sweep RETURNS its pace slot — the next drain retries');
 ok(/curation\.kick/.test(mainSrc) && /_curationBurst\('operator-kick'\)/.test(mainSrc), 'the operator kick watcher is armed (the acceptance-drive door)');
 
 // ── the engine-side manifest: registered, proposer-only whitelist ─────────────────────────────
