@@ -5387,6 +5387,10 @@ try {
     // continue" 08-15): drives + affect computed from existing exhaust, journaled every 10min,
     // ZERO consumers until ~48h of trajectories verify honest by hand. Measured, never asserted.
     try { require('./lib/internal_state').tick({ deps: { lastUserTurnTs } }); } catch {}
+    // AFFECT TISSUES (B2/B3, 2026-08-31 — docs/AFFECT_SUBSTRATE_RESEARCH_2026-08-31.md): the python
+    // passes ride this tick DARK — due-gated (30 min), idle-gated, sequential, below-normal priority,
+    // mode=ro reads only. Manifests land in data/affect/; nothing consumes them yet.
+    try { require('./lib/affect_tissues').maybeRun({ deps: { lastUserTurnTs } }); } catch {}
   }, 10 * 60 * 1000);
   if (_dbhTick.unref) _dbhTick.unref();
   // AMBIENT SCREEN BEAT (senses §2): titles-only sample every 120s → code-computed deltas → one
