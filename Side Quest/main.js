@@ -19062,6 +19062,9 @@ async function _roadRun({ order, road, userText, sessionId, asResume = false }) 
       const _who = _spawned.filter((s) => deposits.some((d) => d.startsWith(`— ${s.agent}`))).map((s) => s.agent.replace(/_/g, ' ')).join(', ');
       msg = `The ${String(order.deliverable || 'document')} is done — saved at ${rel} (${kb}KB, ~${words} words${_who ? `, with section research from ${_who}` : ''}).${w.text.length < _floor ? ' It ran thinner than the sources warrant — flagged for a follow-up pass.' : ''}\n\n${lead}`;
       console.log(`[road] WRITER'S TURN delivered: ${rel} (${kb}KB, ${words}w, model ${w.model}, ${deposits.length}/${_spawned.length} deposit(s), ${Math.round((Date.now() - t0) / 1000)}s)`);
+      // A registered delivery is a competence win — the affect substrate's second win channel
+      // (internal_state v3; the pursuit-resolved channel lives in recheck_queue.complete).
+      try { require('./lib/obs_bus').emit({ lane: 'road', kind: 'win', text: `registered delivery: ${rel} (${kb}KB, ~${words}w)`, ref: _r.slug }); } catch {}
       try { dr.meter(road, 'writer-turn'); } catch {}
     } else {
       msg = `I started the ${String(order.deliverable || 'document')} and the writing pass returned nothing — that's a failure on my side, not progress. It stays on my ledger and I'll retry with the material I hold.`;

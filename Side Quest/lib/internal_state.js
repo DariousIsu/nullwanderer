@@ -37,7 +37,7 @@ const JOURNAL_CAP = 300;
 const VAD_BASELINE = { v: 0.55, a: 0.45, d: 0.50 };
 const VAD_HALF_LIFE_MS = 4 * 3600e3;
 const VAD_MAX_DEV = 0.30;          // max deviation from baseline per axis — no saturation at the extremes
-const MODEL_VERSION = 2;           // bump when the appraisal/dynamics model changes → journal resets (v2 = 08-15 recalibration)
+const MODEL_VERSION = 3;           // bump when the appraisal/dynamics model changes → journal resets (v3 = 08-31 appraisal symmetry)
 const SOCIAL_HALF_RISE_MS = 5 * 3600e3;
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -101,6 +101,14 @@ function appraiseEvents(events) {
     // CURATED signals only — not the console-capture firehose:
     if (e.kind === 'need') { seen.add(sig); da += 0.04; why.push(`need:${e.lane}`); }                              // an escalated problem is activating
     else if (e.kind === 'anomaly' && (e.lane === 'machine' || e.lane === 'db')) { seen.add(sig); da += 0.05; dv -= 0.03; dd -= 0.02; why.push(`stress:${e.lane}`); }   // real resource / memory-substrate stress
+    // ⚠ RE-RECALIBRATED 2026-08-31 (v3 — the 51h honesty read): with ONLY the two impulses above,
+    // valence could never move UP — needs mint steadily, decay lost, and v/a sat PINNED at the
+    // deviation band's edges for all 300 journal entries (information-free, and readingsLine fed
+    // that permanent "dimmed/keyed-up" into the mood prompt). The affect diet was one-eyed, not
+    // the dynamics wrong. `win` = a verifiably completed thing (a pursuit resolved with an outcome,
+    // a registered road delivery) — satisfaction moves valence up; competence-shaped, so dominance
+    // rises a little too. Same dedupe + per-tick cap + deviation band bound it.
+    else if (e.kind === 'win') { seen.add(sig); dv += 0.05; da += 0.01; dd += 0.02; why.push(`win:${e.lane}`); }
     // everything else (self_watch's raw `anomaly` firehose, info lines, deprecation noise) is NOT appraised
   }
   return {

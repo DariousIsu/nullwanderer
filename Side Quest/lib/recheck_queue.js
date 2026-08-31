@@ -91,7 +91,14 @@ function openByKind({ kind, limit = 1, now = Date.now() } = {}) {
 }
 
 function complete(id, { outcome = '', now = Date.now() } = {}) {
-  try { db().getDb().prepare(`UPDATE recheck_queue SET status = 'done', outcome = ?, last_attempt_ts = ?, attempts = attempts + 1 WHERE id = ?`).run(str(outcome).slice(0, 500), now, id); return true; }
+  try {
+    db().getDb().prepare(`UPDATE recheck_queue SET status = 'done', outcome = ?, last_attempt_ts = ?, attempts = attempts + 1 WHERE id = ?`).run(str(outcome).slice(0, 500), now, id);
+    // A resolved pursuit is the program's one universal satisfaction signal (promise paid, absence
+    // answered, verification landed) — the affect substrate's win channel (internal_state v3). The
+    // failure paths (defer/backoff) never come here, so `done` is honestly a win.
+    try { require('./obs_bus').emit({ lane: 'pursuit', kind: 'win', text: `resolved: ${str(outcome).slice(0, 120) || 'done'}`, ref: `rq:${id}` }); } catch {}
+    return true;
+  }
   catch { return false; }
 }
 

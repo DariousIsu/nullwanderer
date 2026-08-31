@@ -50,6 +50,26 @@ ok(Math.abs(dupd.da - is.appraiseEvents([{ kind: 'anomaly', lane: 'machine', ref
 const flood = is.appraiseEvents(Array.from({ length: 50 }, (_, i) => ({ kind: 'anomaly', lane: 'machine', ref: 'r' + i })));
 ok(flood.da === 0.12, 'appraisal: 50 DISTINCT stressors → still CAPPED at +0.12 (the lurch bound)');
 ok(is.appraiseEvents([]).dv === 0, 'appraisal: quiet → zero impulse');
+// ── v3 APPRAISAL SYMMETRY (2026-08-31 — the 51h honesty read): with only need/anomaly impulses,
+// valence could never rise, and v/a sat PINNED at the deviation band's edges for all 300 journal
+// entries (v∈[0.25,0.29], a∈[0.73,0.75] — information-free). Wins now move it up.
+const win = is.appraiseEvents([{ kind: 'win', lane: 'pursuit', ref: 'rq:9' }]);
+ok(win.dv > 0 && win.dd > 0 && win.why[0] === 'win:pursuit', `appraisal v3: a resolved pursuit lifts valence + dominance (${win.why.join(',')})`);
+const mixed = is.appraiseEvents([{ kind: 'win', lane: 'road', ref: 'slug' }, { kind: 'anomaly', lane: 'machine', ref: 'disk_low' }]);
+ok(mixed.dv > -0.03 && mixed.dv < 0.05 && mixed.why.length === 2, 'appraisal v3: a win and a stressor NET (both signs live in one tick)');
+const windup = is.appraiseEvents(Array.from({ length: 30 }, () => ({ kind: 'win', lane: 'pursuit', ref: 'rq:9' })));
+ok(Math.abs(windup.dv - win.dv) < 1e-9, 'appraisal v3: 30 re-emits of ONE win (signature dedupe) = one signal — no euphoria pinning');
+const winflood = is.appraiseEvents(Array.from({ length: 50 }, (_, i) => ({ kind: 'win', lane: 'pursuit', ref: 'rq:' + i })));
+ok(winflood.dv === 0.12, 'appraisal v3: 50 distinct wins still CAPPED at +0.12 (the lurch bound is symmetric)');
+ok(is.MODEL_VERSION === 3, 'v3: MODEL_VERSION bumped — the saturated v2 journal restarts clean');
+// wiring: the two win emitters exist (the exhaust actually carries wins now)
+{
+  const fsw = require('fs'), pathw = require('path');
+  const rq = fsw.readFileSync(pathw.join(__dirname, '..', 'lib', 'recheck_queue.js'), 'utf8');
+  ok(/kind: 'win'/.test(rq) && /lane: 'pursuit'/.test(rq), '⭐ wiring: recheck_queue.complete emits the pursuit-resolved win (the universal satisfaction signal)');
+  const mainw = fsw.readFileSync(pathw.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/lane: 'road', kind: 'win'/.test(mainw), '⭐ wiring: a registered road delivery emits a competence win');
+}
 // bounded deviation: sustained stress reads "elevated", never pinned at the extreme
 let vad = is.VAD_BASELINE;
 for (let i = 0; i < 40; i++) { const d = is.decayVad(vad, 0); const a = is.appraiseEvents([{ kind: 'anomaly', lane: 'machine', ref: 'disk_low' }]); vad = { v: d.v + a.dv, a: d.a + a.da, d: d.d + a.dd }; }
