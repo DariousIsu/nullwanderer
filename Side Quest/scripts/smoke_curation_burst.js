@@ -73,6 +73,14 @@ ok(cb.sweepFailed('FILED: keeter pair (shared email) · SKIPPED: none · ERRORS:
 ok(/tool failure/.test(cb.burstNote({ deposit: _failedSpecimen })) && /slot is returned/.test(cb.burstNote({ deposit: _failedSpecimen })),
   'the failed-sweep note says failure, never "honest empty sweep"');
 
+// ── the markdown-bold envelope (third first-fire lesson, run 542857bd: `**FILED:** none` beat the
+// raw parser — the monologue claimed "filed 2" over a zero-work sweep; the DB delta caught it) ──
+const _mdSpecimen = 'Sweep complete — blocked at the gate by a systemic store failure.\n\n**FILED:** none — I could not read a single record, so I had no evidence to attach to any proposal.\n\n**SKIPPED:** all 12 groups — store not initialized.\n\n**ERRORS:** `"Store not initialized. …"` — returned verbatim by `list_resolution_proposals`.';
+ok(cb.sweepFailed(_mdSpecimen) === true, '⭐ the live markdown specimen (run 542857bd) is detected as a FAILED sweep');
+ok(/tool failure/.test(cb.burstNote({ deposit: _mdSpecimen })), 'the markdown failure never becomes a "filed N proposals" claim (the say-do catch)');
+const _mdSuccess = '**FILED:** keeter pair (shared email madeline.keeter@gmail.com)\n**SKIPPED:** none · **ERRORS:** none';
+ok(/filed 1 duplicate proposal\b/.test(cb.burstNote({ deposit: _mdSuccess })), 'a markdown-bold SUCCESS deposit still counts its filings right');
+
 // ── wiring (main.js): the drain call site, the quiet tab, the consume mark, monologue-not-chat ─
 const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 const _adjIdx = mainSrc.indexOf("[adjudicate] pass failed");

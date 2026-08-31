@@ -72,8 +72,15 @@ function curatorPrompt({ seedRows = [], firedAt = Date.now() } = {}) {
 // initialized" and the honest deposit carried it). Detection rides the deposit's OWN envelope:
 // nothing filed AND a non-none ERRORS segment. A sweep that filed anything keeps its slot —
 // work happened, partial errors are the curator's honest margin, not a failure.
+// Markdown-normalize before parsing (third first-fire lesson, 08-31 run 542857bd): the agent
+// wrapped the envelope in bold — `**FILED:** none` — and the raw-text parser matched FILED:
+// inside the markers, captured "** none —…", failed the none-check, and the monologue claimed
+// "filed 2 duplicate proposals" over a zero-work sweep (the DB delta caught the lie). A prompt
+// rule ("end with exactly") is a request; a tolerant parser is the gate.
+function _normalize(deposit) { return String(deposit || '').replace(/\*\*/g, '').replace(/__/g, '').replace(/`/g, ''); }
+
 function sweepFailed(deposit) {
-  const s = String(deposit || '');
+  const s = _normalize(deposit);
   const m = /ERRORS:\s*([\s\S]*)$/.exec(s);
   const errs = m ? m[1].trim() : '';
   const filedEmpty = !/FILED:/.test(s) || /FILED:\s*(none|nothing|0)\b/i.test(s);
@@ -84,7 +91,7 @@ function sweepFailed(deposit) {
 // triage is housekeeping, not a discovered connection). This note is that monologue line.
 function burstNote({ deposit = '', agent = AGENT } = {}) {
   if (sweepFailed(deposit)) return `[Curation] The ${agent}'s sweep hit a system-wide tool failure — nothing was actually swept; the slot is returned and the next drain retries.`;
-  const m = /FILED:\s*([\s\S]*?)(?:SKIPPED:|$)/.exec(String(deposit));
+  const m = /FILED:\s*([\s\S]*?)(?:SKIPPED:|$)/.exec(_normalize(deposit));
   const filedTxt = m ? m[1].trim() : '';
   const n = filedTxt && !/^(none|nothing|0)\b/i.test(filedTxt) ? filedTxt.split('\n').filter((l) => l.trim()).length : 0;
   return n
