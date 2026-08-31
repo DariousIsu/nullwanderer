@@ -95,6 +95,8 @@ Same low-competence state, split by arousal into anger vs sadness — emotion as
 
 **Why it matters for the impression store specifically:** attachment/relational affect falls out natively — hold a fundamental EPA per person (who they are to her), compute deflection when events push the transient around: "Lucas praised the report" and "a stranger deleted her rows" produce different, decomposable, dictionary-grounded feelings about *those people*.
 
+**✅ THE CORE IS BUILT (09-01, during the hold — [tissues/act_core.py](../tissues/act_core.py), ~220 stdlib lines):** impression formation (`tau' = Σ Z-selector products × coefficients`), deflection with the per-slot breakdown (the reasons), the deflection-minimizing behavior (exact 3×3 least-squares — tau is affine in B), the characteristic-emotion solve (T affine in M → 3×3 inversion), nearest-word labeling, and honest refusal on out-of-dictionary words. Proven two ways: hand-computable fixture equations match to 1e-6 in the smoke (12 pins), and the live us2010 probe is semantically right — *hero rescues child* deflects 43 ("able bodied"), *hero attacks child* deflects **116** with the strain on the child's slots ("enraged"). CLI: `python tissues/act_core.py --actor hero --behavior attack --object child`. Not yet wired to live events — that's the relational-appraisal slice (B5), where encounter verbs map to behavior words and per-subject deflection joins the impression.
+
 ### 3c. Appraisal engines — OCC, GAMYGDALA, WASABI, FAtiMA, EMA
 *(landed — mechanisms extracted verbatim from source, not papers)*
 

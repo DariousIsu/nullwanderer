@@ -60,6 +60,29 @@ const dirA = path.join(tmp, 'a'), dirB = path.join(tmp, 'b');
     ['terrible', -0.8, 0.5, -0.4], ['awful', -0.85, 0.5, -0.4], ['report', 0.0, 0.0, 0.0],
     ['county', 0.0, 0.0, 0.0], ['development', 0.3, 0.1, 0.2], ['strides', 0.4, 0.2, 0.3],
   ]) ins.run(t2, v, a, d);
+  // ACT fixture — HAND-COMPUTABLE equation set (both genders identical): tau_k = 0.5·f_k + 0.1,
+  // so every act_core result below is verifiable on paper. Emotion table: T = 0.1 + 0.5·M.
+  const eq = w.prepare('INSERT INTO act_eqn VALUES (?,?,?,?,?)');
+  for (const g of ['f', 'm']) {
+    eq.run('us2010', 'impressionabo', g, 'Z000000000', Array(9).fill('0.1').join(' '));
+    for (let k = 0; k < 9; k++) {
+      const sel = 'Z' + '0'.repeat(k) + '1' + '0'.repeat(8 - k);
+      const row = Array(9).fill('0'); row[k] = '0.5';
+      eq.run('us2010', 'impressionabo', g, sel, row.join(' '));
+    }
+    eq.run('us2010', 'emotionid', g, 'Z000000', '0.1 0.1 0.1');
+    for (let k = 0; k < 3; k++) {
+      const sel = 'Z' + '0'.repeat(k) + '1' + '0'.repeat(5 - k);
+      const row = ['0', '0', '0']; row[k] = '0.5';
+      eq.run('us2010', 'emotionid', g, sel, row.join(' '));
+    }
+  }
+  const epaIns = w.prepare('INSERT INTO epa VALUES (?,?,?,?,?)');
+  epaIns.run('identity', 'friend', 2.0, 1.0, 0.5);
+  epaIns.run('identity', 'stranger', 0.0, 0.0, 0.0);
+  epaIns.run('behavior', 'greet', 1.5, 0.5, 0.5);
+  epaIns.run('modifier', 'calm', 0.2, 0.2, 0.2);
+  epaIns.run('modifier', 'tense', -1.0, 0.5, 1.5);
   w.close();
 }
 
@@ -160,6 +183,40 @@ ok(hash(dbPath) === dbHashBefore, '⭐ THE RO RAIL: the fixture sq.db is byte-id
   const moodSrc = fs.readFileSync(path.join(ROOT, 'lib', 'mood.js'), 'utf8');
   ok(/affect_tissues'\)\.manifestLine/.test(moodSrc) && /tissueLine = undefined/.test(moodSrc) && /_measured/.test(moodSrc),
     '⭐ B4 wiring: mood.compose consults the manifest line beside the vector line, injectable + fail-absent');
+}
+
+// ── THE ACT CORE (tissues/act_core.py) — hand-computable fixture: tau_k = 0.5·f_k + 0.1 ────────
+{
+  const py = `
+import json, sys; sys.path.insert(0, r'${path.join(ROOT, 'tissues').replace(/\\/g, '\\\\')}')
+from act_core import ActCore
+c = ActCore(r'${wPath.replace(/\\/g, '\\\\')}')
+ev = c.event('friend', 'greet', 'stranger')
+ob = c.optimal_behavior([2.0, 1.0, 0.5], [0.0, 0.0, 0.0])
+em = c.emotion([2.0, 1.0, 0.5], [0.6, 0.6, 0.6])
+ew = c.emotion_word([2.0, 1.0, 0.5], [0.6, 0.6, 0.6])
+nr = c.nearest('modifier', [-1.0, 0.5, 1.5])
+print(json.dumps({'ev': ev, 'ob': ob, 'em': em, 'ew': ew, 'nr': nr}))
+c.close()`;
+  const r = spawnSync(PY, ['-c', py], { encoding: 'utf8', timeout: 30000 });
+  ok(r.status === 0, `act_core: runs against the fixture weights (${(r.stderr || '').trim().slice(0, 100) || 'clean'})`);
+  const a = JSON.parse(r.stdout || '{}');
+  const near = (x, want, eps = 1e-6) => Math.abs(x - want) < eps;
+  ok(a.ev && a.ev.ok && near(a.ev.tau[0], 1.1) && near(a.ev.tau[3], 0.85) && near(a.ev.tau[8], 0.1),
+    '⭐ act_core: impression formation matches the hand computation (tau = 0.5·f + 0.1, all 9 slots)');
+  ok(near(a.ev.deflection, 1.49, 0.005), `act_core: deflection = Σ(f−tau)² = 1.49 on paper (${a.ev.deflection})`);
+  ok(a.ev.per_slot && near(a.ev.per_slot.Ae, 0.81, 0.005) && near(a.ev.per_slot.Oe, 0.01, 0.005),
+    'act_core: the per-slot breakdown carries the WHERE (the reasons field)');
+  ok(/friend/.test(a.ev.reason) && /us2010/.test(a.ev.reason), 'act_core: the reason names the words and the equation set');
+  ok(a.ob && a.ob.every((x) => near(x, 0.2, 1e-6)),
+    `⭐ act_core: the deflection-minimizing behavior solves EXACTLY (B = [0.2,0.2,0.2] analytically; got ${JSON.stringify(a.ob.map((x) => +x.toFixed(4)))})`);
+  ok(a.em && a.em.every((x) => near(x, 1.0, 1e-6)),
+    '⭐ act_core: the emotion solve inverts the table exactly (T = 0.1 + 0.5·M → M = [1,1,1])');
+  ok(a.ew && a.ew.word === 'calm', `act_core: the emotion labels via nearest modifier (${a.ew && a.ew.word})`);
+  ok(a.nr && a.nr[0] === 'tense' && near(a.nr[1], 0), 'act_core: nearest() finds an exact dictionary hit at distance 0');
+  const missing = spawnSync(PY, ['-c', py.replace("'friend', 'greet'", "'nobody', 'greet'")], { encoding: 'utf8', timeout: 30000 });
+  ok(missing.status === 0 && /not in the dictionary: nobody/.test(missing.stdout),
+    'act_core: an out-of-dictionary word refuses honestly (never guesses an EPA)');
 }
 
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
