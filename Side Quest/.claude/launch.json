@@ -6,6 +6,18 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "8099"],
       "port": 8099
+    },
+    {
+      "name": "studio",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["studio/server.js"],
+      "port": 8790
+    },
+    {
+      "name": "voice-tuner",
+      "runtimeExecutable": "sidecar/tts_kokoro_venv/Scripts/python.exe",
+      "runtimeArgs": ["sidecar/kokoro_tuner_server.py"],
+      "port": 8199
     }
   ]
 }

@@ -27,6 +27,8 @@ const _PROBES = [
   { name: 'image generation', probe: () => !!require('./vision'), detail: 'render real images onto the canvas' },
   { name: 'canvas', probe: () => !!require('./canvas_docs').lastWriteTs, detail: 'land documents, tables, and images on the shared canvas' },
   { name: 'Echo research suite', probe: () => { const es = require('./echo_suit'); return !!(es && es.createSuit); }, detail: 'hundreds of grounded data/research tools (LegiScan, FEC, census, courts, news, agents you can delegate to) via your Echo connection' },
+  { name: 'talking-head video', probe: () => require('./talking_head').available(), detail: 'render YOUR photoreal avatar (data/avatars/zoe_ref.jpg) speaking a voice WAV — offline lip-synced MP4 via lib/talking_head.render()' },
+  { name: 'vertical video compose', probe: () => !!require('ffmpeg-static') && !!require('./video_compose').compose, detail: 'assemble a 1080x1920 short-form MP4 (your head video or a still + voice WAV + burned captions) via lib/video_compose.compose() — the talking-head output feeds straight into it' },
 ];
 
 let _cache = null;

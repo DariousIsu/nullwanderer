@@ -21,6 +21,7 @@ const dir = __dirname;
 // smoke here only once it's confirmed to pass offline with no external dependency.
 const smokes = [
   'smoke_manifest.js',
+  'smoke_video_tools.js',
   'smoke_fallthrough.js',
   'smoke_media_cc.js',
   'smoke_teams.js',
@@ -700,6 +701,11 @@ const smokes = [
   'smoke_screen_ambient.js',
   'smoke_diagnosis.js',
   'smoke_internal_state.js',
+  // ── the AFFECT TISSUES (B2/B3, 2026-08-31 — docs/AFFECT_SUBSTRATE_RESEARCH_2026-08-31.md): the
+  // deterministic python passes (appraisal-with-reasons + per-subject impressions) + the paced
+  // idle-gated driver. Hermetic fixtures; proves replay determinism, decay, the RO rail, and
+  // word-boundary subject matching. Needs a python3 on PATH (ECHO_PYTHON overrides).
+  'smoke_affect_tissues.js',
   'smoke_thread_hygiene.js',
   // ── the analysis+replan layer (2026-08-18, Lucas): a retry loop must never hammer a known-failure.
   // Refuses exact-repeat lookups, replans (does not stop) on no-progress, protects productive/build
