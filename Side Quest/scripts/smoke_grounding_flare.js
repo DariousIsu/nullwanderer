@@ -72,6 +72,8 @@ ok(process.env.ZOE_FLARE_PACE_S === undefined && gf.FLARE_PACE_MS === 90 * 1000,
   'breadth: the pace floor defaults to 90s (env ZOE_FLARE_PACE_S tunes it) — a flare for pretty much every ungrounded turn');
 const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/onModelAnswer: \(\{ need, topic, kind \}\) => \{ _flareRun\(/.test(mainSrc), 'main: answerGrounded deps carry the hook → _flareRun (fire-and-forget)');
+ok(/referent rides the chase — topic anchored/.test(mainSrc) && /_fiv\.referent && !\/\(\?<!\[A-Za-z\]\)\[A-Z\]\[a-z\]\+\//.test(mainSrc),
+  '⭐ the referent rides the flare: a pronoun-question with no proper noun in need/topic anchors to the intent verdict\'s referent (the wasted-Griffin fire)');
 ok(/name: 'spawn_agent_async', args: \{ name: agent, prompt: gf\.flarePrompt\([^)]*\), canvas_tab: gf\.FLARE_TAB \}/.test(mainSrc),
   '⭐ quiet canvas (rail 3): every flare spawn passes the designated research-flare tab');
 ok(/resultText: gf\.followupText\(\{ topic: topic \|\| need, deposits, userName \}\)/.test(mainSrc), 'main: the harvest posts through fireToolFollowup with the antifab followup');

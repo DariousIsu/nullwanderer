@@ -18796,6 +18796,18 @@ async function _flareRun({ sessionId, io, channel, userName, userMessage, need, 
   _flareInFlight = true;
   const t0 = Date.now();
   try {
+    // THE REFERENT RIDES THE FLARE (08-31 first store-backed fire, run 77d00eaf): the question
+    // said "he" and neither need nor topic named Kenneth Griffin — the donor-flow-analyst
+    // honestly returned FOUND: Nothing ("entity name not provided") and the flare was wasted.
+    // The intent pass HAD the resolved referent; when the flare's own topic/need carry no
+    // proper noun, the verdict's referent becomes the topic so the specialists have a name.
+    try {
+      const _fiv = require('./lib/intent_pass').current();
+      if (_fiv && _fiv.referent && !/(?<![A-Za-z])[A-Z][a-z]+/.test(String(topic || need || ''))) {
+        topic = `${String(_fiv.referent).slice(0, 100)}${topic ? ` — ${topic}` : ''}`;
+        console.log(`[flare] referent rides the chase — topic anchored to "${String(_fiv.referent).slice(0, 60)}"`);
+      }
+    } catch {}
     const spawned = [];
     for (const agent of gf.pickSpecialists({ kind, topic, need, userMessage })) {
       try {
