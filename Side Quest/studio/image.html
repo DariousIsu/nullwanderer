@@ -1,0 +1,134 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Zoe Studio — Image Suite</title>
+<style>
+  :root { --bg:#0d0d10; --panel:#121218; --line:#1f1f24; --line-strong:#2a2a30; --tx:#e8e8eb;
+          --tx-muted:#9a9aa3; --tx-dim:#6a6a73; --accent:#6a86b6; --ok:#7fb67a; --warn:#c7a24a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--tx); font-family:-apple-system,"Segoe UI","Inter",system-ui,sans-serif; font-size:14px; }
+  header { padding:14px 22px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:14px; }
+  header .brand { font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:var(--tx-muted); font-weight:700; }
+  header a { color:var(--accent); font-size:12px; text-decoration:none; }
+  .wrap { display:grid; grid-template-columns: 400px 1fr; height:calc(100vh - 49px); }
+  .left { border-right:1px solid var(--line); overflow-y:auto; padding:18px; }
+  .right { overflow-y:auto; padding:20px 26px; }
+  h3 { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--tx-muted); margin:16px 0 8px; }
+  .tabs { display:flex; gap:6px; margin-bottom:14px; }
+  .tabs button { flex:1; background:transparent; border:1px solid var(--line-strong); color:var(--tx-muted); font:inherit; font-size:13px; padding:9px; border-radius:6px; cursor:pointer; }
+  .tabs button.on { border-color:var(--accent); color:var(--accent); }
+  textarea, input { width:100%; background:var(--panel); border:1px solid var(--line-strong); color:var(--tx); border-radius:6px; padding:9px 11px; font:inherit; }
+  textarea { min-height:90px; resize:vertical; }
+  label.fld { display:block; font-size:11px; color:var(--tx-muted); margin:10px 0 4px; }
+  button.go { background:transparent; border:1px solid var(--accent); color:var(--accent); font:inherit; font-weight:600; padding:9px 18px; border-radius:6px; cursor:pointer; margin-top:12px; }
+  button.go:disabled { opacity:.5; cursor:default; }
+  .hint { font-size:11.5px; color:var(--tx-dim); line-height:1.5; margin-top:8px; }
+  .desc { font-size:12px; color:var(--tx-muted); margin-bottom:10px; line-height:1.5; }
+  .gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:14px; }
+  .card { border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--panel); }
+  .card img { width:100%; display:block; }
+  .card .meta { padding:9px 11px; }
+  .card .k { font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--tx-dim); }
+  .card .n { font-weight:600; font-size:13px; margin:2px 0 6px; }
+  .card .row { display:flex; gap:6px; }
+  .card button { flex:1; background:transparent; border:1px solid var(--line-strong); color:var(--tx-muted); font:inherit; font-size:11px; padding:5px; border-radius:5px; cursor:pointer; }
+  .card button:hover { border-color:var(--accent); color:var(--tx); }
+  .empty { color:var(--tx-dim); padding:40px 10px; text-align:center; }
+  #status { font-size:12px; color:var(--warn); min-height:16px; margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">Zoe · Image Suite</span>
+  <a href="http://127.0.0.1:8790">← back to the clip maker</a>
+  <span style="font-size:11px;color:var(--tx-dim);">SDXL on the 7900 XT · generated personas become avatars in both workspaces</span>
+</header>
+<div class="wrap">
+  <div class="left">
+    <div class="tabs">
+      <button class="on" data-kind="persona" onclick="setKind('persona')">Persona</button>
+      <button data-kind="scenery" onclick="setKind('scenery')">Scenery</button>
+      <button data-kind="scene" onclick="setKind('scene')">Scene</button>
+    </div>
+    <div class="desc" id="kinddesc"></div>
+    <label class="fld">Use existing avatar (locks face + body)</label>
+    <select id="avatar" style="width:100%;background:var(--panel);border:1px solid var(--line-strong);color:var(--tx);border-radius:6px;padding:8px;font:inherit;">
+      <option value="__none__">— none (create a new character) —</option>
+    </select>
+    <div class="hint" id="lockhint" style="margin-top:4px;"></div>
+    <label class="fld">Description</label>
+    <textarea id="prompt" placeholder="Describe it in plain language…"></textarea>
+    <label class="fld">Tags (comma-separated, optional)</label>
+    <input id="tags" placeholder="e.g. red hair, confident, studio background">
+    <label class="fld">Name (optional)</label>
+    <input id="name" placeholder="what to call it">
+    <button class="go" id="gen" onclick="generate()">Generate</button>
+    <div id="status"></div>
+    <div class="hint">1024px SDXL on the GPU — ~30–60s per image. A <b>Persona</b> you like can be saved as an <b>avatar</b>, which then appears in the clip maker's roster to drive videos.<br><br>Reference upload + face-lock (carry a specific face across images) is the next layer; this version is description-driven.</div>
+  </div>
+  <div class="right">
+    <h3>Gallery</h3>
+    <div class="gallery" id="gallery"><div class="empty">Nothing generated yet.</div></div>
+  </div>
+</div>
+<script>
+let kind = 'persona';
+const DESC = {
+  persona: 'Create a character — an identity/face. Describe who they are; you can save the result as a reusable avatar.',
+  scenery: 'Create a background or environment — no people. Used behind personas in scenes.',
+  scene:   'Compose a moment — a character in a setting doing something. A finished still.',
+};
+function setKind(k){ kind=k; document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on', b.dataset.kind===k)); document.getElementById('kinddesc').textContent=DESC[k]; }
+async function generate(){
+  const prompt=document.getElementById('prompt').value.trim();
+  const st=document.getElementById('status'), btn=document.getElementById('gen');
+  if(!prompt){ st.textContent='Add a description first.'; return; }
+  const tags=document.getElementById('tags').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const name=document.getElementById('name').value.trim();
+  const av=document.getElementById('avatar').value;
+  const payload={kind,prompt,tags,name};
+  if(av!=='__none__') payload.avatarId=av;   // selecting an avatar → IPAdapter identity lock
+  btn.disabled=true; st.textContent = av!=='__none__' ? 'Generating — locked to the selected avatar…' : 'Generating on the GPU… (~30–60s)';
+  const r=await fetch('/api/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(r=>r.json()).catch(e=>({error:String(e)}));
+  st.textContent = r.id ? 'Done.' : ('Failed: '+(r.error||'unknown'));
+  btn.disabled=false;
+  refresh();
+}
+async function saveAvatar(id){
+  const name=prompt('Name this avatar:'); if(name===null) return;
+  const r=await fetch('/api/images/'+id+'/save_avatar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})}).then(r=>r.json());
+  document.getElementById('status').textContent = r.ok ? 'Saved as an avatar — now in the clip maker roster.' : ('Save failed: '+(r.error||'?'));
+  refresh();
+}
+async function del(id){ await fetch('/api/images/'+id,{method:'DELETE'}); refresh(); }
+async function refresh(){
+  const list=await fetch('/api/images').then(r=>r.json()).catch(()=>[]);
+  const g=document.getElementById('gallery');
+  g.innerHTML = list.length ? '' : '<div class="empty">Nothing generated yet.</div>';
+  for(const im of list){
+    const d=document.createElement('div'); d.className='card';
+    d.innerHTML=`<img src="/file?path=${encodeURIComponent(im.file)}">
+      <div class="meta"><div class="k">${im.kind}${im.savedAvatarId?' · ★ avatar':''}</div>
+        <div class="n">${esc(im.name)}</div>
+        <div class="row">
+          ${im.kind==='persona'&&!im.savedAvatarId?`<button onclick="saveAvatar('${im.id}')">save as avatar</button>`:''}
+          <button onclick="del('${im.id}')">delete</button>
+        </div></div>`;
+    g.appendChild(d);
+  }
+}
+async function refreshAvatarPicker(){
+  const roster=await fetch('/api/avatars').then(r=>r.json()).catch(()=>[]);
+  const sel=document.getElementById('avatar'); const cur=sel.value;
+  sel.innerHTML='<option value="__none__">— none (create a new character) —</option>'+
+    roster.map(a=>`<option value="${a.id}">${esc(a.name)} (${a.type})</option>`).join('');
+  sel.value=cur;
+  sel.onchange=()=>{ const on=sel.value!=='__none__';
+    document.getElementById('lockhint').textContent = on ? '✓ face + body will be preserved from this avatar (all its reference images).' : ''; };
+}
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+setKind('persona'); refresh(); refreshAvatarPicker(); setInterval(refresh, 5000); setInterval(refreshAvatarPicker, 8000);
+</script>
+</body>
+</html>

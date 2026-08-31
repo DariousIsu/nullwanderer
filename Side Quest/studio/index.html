@@ -57,7 +57,8 @@
     <div style="height:8px"></div>
     <textarea id="script" placeholder="Paste the script. House format is understood:&#10;**0:00–0:03**&#10;ZO: &quot;spoken line&quot;&#10;(Cut to b-roll: ...)&#10;&#10;Plain prose also works — it becomes one on-camera take."></textarea>
     <div style="height:8px"></div>
-    <select id="persona"><option value="">reference: Zoe (default)</option></select>
+    <div class="hint" style="margin:2px 0 4px;">Avatar for this video:</div>
+    <div id="avatarroster" style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:8px;"></div>
     <div class="row"><button class="primary" onclick="submitJob()">Produce</button></div>
     <div class="hint">The pipeline runs voice → takes → cut autonomously, then <b>halts at review</b>. Takes render sequentially on the GPU — minutes per spoken second.</div>
 
@@ -131,13 +132,24 @@ async function detail() {
   const j = await fetch('/api/jobs/' + sel).then(r => r.json()).catch(() => null);
   if (!j || j.error) return;
   const el = document.getElementById('detail');
-  const segs = (j.segments || []).map(s =>
-    `<span class="seg ${s.take ? 'done' : s.promptId ? 'queued' : ''}">${s.kind} ${s.i}${s.dur ? ' · ' + s.dur + 's' : ''}${s.take ? ' ✓' : s.promptId ? ' · rendering' : ''}</span>`).join('');
+  // completed segments render as playable clips; pending ones show their status
+  const segCards = (j.segments || []).map(s => {
+    const done = !!s.take;
+    const badge = done ? '✓ done' : (s.promptId ? '· rendering' : '· queued');
+    const media = done
+      ? `<video controls muted src="/file?path=${encodeURIComponent(s.take)}" style="width:150px;border-radius:6px;border:1px solid var(--line-strong);display:block;margin-top:5px;"></video>`
+      : `<div style="width:150px;height:60px;border:1px dashed var(--line-strong);border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--tx-dim);font-size:11px;margin-top:5px;">${s.promptId||j.external?'rendering…':'waiting'}</div>`;
+    return `<div style="display:inline-block;vertical-align:top;margin:0 10px 10px 0;">
+      <div style="font-size:11px;color:var(--tx-muted);">${s.kind} ${s.i} · ${s.dur||'?'}s <span style="color:${done?'var(--ok)':'var(--warn)'}">${badge}</span></div>
+      ${media}</div>`;
+  }).join('');
+  const rendering = ['rendering','voicing','cutting'].includes(j.status);
   el.innerHTML = `
     <h3 style="margin-top:0">${esc(j.title)} <span class="chip">${j.status.replace(/_/g,' ')}</span>
       <span class="chip">${esc(j.personaName || 'Zoe')}</span>
       ${j.postEligible === false ? '<span class="chip warn">download-only</span>' : ''}</h3>
-    ${segs ? '<h3>Segments</h3><div class="segrow">' + segs + '</div>' : ''}
+    ${rendering ? `<div id="liveprog" class="hint" style="margin:2px 0 6px;">checking render…</div>` : ''}
+    ${segCards ? '<h3>Segments</h3><div>' + segCards + '</div>' : ''}
     ${j.cut ? `<h3>Cut</h3><video controls src="/file?path=${encodeURIComponent(j.cut)}"></video>
       <div class="row"><a href="/file?path=${encodeURIComponent(j.cut)}" download style="color:var(--accent);font-size:12.5px;">↓ download cut</a></div>` : ''}
     ${j.status === 'ready_for_review' ? (j.postEligible === false
@@ -153,6 +165,18 @@ async function detail() {
         <div class="hint">Approve marks the cut ready. Posting is a separate future door — nothing leaves this machine from here.</div>`) : ''}
     ${j.status === 'error' ? `<div class="row"><button onclick="decide('retry')">Retry from top</button></div>` : ''}
     <h3>Log</h3><pre class="log">${esc((j.log || []).slice(-60).join('\n'))}</pre>`;
+  if (rendering) updateLiveProgress();
+}
+
+// live render progress for the in-flight segment (ComfyUI sampling % + queue depth)
+async function updateLiveProgress() {
+  const el = document.getElementById('liveprog');
+  if (!el) return;
+  const p = await fetch('/api/comfy/progress').then(r => r.json()).catch(() => null);
+  if (!p) { el.textContent = 'render status unavailable'; return; }
+  if (!p.up) { el.textContent = 'render server offline'; return; }
+  const bar = p.pct != null ? ` <span style="display:inline-block;width:120px;height:6px;background:var(--line);border-radius:3px;vertical-align:middle;overflow:hidden;"><span style="display:block;height:100%;width:${p.pct}%;background:var(--accent);"></span></span> ${p.pct}%` : '';
+  el.innerHTML = `<span style="color:var(--warn)">● live</span> rendering ${p.label||''}${bar} · ${p.running} in progress, ${p.pending} queued`;
 }
 
 async function decide(verdict) {
@@ -164,20 +188,30 @@ async function submitJob() {
   const script = document.getElementById('script').value.trim();
   if (!script) return;
   const payload = { script, title: document.getElementById('title').value.trim() || 'untitled' };
-  const pid = document.getElementById('persona').value;
-  if (pid) payload.personaId = pid;
+  if (selectedAvatar) payload.personaId = selectedAvatar;
   const r = await fetch('/api/jobs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) }).then(r => r.json());
   if (r.id) { sel = r.id; document.getElementById('script').value = ''; }
   refresh();
 }
 
+let selectedAvatar = ''; // '' = Zoe default
+async function refreshAvatars() {
+  const roster = await fetch('/api/avatars').then(r => r.json()).catch(() => []);
+  const el = document.getElementById('avatarroster');
+  if (!el) return;
+  el.innerHTML = roster.map(a => {
+    const on = a.id === selectedAvatar;
+    const tag = a.type === 'default' ? 'default' : a.type === 'generated' ? 'generated' : 'clone';
+    return `<div onclick="selectedAvatar='${a.id}';refreshAvatars();" title="${esc(a.voiceStatus||'')}"
+      style="width:70px;cursor:pointer;text-align:center;">
+      <img src="/file?path=${encodeURIComponent(a.thumb)}" style="width:64px;height:96px;object-fit:cover;border-radius:6px;border:2px solid ${on?'var(--accent)':'transparent'};opacity:${on?1:.62};">
+      <div style="font-size:10.5px;margin-top:2px;color:${on?'var(--tx)':'var(--tx-muted)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(a.name)}</div>
+      <div style="font-size:9px;color:var(--tx-dim);">${tag}</div></div>`;
+  }).join('');
+}
+
 async function refreshPersonas() {
   const ps = await fetch('/api/personas').then(r => r.json()).catch(() => []);
-  const sel2 = document.getElementById('persona');
-  const cur = sel2.value;
-  sel2.innerHTML = '<option value="">reference: Zoe (default)</option>' +
-    ps.map(p => `<option value="${p.id}">reference: ${esc(p.name)}</option>`).join('');
-  sel2.value = cur;
   const el = document.getElementById('personas');
   el.innerHTML = ps.length ? '' : '<div class="hint">No clones yet.</div>';
   for (const p of ps) {
@@ -327,8 +361,9 @@ async function addMotion() {
 }
 
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-refreshVoices(); refresh(); refreshPersonas(); refreshMotions(); refreshCharVoices(); refreshTuner();
+refreshVoices(); refreshAvatars(); refresh(); refreshPersonas(); refreshMotions(); refreshCharVoices(); refreshTuner();
 setInterval(refresh, 4000);
+setInterval(refreshAvatars, 6000);
 setInterval(refreshPersonas, 6000);
 setInterval(refreshMotions, 8000);
 setInterval(refreshTuner, 10000);

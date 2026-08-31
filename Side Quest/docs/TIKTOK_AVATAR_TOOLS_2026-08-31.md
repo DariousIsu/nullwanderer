@@ -238,6 +238,88 @@ cleaner (consistent, artifact-free motion). Same path skins the LIVE avatar (ava
 characters" substrate. Build order to get there: APPLY-motion lane (Wan-Animate) → takes/motion registry
 → live-skin. Not built yet; the pieces now all exist to assemble it.
 
+## WAVE 5 (2026-09-01) — live viewer + avatar roster; image-suite designed
+
+- LIVE VIEWER: job detail now plays every COMPLETED segment as its own <video> + a live "● live"
+  progress line (server /api/comfy/progress = newest ComfyUI sampling % + queue depth). Proven on the
+  intro job (2 segment players + "window 144-225 100% · 1 running/1 queued"). ⚠TRUE frame-by-frame
+  preview needs ComfyUI booted with --preview-method (a restart) — deferred; % + queue is the honest now.
+- AVATAR ROSTER: server /api/avatars = unified list (Zoe type:default + personas type:clone/generated),
+  UI roster of thumbnails replacing the plain reference dropdown; click-to-select drives the job. Zoe is
+  default when nothing selected. persona.origin==='generated' → type 'generated' (for image-suite avatars).
+
+⭐APPEARANCE-vs-IDENTITY (his Q — change Zoe's clothes/hair without corrupting her mapping; any avatar):
+appearance is a RENDERING attribute, identity is separate — so YES, safely. The video pipeline is
+reference-image-driven; a new outfit/hairstyle = a new REFERENCE IMAGE (a "look"), never a mutation of
+the core identity. The pose library (persona.poses[]) IS this — it generalizes to a LOOKS library
+(outfit/hair variants, same face). Voice untouched (independent). The live VRM: clothes/hair are
+separate mesh/texture layers, the face rig/blendshapes ("zoe mapping") untouched. The ONE risk = FACE
+DRIFT when a new look is generated from scratch → cure is inpaint/img2img on the SAME face (change only
+clothes/hair region) or a face-lock (ReActor)/character-LoRA pass. Net: add looks, never regenerate the
+identity. Same for any avatar regardless of origin.
+
+⭐IMAGE-SUITE (his ask — a perchance.org/ai-girl-image-generator-style creator; SDXL already in
+ComfyUI-Zluda): DESIGNED, not built (GPU busy + disk full). Shape: a sibling workspace (studio/image or
+an Images tab) with a character-creation feel — PERSONA creator (identity: description + tags + uploaded
+reference pics/videos → a base look → saved as an AVATAR, appears in BOTH workspaces via /api/avatars),
+SCENERY creator (backgrounds/environments), SCENE creator (persona + scenery + pose/action → composite
+stills or short clips). Backed by ComfyUI SDXL (img gen) + inpaint (looks/wardrobe changes = the
+appearance-edit above) + the existing Wan/InfiniteTalk for motion. Avatars are the shared currency:
+made in the image suite → usable in the clip maker, and vice versa. Reference upload + complex prompts +
+IPAdapter/face-lock for identity carry. ⏭Build as the next lane when GPU frees.
+
+## WAVE 6 (2026-09-01) — right-size the renderer (his call: "work as one", RAM to wishlist)
+
+DIAGNOSIS: video gen spikes the PAGEFILE. Measured mid-render: commit 100.8/109.6GB (92%), RAM 8.9/31
+free, pagefile 32.7GB in use / 80GB allocated, the ComfyUI python proc 19.8GB committed but only 0.76GB
+resident (thrashing). Cause = InfiniteTalk 14B + block-swap offloads the base model to the 31GB RAM,
+which — with the ~12.6GB Electron program also resident — overflows to the (disk-full) pagefile →
+525→772s/step. MATH: program 12.6 + Q4 render ~20 = 32.6 > 31 (pages); program 12.6 + Q3 render ~17 =
+29.6 < 31 (fits). So a smaller quant is the lever that lets the system "work as one."
+
+CHANGE (comfy_client.js): base model now RESOLVED smallest-first (resolveBaseModel, BASE_PREF Q3→Q8,
+override ZOE_WAN_BASE). Picks Q4 today (only one on disk), AUTO-UPGRADES to Q3 the moment it lands — no
+future edit. ⚠Q3 DOWNLOAD IS DISK-GATED (~8GB; disk ~1-2GB free, other context owns it): when free,
+`hf download city96/Wan2.1-I2V-14B-480P-gguf wan2.1-i2v-14b-480p-Q3_K_M.gguf` into ComfyUI
+models/diffusion_models/ and the resolver takes it automatically. THEN PROVE: render a segment with the
+program running, confirm commit stays under the limit (no pagefile spike). RAM (→64GB) = WISHLIST after
+proof, his call. Further lever if Q3 isn't enough: a 1.3B model class (StableAvatar/EchoMimicV3) — much
+lighter, quality drop.
+
+## WAVE 7 (2026-09-01) — tuner on-demand + IMAGE SUITE built
+
+- TUNER ON-DEMAND (his ask): kokoro_tuner_server.py now lazy-loads Kokoro on the first /synth and
+  UNLOADS after 90s idle (ZOE_TUNER_IDLE_S) via an idle watcher — server stays up for the UI without
+  holding VRAM against video renders. PROVEN: /status loaded:false at boot → true after a synth →
+  frees when idle. New /status route; main() no longer eager-boots.
+- ⭐IMAGE SUITE BUILT + PROVEN (his ask, perchance-style): SDXL text2img on the SAME ComfyUI (:8288,
+  sd_xl_base_1.0). studio/image_client.js (schema-validated ckpt→CLIP×2→KSampler→VAE→save graph,
+  aspect presets) · studio/images.js (persona/scenery/scene creators w/ house prompt scaffolding;
+  data/studio/images/) · studio/image.html served at :8790/image (3 creator tabs + gallery). PROVEN:
+  generated a photoreal "journalist" persona from a description. ⭐SHARED CURRENCY: saveAsAvatar promotes
+  a persona image → a persona in cloner store with origin:'generated', oneToOne:false, postEligible:TRUE
+  (synthetic → POSTABLE, unlike a 1:1 real clone) → appears in /api/avatars roster in the clip maker.
+  Verified: "Journalist (generated)" now in the roster, postable. NEXT LAYER: reference upload + IPAdapter
+  face-lock (carry a specific face across images — the identity-consistency + wardrobe/hair-inpaint from
+  the appearance answer); scenery/scene use the same engine, richer compositing later.
+
+## WAVE 8 (2026-09-01) — IDENTITY LOCK (his ask: preserve core face+body on any selected avatar)
+
+Tool = IPAdapter (cubiq ComfyUI_IPAdapter_plus + ip-adapter-plus_sdxl_vit-h 808MB into
+ComfyUI/models/ipadapter/; reuses clip_vision_h; pure-torch node, NO InsightFace pain; ComfyUI restarted
+to load it — 35 IPAdapter classes registered). image_client.buildGraph: when references given, inserts
+IPAdapterModelLoader + CLIPVisionLoader + LoadImage-batch + IPAdapterAdvanced(weight 0.82,
+combine_embeds='average') before the sampler → SDXL conditioned on the avatar. images.avatarRefs()
+gathers the avatar's WHOLE set (ref + all poses + all addSource'd frames), capped 5, averaged — so
+⭐MORE MATERIAL = STRONGER, MORE CONSISTENT identity (his 2nd point: added video/photos inform all
+outputs, automatically). image.html: avatar picker; selecting one → identity lock, none → free new
+character. PROVEN: regenerated the "Journalist" avatar in a new render — same face+body (side-by-side
+sent, identityLocked:true). TRADEOFF (honest): weight 0.82 preserves face AND clothing/framing strongly
+(great consistency, less outfit/pose变 from the prompt); ipWeight is configurable, and FACE-ONLY
+(FaceID/InstantID, needs InsightFace) is the refinement for wardrobe/pose changes while keeping the face
+— ties to the appearance-vs-identity answer. VIDEO side: InfiniteTalk already reference-driven; next =
+use IPAdapter to seed identity-locked reference frames for takes.
+
 ## NOT built (deliberately, in order)
 
 1. **Publishing door** — waits for the account (his word). When it comes: lib/browser.js (her own

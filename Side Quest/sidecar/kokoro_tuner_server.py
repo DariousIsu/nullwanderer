@@ -11,7 +11,7 @@ Run (env pins the discrete GPU + persistent MIOpen cache):
   sidecar/tts_kokoro_venv/Scripts/python.exe sidecar/kokoro_tuner_server.py
 Then open http://127.0.0.1:8199  (loopback only).
 """
-import io, json, sys, threading, time, wave
+import io, json, sys, threading, time, wave, gc, os
 import numpy as np
 import torch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -40,18 +40,26 @@ _lock = threading.Lock()
 _model = None
 _pipes = {}          # lang_code -> KPipeline
 _packs = {}          # voice_id -> style tensor [510,1,256]
+_loaded = False
+_last_use = 0.0
+# ON-DEMAND: hold the GPU only while in use. Load Kokoro on the first synth, free it after this many
+# idle seconds so video renders get the full GPU. First synth after a (re)load pays a one-time autotune
+# (cached in MIOPEN_USER_DB_PATH); subsequent calls are instant.
+IDLE_S = float(os.environ.get("ZOE_TUNER_IDLE_S", "90"))
 
 
 def _log(*a):
     print(*a, file=sys.stderr, flush=True)
 
 
-def _boot():
-    global _model
-    _log("[tuner] loading Kokoro onto GPU...")
+def _load():
+    """Load Kokoro + voice packs onto the GPU. Idempotent (guarded by _loaded). Call under _lock."""
+    global _model, _loaded
+    if _loaded:
+        return
+    _log("[tuner] loading Kokoro onto GPU (on demand)...")
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     _model = KModel().to(dev).eval()
-    _log(f"[tuner] model on {next(_model.parameters()).device}")
     for lang in ("a", "b"):
         _pipes[lang] = KPipeline(lang_code=lang, model=_model)
     for _, vid, _l in VOICES:
@@ -59,16 +67,35 @@ def _boot():
             _packs[vid] = _pipes["a"].load_voice(vid)
         except Exception as e:
             _log(f"[tuner] WARN load {vid}: {e!r}")
-    # pre-warm a couple of shapes so the first real click isn't slow (MIOpen autotune)
+    _loaded = True
+    _log(f"[tuner] model on {dev} — loaded")
+
+
+def _unload():
+    """Free Kokoro from the GPU so a video render gets the VRAM back. Call under _lock."""
+    global _model, _loaded
+    if not _loaded:
+        return
+    _pipes.clear(); _packs.clear(); _model = None; _loaded = False
+    gc.collect()
     try:
-        for _ in _pipes["a"]("warm up one two three.", voice=_packs.get("af_bella")):
-            pass
-        for _ in _pipes["a"]("this is a slightly longer warm up pass for kernel autotuning.",
-                             voice=_packs.get("af_bella")):
-            pass
-    except Exception as e:
-        _log(f"[tuner] warmup note: {e!r}")
-    _log(f"[tuner] READY on http://127.0.0.1:{PORT}  device={dev}")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    _log("[tuner] idle — model unloaded, GPU freed")
+
+
+def _idle_watcher():
+    """Unload the model after IDLE_S of no synth, so the tuner can stay up without holding VRAM."""
+    while True:
+        time.sleep(15)
+        try:
+            with _lock:
+                if _loaded and _last_use and (time.time() - _last_use) > IDLE_S:
+                    _unload()
+        except Exception as e:
+            _log(f"[tuner] idle watcher note: {e!r}")
 
 
 def _blend(weights):
@@ -85,6 +112,9 @@ def _blend(weights):
 
 
 def _synth(text, weights, lang, speed):
+    global _last_use
+    _load()                 # lazy: bring Kokoro onto the GPU if it isn't already (under _lock via do_POST)
+    _last_use = time.time()
     v = _blend(weights)
     if v is None:
         raise ValueError("no voices selected")
@@ -116,6 +146,9 @@ class H(BaseHTTPRequestHandler):
             self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
         elif self.path == "/voices":
             self._send(200, json.dumps([{"label": l, "id": v, "lang": lg} for l, v, lg in VOICES]).encode(), "application/json")
+        elif self.path == "/status":
+            self._send(200, json.dumps({"loaded": _loaded, "idle_s": IDLE_S,
+                                        "since_use_s": round(time.time() - _last_use, 1) if _last_use else None}).encode(), "application/json")
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -260,9 +293,10 @@ init();
 
 
 def main():
-    _boot()
+    threading.Thread(target=_idle_watcher, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
-    _log(f"[tuner] serving on 127.0.0.1:{PORT}")
+    _log(f"[tuner] READY (on-demand) on http://127.0.0.1:{PORT} — model loads on first Speak, "
+         f"frees after {int(IDLE_S)}s idle. device={'cuda' if torch.cuda.is_available() else 'cpu'}")
     srv.serve_forever()
 
 

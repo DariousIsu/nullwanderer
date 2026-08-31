@@ -37,6 +37,18 @@ function stageInput(file) {
 
 const NEG = 'bright tones, overexposed, static, blurred details, subtitles, style, works, painting, image, still, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards';
 
+// Smallest-first preference for the Wan2.1 i2v base — lower quant = less RAM under block-swap, which
+// is what lets the render share the machine with the program. Picks the first present in ComfyUI's
+// model list; an explicit override (env/opts) wins if that file is actually available.
+const BASE_PREF = ['Q3_K_S', 'Q3_K_M', 'Q4_K_S', 'Q4_0', 'Q4_1', 'Q4_K_M', 'Q5_K_S', 'Q5_0', 'Q5_K_M', 'Q6_K', 'Q8_0', 'BF16', 'F16'];
+function resolveBaseModel(OI, override) {
+  const avail = (OI.WanVideoModelLoader && OI.WanVideoModelLoader.input.required.model[0]) || [];
+  const bases = avail.filter(m => /wan2\.1-i2v-14b-480p/i.test(m));
+  if (override && bases.includes(override)) return override;
+  for (const q of BASE_PREF) { const hit = bases.find(m => m.toUpperCase().includes(q)); if (hit) return hit; }
+  return bases[0] || 'wan2.1-i2v-14b-480p-Q4_K_M.gguf';
+}
+
 /*
  * buildTakeGraph — the InfiniteTalk I2V take, parameterized: reference image, driving WAV, its
  * duration, an output prefix, and the performance direction. Steps default to 4 (the lightx2v
@@ -61,10 +73,17 @@ async function buildTakeGraph({ image, audio, durSec, prefix, prompt, steps = 4,
   const mtKey = Object.keys(OI.WanVideoSampler.input.optional).find(k => k.toLowerCase().includes('multitalk'));
   const frames = Math.ceil(durSec * 25) + 1;
 
+  // RIGHT-SIZE THE RENDERER: on a 20GB GPU + 31GB RAM, block-swap offloads the base model to RAM,
+  // so a smaller quant is what lets the render coexist with the rest of the program instead of
+  // thrashing the pagefile. Prefer the SMALLEST available i2v base (Q3 ≈ 8GB fits; Q4 ≈ 10.6GB tips
+  // it into paging). Auto-picks whatever is on disk today (Q4) and upgrades to Q3 the moment it lands
+  // — no code change needed. Override with ZOE_WAN_BASE.
+  const baseModel = resolveBaseModel(OI, opts.baseModel || process.env.ZOE_WAN_BASE);
+
   const swap = node('WanVideoBlockSwap', { blocks_to_swap: 20, offload_img_emb: false, offload_txt_emb: false });
   const lora = node('WanVideoLoraSelect', { lora: 'lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors', strength: 1.0, low_mem_load: false, merge_loras: false });
   const mtalk = node('MultiTalkModelLoader', { model: 'Wan2_1-InfiniteTalk_Single_Q8.gguf' });
-  const model = node('WanVideoModelLoader', { model: 'wan2.1-i2v-14b-480p-Q4_K_M.gguf', base_precision: 'fp16_fast', quantization: 'disabled', load_device: 'offload_device', attention_mode: 'sdpa', block_swap_args: out(swap), lora: out(lora), multitalk_model: out(mtalk) });
+  const model = node('WanVideoModelLoader', { model: baseModel, base_precision: 'fp16_fast', quantization: 'disabled', load_device: 'offload_device', attention_mode: 'sdpa', block_swap_args: out(swap), lora: out(lora), multitalk_model: out(mtalk) });
   const vae = node('WanVideoVAELoader', { model_name: 'Wan2_1_VAE_bf16.safetensors', precision: 'bf16' });
   const clipv = node('CLIPVisionLoader', { clip_name: 'clip_vision_h.safetensors' });
   const img = node('LoadImage', { image });

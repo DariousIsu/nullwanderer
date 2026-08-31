@@ -16,12 +16,13 @@ const runner = require('./runner');
 const cloner = require('./cloner');
 const motion = require('./motion');
 const charVoices = require('./char_voices');
+const images = require('./images');
 const voiceKokoro = require(path.join(__dirname, '..', 'lib', 'voice_kokoro'));
 
 const ROOT = path.resolve(__dirname, '..');
 const PORT = parseInt(process.env.ZOE_STUDIO_PORT || '8790', 10);
 const UPLOAD_DIR = path.join(ROOT, 'data', 'studio', 'uploads');
-const ALLOWED = [runner.JOBS_DIR, cloner.PERSONAS_DIR, motion.LIB_DIR, path.join(ROOT, 'data', 'video_out'), path.join(ROOT, 'data', 'avatars')];
+const ALLOWED = [runner.JOBS_DIR, cloner.PERSONAS_DIR, motion.LIB_DIR, images.IMG_DIR, path.join(ROOT, 'data', 'video_out'), path.join(ROOT, 'data', 'avatars')];
 
 const MIME = { '.html': 'text/html', '.mp4': 'video/mp4', '.wav': 'audio/wav', '.png': 'image/png', '.jpg': 'image/jpeg', '.json': 'application/json' };
 
@@ -91,6 +92,22 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { id: job.id, status: job.status });
     }
 
+    // --- avatars: the unified roster (Zoe default + clones + generated) ---
+    if (req.method === 'GET' && u.pathname === '/api/avatars') {
+      const roster = [{
+        id: '', name: 'Zoe', type: 'default', postEligible: true,
+        thumb: path.join(ROOT, 'data', 'avatars', 'zoe_ref.jpg'),
+      }];
+      for (const p of cloner.listPersonas()) {
+        roster.push({
+          id: p.id, name: p.name, type: p.origin === 'generated' ? 'generated' : 'clone',
+          postEligible: !!p.postEligible, thumb: p.refImage,
+          poses: (p.poses || []).length, voiceStatus: p.voiceStatus || '',
+        });
+      }
+      return json(res, 200, roster);
+    }
+
     // --- personas (the cloner) ---
     if (req.method === 'GET' && u.pathname === '/api/personas') {
       return json(res, 200, cloner.listPersonas().map(p => ({
@@ -158,6 +175,23 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && u.pathname === '/api/tuner/status') {
       return json(res, 200, { up: await voiceKokoro.available(), url: voiceKokoro.BASE });
     }
+    // live render progress: the newest ComfyUI sampling line + queue depth (for the in-flight segment)
+    if (req.method === 'GET' && u.pathname === '/api/comfy/progress') {
+      const out = { up: false, pct: null, label: null, running: 0, pending: 0 };
+      try {
+        const q = await (await fetch('http://127.0.0.1:8288/queue', { signal: AbortSignal.timeout(3000) })).json();
+        out.up = true; out.running = (q.queue_running || []).length; out.pending = (q.queue_pending || []).length;
+      } catch { /* comfy down */ }
+      try {
+        const log = fs.readFileSync('C:\\Users\\azrae\\Desktop\\ComfyUI-Zluda\\rocm_server.log', 'utf8');
+        const lines = log.replace(/\r/g, '\n').split('\n');
+        for (let i = lines.length - 1; i >= 0 && i > lines.length - 400; i--) {
+          const m = /Sampling audio indices ([\d-]+):\s+(\d+)%/.exec(lines[i]);
+          if (m) { out.pct = parseInt(m[2], 10); out.label = `window ${m[1]}`; break; }
+        }
+      } catch { /* no log */ }
+      return json(res, 200, out);
+    }
     const mPose = u.pathname.match(/^\/api\/personas\/([\w.-]+)\/pose$/);
     if (req.method === 'POST' && mPose) {
       const b = await body(req);
@@ -216,6 +250,28 @@ const server = http.createServer(async (req, res) => {
     }
     const mMoDel = u.pathname.match(/^\/api\/motions\/([\w.-]+)$/);
     if (req.method === 'DELETE' && mMoDel) return json(res, 200, motion.remove(mMoDel[1]));
+
+    // --- image suite: persona / scenery / scene creators (SDXL) ---
+    if (u.pathname === '/image' || u.pathname === '/image.html') {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      return res.end(fs.readFileSync(path.join(__dirname, 'image.html')));
+    }
+    if (req.method === 'GET' && u.pathname === '/api/images') {
+      return json(res, 200, images.listImages());
+    }
+    if (req.method === 'POST' && u.pathname === '/api/images') {
+      const b = await body(req);
+      if (!b || !b.prompt) return json(res, 400, { error: 'prompt required' });
+      const r = await images.create(b);
+      return json(res, r.ok ? 200 : 400, r.ok ? r.image : { error: r.error });
+    }
+    const mImgSave = u.pathname.match(/^\/api\/images\/([\w.-]+)\/save_avatar$/);
+    if (req.method === 'POST' && mImgSave) {
+      const b = await body(req);
+      return json(res, 200, images.saveAsAvatar(mImgSave[1], b && b.name));
+    }
+    const mImgDel = u.pathname.match(/^\/api\/images\/([\w.-]+)$/);
+    if (req.method === 'DELETE' && mImgDel) return json(res, 200, images.remove(mImgDel[1]));
 
     if (req.method === 'GET' && u.pathname === '/file') {
       const abs = safePath(u.searchParams.get('path') || '');
