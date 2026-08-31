@@ -594,7 +594,28 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
     : 'I looked at what I have';
   const _unchecked = _errLanes.filter((l) => _tried.includes(l));
   const _uncheckedNote = _unchecked.length ? ` (my ${_unchecked.join('/')} lookup${_unchecked.length > 1 ? 's' : ''} errored, so that part went unchecked)` : '';
-  return { say: `${where}, but I couldn't pin down ${need0}.${_uncheckedNote}`, enriched: true, missed: true, need: need0, tried: _tried, errLanes: _errLanes };
+  // THE ABSENCE DOCTRINE (Lucas 08-31: "not finding something should automatically be 'we don't
+  // have that in the database, I'm doing x, y, z to find the correct information' — then she's
+  // off on full research until she has an answer"). A conversational miss is a FIRST-CLASS
+  // memory gap: it enqueues an absence recheck — the metabolism's verification passes hunt it
+  // (source-required verdicts; an honest miss re-arms the TTL and the cycle continues; a win
+  // lands structured and surfaces a note) — and the say NAMES the store and the plan instead of
+  // dead-ending. (The Hooper "may have retired" and the Griffin no-graph-row misses both
+  // evaporated with no pursuit; this is the wire they were missing.)
+  let _queuedNote = '';
+  try {
+    const rq = require('./recheck_queue');
+    const r = rq.enqueue({
+      kind: 'absence', subject: String(need0).slice(0, 140),
+      detail: { predicate: (it && it.kind) === 'office_holder' ? 'current officeholder' : 'identity and current facts', doc: 'conversation miss' },
+      priority: 8, bornFrom: 'conversation-miss',
+    });
+    if (r && r.ok) {
+      _queuedNote = ' We don\'t have that in the database yet — I\'ve queued it for a full research pass (fresh web, page excavation, and the research team) and I\'ll bring back what lands.';
+      console.log(`[cognition] conversation miss "${String(need0).slice(0, 60)}" → absence recheck queued (the doctrine: a miss launches a pursuit)`);
+    }
+  } catch { /* the say stands even if the queue write fails */ }
+  return { say: `${where}, but I couldn't pin down ${need0}.${_uncheckedNote}${_queuedNote}`, enriched: true, missed: true, need: need0, tried: _tried, errLanes: _errLanes };
 }
 
 module.exports = { answerGrounded, _draftOrNeed, _enrichConvo, _enrichGraph, _enrichWiki, _enrichNews, _enrichForecast, isForecastQuestion, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _hasStaleGrounding, _entLine, _billToksOf, _instanceMismatch, NEED_RE };

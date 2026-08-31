@@ -4,6 +4,12 @@
  *   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_cognition.js
  */
 'use strict';
+// HERMETIC DB (08-31, the doctrine wire): cognition now touches the recheck queue on a miss —
+// without this, the suite's fictional misses were WRITTEN INTO THE LIVE absence queue (three
+// "Dravenmoor" pursuit rows landed in production before this line existed).
+const _os0 = require('os'), _p0 = require('path');
+process.env.SQ_DB_PATH = _p0.join(_os0.tmpdir(), `sq_cog_${process.pid}`, 'sq.db');
+require('fs').mkdirSync(_p0.dirname(process.env.SQ_DB_PATH), { recursive: true });
 const cog = require('../lib/cognition');
 
 let pass = 0, fail = 0;
@@ -305,6 +311,24 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
       ask: needAsk, intent, dispatch: emptyDispatch, retrieveTurns: async () => [], wikiLookup: async () => [], routeNeed: async () => ({ ok: false }), webSearch: emptyLane, excavate: async () => ({ found: false }),
     } });
     ok(r3 && !r3.lookupFailed && /couldn't pin down/.test(r3.say) && !/errored/.test(r3.say), 'all-clean empties keep the classic honest miss (no phantom error note)');
+    // THE ABSENCE DOCTRINE (Lucas 08-31): a conversational miss is a first-class memory gap —
+    // the say NAMES the store and the plan, and the miss ENQUEUES an absence recheck that the
+    // metabolism hunts until resolved (the Hooper/Griffin misses evaporated with no pursuit).
+    // This suite never touched the DB before this wire; the doctrine needs a real (temp) store —
+    // and the fail-soft is itself pinned: r3 above ran with NO db and the classic miss say stood.
+    {
+      require('../lib/db').init();
+      const r4 = await cog.answerGrounded({ userMessage: 'who sponsored the Dravenmoor water compact?', grounding: '', scope: 'records', deps: {
+        ask: needAsk, intent, dispatch: emptyDispatch, retrieveTurns: async () => [], wikiLookup: async () => [], routeNeed: async () => ({ ok: false }), webSearch: emptyLane, excavate: async () => ({ found: false }),
+      } });
+      ok(r4 && /We don't have that in the database yet — I've queued it for a full research pass/.test(r4.say),
+        '⭐ the doctrine say: a miss names the store and the plan, never a dead-end');
+      const rq = require('../lib/recheck_queue');
+      const open = rq.openByKind({ kind: 'absence', limit: 10, now: Date.now() + 24 * 3600 * 1000 });
+      if (!open.some((x) => /Dravenmoor/i.test(String(x.subject || '')))) console.log('    [debug] absence rows:', JSON.stringify(open.map((x) => ({ s: x.subject, b: x.born_from }))));
+      ok(Array.isArray(open) && open.some((x) => /Dravenmoor/i.test(String(x.subject || '')) && x.born_from === 'conversation-miss'),
+        '⭐ the doctrine pursuit: the miss sits in the absence queue (bornFrom conversation-miss) — off on full research until answered');
+    }
   }
 
   // 15) THE GROUNDING FLARE HOOK (swarm substrate T1, 08-30): the answering-from-the-model branch
