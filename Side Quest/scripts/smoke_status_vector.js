@@ -52,8 +52,17 @@ const GB = 1073741824;
     const agedGpu = await mv.sample({ deps: { cpus: () => cpusB, freemem: () => 16 * GB, totalmem: () => 64 * GB, statfs: statfsOk, gpuBytes: null, uptime: () => 1 }, nowMs: now + 4 * GPU_WIN });
     ok(!agedGpu.gpu, 'a frozen GPU reading past the freshness window is dropped (fail-absent, not a stale figure presented as live)');
 
-    // anomalies: low RAM + low disk → obs_bus events; cooldown suppresses a repeat
-    const statfsLow = async () => ({ bavail: 30 * 1024, bsize: 1048576, blocks: 1000 * 1024 });   // 3% free
+    // THE FALSE-STRESS CURE (09-01, the affect dark window's first data-quality catch): a big drive
+    // at 5-6% free is ~50GB — HEALTHY — yet the percentage-only gate minted "Data volume low"
+    // distress on every sample, feeding permanent manufactured negative affect into the substrate.
+    // An alarm needs BOTH low percentage AND under the absolute DISK_LOW_GB floor.
+    const statfsBigDrive = async () => ({ bavail: 51 * 1024, bsize: 1048576, blocks: 1000 * 1024 });  // 51GB free / 5%
+    await mv.sample({ deps: { cpus: () => cpusB, freemem: () => 16 * GB, totalmem: () => 64 * GB, statfs: statfsBigDrive, gpuBytes: null, uptime: () => 1 } });
+    bus.flush();
+    ok(!bus.latest({ lanes: ['machine'], limit: 10 }).some((e) => e.ref === 'disk_low'), '⭐ false-stress cure: 51GB free on a big drive (5%) emits NO disk_low — percentage alone never mints distress');
+
+    // anomalies: low RAM + TRULY low disk (both gates) → obs_bus events; cooldown suppresses a repeat
+    const statfsLow = async () => ({ bavail: 15 * 1024, bsize: 1048576, blocks: 1000 * 1024 });   // 15GB free / 2% — under BOTH gates
     await mv.sample({ deps: { cpus: () => cpusB, freemem: () => 1 * GB, totalmem: () => 64 * GB, statfs: statfsLow, gpuBytes: null, uptime: () => 1 } });
     bus.flush();
     let evs = bus.latest({ lanes: ['machine'], limit: 10 });

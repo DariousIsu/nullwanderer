@@ -27,7 +27,14 @@ const GPU_MAX_FAILS = 2;
 const ANOMALY_COOLDOWN_MS = 30 * 60e3;
 const CPU_HOT_PCT = 90;          // sustained (3 consecutive samples) → anomaly
 const RAM_LOW_PCT = 5;           // free below this % → anomaly
-const DISK_LOW_PCT = 10;         // free below this % → anomaly
+const DISK_LOW_PCT = 10;         // free below this % → anomaly, BUT only when GB is also low:
+// THE FALSE-STRESS CURE (09-01, the affect dark window's first data-quality catch): on a 931GB
+// volume, 6% free = 51GB — completely healthy — yet the percentage-only gate minted "Data volume
+// low" distress on every sample, feeding permanent negative affect into the substrate (program-is-
+// the-model: manufactured feeling = corrupt training data; it also helped pin internal_state's
+// valence at its floor across two model versions). An alarm must mean a real wall: BOTH low
+// percentage AND under an absolute floor of working headroom.
+const DISK_LOW_GB = 25;          // absolute floor — under this many GB free, low% is REAL stress
 
 // module state (per-process; a restart just re-primes)
 let _prevCpu = null;             // aggregate {busy, total} from the last sample
@@ -115,7 +122,7 @@ async function sample({ deps = {}, nowMs = Date.now(), dataDir = null } = {}) {
     if (totalB > 0) {
       out.diskFreeGB = Math.round(freeB / 1073741824);
       out.diskFreePct = Math.round((freeB / totalB) * 100);
-      if (out.diskFreePct < DISK_LOW_PCT) {
+      if (out.diskFreePct < DISK_LOW_PCT && out.diskFreeGB < DISK_LOW_GB) {
         _emitAnomaly('disk_low', `Data volume low — ${out.diskFreeGB}GB free (${out.diskFreePct}%)`, { deps, nowMs });
       }
     }
@@ -153,4 +160,4 @@ function describe(v) {
   return bits.length ? bits.join(' · ') : null;
 }
 
-module.exports = { sample, describe, cpuPctBetween, _sampleGpu, CPU_HOT_PCT, RAM_LOW_PCT, DISK_LOW_PCT, ANOMALY_COOLDOWN_MS };
+module.exports = { sample, describe, cpuPctBetween, _sampleGpu, CPU_HOT_PCT, RAM_LOW_PCT, DISK_LOW_PCT, DISK_LOW_GB, ANOMALY_COOLDOWN_MS };
