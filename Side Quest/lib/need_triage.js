@@ -75,8 +75,12 @@ function _priorityCmp(a, b) {
 // are the self-repair targets we WANT to keep chasing to a verdict, never reaped for mere age.
 // Pure: returns the ids to park; the caller does the status write. Default age 7 days.
 function staleReap({ needs = [], nowMs = Date.now(), maxAgeMs = 7 * 24 * 3600 * 1000 } = {}) {
+  // Keyed on updated_ts, NOT created_ts (09-01: the reaper parked #92 HOURS after Lucas blessed
+  // it YES through the approval cards — his click set updated_ts but the reaper read the birth
+  // date, so an age rule overrode the operator's explicit decision). Staleness = nothing has
+  // MOVED for 7d; any real touch (a blessing, a triage verdict, a status change) resets the clock.
   return (Array.isArray(needs) ? needs : [])
-    .filter((n) => n && n.status === 'open' && !isSelfWatch(n) && (nowMs - (Number(n.created_ts) || 0)) > maxAgeMs)
+    .filter((n) => n && n.status === 'open' && !isSelfWatch(n) && (nowMs - (Number(n.updated_ts || n.created_ts) || 0)) > maxAgeMs)
     .map((n) => n.id);
 }
 

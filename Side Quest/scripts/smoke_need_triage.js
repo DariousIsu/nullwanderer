@@ -97,6 +97,13 @@ ok(nt.isSelfWatch({ born_from: 'self-watch: recurred 3x/…' }) === true && nt.i
   ok(!reap.includes(3), 'a 30d-old SELF-WATCH need is EXEMPT from the reaper (it stays a self-repair target)');
   ok(!reap.includes(2) && !reap.includes(4), 'a fresh need and an already-parked need are untouched');
   ok(nt.staleReap({ needs, nowMs: t0, maxAgeMs: 60 * DAY }).length === 0, 'a longer reap age spares everything (age is configurable)');
+  // 09-01: the reaper parked #92 HOURS after Lucas blessed it YES — it keyed created_ts, so an
+  // age rule overrode the operator's explicit decision. Staleness = nothing MOVED, not born-old:
+  // updated_ts (any real touch — a blessing, a verdict, a status change) resets the clock.
+  ok(nt.staleReap({ needs: [{ id: 5, status: 'open', created_ts: t0 - 40 * DAY, updated_ts: t0 - 1 * DAY, born_from: 'inquiry-5' }], nowMs: t0 }).length === 0,
+    '⭐ the #92 cure: an old need TOUCHED yesterday (e.g. his blessing) is NOT stale — updated_ts outranks the birth date');
+  ok(nt.staleReap({ needs: [{ id: 6, status: 'open', created_ts: t0 - 40 * DAY, updated_ts: t0 - 9 * DAY, born_from: 'inquiry-6' }], nowMs: t0 }).length === 1,
+    'an old need whose last touch is ALSO past the window still reaps (the rule stays real)');
 }
 
 // --- renderExternalAsk ---
