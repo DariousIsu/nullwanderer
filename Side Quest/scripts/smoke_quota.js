@@ -158,5 +158,22 @@ ok(q.check({ lane: 'nonsense', st: live, spentLastHour: 60_000 }).allow === fals
   ok(q.WINDOW_H === 168 && q.BURST_AHEAD_MARGIN === 0.10, 'the window and margin are named constants, exported for audit');
 }
 
+// ── ⭐ #115 (Lucas-approved): BACKGROUND paces against BACKGROUND spend — the symmetric of the
+// directed exemption. Measured live: 40k+ all-lane compute in one build hour closed research at
+// 19% of a barely-touched pool.
+{
+  // a mid-window pool (50% used, 84h left) so neither floor nor burst interferes with the pace test
+  const st = q.state({ limit: 1000000, markPct: 0.5, markAt: Date.now() - 1000, spentSince: 0, resetAt: Date.now() + 84 * 3600e3 });
+  const hot = st.pacePerHour * 2;   // an all-lane hour far past any share
+  const r1 = q.check({ lane: 'research', st, spentLastHour: hot, spentLastHourBg: 0, estimate: 10 });
+  ok(r1.allow === true, '⭐ a hot DIRECTED/interactive hour no longer closes research when background is quiet');
+  const r2 = q.check({ lane: 'research', st, spentLastHour: hot, spentLastHourBg: hot, estimate: 10 });
+  ok(r2.allow === false && /BACKGROUND/.test(r2.reason), 'a hot BACKGROUND hour still throttles background — the split is honest, not a bypass');
+  const r3 = q.check({ lane: 'research', st, spentLastHour: hot, estimate: 10 });
+  ok(r3.allow === false, 'without the split (old callers) the all-lane hour still governs — backward compatible');
+  const st86 = q.state({ limit: 1000000, markPct: 0.86, markAt: Date.now() - 1000, spentSince: 0, resetAt: Date.now() + 84 * 3600e3 });
+  ok(q.check({ lane: 'idle', st: st86, spentLastHour: 0, spentLastHourBg: 0 }).allow === false, 'the FLOOR still stops idle at 85% regardless of the split — the chat reserve is untouched');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

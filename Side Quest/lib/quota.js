@@ -181,7 +181,13 @@ function state({ limit = 0, markPct = 0, markAt = 0, spentSince = 0, resetAt = 0
  * @param {number} o.spentLastHour compute units across ALL lanes in the trailing hour
  * @param {number} o.estimate      compute units this call is expected to cost (see costOf)
  */
-function check({ lane = 'idle', st = null, spentLastHour = 0, estimate = 0 } = {}) {
+// #115 (Lucas-approved 09-01): `spentLastHourBg` — background-lane spend only (research+idle+
+// untagged). When provided, the PACE check charges background against BACKGROUND spend, the exact
+// symmetric of the directed exemption below: his and the engineer's directed hours must not starve
+// her research (measured: 40k+ all-lane compute in one build hour closed the research lane at 19%
+// of a barely-touched weekly pool). Floors and burst logic are untouched — the reserve still
+// protects his chat, and a hot BACKGROUND hour still throttles background.
+function check({ lane = 'idle', st = null, spentLastHour = 0, spentLastHourBg = null, estimate = 0 } = {}) {
   const tier = TIER[lane] != null ? lane : 'idle';
   if (tier === 'interactive') return { allow: true, reason: 'interactive — never throttled' };
   if (!st || !st.known) return { allow: true, reason: 'no quota configured' };
@@ -239,10 +245,12 @@ function check({ lane = 'idle', st = null, spentLastHour = 0, estimate = 0 } = {
   const ramp = st.hoursLeft < ENDGAME_H ? (1 - st.hoursLeft / ENDGAME_H) : 0;   // 0 → 1 across the final window
   const share = base + (0.95 - base) * ramp;
   const allowedThisHour = st.pacePerHour * share;
-  if (num(spentLastHour) + num(estimate) > allowedThisHour) {
+  // #115: background paces against background spend when the caller can split the hour.
+  const paceSpend = spentLastHourBg != null ? num(spentLastHourBg) : num(spentLastHour);
+  if (paceSpend + num(estimate) > allowedThisHour) {
     return {
       allow: false,
-      reason: `over burn-down pace: ${Math.round(num(spentLastHour)).toLocaleString()} compute in the last hour vs ${Math.round(allowedThisHour).toLocaleString()} sustainable for ${tier} (${Math.round(st.remaining).toLocaleString()} left, ${st.hoursLeft.toFixed(1)}h to reset)`,
+      reason: `over burn-down pace: ${Math.round(paceSpend).toLocaleString()} ${spentLastHourBg != null ? 'BACKGROUND ' : ''}compute in the last hour vs ${Math.round(allowedThisHour).toLocaleString()} sustainable for ${tier} (${Math.round(st.remaining).toLocaleString()} left, ${st.hoursLeft.toFixed(1)}h to reset)`,
       usedPct: st.usedPct,
       pacePerHour: st.pacePerHour,
     };

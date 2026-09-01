@@ -37,6 +37,14 @@ function _db(deps) { return (deps && deps.db) || require('./db'); }
 function assemble({ deps = {}, nowMs = Date.now() } = {}) {
   const v = { at: nowMs };
 
+  // THE PEN LEDGER (Lucas 09-01: "let's make sure she keeps real awareness" — her chat answered a
+  // card-status question blind to her own filed proposal). Measured truth of her code-change work.
+  try {
+    const pen = deps.pen || require('./code_pen');
+    const rows = require('./db').getDb().prepare("SELECT id, title, status FROM code_proposals ORDER BY id DESC LIMIT 4").all();
+    v.pen = { queue: pen.workQueue().length, proposals: rows.map((r) => ({ id: r.id, title: String(r.title).slice(0, 60), status: r.status })) };
+  } catch {}
+
   // organs — connection truths
   v.organs = {};
   try { v.organs.echo = deps.echoConnected !== undefined ? !!deps.echoConnected : null; } catch {}
@@ -181,6 +189,7 @@ function line({ deps = {}, nowMs = Date.now() } = {}) {
   if (v.producers) { const pd = require('./producer_vitals').describe(v.producers); if (pd) bits.push(pd); }
   if (v.memory && v.memory.sq && v.memory.sq.sizeMB != null) bits.push(`memory ${(v.memory.sq.sizeMB / 1024).toFixed(1)}GB${v.memory.quickCheck && !v.memory.quickCheck.ok ? ' INTEGRITY-FAIL' : ''}`);
   if (v.needs && v.needs.newestRepair) bits.push(`self-repair need #${v.needs.newestRepair.id} ${v.needs.newestRepair.status}${v.needs.newestRepair.diagnosed ? ' (diagnosed)' : v.needs.newestRepair.tries ? ` (diagnosis try ${v.needs.newestRepair.tries}/3)` : ''}`);
+  if (v.pen && v.pen.proposals && v.pen.proposals.some((p) => p.status === 'proposed')) bits.push(`🖊 code proposal #${v.pen.proposals.find((p) => p.status === 'proposed').id} WAITING on Lucas's card`);
   if (!bits.length) return null;
   let delta = '';
   try {
@@ -225,6 +234,9 @@ function block({ deps = {}, nowMs = Date.now() } = {}) {
   if (v.audit) {
     const ageH = Math.round((nowMs - v.audit.ts) / 3600e3 * 10) / 10;
     L.push(`Integrity auditor (last real pass ${ageH}h ago — refute or confirm audit claims from THIS): ${v.audit.skipped ? `skipped (${v.audit.skipped})` : `fixed ${v.audit.total_fixed || 0}, ${v.audit.converged ? 'converged' : 'NOT converged'}${v.audit.halted ? `, HALTED(${v.audit.halted})` : ''}${v.audit.auto_killed ? ', AUTOPILOT-DISARMED' : ''}`}.`);
+  }
+  if (v.pen && (v.pen.queue || (v.pen.proposals && v.pen.proposals.length))) {
+    L.push(`Your code pen (answer "did you write it / is the card ready" from THIS): ${v.pen.queue} work thread(s) driving · proposals: ${v.pen.proposals.length ? v.pen.proposals.map((p) => `#${p.id} "${p.title}" [${p.status}${p.status === 'proposed' ? ' — CARD ON LUCAS\'S BAR' : ''}]`).join(' · ') : 'none filed yet'}.`);
   }
   if (v.drives && v.drives.at) { try { L.push(`Drives (measured): ${JSON.stringify(v.drives).slice(0, 200)}.`); } catch {} }
   if (v.recentFires && v.recentFires.length) L.push(`Recent organ activity: ${v.recentFires.slice(-5).join(' | ')}.`);

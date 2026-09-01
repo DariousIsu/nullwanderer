@@ -45,5 +45,22 @@ ok(um.tokensOf({ prompt_tokens: 10, eval_tokens: 20 }) === 30, 'tokensOf: normal
 ok(um.tokensOf({ prompt_eval_count: 7, eval_count: 8 }) === 15, 'tokensOf: raw Ollama shape');
 ok(um.tokensOf(null) === 0 && um.tokensOf({}) === 0, 'tokensOf: junk → 0');
 
+// ── ⭐ #115: the ring carries LANE so quota can split the hour ──
+{
+  um.reset();
+  const t0 = Date.now();
+  um.record('m1', 100, t0, 'directed');
+  um.record('m1', 40, t0, 'research');
+  um.record('m2', 7, t0);   // untagged → '?'
+  const bg = um.byModelSince(t0 - 1000, t0 + 1000, { lanes: ['research', 'idle', '?'] });
+  ok(bg.m1 === 40 && bg.m2 === 7, '⭐ byModelSince filters to background lanes; untagged counts as background (safe-biased)');
+  const all = um.byModelSince(t0 - 1000, t0 + 1000);
+  ok(all.m1 === 140 && all.m2 === 7, 'no filter → all lanes');
+  um.persist(t0 + 1, { setMeta: (k, v) => { globalThis.__ring = v; }, force: true });
+  um.reset();
+  um.restore(t0 + 2, { getMeta: () => globalThis.__ring });
+  ok(um.byModelSince(t0 - 1000, t0 + 1000, { lanes: ['directed'] }).m1 === 100, 'the lane tag survives persist/restore');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

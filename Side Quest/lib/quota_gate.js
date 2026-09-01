@@ -79,6 +79,18 @@ function spentLastHour(now = Date.now()) {
   } catch { return 0; }
 }
 
+/** #115: BACKGROUND compute in the trailing hour — research + idle + untagged ('?', safe-biased:
+ *  unattributed spend charges against background until the lane tags populate). */
+function spentLastHourBackground(now = Date.now()) {
+  try {
+    const um = require('./usage_meter');
+    const byModel = um.byModelSince(now - quota.HOUR, now, { lanes: ['research', 'idle', '?'] });
+    let total = 0;
+    for (const [model, tokens] of Object.entries(byModel)) total += quota.costOf({ model, tokens });
+    return total;
+  } catch { return 0; }
+}
+
 /**
  * May `lane` spend? Fails OPEN on any error or missing config — a throttle that bricks her because a
  * meta key is absent would be a worse bug than the one it prevents.
@@ -89,7 +101,7 @@ function spentLastHour(now = Date.now()) {
 function allow(lane, { estimate = 0, now = Date.now(), quiet = false } = {}) {
   try {
     const st = state(now);
-    const r = quota.check({ lane, st, spentLastHour: spentLastHour(now), estimate });
+    const r = quota.check({ lane, st, spentLastHour: spentLastHour(now), spentLastHourBg: spentLastHourBackground(now), estimate });
     if (!r.allow && !quiet && now - _lastLog > 5 * 60 * 1000) {
       _lastLog = now;
       console.log(`[quota] ${lane} DEFERRED — ${r.reason}`);
@@ -122,4 +134,4 @@ function closedSince(lane) {
 /** One line for boot / status. */
 function describe(now = Date.now()) { return quota.describe(state(now)); }
 
-module.exports = { allow, state, describe, spentLastHour, closedSince, _noteClosure };
+module.exports = { allow, state, describe, spentLastHour, spentLastHourBackground, closedSince, _noteClosure };
