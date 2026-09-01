@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>The Parlor</title>
+<style>
+  :root { --bg: #17171c; --card: #202028; --fg: #e8e8ee; --mut: #9a9aa6; --zoe: #a78bfa; --claude: #d97757; --gemini: #4c9df8; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 "Segoe UI", system-ui, sans-serif; }
+  header { padding: 10px 14px; border-bottom: 1px solid #2c2c34; display: flex; justify-content: space-between; align-items: baseline; }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  #visit { font-size: 12px; color: var(--mut); }
+  #log { padding: 12px 14px 24px; overflow-y: auto; height: calc(100vh - 44px); }
+  .turn { margin: 0 0 10px; padding: 8px 11px; background: var(--card); border-radius: 10px; border-left: 3px solid var(--mut); }
+  .turn .who { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px; }
+  .turn.zoe { border-left-color: var(--zoe); } .turn.zoe .who { color: var(--zoe); }
+  .turn.claude { border-left-color: var(--claude); } .turn.claude .who { color: var(--claude); }
+  .turn.gemini { border-left-color: var(--gemini); } .turn.gemini .who { color: var(--gemini); }
+  .empty { color: var(--mut); font-style: italic; padding: 24px 6px; }
+</style>
+</head>
+<body>
+<header><h1>The Parlor <span style="color:var(--mut);font-weight:400">— observing</span></h1><span id="visit"></span></header>
+<div id="log"><div class="empty">The room is resting. Zoe steps in when she has a reason.</div></div>
+<script>
+  const log = document.getElementById('log');
+  const visitEl = document.getElementById('visit');
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function add(t) {
+    if (!t || !t.id) return;
+    const empty = log.querySelector('.empty');
+    if (empty) empty.remove();
+    const d = document.createElement('div');
+    d.className = 'turn ' + esc(t.speaker);
+    d.innerHTML = '<div class="who">' + esc(t.speaker) + '</div>' + esc(t.content);
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+  }
+  (async () => {
+    try {
+      const r = await window.sq.parlorTranscript();
+      if (r && r.turns) r.turns.forEach(add);
+      if (r && r.visit && r.visit.open) visitEl.textContent = 'visit open — ' + (r.visit.reason || '');
+    } catch {}
+  })();
+  if (window.sq && window.sq.onParlorTick) window.sq.onParlorTick(add);
+</script>
+</body>
+</html>

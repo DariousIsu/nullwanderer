@@ -44,6 +44,10 @@ contextBridge.exposeInMainWorld('sq', {
   needsPending: () => ipcRenderer.invoke('needs:pending'),
   needsDecide: (id, decision) => ipcRenderer.invoke('needs:decide', { id, decision }),
 
+  // The Parlor (09-01): HER room; Lucas observes through his own window.
+  onParlorTick: (cb) => ipcRenderer.on('parlor:tick', (_e, turn) => cb(turn)),
+  parlorTranscript: () => ipcRenderer.invoke('parlor:transcript'),
+
   // Open the Editor Studio window directly (kept for back-compat / direct access)
   openEditor: () => ipcRenderer.invoke('editor:open'),
   // Open the My Workspace workbench — the operator surfaces + studios

@@ -180,6 +180,27 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
         return send(200, { ok: true, inFlight: _inFlight, lastUserTurnAgoMs: _lastUserTurnAgoMs(),
           lastRealUserTurnAgoMs: real.agoMs, realUnanswered: real.unanswered, port });
       }
+      // ── THE PARLOR doors (09-01): outside seats post attributed turns; zoe's seat posts only
+      // from inside the process (a port caller may not speak AS her). Loopback-only server.
+      if (req.method === 'POST' && req.url === '/parlor/say') {
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
+        req.on('end', () => {
+          try {
+            const { room, speaker, text } = JSON.parse(body || '{}');
+            if (String(speaker || '').toLowerCase() === 'zoe') return send(403, { ok: false, error: "zoe's seat posts only from inside her own process" });
+            const r = require('./parlor').post({ room, speaker, text, via: 'port' });
+            return send(r.ok ? 200 : 400, r.ok ? { ok: true, id: r.id } : { ok: false, error: r.why });
+          } catch (e) { return send(500, { ok: false, error: e.message }); }
+        });
+        return;
+      }
+      if (req.method === 'GET' && req.url.startsWith('/parlor/read')) {
+        const u = new URL(req.url, 'http://x');
+        const turns = require('./parlor').transcript(u.searchParams.get('room') || undefined,
+          { sinceId: parseInt(u.searchParams.get('since') || '0', 10) || 0, limit: 50 });
+        return send(200, { ok: true, turns });
+      }
       // DEBUG: run the REAL wired anti-fabrication / Spine-2 gate on a SUPPLIED reply — deterministic proof
       // that the gate transforms a bad reply in the live process (no model needed). {say, evidence, turnStartTs}.
       // turnStartTs default = now (so lastGatherTs is stale → "no gather this turn", exercises absence);

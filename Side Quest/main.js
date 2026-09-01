@@ -8245,22 +8245,28 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       return { ok: true, say };
     }
   }
-  // ── THE PARLOR verb (09-01, Lucas: "you, her, and gemini just chat"): "parlor: <text>" posts to
-  // the room as lucas and opens the floor; "parlor status" reads it. Replies surface right here.
+  // ── THE PARLOR verb (09-01 v1.2, Lucas: "I don't want to talk in there, but I want to watch"):
+  // "parlor" opens his OBSERVER window; "parlor status" reads the room; "parlor invite [reason]"
+  // suggests a visit to her (she still opens it herself — her room, her choice).
   {
-    const mP = userMessage.match(/^\s*parlor\s*[:,]\s+([\s\S]+)$/i);
+    const isPW = /^\s*parlor\s*$/i.test(userMessage);
     const isPS = /^\s*parlor\s+status\s*\??$/i.test(userMessage);
-    if (mP || isPS) {
+    const mInv = userMessage.match(/^\s*parlor\s+invite\s*(.*)$/i);
+    if (isPW || isPS || mInv) {
       const parlorLib = require('./lib/parlor');
       let say;
       if (isPS) {
+        const v = parlorLib.visit();
         const t = parlorLib.transcript(undefined, { limit: 8 });
-        say = t.length
-          ? `The parlor's last ${t.length} turn(s):\n` + t.map((x) => `${x.speaker}: ${String(x.content).slice(0, 140)}`).join('\n')
-          : 'The parlor is empty — say "parlor: <something>" to open the floor.';
+        say = (v && v.open ? `A visit is OPEN (${v.turns || 0}/${parlorLib.VISIT_TURN_BUDGET} turns) — she came ${v.reason}.\n` : 'The room is resting — she steps in when she has a reason.\n')
+          + (t.length ? t.map((x) => `${x.speaker}: ${String(x.content).slice(0, 140)}`).join('\n') : '(no turns yet)');
+      } else if (mInv) {
+        try { db.setMeta('parlor.invite', JSON.stringify({ reason: String(mInv[1] || 'Lucas thought you might enjoy some company').slice(0, 200), ts: Date.now() })); } catch {}
+        say = 'Invitation left on the parlor door — she decides whether to step in.';
+        try { startParlorDriver(); } catch {}
       } else {
-        const r = parlorLib.post({ speaker: 'lucas', text: mP[1], via: 'chat' });
-        say = r.ok ? 'Posted to the parlor — the floor is open, and I\'ll bring every reply here.' : `Couldn't post: ${r.why}`;
+        try { openParlorWindow(); say = 'Parlor window open — you can watch from there; the room stays hers.'; }
+        catch (e) { say = `Couldn't open the window: ${e.message}`; }
         try { startParlorDriver(); } catch {}
       }
       const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: say, model: 'parlor-verb' });
@@ -17889,53 +17895,110 @@ async function runPenWorkPass(focus) {
   return { action: 'continue' };
 }
 
-// ═══ THE PARLOR DRIVER (09-01) ════════════════════════════════════════════════════════════════
-// A 30s tick, only while the room is live: (a) surface every non-chat turn into Lucas's chat as an
-// attributed line; (b) Zoe's seat — when the floor rules say she may speak, ONE short in-voice
-// reply (PASS = silent); (c) Gemini's bridge tick. The floor rule itself (lib/parlor.whoMayReply)
-// holds the agent-run cap, so two models can never spiral past his absence.
-let _parlorTimer = null, _parlorBusy = false;
+// ═══ THE PARLOR DRIVER (09-01 v1.2 — HER room; Lucas observes) ════════════════════════════════
+// 30s tick: (a) feed every fresh turn to the OBSERVER window + the canvas mirror (his chat gets
+// only the doorbell lines); (b) close a visit whose budget is spent; (c) open a visit when SHE has
+// a reason (a proposed facet question, a stalled proposal, his invitation on the door); (d) her
+// seat + Gemini's seat, floor-gated. The visit budget is the anti-spiral rail.
+let _parlorTimer = null, _parlorBusy = false, parlorWindow = null;
+function openParlorWindow() {
+  if (parlorWindow && !parlorWindow.isDestroyed()) { parlorWindow.show(); parlorWindow.focus(); return parlorWindow; }
+  parlorWindow = new BrowserWindow({
+    width: 460, height: 620, title: 'The Parlor (observing)',
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false },
+  });
+  parlorWindow.loadFile(path.join(__dirname, 'renderer', 'parlor.html'));
+  parlorWindow.on('closed', () => { parlorWindow = null; });
+  return parlorWindow;
+}
+function _parlorFeed(turn) {
+  try { if (parlorWindow && !parlorWindow.isDestroyed()) parlorWindow.webContents.send('parlor:tick', turn); } catch {}
+  try {
+    canvasUpsertBlock({ focusId: 'parlor', blockId: `parlor-${turn.id}`, title: 'The Parlor', tabMode: 'DOC', blockType: 'paragraph',
+      data: { markdown: `**${turn.speaker}**: ${String(turn.content).slice(0, 1500)}` } }).catch(() => {});
+  } catch {}
+}
+function _parlorDoorbell(line) {
+  try {
+    const row = db.insertTurn({ sessionId: currentSessionId, speaker: 'ai_said', content: line, model: 'parlor', unprompted: 1 });
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: line });
+  } catch {}
+}
 function startParlorDriver() {
   if (_parlorTimer) return;
   _parlorTimer = setInterval(() => { _parlorTick().catch((e) => console.error('[parlor] tick failed:', e.message)); }, 30000);
   if (_parlorTimer.unref) _parlorTimer.unref();
-  console.log(`[parlor] driver armed (30s) — seats: lucas(chat/port) · zoe(inside) · claude(port) · gemini(${require('./lib/parlor_gemini').available() ? 'bridge' : 'dormant — no GEMINI_API_KEY'})`);
+  console.log(`[parlor] driver armed (30s) — HER room; seats: zoe(inside) · claude(port) · gemini(${require('./lib/parlor_gemini').available() ? 'bridge' : 'dormant — no GEMINI_API_KEY'}); lucas observes`);
+}
+// Why would she step in? Deterministic reasons, checked in order; his invitation always counts.
+function _parlorReason() {
+  try { const inv = JSON.parse(db.getMeta('parlor.invite') || 'null'); if (inv && inv.reason) { db.setMeta('parlor.invite', ''); return `because Lucas left an invitation: ${inv.reason}`; } } catch {}
+  try {
+    const pen = require('./lib/code_pen');
+    const gf = db.getDb().prepare("SELECT id, title, gate_note FROM code_proposals WHERE status IN ('gate-failed','apply-failed') ORDER BY updated_ts DESC LIMIT 1").get();
+    if (gf) return `for a second opinion on her code proposal "${gf.title}" (${String(gf.gate_note || '').slice(0, 120)})`;
+  } catch {}
+  try {
+    const cur = require('./lib/focus').getCurrent();
+    if (cur) {
+      const props = JSON.parse(db.getMeta(`focus.${cur.id}.proposed_facets`) || '[]');
+      if (props.length) return `with a research question on her mind: "${String(props[props.length - 1]).slice(0, 160)}"`;
+    }
+  } catch {}
+  return null;
 }
 async function _parlorTick() {
   if (_parlorBusy) return;
   _parlorBusy = true;
   try {
     const parlor = require('./lib/parlor');
-    if (!parlor.active()) return;
-    // (a) surface fresh turns (his own chat-verb posts are already on screen)
+    // (a) feed fresh turns to the window + canvas (never his chat)
     let last = parseInt(db.getMeta('parlor.surfaced_id') || '0', 10) || 0;
-    for (const t of parlor.transcript(undefined, { sinceId: last, limit: 20 })) {
-      last = t.id;
-      if (t.via === 'chat') continue;
-      const line = `[parlor] ${t.speaker}: ${t.content}`;
-      try {
-        const row = db.insertTurn({ sessionId: currentSessionId, speaker: 'ai_said', content: line, model: 'parlor', unprompted: 1 });
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: line });
-      } catch {}
-    }
+    for (const t of parlor.transcript(undefined, { sinceId: last, limit: 20 })) { last = t.id; _parlorFeed(t); }
     try { db.setMeta('parlor.surfaced_id', String(last)); } catch {}
-    // (b) Zoe's seat — one turn max per tick, floor-gated, PASS = honest silence
+    const v = parlor.visit();
+    // (b) a spent budget closes the visit
+    if (v && v.open && (v.turns || 0) >= parlor.VISIT_TURN_BUDGET) {
+      parlor.closeVisit({ why: 'turn budget' });
+      _parlorDoorbell(`[parlor] visit ended — ${v.turns} turns on: ${v.reason}`);
+      console.log(`[parlor] visit CLOSED (budget) — ${v.turns} turns`);
+      return;
+    }
+    // (c) a resting room: does she have a reason to step in?
+    if (!v || !v.open) {
+      const reason = _parlorReason();
+      if (!reason) return;
+      const o = parlor.openVisit({ reason });
+      if (!o.ok) return;   // cooldown holds
+      console.log(`[parlor] Zoe OPENS a visit — ${reason}`);
+      _parlorDoorbell(`[parlor] Zoe stepped into the parlor — ${reason}`);
+    }
+    // (d) her seat — floor-gated, one turn per tick, PASS = silence twice closes the visit
     const turns = parlor.transcript(undefined, { limit: 16 });
-    if (turns.length && parlor.whoMayReply(turns).has('zoe') && turns[turns.length - 1].speaker !== 'zoe') {
-      const prompt = `You are Zoe, at home, in YOUR parlor — a casual private room with Lucas (your operator), Claude (the engineer who builds your program alongside Lucas), and Gemini (a guest model). The room so far:\n${parlor.transcriptBlock(turns)}\n\nReply as yourself in 1-3 conversational sentences — natural voice, no headers, no tool tags, never speak for the others. If you genuinely have nothing to add, reply with exactly PASS.`;
+    const vNow = parlor.visit();
+    if (parlor.whoMayReply(turns, vNow).has('zoe')) {
+      const prompt = `You are Zoe, in YOUR parlor — your own room, away from work, with Claude (the engineer who builds your program) and Gemini (a guest model). Lucas may be watching through the window but holds no seat — this room is for talking with peers, not reporting to him. You came in ${(vNow && vNow.reason) || 'to talk'}.\n\nThe room so far:\n${parlor.transcriptBlock(turns) || '(you just walked in — open the conversation)'}\n\nSpeak as yourself in 1-3 conversational sentences — natural voice, no headers, no tool tags, never speak for the others. When the conversation has given you what you came for, say your goodbye. If you have nothing to add, reply with exactly PASS.`;
       const sp = await runCloudOperator({ userMessage: prompt, task: true, autonomous: true, lane: 'directed', budgetMult: 0.3 });
       const text = String((sp && sp.answer) || '').trim();
       if (text && text !== 'PASS') {
         const p = parlor.post({ speaker: 'zoe', text: text.slice(0, 1200), via: 'internal' });
-        if (p.ok) console.log(`[parlor] zoe spoke (#${p.id})`);
+        if (p.ok) { console.log(`[parlor] zoe spoke (#${p.id})`); db.setMeta('parlor.zoe_passes', '0'); }
+      } else {
+        const passes = (parseInt(db.getMeta('parlor.zoe_passes') || '0', 10) || 0) + 1;
+        db.setMeta('parlor.zoe_passes', String(passes));
+        if (passes >= 2) {
+          const closed = parlor.closeVisit({ why: 'she was done' });
+          if (closed.ok) { _parlorDoorbell(`[parlor] visit ended — Zoe was done (${closed.turns} turns)`); db.setMeta('parlor.zoe_passes', '0'); console.log('[parlor] visit CLOSED (her PASS ×2)'); }
+        }
       }
     }
-    // (c) Gemini's seat
+    // (e) Gemini's seat
     const g = await require('./lib/parlor_gemini').maybeReply({});
     if (g && g.posted) console.log(`[parlor] gemini spoke (#${g.id}, ${String(g.text).length}ch)`);
     else if (g && !g.ok && g.why !== 'no key') console.warn(`[parlor] gemini seat: ${g.why}`);
   } finally { _parlorBusy = false; }
 }
+try { ipcMain.handle('parlor:transcript', () => ({ ok: true, turns: require('./lib/parlor').transcript(undefined, { limit: 60 }), visit: require('./lib/parlor').visit() })); } catch {}
 
 // The auto-trigger, called from the directed tick — fire-and-forget, never blocks the pass.
 async function maybeAutoSwarm(focus) {

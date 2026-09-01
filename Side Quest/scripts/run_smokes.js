@@ -710,6 +710,10 @@ const smokes = [
   // source (jailed — .env/data/.git sealed) and PROPOSES diffs; his card approves; main enforces
   // clean-tree apply + full gate + revert-on-red. Jail, diff parse, state machine, tag doors.
   'smoke_code_pen.js',
+  // ── THE PARLOR (Lucas 09-01: "you, her, and gemini just chat"): attributed turns in her one
+  // memory; floor rules (naming hands the floor; agent-run cap holds it for Lucas); the Gemini
+  // bridge (key in HEADER never URL, PASS = silence, fail-soft); port doors + zoe-seat protection.
+  'smoke_parlor.js',
   // ── the AFFECT TISSUES (B2/B3, 2026-08-31 — docs/AFFECT_SUBSTRATE_RESEARCH_2026-08-31.md): the
   // deterministic python passes (appraisal-with-reasons + per-subject impressions) + the paced
   // idle-gated driver. Hermetic fixtures; proves replay determinism, decay, the RO rail, and
