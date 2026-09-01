@@ -3471,17 +3471,88 @@ function _pendingNeedItems() {
       .map((r) => ({ id: r.id, kind: 'blocked', text: _txt(r.need), verdict: null }));
     const proposed = db.getDb().prepare("SELECT id, need FROM capability_needs WHERE status = 'proposed' ORDER BY updated_ts DESC LIMIT 6").all()
       .map((r) => { const v = (() => { try { return capn.getVerdict(r.id); } catch { return null; } })(); return { id: r.id, kind: 'proposed', text: _txt(r.need), verdict: v ? v.v : null }; });
-    return [...blocked, ...proposed];
+    // THE GATED PEN (09-01): code proposals ride the same bar, id-space 'pen-N'.
+    let pens = []; try { pens = require('./lib/code_pen').pending(); } catch {}
+    return [...pens, ...blocked, ...proposed];
   } catch (e) { console.error('[needs] pending items failed:', e.message); return []; }
 }
 ipcMain.handle('needs:pending', () => ({ ok: true, items: _pendingNeedItems() }));
 ipcMain.handle('needs:decide', (_e, { id, decision } = {}) => {
   try {
+    // Pen route: 'pen-N' ids are code proposals — his ✓ arms the ENFORCE pipeline (clean tree →
+    // full gate → commit on green / revert on red), his ✗ retires. Runs async; the card refreshes
+    // now and again when the gate verdict lands.
+    const _pm = String(id).match(/^pen-(\d+)$/);
+    if (_pm) {
+      const pen = require('./lib/code_pen');
+      const r = pen.decide(Number(_pm[1]), decision);
+      if (r.ok) {
+        try { require('./lib/obs_bus').emit({ lane: 'pen', kind: 'decision', level: 'info', text: `code proposal #${r.id} decided ${String(decision).toLowerCase()} by Lucas → ${r.status}`, ref: `pen:${r.id}` }); } catch {}
+        if (r.status === 'approved') _applyPenProposal(r.id).catch((e) => console.error('[pen] apply pipeline crashed:', e.message));
+      }
+      return { ...r, items: _pendingNeedItems() };
+    }
     const r = require('./lib/capability_need').decide(id, decision);
     if (r.ok) { try { require('./lib/obs_bus').emit({ lane: 'needs', kind: 'decision', level: 'info', text: `need #${r.id} decided ${String(decision).toLowerCase()} by Lucas → ${r.status}`, ref: `need:${r.id}` }); } catch {} }
     return { ...r, items: _pendingNeedItems() };
   } catch (e) { return { ok: false, why: e.message, items: _pendingNeedItems() }; }
 });
+// THE ENFORCE PIPELINE (the acceptance gate made mechanical): clean tree on the touched files →
+// git apply --check → apply → FULL npm test with the exit code READ (never piped away) → commit
+// the named files on green; REVERT the files and attach the gate tail on red. Every outcome is
+// loud and lands back on the proposal row; the change goes LIVE at the next cycle, never hot.
+async function _applyPenProposal(id) {
+  const pen = require('./lib/code_pen');
+  const { execFile } = require('child_process');
+  const run = (cmd, args, opts = {}) => new Promise((resolve) => {
+    execFile(cmd, args, { cwd: __dirname, timeout: opts.timeoutMs || 600000, maxBuffer: 32 * 1024 * 1024, ...opts },
+      (err, stdout, stderr) => resolve({ code: err ? (err.code == null ? 1 : err.code) : 0, stdout: String(stdout || ''), stderr: String(stderr || '') }));
+  });
+  const p = pen.get(id);
+  if (!p || p.status !== 'approved') return;
+  const files = JSON.parse(p.files || '[]');
+  pen.setStatus(id, 'applying');
+  console.log(`[pen] APPLY #${id} "${p.title}" — ${files.length} file(s): ${files.join(', ')}`);
+  try {
+    const dirty = await run('git', ['status', '--porcelain', '--', ...files]);
+    if (dirty.stdout.trim()) {
+      pen.setStatus(id, 'proposed', { gateNote: `blocked: uncommitted local changes on ${dirty.stdout.trim().split('\n').length} touched file(s) — retry after the tree is clean` });
+      console.warn(`[pen] #${id} BLOCKED — touched files carry uncommitted work; never clobbered. Card returns.`);
+      return;
+    }
+    const tmp = require('path').join(require('os').tmpdir(), `pen_${id}.diff`);
+    require('fs').writeFileSync(tmp, p.diff.endsWith('\n') ? p.diff : p.diff + '\n', 'utf8');
+    const check = await run('git', ['apply', '--check', '--whitespace=nowarn', tmp]);
+    if (check.code !== 0) {
+      pen.setStatus(id, 'apply-failed', { gateNote: `git apply --check failed: ${(check.stderr || check.stdout).slice(0, 400)}` });
+      console.warn(`[pen] #${id} APPLY-CHECK FAILED — the diff does not fit the tree (stale read?). She gets the why.`);
+      return;
+    }
+    await run('git', ['apply', '--whitespace=nowarn', tmp]);
+    console.log(`[pen] #${id} applied — running the FULL gate…`);
+    const gate = await run('npm', ['test'], { timeoutMs: 900000, shell: process.platform === 'win32' });
+    if (gate.code === 0) {
+      await run('git', ['add', '--', ...files]);
+      const cm = await run('git', ['commit', '-m', `PEN #${id}: ${p.title}\n\nProposed by Zoe through the gated pen; approved by Lucas at the card; full gate green.\n\n${String(p.rationale || '').slice(0, 600)}\n\nCo-Authored-By: Zoe (gated pen) <noreply@local>`]);
+      pen.setStatus(id, cm.code === 0 ? 'applied' : 'apply-failed', { gateNote: cm.code === 0 ? 'gate GREEN — committed; goes live at the next program cycle' : `gate green but commit failed: ${cm.stderr.slice(0, 300)}` });
+      console.log(`[pen] #${id} ${cm.code === 0 ? 'LANDED — gate green, committed. Live at the next cycle.' : 'gate green but COMMIT FAILED: ' + cm.stderr.slice(0, 200)}`);
+      try { require('./lib/obs_bus').emit({ lane: 'pen', kind: 'win', text: `code proposal #${id} landed through the gate: ${p.title}`, ref: `pen:${id}` }); } catch {}
+      try { db.insertMonologue({ content: `My code proposal #${id} ("${p.title}") passed the full gate and is committed. It goes live at the next program cycle.`, model: 'pen', type: 'reading' }); } catch {}
+    } else {
+      await run('git', ['checkout', '--', ...files]);
+      const tail = (gate.stdout + '\n' + gate.stderr).split('\n').filter((l) => /FAIL|✗|failed|Error/.test(l)).slice(-6).join('\n').slice(0, 800);
+      pen.setStatus(id, 'gate-failed', { gateNote: `gate RED — reverted. Tail:\n${tail || '(no matching failure lines — read the gate log)'}` });
+      console.warn(`[pen] #${id} GATE RED — files reverted, nothing landed. The tail rides the row back to her.`);
+      try { db.insertMonologue({ content: `My code proposal #${id} ("${p.title}") FAILED the gate and was reverted — nothing landed. Gate tail:\n${tail}`, model: 'pen', type: 'reading' }); } catch {}
+    }
+  } catch (e) {
+    try { await run('git', ['checkout', '--', ...files]); } catch {}
+    pen.setStatus(id, 'apply-failed', { gateNote: `pipeline error: ${e.message}` });
+    console.error(`[pen] #${id} pipeline error (files restored):`, e.message);
+  } finally {
+    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('needs:approvals', { items: _pendingNeedItems() }); } catch {}
+  }
+}
 // Desktop companion: hide (keep the process/state, just tuck her away) + toggle (create/show or hide).
 ipcMain.handle('companion:hide', () => { try { if (companionWindow && !companionWindow.isDestroyed()) companionWindow.hide(); } catch {} return { ok: true }; });
 ipcMain.handle('companion:toggle', () => {
@@ -8782,7 +8853,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const inboxBlock = inboxLib.buildPromptBlock();           // null when unconfigured
   const discordConnBlock = discordLib.buildPromptBlock();   // null when unconfigured
   const browserConnBlock = browserLib.isConnected() ? browserLib.buildPromptBlock() : null;
-  const browserBlock = [fileBlock, screenBlock, schedBlock, presenceBlock, emailBlock, inboxBlock, discordConnBlock, browserConnBlock].filter(Boolean).join('\n\n') || null;
+  // THE GATED PEN (Lucas 09-01): source read + change proposals; his card + the gate are the law.
+  const penBlock = require('./lib/code_pen').buildPromptBlock();
+  const browserBlock = [fileBlock, screenBlock, schedBlock, presenceBlock, emailBlock, inboxBlock, discordConnBlock, browserConnBlock, penBlock].filter(Boolean).join('\n\n') || null;
   // THE ATTACHMENT LAND DOOR (2026-08-14, the fabricated-review audit — lib/attach_intake): a
   // .docx used to arrive as ZIP bytes read as UTF-8, capped to 6,000 chars of mojibake, landed
   // nowhere — and the reply reviewed it anyway (#11891, "JobsOhio case study" from thin air).
@@ -12689,6 +12762,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ...schedulerLib.parseTags(thought || ''),
     ...schedulerLib.parseTags(say || '')
   ];
+  // THE GATED PEN doors (work tools — off the clock the pen stays capped).
+  const penLib = require('./lib/code_pen');
+  const penTagsToRun = offClock ? [] : [
+    ...penLib.parseTags(thought || ''),
+    ...penLib.parseTags(say || '')
+  ];
   const presenceTagsToRun = offClock ? [] : [
     ...presenceLib.parseTags(thought || ''),
     ...presenceLib.parseTags(say || '')
@@ -12767,6 +12846,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   thoughtStripped = screenLib.stripTags(thoughtStripped);
   thoughtStripped = inboxLib.stripTags(thoughtStripped);
   thoughtStripped = schedulerLib.stripTags(thoughtStripped);
+  thoughtStripped = penLib.stripTags(thoughtStripped);
   thoughtStripped = presenceLib.stripTags(thoughtStripped);
   thoughtStripped = emailLib.stripTags(thoughtStripped);
   thoughtStripped = discordLib.stripTags(thoughtStripped);
@@ -12817,6 +12897,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   sayStripped = inboxLib.stripTags(sayStripped);
   // Strip any scheduling / presence / email / discord tags that leaked into say
   sayStripped = schedulerLib.stripTags(sayStripped);
+  sayStripped = penLib.stripTags(sayStripped);
   sayStripped = presenceLib.stripTags(sayStripped);
   sayStripped = emailLib.stripTags(sayStripped);
   sayStripped = discordLib.stripTags(sayStripped);
@@ -13245,6 +13326,33 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         }
       }
     })().catch(err => console.error('[main] file async error:', err.message));
+  }
+
+  // Background: THE GATED PEN doors — source reads land as readings (she reasons over them next
+  // turn); a filed proposal pushes an approval card to Lucas. Nothing here writes the tree.
+  if (penTagsToRun.length > 0) {
+    (async () => {
+      for (const t of penTagsToRun.slice(0, 4)) {
+        try {
+          const result = penLib.dispatch(t);
+          if (result && result.ok && t.tag === 'source-read') {
+            const row = db.insertMonologue({ content: `I read my own source ${result.path} (${result.bytes} bytes${result.truncated ? ', truncated' : ''}):\n${result.text}`, model: 'source-read', type: 'reading', query: result.path });
+            try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(read own source) ${result.path}`, type: 'reading', query: result.path }); } catch {}
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[You just read your own source file ${result.path} (${result.bytes} bytes). It is now in your readings — reason over it; propose a change only against lines you have actually read.]` }); }
+          } else if (result && result.ok && t.tag === 'source-list') {
+            const row = db.insertMonologue({ content: `My source dir ${result.path}: ${(result.entries || []).join(', ')}`, model: 'source-read', type: 'reading', query: result.path });
+            try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(listed own source) ${result.path}`, type: 'reading' }); } catch {}
+          } else if (result && result.ok && t.tag === 'propose-change') {
+            console.log(`[pen] proposal #${result.id} FILED: "${String(t.attrs.title).slice(0, 80)}" touching ${result.files.join(', ')} — Lucas's card decides`);
+            try { db.insertMonologue({ content: `I filed code proposal #${result.id} ("${String(t.attrs.title).slice(0, 100)}") touching ${result.files.join(', ')}. It waits on Lucas's approval card — his ✓ applies it through the full gate; I never land it myself.`, model: 'pen', type: 'reading' }); } catch {}
+            try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('needs:approvals', { items: _pendingNeedItems() }); } catch {}
+          } else if (result && !result.ok) {
+            try { db.insertMonologue({ content: `My pen ${t.tag} was refused: ${result.why}`, model: 'pen', type: 'reading' }); } catch {}
+            console.log(`[pen] ${t.tag} refused: ${result.why}`);
+          }
+        } catch (err) { console.error('[pen] dispatch error:', err.message); }
+      }
+    })().catch((err) => console.error('[pen] async error:', err.message));
   }
 
   // Background: dispatch any screen-observe tags. Result (open windows + focused

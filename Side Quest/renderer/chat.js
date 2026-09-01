@@ -1263,12 +1263,12 @@ function renderApprovals(items) {
     if (!Array.isArray(items) || !items.length) { approvalsBar.classList.add('hidden'); approvalsBar.innerHTML = ''; return; }
     approvalsBar.classList.remove('hidden');
     approvalsBar.innerHTML = `<div class="approvals-title">⏳ waiting on your word (${items.length})</div>` + items.map((it) => `
-      <div class="approval-card" data-id="${Number(it.id)}">
-        <span class="approval-kind ${it.kind === 'blocked' ? 'blocked' : 'proposed'}">${it.kind === 'blocked' ? 'blocked on you' : 'proposed'}</span>
+      <div class="approval-card" data-id="${escapeHtml(String(it.id))}">
+        <span class="approval-kind ${it.kind === 'blocked' ? 'blocked' : 'proposed'}">${it.kind === 'blocked' ? 'blocked on you' : it.kind === 'pen' ? '🖊 code change' : 'proposed'}</span>
         ${it.verdict ? `<span class="approval-verdict ${it.verdict}">${it.verdict === 'verified' ? '✓ verified' : '✗ rejected'}</span>` : ''}
-        <span class="approval-text">#${Number(it.id)} — ${escapeHtml(it.text)}</span>
+        <span class="approval-text">#${escapeHtml(String(it.id))} — ${escapeHtml(it.text)}</span>
         <span class="approval-actions">
-          <button type="button" class="approval-yes" title="${it.kind === 'blocked' ? 'Done / unblocked — she re-checks it' : 'Yes — build it (back into the open queue with your blessing)'}">✓ yes</button>
+          <button type="button" class="approval-yes" title="${it.kind === 'blocked' ? 'Done / unblocked — she re-checks it' : it.kind === 'pen' ? 'Yes — apply it: clean tree, full gate, commit on green, revert on red' : 'Yes — build it (back into the open queue with your blessing)'}">✓ yes</button>
           <button type="button" class="approval-no" title="No — retire it">✗ no</button>
         </span>
       </div>`).join('');
@@ -1280,7 +1280,7 @@ if (approvalsBar) {
     if (!btn) return;
     const card = btn.closest('.approval-card');
     if (!card) return;
-    const id = Number(card.dataset.id);
+    const id = /^pen-/.test(card.dataset.id) ? card.dataset.id : Number(card.dataset.id);   // pen cards carry string ids
     const decision = btn.classList.contains('approval-yes') ? 'yes' : 'no';
     btn.disabled = true;
     try {

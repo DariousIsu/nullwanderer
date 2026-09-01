@@ -706,6 +706,10 @@ const smokes = [
   // Date.parse read "1330" as the YEAR 1330; the say is the contract, the machinery books what
   // was said). Durations + clock forms (HH:MM, military, am/pm, next-occurrence) + ISO.
   'smoke_scheduler.js',
+  // ── THE GATED PEN (Lucas 09-01: "acceptance approval gate for the pen"): she reads her own
+  // source (jailed — .env/data/.git sealed) and PROPOSES diffs; his card approves; main enforces
+  // clean-tree apply + full gate + revert-on-red. Jail, diff parse, state machine, tag doors.
+  'smoke_code_pen.js',
   // ── the AFFECT TISSUES (B2/B3, 2026-08-31 — docs/AFFECT_SUBSTRATE_RESEARCH_2026-08-31.md): the
   // deterministic python passes (appraisal-with-reasons + per-subject impressions) + the paced
   // idle-gated driver. Hermetic fixtures; proves replay determinism, decay, the RO rail, and
