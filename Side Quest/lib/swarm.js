@@ -67,4 +67,17 @@ function nextDeepFacet({ facetsPlanned = [], claimed = [] } = {}) {
   return facetsPlanned.find((f) => !taken.has(f)) || null;
 }
 
-module.exports = { DEFAULT_SWARM_FLOOR, partitionRoster, planSwarmSlots, shouldReleaseRoster, shouldReleaseDeep, nextDeepFacet };
+// AUTO-SWARM decision (2026-09-01, Lucas: "there should be a swarm on everything now — all this
+// research that's being done should be being swarmed"): a bounded user run with enough remaining
+// targets and free background workers swarms by DEFAULT — the chat verb still works, but his
+// research no longer waits for it. Pure; thresholds injectable so the pins run offline.
+const AUTO_SWARM_MIN_TARGETS = 4;
+function shouldAutoSwarm({ remaining = 0, totalWorkers = 1, swarmLive = false, minTargets = AUTO_SWARM_MIN_TARGETS, floor = DEFAULT_SWARM_FLOOR } = {}) {
+  if (swarmLive) return { swarm: false, reason: 'swarm-live' };            // one swarm at a time machine-wide
+  const { swarmWorkers } = planSwarmSlots({ totalWorkers, floor });
+  if (swarmWorkers < 1) return { swarm: false, reason: 'no-workers' };     // research.workers=1 → nothing to surge
+  if ((remaining | 0) < minTargets) return { swarm: false, reason: 'below-threshold' };   // a 2-target run splits into overhead, not speed
+  return { swarm: true, k: Math.min(swarmWorkers, remaining | 0) };
+}
+
+module.exports = { DEFAULT_SWARM_FLOOR, AUTO_SWARM_MIN_TARGETS, partitionRoster, planSwarmSlots, shouldReleaseRoster, shouldReleaseDeep, nextDeepFacet, shouldAutoSwarm };

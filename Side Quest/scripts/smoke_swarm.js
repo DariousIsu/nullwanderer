@@ -23,6 +23,15 @@ ok(s.partitionRoster(['a', 'b'], 0)[0].length === 2, 'k floored at 1 (never zero
   ok(flat.length === 67 && new Set(flat).size === 67, 'partition is a clean cover — every target once, no dupes (67/3)');
 }
 
+// --- ⭐ AUTO-SWARM (2026-09-01, Lucas: "there should be a swarm on everything now"): the pure
+// decision behind partitioning HIS bounded runs by default ---
+ok(s.shouldAutoSwarm({ remaining: 8, totalWorkers: 4 }).swarm === true, '⭐ a bounded run with 8 remaining targets and 4 workers swarms by default');
+ok(s.shouldAutoSwarm({ remaining: 8, totalWorkers: 4 }).k === 3, 'k respects the slot plan (4 workers → the primary IS the floor stream → 3 swarm)');
+ok(s.shouldAutoSwarm({ remaining: 3, totalWorkers: 4 }).reason === 'below-threshold', `fewer than ${s.AUTO_SWARM_MIN_TARGETS} remaining → overhead, not speed — no swarm`);
+ok(s.shouldAutoSwarm({ remaining: 8, totalWorkers: 1 }).reason === 'no-workers', 'research.workers=1 → nothing to surge, honest refusal');
+ok(s.shouldAutoSwarm({ remaining: 8, totalWorkers: 4, swarmLive: true }).reason === 'swarm-live', 'one swarm at a time machine-wide — a live swarm blocks a second');
+ok(s.shouldAutoSwarm({}).swarm === false, 'empty input → no swarm, no throw');
+
 // --- planSwarmSlots: primary always breadth, ≥floor stays normal, capped by bg ---
 ok(eq(s.planSwarmSlots({ totalWorkers: 2 }), { swarmWorkers: 1, breadthWorkers: 1 }), '2 workers → 1 swarms, primary stays breadth');
 ok(eq(s.planSwarmSlots({ totalWorkers: 4 }), { swarmWorkers: 3, breadthWorkers: 1 }), '4 workers → 3 bg swarm, primary breadth');

@@ -847,8 +847,30 @@ app.whenReady().then(() => {
     if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_CURATION_ENABLED || '').trim())) return;
     if (_bootGraceActive()) { _logBootDefer('curation'); return; }   // cold-boot stutter: let the app warm first
     if (curationRunning) return;
-    if (Date.now() - parseInt(db.getMeta('last_curation_pass_at') || '0', 10) < CURATION_MIN_GAP_MS) return;
-    if (Date.now() - lastUserTurnTs < CURATION_IDLE_MS) return;    // not while recently active
+    // OWED DRAIN (2026-09-01 gate trace, Blockers 2+3): the slot is claimed BEFORE the work and the
+    // curator drain is nearly the LAST stage of a 30-60min pass — a reboot in between spent the day's
+    // one 20h slot with ZERO bursts, and the post-boot engine race skipped with no retry. The owed
+    // flag persists across reboots and re-kicks JUST the drain (per-curator pace/kill gates still
+    // apply inside), without waiting out the 20h gap the interrupted pass already paid for.
+    try {
+      if (db.getMeta('curation.drain_owed') === '1' && !_curationBurstInFlight && echoSuit && echoSuit.connected) {
+        db.setMeta('curation.drain_owed', '0');   // consume first — the per-curator paces make a double-fire harmless
+        console.log('[curation-burst] owed drain from an interrupted pass — re-kicking the four curators');
+        (async () => {
+          const _cb = require('./lib/curation_burst');
+          for (const _ck of _cb.CURATOR_KEYS) await _curationBurst('owed-drain', _ck);
+        })().catch((e) => console.error('[curation-burst] owed drain failed:', e.message));
+        return;
+      }
+    } catch {}
+    const _lastPassTs = parseInt(db.getMeta('last_curation_pass_at') || '0', 10);
+    if (Date.now() - _lastPassTs < CURATION_MIN_GAP_MS) return;
+    // CURATION DEBT ESCALATOR (2026-09-01 gate trace, Blocker 1): on a busy day his turns restamp
+    // lastUserTurnTs faster than the idle gate's window, and the pass starves ALL day — measured
+    // 09-01: zero bursts across three boots of continuous directed work. Past the debt horizon,
+    // curation outranks the lull and runs anyway (yielding forever is not yielding, it is dying).
+    const _debtMs = ((parseFloat(process.env.ZOE_CURATION_DEBT_HRS) || 36) * 3600 * 1000);
+    if (Date.now() - lastUserTurnTs < CURATION_IDLE_MS && Date.now() - _lastPassTs < _debtMs) return;    // not while recently active — unless the debt horizon passed
     try { await curationBackup(); } catch (e) { console.error('[curation] backup failed — skipping pass:', e.message); return; }
     curationRunning = true;
     markActivity('curation');   // stall-attrib (diagnostic)
@@ -991,10 +1013,13 @@ app.whenReady().then(() => {
       }
       // W2+W3 (swarm substrate §T3): the four curators ride this drain as proposer bursts —
       // SEQUENTIAL (one in flight, drain pace) and fire-and-forget as a set, so the pass never
-      // waits on a sweep; each curator's own kill/pace gates apply.
+      // waits on a sweep; each curator's own kill/pace gates apply. The owed flag makes the kick
+      // reboot-safe: set before, cleared only after all four complete (see the owed-drain branch).
+      try { db.setMeta('curation.drain_owed', '1'); } catch {}
       (async () => {
         const _cb = require('./lib/curation_burst');
         for (const _ck of _cb.CURATOR_KEYS) await _curationBurst('nightly-drain', _ck);
+        try { db.setMeta('curation.drain_owed', '0'); } catch {}
       })().catch((e) => console.error('[curation-burst] drain kick failed:', e.message));
       // (The RECURSIVE AUDITOR auto-cleaner used to run here on the 20h curation cadence — it is now
       // DECOUPLED onto its own fast, write-triggered tick: maybeRunAudit / AUDIT_CHECK_MS below.)
@@ -17492,6 +17517,7 @@ async function startSwarm({ target, requestedK = null, requestedBy = 'chat' } = 
   if (!seeded) { delete state.swarm; return { ok: false, reason: 'failed to seed any swarm worker' }; }
   _saveSchedState(state);
   startBackgroundWorkers();
+  _pushSwarmChip();
   console.log(`[swarm] START roster ${beat.id}: ${targets.length} targets across ${seeded} worker(s) (by ${requestedBy})`);
   return { ok: true, beatId: beat.id, targets: targets.length, workers: seeded };
 }
@@ -17542,8 +17568,10 @@ function _maintainSwarm(state) {
       _closeSwarmParts(state.swarm.parts, { abandon: false });   // threads already resolved on convergence; just clear the surfacing tags
       console.log(`[swarm] RELEASE ${b} — ${n} partition(s)${stalled ? `, ${stalled} expired as stalled` : ' converged'} → workers back to normal rotation`);
       delete state.swarm;
+      setTimeout(_pushSwarmChip, 0);   // after the caller's _saveSchedState persists the delete
       return 0;
     }
+    _pushSwarmChip();
     return Object.keys(state.swarm.parts).filter((k) => !state.swarm.parts[k].done).length;
   } catch (e) { console.error('[swarm] maintain failed:', e.message); return 0; }
 }
@@ -17555,14 +17583,115 @@ function releaseSwarm(reason = 'manual') {
   const b = state.swarm.beatId, parts = state.swarm.parts || {};
   const closed = _closeSwarmParts(parts, { abandon: true, reason: `swarm-release:${reason}` });   // STOP in-flight partitions — no orphan pileup
   delete state.swarm; _saveSchedState(state);
+  _pushSwarmChip();
   console.log(`[swarm] RELEASE ${b} (${reason}) — stopped ${closed} in-flight partition(s)`);
   return { ok: true, beatId: b, stopped: closed };
+}
+
+// SWARM CHIP (2026-09-01): the beat/focus swarm never lit the chat chip — only the R4 roster drain
+// pushed 'swarm:status', so Lucas watched "swarm: off" while partitions worked. Push the record's
+// truth on every start/maintain/release.
+function _pushSwarmChip() {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const s = _loadSchedState().swarm;
+    if (!s) { mainWindow.webContents.send('swarm:status', { active: false }); return; }
+    const parts = Object.values(s.parts || {});
+    mainWindow.webContents.send('swarm:status', {
+      active: true,
+      workers: parts.filter((p) => p && !p.done).length,
+      target: parts.reduce((a, p) => a + ((p && p.n) || 0), 0),
+      done: parts.filter((p) => p && p.done).length,
+      state: s.beatId,
+    });
+  } catch {}
+}
+
+// ═══ AUTO-SWARM (2026-09-01, Lucas: "there should be a swarm on everything now — all this research
+// should be being swarmed") ═══════════════════════════════════════════════════════════════════════
+// A bounded USER run with enough uncovered intended targets partitions itself across the background
+// workers the moment slots are free — the same proven machinery as `swarm on <X>` (partitionRoster →
+// seedBeatRun with targetsOverride → the 17395 drive loop → _maintainSwarm release), aimed at HIS
+// focus instead of a beat. Each partition is its own focus thread (own cursors/file/contract — the
+// collision-free seam; N passes inside ONE focus corrupt cite-binding and the DRY stream). The
+// synthetic beat id `focus-<id>-swarm` makes coverage roll up by tag, which both the seed-time carry
+// and the parent's per-pass fold read. The parent keeps walking (it holds the current target and the
+// deliverable); partitions never re-swarm (background gate).
+async function startFocusSwarm(focus, { requestedK = null, requestedBy = 'auto' } = {}) {
+  const swarmLib = require('./lib/swarm');
+  const state = _loadSchedState();
+  if (state.swarm) return { ok: false, reason: `already swarming ${state.swarm.beatId} — release it first` };
+  const fid = focus.id;
+  let intended = [], covered = [], cur = null, plan = {};
+  try { intended = JSON.parse(db.getMeta(`focus.${fid}.intended_targets`) || '[]'); } catch {}
+  try { covered = JSON.parse(db.getMeta(`focus.${fid}.covered`) || '[]'); } catch {}
+  try { cur = JSON.parse(db.getMeta(`focus.${fid}.target`) || 'null'); } catch {}
+  try { plan = JSON.parse(db.getMeta(`focus.${fid}.plan`) || '{}'); } catch {}
+  const rs = require('./lib/research');
+  // partitions take the UNCOVERED remainder; the in-flight target stays with the parent
+  const remaining = intended.filter((t) => !rs.targetIsCovered(covered, t) && (!cur || String(t).toLowerCase() !== String(cur.name || '').toLowerCase()));
+  if (remaining.length < 2) return { ok: false, reason: 'below-threshold' };
+  const total = _workerCount();
+  const { swarmWorkers } = swarmLib.planSwarmSlots({ totalWorkers: total, requestedK, floor: swarmLib.DEFAULT_SWARM_FLOOR });
+  if (swarmWorkers < 1) return { ok: false, reason: `no background workers free to swarm (research.workers=${total}); raise research.workers first` };
+  const parts = swarmLib.partitionRoster(remaining, swarmWorkers);
+  const beatId = `focus-${fid}-swarm`;
+  const kind = (() => { try { return (db.getMeta(`focus.${fid}.kind`) || 'entity').trim(); } catch { return 'entity'; } })();
+  const depth = (() => { try { return (db.getMeta(`focus.${fid}.depth`) || '').trim() || null; } catch { return null; } })();
+  const goal = String(focus.content || '');
+  state.swarm = { beatId, mode: 'focus', parentFocus: fid, startedAt: Date.now(), requestedBy, parts: {} };
+  const childIds = [];
+  for (let i = 0; i < parts.length; i++) {
+    // distinct per-partition goal — the churn guard reuses threads on IDENTICAL content, and the
+    // partitions must be K separate threads, not one
+    const partGoal = `${goal} — swarm partition ${i + 1}/${parts.length}: ${parts[i].slice(0, 3).join(', ')}${parts[i].length > 3 ? ` (+${parts[i].length - 3} more)` : ''}`;
+    const beat = { id: beatId, goal: partGoal, kind, depth, facets: (Array.isArray(plan.facets) && plan.facets.length) ? plan.facets : null };
+    const r = await seedBeatRun(beat, { background: true, targetsOverride: parts[i] });
+    if (r && r.ok) {
+      state.swarm.parts[i + 1] = { thread: r.focusId, n: parts[i].length, done: false };
+      childIds.push(r.focusId);
+      try { db.setMeta(`focus.${r.focusId}.swarm`, '1'); } catch {}
+    }
+  }
+  const seeded = Object.keys(state.swarm.parts).length;
+  if (!seeded) { delete state.swarm; return { ok: false, reason: 'failed to seed any partition' }; }
+  try { db.setMeta(`focus.${fid}.swarm_children`, JSON.stringify(childIds)); } catch {}
+  try { db.setMeta(`focus.${fid}.swarm_spawned`, '1'); } catch {}   // one-shot per focus
+  _saveSchedState(state);
+  startBackgroundWorkers();
+  _pushSwarmChip();
+  console.log(`[swarm] AUTO-START focus #${fid} (${requestedBy}): ${remaining.length} remaining target(s) split across ${seeded} partition worker(s) — parallel by default`);
+  return { ok: true, beatId, targets: remaining.length, workers: seeded };
+}
+
+// The auto-trigger, called from the directed tick — fire-and-forget, never blocks the pass.
+async function maybeAutoSwarm(focus) {
+  try {
+    if (!focus || !focus.id) return;
+    if (db.getMeta(`focus.${focus.id}.swarm_spawned`) === '1') return;
+    if ((db.getMeta(`focus.${focus.id}.scope`) || '') !== 'bounded') return;   // open discovery has no roster to split
+    if (db.getMeta(`focus.${focus.id}.background`) === '1') return;            // partitions never re-swarm
+    const focusLib = require('./lib/focus');
+    if (!focusLib.isDirected(focus)) return;   // auto serves HIS runs; beats swarm by command as before
+    const swarmLib = require('./lib/swarm');
+    let intended = [], covered = [], cur = null;
+    try { intended = JSON.parse(db.getMeta(`focus.${focus.id}.intended_targets`) || '[]'); } catch {}
+    try { covered = JSON.parse(db.getMeta(`focus.${focus.id}.covered`) || '[]'); } catch {}
+    try { cur = JSON.parse(db.getMeta(`focus.${focus.id}.target`) || 'null'); } catch {}
+    const rs = require('./lib/research');
+    const remaining = intended.filter((t) => !rs.targetIsCovered(covered, t) && (!cur || String(t).toLowerCase() !== String(cur.name || '').toLowerCase())).length;
+    const d = swarmLib.shouldAutoSwarm({ remaining, totalWorkers: _workerCount(), swarmLive: !!_loadSchedState().swarm });
+    if (!d.swarm) return;
+    const r = await startFocusSwarm(focus, { requestedBy: 'auto' });
+    if (!r.ok && r.reason !== 'below-threshold') console.log(`[swarm] auto skipped on focus #${focus.id}: ${r.reason}`);
+  } catch (e) { console.error('[swarm] auto trigger failed:', e.message); }
 }
 
 // Inspector triggers (validation): global.__swarmOn('florida counties'), global.__swarmRelease().
 try { global.__swarmOn = (target, opts = {}) => startSwarm({ target, ...opts, requestedBy: 'inspector' }); } catch {}
 try { global.__swarmRelease = () => releaseSwarm('inspector'); } catch {}
 try { global.__swarmStatus = () => { const s = _loadSchedState(); return s.swarm || null; }; } catch {}
+try { global.__swarmOnFocus = (fid, opts = {}) => { const f = db.getOpenThread(fid); return f ? startFocusSwarm({ id: fid, content: f.content }, { ...opts, requestedBy: 'inspector' }) : { ok: false, reason: 'no such thread' }; }; } catch {}
 
 // ═══ DEEP DIVE — the PREMIUM lane, explicit-command only (2026-07-19) ═════════════════════════════
 // `deep dive on <X>` runs ONE subject to exhaustion on the heavy model. Deliberately verb-gated: the heavy
@@ -17717,6 +17846,7 @@ async function _directedFocusTick() {
     });
     if (!bg.ok) { _logBeatIdleDefer(bg.reason); return; }
   }
+  maybeAutoSwarm(focus).catch(() => {});   // AUTO-SWARM: a bounded user run partitions itself across free workers (fire-and-forget; never blocks the pass)
   if (!_researchGateCheck('primary', focus.id)) return;                               // operator throttle — skip this cycle entirely
   if (_conversationActive()) { _logLoadDeferral('directed'); return; }                // main-thread balance: don't START a directed pass (web grab → PDF decomp → package build) while he types
   directedStepInFlight = true;
@@ -20348,6 +20478,25 @@ async function runDirectedResearchPass(focus) {
   const targetKey = `focus.${focus.id}.target`;
   const fileKey = `focus.${focus.id}.file`;
   let covered = []; try { covered = JSON.parse(db.getMeta(coveredKey) || '[]'); } catch {}
+  // AUTO-SWARM FOLD (2026-09-01): partition workers cover targets in parallel under the beat tag
+  // `focus-<id>-swarm`; union their finished targets into the parent's walk at every pass start, so
+  // the parent never re-researches a partition's work and the bounded terminus sees the whole run.
+  // (Pass-start is the safe merge point — the parent pass is serial, and a mid-pass union from the
+  // autonomic tick would be clobbered by this pass's own covered write at its end.)
+  try {
+    if (db.getMeta(`focus.${focus.id}.swarm_children`)) {
+      const prior = db.coveredForBeat(`focus-${focus.id}-swarm`) || [];
+      if (prior.length) {
+        const seen = new Set(covered.map((c) => String(c).toLowerCase()));
+        const add = prior.filter((c) => !seen.has(String(c).toLowerCase()));
+        if (add.length) {
+          covered = covered.concat(add);
+          try { db.setMeta(coveredKey, JSON.stringify(covered)); } catch {}
+          console.log(`[swarm] fold: ${add.length} partition-covered target(s) union into focus #${focus.id} (${covered.length} total)`);
+        }
+      }
+    }
+  } catch {}
   let target = null; try { target = JSON.parse(db.getMeta(targetKey) || 'null'); } catch {}
   let file = db.getMeta(fileKey); if (!file) { file = `notes/directed-${focus.id}.md`; try { db.setMeta(fileKey, file); } catch {} }
   // Pointer to the most recent directed run, so the deliverable-query path can resolve the "last Track"

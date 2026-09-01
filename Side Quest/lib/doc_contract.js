@@ -123,7 +123,7 @@ const _GENERIC_ANCHOR_TOKENS = new Set([
   'association', 'committee', 'task', 'force', 'development', 'conference', 'coalition', 'network',
   'partnership', 'group', 'alliance', 'federal', 'state', 'public', 'county', 'city', 'united', 'states',
   'office', 'department', 'agency', 'initiative', 'program', 'society', 'union', 'league', 'trust',
-  'house', 'senate', 'congress', 'district', 'new', 'the', 'for', 'and',
+  'house', 'senate', 'congress', 'district', 'new', 'the', 'for', 'and', 'data', 'centers',
 ]);
 function entityAnchorFrom(topic, rawText) {
   const raw = String(rawText || '').trim();

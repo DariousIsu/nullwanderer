@@ -91,6 +91,8 @@ ok('one SPECIFIC shared token still binds (mercatus is nobody\'s generic)', (() 
   const a = dc.entityAnchorFrom('profile mercatus funding sources', '[{"name":"Mercatus Center at George Mason University","summary":"free-market think tank"}]');
   return a && /Mercatus/.test(a.name);
 })());
+ok('"data" is generic too (#4154 near-miss: a lone "data" hit must not bind a namesake bank/fund)',
+  dc.entityAnchorFrom('create concept sketches lucas arizona data center', '[{"name":"Data Bank of Kansas","summary":"regional data services company"}]') === null);
 
 // The repair door: clear → a fresh freeze takes (a wrong anchor is never pinned forever).
 dc.clear(9001);
