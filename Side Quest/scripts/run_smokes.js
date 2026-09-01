@@ -701,6 +701,10 @@ const smokes = [
   'smoke_screen_ambient.js',
   'smoke_diagnosis.js',
   'smoke_internal_state.js',
+  // ── lib/scheduler parseWhen (09-01: "at 1330" booked 11:48 — clock times were unparseable and
+  // Date.parse read "1330" as the YEAR 1330; the say is the contract, the machinery books what
+  // was said). Durations + clock forms (HH:MM, military, am/pm, next-occurrence) + ISO.
+  'smoke_scheduler.js',
   // ── the AFFECT TISSUES (B2/B3, 2026-08-31 — docs/AFFECT_SUBSTRATE_RESEARCH_2026-08-31.md): the
   // deterministic python passes (appraisal-with-reasons + per-subject impressions) + the paced
   // idle-gated driver. Hermetic fixtures; proves replay determinism, decay, the RO rail, and

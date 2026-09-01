@@ -44,14 +44,33 @@ function parseDuration(str) {
 }
 
 // Resolve a "when" attribute to an absolute fire timestamp (ms).
-// Accepts: "in 30m", a bare "30m", or an absolute ISO date string.
-function parseWhen(when) {
+// Accepts: "in 30m", a bare "30m", a CLOCK TIME ("13:30", "1:30pm", "at 1330", military "0930"),
+// or an absolute ISO date string.
+function parseWhen(when, nowMs = Date.now()) {
   if (!when || typeof when !== 'string') return null;
   let s = when.trim();
   const lower = s.toLowerCase();
   if (lower.startsWith('in ')) s = s.slice(3).trim();
   const dur = parseDuration(s);
-  if (dur != null) return Date.now() + dur;
+  if (dur != null) return nowMs + dur;
+  // CLOCK TIMES (09-01: Lucas said "at 1330", she SAID "reminder set for 13:30" — and the booked
+  // row fired at 11:48 because nothing here understood a clock time; the promise and the machinery
+  // disagreed. The say IS the contract). "HH:MM", "H:MMam/pm", "at 1330", military "0930" → the
+  // NEXT occurrence of that local time (today, or tomorrow if already past). Checked BEFORE
+  // Date.parse, which would happily read "1330" as the year 1330.
+  const clock = lower.replace(/^at\s+/, '').match(/^(\d{1,2}):?(\d{2})\s*(am|pm)?$/);
+  if (clock) {
+    let h = parseInt(clock[1], 10);
+    const mnt = parseInt(clock[2], 10);
+    if (clock[3] === 'pm' && h < 12) h += 12;
+    if (clock[3] === 'am' && h === 12) h = 0;
+    if (h <= 23 && mnt <= 59) {
+      const d = new Date(nowMs);
+      d.setHours(h, mnt, 0, 0);
+      if (d.getTime() <= nowMs) d.setDate(d.getDate() + 1);
+      return d.getTime();
+    }
+  }
   // Absolute date fallback
   const t = Date.parse(when);
   if (Number.isFinite(t)) return t;
