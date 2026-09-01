@@ -11290,6 +11290,33 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         clarificationCaptured = true;
         composedUserMessage += `\n\n[${userName} just gave you a CLARIFICATION for the task you're researching right now. You've noted it and will fold it into the rest of the run. Acknowledge briefly + concretely what you'll do differently going forward, in your own voice — do NOT restate the whole task or fabricate progress.]`;
         console.log(`[clarify] captured for focus #${f.id}: "${userMessage.slice(0, 60)}"`);
+        // THE WRITE PHASE (Lucas 09-01, the Ballotpedia test: "the conclusion has been reached and
+        // agreed upon — if she hasn't closed that question with the answer we agreed on then we are
+        // missing the write phase"). His clarification about need #82 was captured, discussed, and
+        // agreed in chat — and the need's row never changed (status open, diagnosis null). The
+        // capture now also WRITES onto any matching open/blocked/proposed need: ≥2 word-boundary
+        // token hits with at least one SPECIFIC (>3ch, non-generic) token — the suiteFor lesson, a
+        // single generic word never binds. The clarification lands on the need's meta where the
+        // triage/pressure machinery reads it next touch; retire/re-scope stays THEIR decision, made
+        // with his words finally in front of them.
+        try {
+          const _toks = String(userMessage).toLowerCase().match(/[a-z][a-z'-]{2,}/g) || [];
+          const _generic = new Set(['the', 'and', 'for', 'you', 'she', 'her', 'that', 'this', 'with', 'have', 'need', 'needs', 'should', 'would', 'could', 'just', 'access', 'work', 'use', 'get', 'not', 'but', 'its', 'his', 'was', 'are', 'were', 'will', 'can', 'all', 'any', 'one', 'about', 'require', 'requires']);
+          const _specific = _toks.filter((t) => t.length > 3 && !_generic.has(t));
+          const _rows = db.getDb().prepare("SELECT id, need FROM capability_needs WHERE status IN ('open','blocked_external','proposed')").all();
+          for (const _n of _rows) {
+            const _nl = String(_n.need).toLowerCase();
+            const hits = new Set(_toks.filter((t) => !_generic.has(t) && new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(_nl)));
+            const specHit = _specific.some((t) => hits.has(t));
+            if (hits.size >= 2 && specHit) {
+              const _ck = `need.${_n.id}.clarification`;
+              let _cl = []; try { _cl = JSON.parse(db.getMeta(_ck) || '[]'); if (!Array.isArray(_cl)) _cl = [_cl]; } catch {}
+              _cl.push({ text: userMessage.replace(/\s+/g, ' ').trim().slice(0, 300), ts: Date.now(), by: userName });
+              db.setMeta(_ck, JSON.stringify(_cl.slice(-5)));
+              console.log(`[clarify] WRITE PHASE — clarification written onto need #${_n.id} ("${String(_n.need).slice(0, 50)}", ${hits.size} token hits)`);
+            }
+          }
+        } catch (e) { console.error('[clarify] need write-phase failed:', e.message); }
       }
     }
   } catch (e) { console.error('[main] clarification capture failed:', e.message); }
@@ -19646,7 +19673,12 @@ async function _needsPressure(now = Date.now()) {
   const capn = require('./lib/capability_need');
   let run = null; try { run = require('./lib/rehearsal_driver').load(); } catch {}
   const lastTs = parseInt(db.getMeta('needs.last_rehearse_at') || '0', 10) || 0;
-  const needs = (capn.listOpen() || []).map((n) => ({ ...n, triage: (() => { try { return db.getMeta(`need.${n.id}.triage`) || null; } catch { return null; } })() }));
+  const needs = (capn.listOpen() || []).map((n) => ({
+    ...n,
+    triage: (() => { try { return db.getMeta(`need.${n.id}.triage`) || null; } catch { return null; } })(),
+    // the write phase's read side: his captured clarifications ride into triage (newest last)
+    clarification: (() => { try { const c = JSON.parse(db.getMeta(`need.${n.id}.clarification`) || 'null'); return Array.isArray(c) ? c.map((x) => x.text || x).join(' · ') : (c && (c.text || c)) || null; } catch { return null; } })(),
+  }));
   // WIRE-4 COMPLEMENT (2026-08-27 night): the repair lane filters repair-born ROWS out of the
   // tool pipe, but a run started BEFORE the cure leaks through the iterate branch, which keys on
   // the loaded RUN — need #94's grandfathered run kept advancing (and schema-failing) after its

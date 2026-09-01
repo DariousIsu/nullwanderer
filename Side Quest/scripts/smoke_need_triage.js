@@ -142,6 +142,22 @@ ok(nt.renderExternalAsk([]) === '' && nt.renderExternalAsk(null) === '', 'nothin
     'renderer: cards render with ✓/✗, decide on click, restore on every load');
   ok(/approvals-bar/.test(fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8')), 'renderer: the approvals bar exists in the shell');
 
+  // ── THE WRITE PHASE (Lucas 09-01, the Ballotpedia test: conclusion agreed in chat, need row
+  // untouched — "we are missing the write phase"). Capture side: a clarify capture also WRITES
+  // onto matching open/blocked/proposed needs (≥2 word-boundary token hits incl. one specific —
+  // the suiteFor lesson). Read side: triage decides WITH his words, which outrank inference. ────
+  ok(/WRITE PHASE — clarification written onto need #/.test(m) && /hits\.size >= 2 && specHit/.test(m),
+    '⭐ write phase: a captured clarification lands on matching needs (2-hit floor + specific-token rail)');
+  ok(/need\.\$\{n\.id\}\.clarification/.test(m) || /need\.\$\{_n\.id\}\.clarification/.test(m), 'write phase: the clarification rides need meta');
+  ok(/clarification: \(\(\) =>/.test(m), 'read side: the pressure pass attaches his clarifications to every need it lifts');
+  {
+    const ti = nt.triageInput({ need: 'Ballotpedia portal access', born_from: 'plan-revalidate:3906', clarification: 'no login exists; API paywalled; go manual' });
+    ok(ti.operatorClarification === 'no login exists; API paywalled; go manual', '⭐ read side: triageInput carries operatorClarification');
+    ok(nt.triageInput({ need: 'x' }).operatorClarification === undefined, 'read side: absent clarification stays absent (no empty field noise)');
+    ok(/OUTRANKS your inference/.test(nt.triageWant()) && /kills the premise/.test(nt.triageWant()),
+      'read side: the triage contract says his words outrank inference (premise-kill → junk, quoted)');
+  }
+
   // decide() behavior — fixture db with the real CHECK constraint:
   {
     const os2 = require('os');

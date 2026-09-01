@@ -24,6 +24,11 @@ function triageInput(need = {}) {
   const o = { need: str(need.need).slice(0, 500) };
   if (need.born_from) o.bornFrom = str(need.born_from).slice(0, 160);
   if (Number(need.recurrence) > 1) o.recurrence = Number(need.recurrence);
+  // THE WRITE PHASE, read side (Lucas 09-01, the Ballotpedia test): a clarification he gave in
+  // chat is WRITTEN onto the need's meta at capture time — and the triage that next touches the
+  // need must decide WITH his words in front of it (an agreed premise-kill routes to junk/research
+  // instead of re-asking him for what he already answered).
+  if (need.clarification) o.operatorClarification = str(need.clarification).slice(0, 400);
   return o;
 }
 
@@ -34,7 +39,8 @@ function triageWant() {
 - external: needs something ONLY her operator can provide — a paid subscription, an account/credentials, an API key with billing, hardware. ask: the ONE-sentence request to the operator. build_sketch/study_query: "".
 - research: not a tool at all — a DATA or KNOWLEDGE gap answerable by researching (it belongs in the inquiry queue, not the build queue).
 - junk: not a real capability — vague prose, a duplicate phrasing, or a harvesting artifact.
-Be strict about buildable: "access to <paid database>" is external, not buildable; "parse XLS rosters" is buildable; "who funds X" is research.`;
+Be strict about buildable: "access to <paid database>" is external, not buildable; "parse XLS rosters" is buildable; "who funds X" is research.
+If operatorClarification is present, it is the OPERATOR'S OWN WORDS about this need and OUTRANKS your inference: a clarification that kills the premise ("no login exists", "already have it", "don't bother") routes junk with the clarification quoted in reason; one that re-scopes the method routes to the class the NEW method implies. Never route external for something his clarification already answered.`;
 }
 
 function triageValidator(raw) {
