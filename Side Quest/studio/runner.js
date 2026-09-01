@@ -18,6 +18,8 @@
 'use strict';
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const arbiter = require('./render_arbiter');
 
 const ROOT = path.resolve(__dirname, '..');
 const JOBS_DIR = path.join(ROOT, 'data', 'studio', 'jobs');
@@ -36,6 +38,11 @@ const DEFAULT_REF = path.join(ROOT, 'data', 'avatars', 'zoe_ref.jpg');
 // seconds — the short-form grammar). Tunable via ZOE_MAX_TAKE_SEC; one 81-frame window ≈ 3.24s at 25fps.
 const MAX_TAKE_SEC = Math.max(2, parseFloat(process.env.ZOE_MAX_TAKE_SEC) || 4);
 const WORDS_PER_SEC = 2.6; // ~156 wpm — the PRE-voice prose estimate only; measured audio is the real gate
+
+// PRE-RENDER MEMORY GUARD floor: don't START a take when free physical RAM is already below this — a take
+// under block-swap pulls the base model into RAM, so kicking one off on an exhausted box is what pages the
+// pagefile. Holds (never fails) the take and retries next tick. Tunable via ZOE_MIN_FREE_MB.
+const MIN_FREE_MB = Math.max(1024, parseInt(process.env.ZOE_MIN_FREE_MB, 10) || 4096);
 
 function listJobs() {
   try {
@@ -206,6 +213,19 @@ async function tick() {
         const next = job.segments.find(s => s.kind === 'avatar' && !s.take && !s.promptId);
         if (!next) { job.status = 'cutting'; log(job, 'all takes rendered'); }
         else {
+          // ONE HEAVY TENANT (his rule): free the image model (:8188) before this video take loads — the box
+          // can't host pictures and movies at once. Doing it BEFORE the memory guard also means the guard
+          // reads the TRUE post-eviction headroom, and prevents a deadlock where a resident image model
+          // would keep free RAM under the floor forever (the guard would hold every tick, never freeing it).
+          const claim = await arbiter.claimGpu('video');
+          const freeMB = Math.round(os.freemem() / (1024 * 1024));
+          if (freeMB < MIN_FREE_MB) {
+            const last = (job.log && job.log[job.log.length - 1]) || '';
+            if (!last.includes(`holding take ${next.i} `))
+              log(job, `⏸ holding take ${next.i} — ${(freeMB / 1024).toFixed(1)}GB free < ${(MIN_FREE_MB / 1024).toFixed(1)}GB floor (retrying next tick)`);
+            saveJob(job); return;
+          }
+          if (claim.freedOther) log(job, 'freed the image model before rendering (one heavy tenant)');
           // MULTI-POSE: rotate through the persona's pose set so consecutive on-camera cuts vary the
           // angle/framing (the visual variety that reads as a real multi-shot edit, not one locked take).
           const poses = (job.poses && job.poses.length) ? job.poses : [job.refImage];

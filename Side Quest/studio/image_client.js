@@ -119,6 +119,9 @@ async function buildGraph({ prompt, negative, aspect = 'portrait', steps = 28, c
 async function generate(opts) {
   try {
     if (!(await alive())) return { ok: false, error: 'ComfyUI not reachable' };
+    // ONE heavy tenant (his rule): evict the video model (:8288) before this image gen loads its own — the
+    // box can't host pictures and movies at once. A light warm-up reload is the trade. Fail-soft.
+    await require('./render_arbiter').claimGpu('image');
     const o = Object.assign({}, opts);
     // stage reference images (absolute paths) into ComfyUI's input dir → basenames for LoadImage
     if (Array.isArray(o.references) && o.references.length) {
