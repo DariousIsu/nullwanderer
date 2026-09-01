@@ -48,6 +48,25 @@ ok(typeof tc.idleMs === 'number' && tc.idleMs >= 0, `ttsConfig.idleMs is a numbe
   tts.shutdownTts(); tts.shutdownTts();
   ok(true, 'shutdownTts() is idempotent / safe with no live service');
 
+  // --- ⭐ THE KOKORO CONSOLIDATION (2026-09-01): lib/voice_kokoro.synthesizeDefault speaks through
+  // the ONE resident tuner (:8199) in Zoe's own voice — the request carries NO weights, so the
+  // tuner defaults to the saved recipe server-side. Deterministic via injected fetchFn.
+  const vk = require('../lib/voice_kokoro');
+  const os = require('os');
+  {
+    let captured = null;
+    const wav = Buffer.from('RIFFfakewav');
+    const fakeFetch = async (url, init) => { captured = { url, body: JSON.parse(init.body) }; return { ok: true, arrayBuffer: async () => wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength) }; };
+    const outP = require('path').join(os.tmpdir(), `smoke_vk_${process.pid}.wav`);
+    const r1 = await vk.synthesizeDefault('Hello there.', { out: outP, fetchFn: fakeFetch });
+    ok(r1.ok === true && r1.out === outP && r1.bytes === wav.length && r1.sampleRate === 24000, 'tuner synth writes the wav and reports bytes + 24kHz');
+    ok(captured && /\/synth$/.test(captured.url) && captured.body.text === 'Hello there.' && !('weights' in captured.body), '⭐ the request carries NO weights — Zoe\'s saved recipe is the tuner-side default');
+    try { require('fs').unlinkSync(outP); } catch {}
+  }
+  ok((await vk.synthesizeDefault('', {})).ok === false, 'empty text → {ok:false}, no request');
+  ok((await vk.synthesizeDefault('hi', { fetchFn: async () => ({ ok: false, status: 500, text: async () => 'boom' }) })).error.includes('500'), 'an HTTP error surfaces the status, fail-soft');
+  ok((await vk.synthesizeDefault('hi', { fetchFn: async () => { throw new Error('ECONNREFUSED'); } })).ok === false, 'a dead tuner → {ok:false}, never a throw');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

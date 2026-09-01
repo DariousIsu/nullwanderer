@@ -194,21 +194,43 @@ function _service() {
 // stop the resident sidecar (clean app exit / tests). It respawns lazily on the next synthesize().
 function shutdownTts() { if (_singleton) { _singleton.shutdown(); _singleton = null; _singletonProvider = null; } }
 
+// THE KOKORO CONSOLIDATION (2026-09-01, RAM lever 3): the voice tuner (:8199) is the ONE resident
+// Kokoro on the box — GPU idle-unload built in, deliberately surviving app cycles. The kokoro path
+// speaks through it (no weights in the request → the tuner uses Zoe's saved recipe server-side)
+// instead of every consumer (app, studio, tests) each holding a ~3GB stdio child. The stdio child
+// remains ONLY as the fallback when the tuner cannot come up — voice never dies from consolidation.
+async function _synthesizeKokoro({ clean, out, wallMs }) {
+  try {
+    const vk = require('./voice_kokoro');
+    if (await vk.ensureUp()) {
+      const r = await vk.synthesizeDefault(clean, { out, timeoutMs: wallMs });
+      if (r && r.ok) return r;
+      console.warn('[tts] tuner synth failed (' + String(r && r.error).slice(0, 120) + ') — falling back to the stdio sidecar');
+    } else {
+      console.warn('[tts] tuner not reachable — falling back to the stdio sidecar');
+    }
+  } catch (e) { console.warn('[tts] tuner path error (' + e.message + ') — falling back to the stdio sidecar'); }
+  return _service().request({ text: clean, voice: null, out, speaker: null }, wallMs);
+}
+
 // Synthesize `text` → a WAV file. Returns { ok, out, bytes, sampleRate } or { ok:false, error }. Never throws.
-// Routes to the PERSISTENT sidecar by default (warm, no per-call reload); opts.oneShot or an explicit
-// opts.python forces a one-shot spawn.  opts: { voice, speaker, out, wallMs, python, oneShot, maxChars }
+// kokoro → the resident tuner service (stdio child only as fallback); piper → the persistent stdio
+// sidecar. opts.oneShot or an explicit opts.python forces a one-shot spawn.
+// opts: { voice, speaker, out, wallMs, python, oneShot, maxChars }
 function synthesize(text, opts = {}) {
   return new Promise((resolve) => {
     const clean = prepareText(text, { maxChars: opts.maxChars });
     if (!clean) return resolve({ ok: false, error: 'empty text' });
     const voice = resolveVoice(opts);
-    // Piper needs an .onnx model path; the Kokoro sidecar carries its own baked blend (no voice arg).
+    // Piper needs an .onnx model path; the Kokoro paths carry Zoe's baked blend (no voice arg).
     if (_provider() !== 'kokoro' && !voice) return resolve({ ok: false, error: 'no voice model configured' });
     const out = _resolveOut(opts);
     const speaker = (opts.speaker === 0 || opts.speaker) ? opts.speaker : null;
     const wallMs = Number.isFinite(opts.wallMs) ? opts.wallMs : 60000;
     if (opts.oneShot || opts.python) {
       synthesizeOneShot({ text: clean, voice, out, speaker, python: opts.python, wallMs }).then(resolve);
+    } else if (_provider() === 'kokoro') {
+      _synthesizeKokoro({ clean, out, wallMs }).then(resolve);
     } else {
       _service().request({ text: clean, voice, out, speaker }, wallMs).then(resolve);
     }

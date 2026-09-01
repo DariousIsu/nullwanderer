@@ -18,6 +18,31 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from kokoro import KModel, KPipeline
 
 PORT = 8199
+# THE CONSOLIDATION (2026-09-01, RAM lever 3): this server is the ONE resident Kokoro on the box.
+# A /synth request WITHOUT weights defaults to Zoe's saved blend (data/voices/zoe_voice.json), so
+# lib/tts.js speaks through the tuner instead of each consumer holding its own ~3GB stdio child.
+# The recipe is re-read when its mtime changes — a re-tuned voice lands without a restart.
+APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RECIPE_PATH = os.path.join(APP_ROOT, "data", "voices", "zoe_voice.json")
+_recipe_cache = {"mtime": 0.0, "recipe": None}
+
+
+def _zoe_recipe():
+    """Load (and mtime-cache) the saved voice recipe; None when absent/unreadable (fail-absent)."""
+    try:
+        mtime = os.path.getmtime(RECIPE_PATH)
+        if _recipe_cache["recipe"] is None or mtime != _recipe_cache["mtime"]:
+            with open(RECIPE_PATH, encoding="utf-8") as f:
+                r = json.load(f)
+            r.setdefault("weights", {"af_bella": 1.0})
+            r.setdefault("lang", "a")
+            r.setdefault("speed", 1.0)
+            _recipe_cache.update(mtime=mtime, recipe=r)
+        return _recipe_cache["recipe"]
+    except OSError:
+        return None
+    except ValueError:
+        return None
 # Female voices worth blending (a=American, b=British). label -> (voice_id, lang)
 VOICES = [
     ("Bella (Am, warm)",      "af_bella",    "a"),
@@ -159,8 +184,17 @@ class H(BaseHTTPRequestHandler):
         req = json.loads(self.rfile.read(n) or b"{}")
         text = (req.get("text") or DEFAULT_TEXT).strip()[:800]
         weights = req.get("weights") or {}
-        lang = req.get("lang") or "a"
-        speed = req.get("speed") or 1.0
+        lang = req.get("lang")
+        speed = req.get("speed")
+        if not weights:
+            # no explicit blend → Zoe's saved recipe (the consolidation default); request fields win
+            rc = _zoe_recipe()
+            if rc:
+                weights = rc["weights"]
+                lang = lang or rc["lang"]
+                speed = speed or rc["speed"]
+        lang = lang or "a"
+        speed = speed or 1.0
         try:
             with _lock:
                 audio, dt, secs = _synth(text, weights, lang, speed)
