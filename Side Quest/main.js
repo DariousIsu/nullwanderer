@@ -17876,8 +17876,13 @@ async function runPenWorkPass(focus) {
   const notes = (st.notes || []).slice(-8).join('\n');
   const prompt = `${pen.buildPromptBlock()}\n\nTHE CODE-CHANGE ORDER (Lucas): ${String(focus.content || '').slice(0, 500)}\n\n` +
     (st.gateNote ? `YOUR LAST PROPOSAL FAILED THE GATE — fix exactly this and re-file:\n${String(st.gateNote).slice(0, 800)}\n\n` : '') +
-    (notes ? `WHAT YOU HAVE READ SO FAR:\n${notes}\n\n` : '') +
-    `Pass ${st.passes} of ${MAX_PEN_PASSES}. YOUR ENTIRE REPLY MUST BE TAGS — no prose, no plan, no preamble; words outside tags are DISCARDED and the pass is wasted. Either emit 1-3 <source-read path="..."/> tags for the exact files whose lines you need next, or — once you have READ the lines you intend to change — exactly one <propose-change title="..." rationale="...">unified diff</propose-change>. An announced intention is not an act; the tag is the act.`;
+    (notes ? `WHAT YOU HAVE READ SO FAR (re-reading these is a WASTED pass — they are already above):\n${notes}\n\n` : '') +
+    `Pass ${st.passes} of ${MAX_PEN_PASSES}. YOUR ENTIRE REPLY MUST BE TAGS — no prose, no plan, no preamble; words outside tags are DISCARDED and the pass is wasted. ` +
+    // ESCALATION (p224 passes 2-5: she found lib/voice_guard.js on pass 1 and RE-READ it four more
+    // times — a retry loop without replan). Past the reading phase, the only legal reply is the diff.
+    ((st.passes >= 3 && (st.notes || []).some((n) => n.startsWith('— ') && !n.startsWith('— dir')))
+      ? `THE READING PHASE IS OVER — you hold the file contents above. Your ENTIRE reply must be exactly ONE <propose-change title="..." rationale="...">unified diff</propose-change> against lines you HOLD above. No more reads.`
+      : `Either emit 1-3 <source-read path="..."/> tags for the exact files whose lines you need next, or — once you have READ the lines you intend to change — exactly one <propose-change title="..." rationale="...">unified diff</propose-change>. An announced intention is not an act; the tag is the act.`);
   // ROAD-WRITER PATTERN (fix-forward, p222 passes 1-2: ZERO reads — the operator agent-loop's own
   // tool grammar competed with the pen tags and the doors never fired). A pen pass is a PLAIN
   // completion turn: the pen tags are the only grammar on the table.
@@ -17903,7 +17908,8 @@ async function runPenWorkPass(focus) {
     const r = pen.dispatch(t);
     if (r && r.ok && (t.tag === 'source-read')) {
       reads++;
-      st.notes = [...(st.notes || []), `— ${r.path} (${r.bytes}b) —\n${String(r.text).slice(0, 6000)}`].slice(-8);
+      // dedupe by path — a re-read REFRESHES its slot, never stacks duplicates that squeeze out context
+      st.notes = [...(st.notes || []).filter((n) => !n.startsWith(`— ${r.path} (`)), `— ${r.path} (${r.bytes}b) —\n${String(r.text).slice(0, 6000)}`].slice(-8);
     } else if (r && r.ok && t.tag === 'source-list') {
       st.notes = [...(st.notes || []), `— dir ${r.path}: ${(r.entries || []).join(', ')}`].slice(-8);
     } else if (r && r.ok && t.tag === 'propose-change') {
