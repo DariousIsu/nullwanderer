@@ -263,20 +263,29 @@ function poolRacesFrom(races, parseSubject, incumbentBySeat = {}) {
   const out = [];
   for (const r of (Array.isArray(races) ? races : [])) {
     if (!r || (r.chamber !== 'house' && r.chamber !== 'senate')) continue;
-    let ps = {};
-    try { ps = parseSubject(String(r.subject || '')) || {}; } catch { ps = {}; }
-    const abbr = ps.stateAbbr || null;
-    if (!abbr) continue;
-    const seat = r.chamber === 'senate'
-      ? `S-${abbr}`
-      : (ps.district != null ? `H-${abbr}-${ps.district}` : null);
+    // Coverage-built races (462 of the 470-seat universe) carry `seat` ALREADY in the pool grammar
+    // ('S-AZ' / 'H-CA-22') and NO subject — the first live fire mapped ZERO of 470 seats reading
+    // subject alone. Native seat id first; the VoteHub subject parse is the fallback.
+    let seat = null, abbr = null, district = null;
+    const rs = String(r.seat || '');
+    let sm;
+    if ((sm = rs.match(/^S-([A-Z]{2})$/))) { seat = rs; abbr = sm[1]; }
+    else if ((sm = rs.match(/^H-([A-Z]{2})-(\d{1,2})$/))) { seat = rs; abbr = sm[1]; district = parseInt(sm[2], 10); }
+    else {
+      let ps = {};
+      try { ps = parseSubject(String(r.subject || '')) || {}; } catch { ps = {}; }
+      abbr = ps.stateAbbr || null;
+      if (!abbr) continue;
+      district = ps.district != null ? ps.district : null;
+      seat = r.chamber === 'senate' ? `S-${abbr}` : (district != null ? `H-${abbr}-${district}` : null);
+    }
     if (!seat) continue;
     const m = Number(r.margin);
     out.push({
       seat, chamber: r.chamber,
       poll_margin: Number.isFinite(m) ? m : 0,
       base: Number.isFinite(m) ? m : 0,
-      state: abbr, district: ps.district != null ? ps.district : null,
+      state: abbr, district,
       incumbent_party: (incumbentBySeat && incumbentBySeat[seat]) || null,
     });
   }

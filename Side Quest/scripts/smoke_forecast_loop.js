@@ -142,6 +142,12 @@ ok('applyMidterm: swing 0 → untouched', L.applyMidterm([{ margin: 3 }], { swin
     ];
     const pr = L.poolRacesFrom(slate, parseSubject, { 'S-AZ': 'B' });
     ok('unparseable geography + non-congressional chambers are SKIPPED, never guessed', pr.length === 2, JSON.stringify(pr.map((r) => r.seat)));
+    // ⭐ the first LIVE fire mapped 0/470: coverage races carry `seat` natively and NO subject.
+    const cov = L.poolRacesFrom([
+      { seat: 'H-NY-3', chamber: 'house', margin: 2.5, source: 'lean' },
+      { seat: 'S-TX', chamber: 'senate', margin: -12, source: 'lean' },
+    ], parseSubject, { 'S-TX': 'B' });
+    ok('⭐ coverage-shaped races (native seat id, no subject) map — the 0/470 live miss', cov.length === 2 && cov[0].seat === 'H-NY-3' && cov[0].district === 3 && cov[1].incumbent_party === 'B', JSON.stringify(cov.map((r) => r.seat)));
     const az = pr.find((r) => r.seat === 'S-AZ');
     ok('senate seat carries margin + incumbency in the pool grammar', !!az && az.poll_margin === 1.25 && az.base === 1.25 && az.incumbent_party === 'B' && az.chamber === 'senate');
     const ca = pr.find((r) => r.seat === 'H-CA-22');
