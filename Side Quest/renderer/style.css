@@ -585,3 +585,21 @@ html, body {
 .sheep.inbound .sheep-time { color: #5a9a6a; }
 .sheep.inbound-timeout { border-left: 2px solid #6a4a4a; padding-left: 8px; color: #8a7a7a; }
 .sheep.inbound-timeout .sheep-time { color: #8a6a6a; }
+
+/* ── approval cards (09-01): non-chat yes/no permission requests ─────────────────────────────── */
+#approvals-bar { border-bottom: 1px solid #3a3a44; padding: 8px 12px; background: #1c1c22; max-height: 32vh; overflow-y: auto; }
+#approvals-bar.hidden { display: none; }
+.approvals-title { color: #c9a86a; font-size: 12px; letter-spacing: 0.04em; margin-bottom: 6px; }
+.approval-card { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border: 1px solid #33333c; border-radius: 6px; margin-bottom: 5px; background: #22222a; }
+.approval-kind { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
+.approval-kind.proposed { background: #2a3a4a; color: #8ab4d8; }
+.approval-kind.blocked { background: #4a3a2a; color: #d8b48a; }
+.approval-verdict { font-size: 10px; white-space: nowrap; }
+.approval-verdict.verified { color: #7ac07a; }
+.approval-verdict.rejected { color: #c07a7a; }
+.approval-text { flex: 1; font-size: 12px; color: #c8c8d0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.approval-actions { display: flex; gap: 6px; white-space: nowrap; }
+.approval-actions button { font-size: 11px; padding: 3px 10px; border-radius: 5px; border: 1px solid #3a3a44; background: #2a2a32; color: #c8c8d0; cursor: pointer; }
+.approval-actions .approval-yes:hover { background: #2a4a2a; border-color: #4a7a4a; }
+.approval-actions .approval-no:hover { background: #4a2a2a; border-color: #7a4a4a; }
+.approval-actions button:disabled { opacity: 0.4; cursor: default; }

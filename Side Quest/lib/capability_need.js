@@ -125,6 +125,25 @@ function getVerdict(id, { deps = {} } = {}) {
   try { return JSON.parse(_db(deps).getMeta(`need.${Number(id) || 0}.verdict`) || 'null'); } catch { return null; }
 }
 
+// THE YES/NO DOOR (Lucas 09-01: "make those prompts non-chat — rather yes or no permission
+// requests"): his click on an approval card resolves the need DETERMINISTICALLY. yes on a
+// proposed need → back to 'open' with his blessing stamped on meta (the build machinery
+// rehearses open needs); yes on blocked_external → 'open' (he cleared the blocker; she
+// re-checks). no → 'retired'. Only proposed/blocked_external are decidable — a click can
+// never mutate a lane mid-flight, and an unknown decision string does nothing.
+function decide(id, decision, { deps = {}, nowMs = Date.now() } = {}) {
+  const d = String(decision || '').toLowerCase();
+  if (d !== 'yes' && d !== 'no') return { ok: false, why: 'decision must be yes or no' };
+  const n = get(id, { deps });
+  if (!n) return { ok: false, why: `need #${id} not found` };
+  if (n.status !== 'proposed' && n.status !== 'blocked_external') return { ok: false, why: `need #${id} is '${n.status}' — not decidable` };
+  const next = d === 'yes' ? 'open' : 'retired';
+  if (!setStatus(id, next, { deps, nowMs })) return { ok: false, why: 'status write failed' };
+  try { _db(deps).setMeta(`need.${Number(id)}.decision`, JSON.stringify({ d, from: n.status, ts: nowMs, by: 'Lucas (approval card)' })); } catch {}
+  console.log(`[need] #${id} DECIDED ${d.toUpperCase()} by Lucas → ${next} (was ${n.status})`);
+  return { ok: true, id: Number(id), status: next };
+}
+
 function setDiagnosis(id, text, { deps = {}, nowMs = Date.now() } = {}) {
   try {
     const r = _db(deps).getDb().prepare('UPDATE capability_needs SET diagnosis = ?, updated_ts = ? WHERE id = ?').run(str(text).slice(0, 2500), nowMs, Number(id) || 0);
@@ -203,4 +222,4 @@ function slugFor(id, needText) {
   return base.slice(0, 40).replace(/-+$/, '') || `need-${id}`;
 }
 
-module.exports = { detect, record, listOpen, get, setStatus, setDiagnosis, setVerdict, getVerdict, harvest, suiteFor, slugFor, manifestLines };
+module.exports = { detect, record, listOpen, get, setStatus, setDiagnosis, setVerdict, getVerdict, decide, harvest, suiteFor, slugFor, manifestLines };

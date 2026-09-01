@@ -1252,6 +1252,48 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !dashboardOverlay.classList.contains('hidden')) closeDashboard();
 });
 
+// ── APPROVAL CARDS (Lucas 09-01: authorization asks are NON-CHAT yes/no permission requests) ────
+// Pending needs render as cards with ✓/✗; a click routes to capability_need.decide() in main and
+// the bar re-renders from the returned set. Restored on every load via needs:pending, refreshed by
+// the needs:approvals push. Fail-soft: any error hides the bar rather than wedging the chat.
+const approvalsBar = document.getElementById('approvals-bar');
+function renderApprovals(items) {
+  if (!approvalsBar) return;
+  try {
+    if (!Array.isArray(items) || !items.length) { approvalsBar.classList.add('hidden'); approvalsBar.innerHTML = ''; return; }
+    approvalsBar.classList.remove('hidden');
+    approvalsBar.innerHTML = `<div class="approvals-title">⏳ waiting on your word (${items.length})</div>` + items.map((it) => `
+      <div class="approval-card" data-id="${Number(it.id)}">
+        <span class="approval-kind ${it.kind === 'blocked' ? 'blocked' : 'proposed'}">${it.kind === 'blocked' ? 'blocked on you' : 'proposed'}</span>
+        ${it.verdict ? `<span class="approval-verdict ${it.verdict}">${it.verdict === 'verified' ? '✓ verified' : '✗ rejected'}</span>` : ''}
+        <span class="approval-text">#${Number(it.id)} — ${escapeHtml(it.text)}</span>
+        <span class="approval-actions">
+          <button type="button" class="approval-yes" title="${it.kind === 'blocked' ? 'Done / unblocked — she re-checks it' : 'Yes — build it (back into the open queue with your blessing)'}">✓ yes</button>
+          <button type="button" class="approval-no" title="No — retire it">✗ no</button>
+        </span>
+      </div>`).join('');
+  } catch { approvalsBar.classList.add('hidden'); }
+}
+if (approvalsBar) {
+  approvalsBar.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const card = btn.closest('.approval-card');
+    if (!card) return;
+    const id = Number(card.dataset.id);
+    const decision = btn.classList.contains('approval-yes') ? 'yes' : 'no';
+    btn.disabled = true;
+    try {
+      const r = await window.sq.needsDecide(id, decision);
+      renderApprovals(r && r.items);
+    } catch { btn.disabled = false; }
+  });
+  if (window.sq.onNeedsApprovals) window.sq.onNeedsApprovals((info) => renderApprovals(info && info.items));
+}
+async function loadApprovals() {
+  try { const r = await window.sq.needsPending(); renderApprovals(r && r.items); } catch {}
+}
+
 async function init() {
   const name = await window.sq.getMeta('user_name');
   if (!name) {
@@ -1259,6 +1301,7 @@ async function init() {
   } else {
     await loadHistory();
     await loadSheep();
+    await loadApprovals();
     input.focus();
   }
 }

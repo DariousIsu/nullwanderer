@@ -127,15 +127,45 @@ ok(nt.renderExternalAsk([]) === '' && nt.renderExternalAsk(null) === '', 'nothin
   ok(/NEEDS CARD, UN-HITCHED/.test(m) && /try \{ _surfaceExternalNeeds\(Date\.now\(\)\); \} catch \{\}/.test(m),
     '⭐ the daily card rides the 10-min tick (never again hostage to triage luck)');
   ok(/>= 48 \* 3600e3/.test(m) && !/>= 7 \* 24 \* 3600e3/.test(m), 'proposed cards re-air at 48h, not weekly');
-  ok(/AWAITING HIS WORD/.test(m) && /needs\.return_aired_at/.test(m) && /BLOCKED ON HIM/.test(m),
-    '⭐ return-after-a-gap surfaces what waits on him (paced 6h; verdicts ride the line)');
-  ok(/rejected — never build from it/.test(m), 'the return-air line carries the verdict channel (a rejected diagnosis can never read as a clean ask)');
-  // 09-01 second firing lesson: the prompt block ALONE was dropped by the model on a work-heavy
-  // turn (reply #14847 named zero of six). A prompt rule is a request, a gate is enforcement —
-  // the card is now POSTED as its own turn, code-side, before her reply.
-  ok(/WAITING ON YOUR WORD \(\$\{lines\.length\}\)/.test(m) && /insertTurn\(\{ sessionId: currentSessionId, speaker: 'ai_said', content: cardMsg/.test(m),
-    '⭐ ENFORCED: the card posts as its own chat turn (the model cannot drop what it never carries)');
-  ok(/never re-list the items/.test(m), 'the prompt block shrinks to acknowledge-only (no duplicate wall)');
+  // ── THE APPROVAL CARDS (Lucas 09-01, third revision same day — the arc that earned a law:
+  // prompt block (dropped by the model) → posted chat turn (his call: "non-chat") → yes/no
+  // PERMISSION REQUESTS in the UI, decided deterministically. Wiring pins: ─────────────────────
+  ok(/needs:approvals/.test(m) && /_pendingNeedItems\(\)/.test(m) && /needs\.return_aired_at/.test(m),
+    '⭐ return-after-a-gap pushes APPROVAL CARDS to the panel (non-chat, paced 6h)');
+  ok(/ipcMain\.handle\('needs:pending'/.test(m) && /ipcMain\.handle\('needs:decide'/.test(m),
+    'main: the renderer can pull the pending set and route a decision');
+  ok(/capability_need'\)\.decide\(id, decision\)/.test(m), 'main: a click routes through capability_need.decide (deterministic, never freeform)');
+  const pre = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
+  ok(/onNeedsApprovals/.test(pre) && /needsPending/.test(pre) && /needsDecide/.test(pre), 'preload: the three approval bridges exist');
+  const cjs = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'chat.js'), 'utf8');
+  ok(/renderApprovals/.test(cjs) && /approval-yes/.test(cjs) && /needsDecide\(id, decision\)/.test(cjs) && /loadApprovals\(\)/.test(cjs),
+    'renderer: cards render with ✓/✗, decide on click, restore on every load');
+  ok(/approvals-bar/.test(fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8')), 'renderer: the approvals bar exists in the shell');
+
+  // decide() behavior — fixture db with the real CHECK constraint:
+  {
+    const os2 = require('os');
+    const Database = require('../node_modules/better-sqlite3');
+    const tmpDb = path.join(os2.tmpdir(), `sq_needdecide_${process.pid}.db`);
+    try { fs.unlinkSync(tmpDb); } catch {}
+    const d = new Database(tmpDb);
+    d.exec("CREATE TABLE capability_needs (id INTEGER PRIMARY KEY, need TEXT NOT NULL, born_from TEXT, status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','rehearsing','proposed','parked','retired','blocked_external','routed_research')), created_ts INTEGER NOT NULL, updated_ts INTEGER, diagnosis TEXT)");
+    d.prepare("INSERT INTO capability_needs (id, need, status, created_ts) VALUES (1, 'a proposed fix', 'proposed', 1), (2, 'an external ask', 'blocked_external', 1), (3, 'mid-flight', 'rehearsing', 1)").run();
+    const metaStore = {};
+    const deps = { db: { getDb: () => d, setMeta: (k, v) => { metaStore[k] = v; }, getMeta: (k) => metaStore[k] } };
+    const capn = require('../lib/capability_need');
+    const r1 = capn.decide(1, 'yes', { deps, nowMs: 5000 });
+    ok(r1.ok && r1.status === 'open' && d.prepare('SELECT status FROM capability_needs WHERE id=1').get().status === 'open',
+      '⭐ decide: YES on a proposed need → back to open (the build machinery picks it up)');
+    ok(JSON.parse(metaStore['need.1.decision']).d === 'yes' && /Lucas/.test(JSON.parse(metaStore['need.1.decision']).by),
+      'decide: his blessing is stamped on the need meta');
+    const r2 = capn.decide(2, 'no', { deps, nowMs: 6000 });
+    ok(r2.ok && d.prepare('SELECT status FROM capability_needs WHERE id=2').get().status === 'retired', 'decide: NO → retired');
+    ok(!capn.decide(3, 'yes', { deps }).ok, 'decide: a mid-flight (rehearsing) need is NOT decidable — a click never mutates a running lane');
+    ok(!capn.decide(1, 'maybe', { deps }).ok && !capn.decide(99, 'yes', { deps }).ok, 'decide: unknown decision / unknown id refuse honestly');
+    d.close();
+    try { fs.unlinkSync(tmpDb); } catch {}
+  }
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

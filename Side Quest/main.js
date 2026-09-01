@@ -3396,6 +3396,30 @@ ipcMain.handle('usage:summary', () => {
     return { ok: true, ...s, label: uc.label };
   } catch (e) { return { ok: false, error: e.message }; }
 });
+
+// ── APPROVAL CARDS (Lucas 09-01: authorization asks are NON-CHAT yes/no permission requests) ────
+// The renderer's approvals bar reads the pending set here on load and after every decision;
+// a ✓/✗ click routes through capability_need.decide() (deterministic: yes → open with his
+// blessing stamped, no → retired; only proposed/blocked_external are decidable).
+function _pendingNeedItems() {
+  try {
+    const capn = require('./lib/capability_need');
+    const _txt = (s) => String(s).replace(/\s+/g, ' ').slice(0, 140);
+    const blocked = db.getDb().prepare("SELECT id, need FROM capability_needs WHERE status = 'blocked_external' ORDER BY updated_ts DESC LIMIT 4").all()
+      .map((r) => ({ id: r.id, kind: 'blocked', text: _txt(r.need), verdict: null }));
+    const proposed = db.getDb().prepare("SELECT id, need FROM capability_needs WHERE status = 'proposed' ORDER BY updated_ts DESC LIMIT 6").all()
+      .map((r) => { const v = (() => { try { return capn.getVerdict(r.id); } catch { return null; } })(); return { id: r.id, kind: 'proposed', text: _txt(r.need), verdict: v ? v.v : null }; });
+    return [...blocked, ...proposed];
+  } catch (e) { console.error('[needs] pending items failed:', e.message); return []; }
+}
+ipcMain.handle('needs:pending', () => ({ ok: true, items: _pendingNeedItems() }));
+ipcMain.handle('needs:decide', (_e, { id, decision } = {}) => {
+  try {
+    const r = require('./lib/capability_need').decide(id, decision);
+    if (r.ok) { try { require('./lib/obs_bus').emit({ lane: 'needs', kind: 'decision', level: 'info', text: `need #${r.id} decided ${String(decision).toLowerCase()} by Lucas → ${r.status}`, ref: `need:${r.id}` }); } catch {} }
+    return { ...r, items: _pendingNeedItems() };
+  } catch (e) { return { ok: false, why: e.message, items: _pendingNeedItems() }; }
+});
 // Desktop companion: hide (keep the process/state, just tuck her away) + toggle (create/show or hide).
 ipcMain.handle('companion:hide', () => { try { if (companionWindow && !companionWindow.isDestroyed()) companionWindow.hide(); } catch {} return { ok: true }; });
 ipcMain.handle('companion:toggle', () => {
@@ -9761,32 +9785,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // external triage happened to run — miss the moment and the ask was invisible. Now every
     // return-after-a-gap NAMES what waits on him, in her own reply, paced 6h so a busy evening
     // isn't nagged. The full card still airs through _surfaceExternalNeeds.
+    // NON-CHAT, YES/NO (Lucas 09-01, superseding the posted-message card same day: "make those
+    // prompts non-chat — rather yes or no permission requests"): the waiting items render as
+    // APPROVAL CARDS in the UI (renderer approvals bar) with ✓/✗ buttons wired to
+    // capability_need.decide() — a click resolves the need deterministically. The renderer also
+    // pulls the pending set on every load (needs:pending), so this push is a freshness nudge,
+    // not the only door. AWAITING HIS WORD lives in the panel now, never in prose.
     try {
       const _awNow = Date.now();
       if (_awNow - (parseInt(db.getMeta('needs.return_aired_at') || '0', 10) || 0) > 6 * 3600e3) {
-        const _blocked = db.getDb().prepare("SELECT id, need FROM capability_needs WHERE status = 'blocked_external' ORDER BY updated_ts DESC LIMIT 4").all();
-        const _prop = db.getDb().prepare("SELECT id, need FROM capability_needs WHERE status = 'proposed' ORDER BY updated_ts DESC LIMIT 5").all();
-        if (_blocked.length || _prop.length) {
-          const _vd = (id) => { try { return require('./lib/capability_need').getVerdict(id); } catch { return null; } };
-          const lines = [
-            ..._blocked.map((r) => `• BLOCKED ON HIM — need #${r.id}: ${String(r.need).replace(/\s+/g, ' ').slice(0, 110)}`),
-            ..._prop.map((r) => { const v = _vd(r.id); return `• proposed #${r.id}${v ? (v.v === 'verified' ? ' (✓ verified)' : ' (⚠ rejected — never build from it)') : ''}: ${String(r.need).replace(/\s+/g, ' ').slice(0, 110)}`; }),
-          ];
-          // ENFORCED, NOT REQUESTED (09-01, the first live firing: the block rode the prompt and
-          // the model DROPPED it under a work-heavy turn — reply #14847 named zero of six items.
-          // A prompt rule is a request, a gate is enforcement): the card is now POSTED as its own
-          // chat message, code-side — the same insertTurn+push mechanism the daily card uses,
-          // proven to render. The model can't drop what it never carries.
-          const cardMsg = `⏳ WAITING ON YOUR WORD (${lines.length}):\n${lines.join('\n')}\n(say "show me the cards" for the full detail on any of them)`;
-          try {
-            const _cardRow = db.insertTurn({ sessionId: currentSessionId, speaker: 'ai_said', content: cardMsg, model: 'research', unprompted: 1 });
-            try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: _cardRow.id, truncated: 0, unprompted: true, say: cardMsg }); } catch {}
-            try { require('./lib/blackboard').append({ source: 'research', kind: 'utterance', refTable: 'turns', refId: _cardRow.id, content: cardMsg }); } catch {}
-          } catch (e) { console.error('[needs] return-air card post failed:', e.message); }
-          const aw = `A card listing ${lines.length} item(s) AWAITING HIS WORD was just posted above your reply — acknowledge it in one short natural line if it fits; never re-list the items.`;
-          capabilityProposalBlock = capabilityProposalBlock ? `${capabilityProposalBlock}\n\n${aw}` : aw;
+        const items = _pendingNeedItems();
+        if (items.length) {
+          try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('needs:approvals', { items }); } catch {}
           db.setMeta('needs.return_aired_at', String(_awNow));
-          console.log(`[needs] return-air: ${lines.length} item(s) POSTED as a card (turn-level, enforced)`);
+          console.log(`[needs] return-air: ${items.length} approval card(s) pushed to the panel (yes/no, non-chat)`);
         }
       }
     } catch (e) { console.error('[needs] return-air failed:', e.message); }

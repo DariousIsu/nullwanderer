@@ -39,6 +39,11 @@ contextBridge.exposeInMainWorld('sq', {
   onReflectionFired: (cb) => ipcRenderer.on('reflection:fired', (_e, info) => cb(info)),
   onMonologueTick: (cb) => ipcRenderer.on('monologue:tick', (_e, info) => cb(info)),
 
+  // Approval cards (Lucas 09-01): authorization asks are non-chat yes/no permission requests.
+  onNeedsApprovals: (cb) => ipcRenderer.on('needs:approvals', (_e, info) => cb(info)),
+  needsPending: () => ipcRenderer.invoke('needs:pending'),
+  needsDecide: (id, decision) => ipcRenderer.invoke('needs:decide', { id, decision }),
+
   // Open the Editor Studio window directly (kept for back-compat / direct access)
   openEditor: () => ipcRenderer.invoke('editor:open'),
   // Open the My Workspace workbench — the operator surfaces + studios
