@@ -103,6 +103,75 @@ function rotateBackups({ deps = {}, nowMs = Date.now(), dataDir = null } = {}) {
   } catch { return { pruned: [], kept: [] }; }
 }
 
+// ── THE RETENTION SWEEP (Lucas 09-01: "no data, her internal systems or research or anything in
+// between should be being stored in an exploding position") ────────────────────────────────────
+// SHORT-TERM MUST BE DISPOSABLE BY CONSTRUCTION: quarantine's whole purpose is that a corrupted
+// short-term tier can be dumped without touching the long-term investment — an unbounded stream
+// is un-dumpable AND a disk bomb (encounters hit 1.2M rows, kg_observations 1.45M before this).
+// ONE organ, declared registry, per-store bound + DISTILL-GUARD (a row prunes only after what it
+// feeds has consumed it). Long-term stores are NEVER listed here. Quarantine rows prune only
+// after a gate decided them — never by age alone (they're claims, not exhaust).
+// DARK-FIRST: dry-run by default — passes REPORT would-prune counts until meta retention.armed='on'
+// (his word arms it). Batched deletes (bounded per pass) so a sweep never holds a long lock.
+const RETENTION = [
+  // pure exhaust — ring by rows
+  { table: 'cloud_traces', kind: 'ring', maxRows: 20000 },
+  { table: 'agent_events', kind: 'ring', maxRows: 20000 },
+  { table: 'recent_cards', kind: 'ring', maxRows: 50000 },
+  // recency/episodic streams — age windows (their consumers read far shorter windows)
+  { table: 'encounters', kind: 'age', tsCol: 'ingested_at', maxAgeMs: 90 * 24 * 3600e3 },
+  { table: 'kg_observations', kind: 'age', tsCol: 'captured_at', maxAgeMs: 60 * 24 * 3600e3 },
+  { table: 'touchpoints', kind: 'age', tsCol: 'ts', maxAgeMs: 90 * 24 * 3600e3 },
+  { table: 'inbound_messages', kind: 'age', tsCol: 'received_ts', maxAgeMs: 90 * 24 * 3600e3 },
+  // distill-guarded: a thought prunes ONLY once consolidation has eaten it
+  { table: 'monologue', kind: 'age', tsCol: 'ts', maxAgeMs: 90 * 24 * 3600e3, guard: 'consolidated = 1' },
+];
+const RETENTION_BATCH = 5000;          // max deletes per table per pass — never a long lock
+const RETENTION_EVERY_MS = 24 * 3600e3;
+
+function retentionSweep({ deps = {}, nowMs = Date.now(), registry = RETENTION, batch = RETENTION_BATCH } = {}) {
+  const db = deps.db || require('./db');
+  try {
+    if (nowMs - (parseInt(db.getMeta('retention.last_sweep') || '0', 10) || 0) < RETENTION_EVERY_MS) return null;
+    db.setMeta('retention.last_sweep', String(nowMs));
+    const armed = (db.getMeta('retention.armed') || 'off') === 'on';
+    const d = db.getDb();
+    const report = [];
+    for (const r of registry) {
+      try {
+        let where = '';
+        if (r.kind === 'ring') {
+          const hi = d.prepare(`SELECT MAX(id) m FROM ${r.table}`).get();
+          if (!hi || !hi.m || hi.m <= r.maxRows) { continue; }
+          where = `id <= ${hi.m - r.maxRows}`;
+        } else {
+          where = `${r.tsCol} < ${nowMs - r.maxAgeMs}`;
+        }
+        if (r.guard) where += ` AND ${r.guard}`;
+        const n = d.prepare(`SELECT COUNT(*) c FROM ${r.table} WHERE ${where}`).get().c;
+        if (!n) continue;
+        if (armed) {
+          const del = d.prepare(`DELETE FROM ${r.table} WHERE rowid IN (SELECT rowid FROM ${r.table} WHERE ${where} LIMIT ${batch})`).run();
+          report.push(`${r.table}: pruned ${del.changes}${n > del.changes ? ` of ${n} (batched — the rest next pass)` : ''}`);
+        } else {
+          report.push(`${r.table}: WOULD prune ${n} (dry-run)`);
+        }
+      } catch (e) { report.push(`${r.table}: ERR ${String(e.message).slice(0, 60)}`); }
+    }
+    if (report.length) {
+      const mode = armed ? 'ARMED' : 'DRY-RUN';
+      console.log(`[db_health] retention sweep (${mode}): ${report.join(' · ')}`);
+      try {
+        ((deps.obsBus) || require('./obs_bus')).emit(
+          { lane: 'db', kind: 'rotation', level: 'info', text: `retention sweep (${mode}): ${report.join(' · ').slice(0, 400)}`, ref: 'retention' },
+          { deps, nowMs }
+        );
+      } catch {}
+    }
+    return { armed, report };
+  } catch (e) { try { console.error('[db_health] retention sweep failed soft:', e.message); } catch {} return null; }
+}
+
 // Census of backup-ish copies in the data dir (name-matched, ≥50MB). REPORT-ONLY by design.
 function backupCensus(dataDir) {
   try {
@@ -127,6 +196,8 @@ function tick({ deps = {}, nowMs = Date.now(), paths = null } = {}) {
   const out = { at: nowMs };
   // rotation FIRST, so the census below reports the post-rotation truth
   try { rotateBackups({ deps, nowMs, dataDir: P.dataDir }); } catch {}
+  // the retention sweep rides the same tick (due-gated daily inside; dry-run until armed)
+  try { retentionSweep({ deps, nowMs }); } catch {}
   try {
     out.sq = { sizeMB: _mb(P.sqDb), walMB: _mb(P.sqDb + '-wal') };
     if (out.sq.walMB != null && out.sq.walMB > WAL_WARN_MB) {
@@ -225,4 +296,4 @@ function describe(v) {
   return bits.length ? bits.join(' · ') : null;
 }
 
-module.exports = { tick, maybeQuickCheck, backupCensus, rotateBackups, describe, WAL_WARN_MB, BACKUP_WARN_GB, PRECURATION_KEEP, RING_KEY, QC_KEY, SNAP_KEY };
+module.exports = { tick, maybeQuickCheck, backupCensus, rotateBackups, retentionSweep, describe, RETENTION, RETENTION_BATCH, WAL_WARN_MB, BACKUP_WARN_GB, PRECURATION_KEEP, RING_KEY, QC_KEY, SNAP_KEY };

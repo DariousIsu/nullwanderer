@@ -115,6 +115,40 @@ const GB = 1073741824;
     ok(fs.existsSync(path.join(tmpDir, 'sq.db.precuration_NOTASTAMP')), 'a non-matching name is NEVER touched (strict pattern)');
     ok(dh.rotateBackups({ dataDir: tmpDir }).pruned.length === 0, 'steady state: nothing further to prune');
 
+    // ── THE RETENTION SWEEP (Lucas 09-01: "no data ... stored in an exploding position" — short-
+    // term must be DISPOSABLE BY CONSTRUCTION; the quarantine firewall only works if the tier can
+    // be dumped). Dry-run by default; his word (retention.armed='on') arms it; distill-guards hold.
+    {
+      const RD = require(ROOT + '/node_modules/better-sqlite3');
+      const rdb = new RD(path.join(tmpDir, 'retention.db'));
+      rdb.exec('CREATE TABLE exhaust (id INTEGER PRIMARY KEY); CREATE TABLE thoughts (id INTEGER PRIMARY KEY, ts INTEGER, consolidated INTEGER DEFAULT 0)');
+      for (let i = 1; i <= 12; i++) rdb.prepare('INSERT INTO exhaust (id) VALUES (?)').run(i);
+      const T0 = 3_000_000_000_000;
+      rdb.prepare('INSERT INTO thoughts (id, ts, consolidated) VALUES (1, ?, 1), (2, ?, 0), (3, ?, 1)').run(T0 - 100 * 86400e3, T0 - 100 * 86400e3, T0 - 1 * 86400e3);
+      const st2 = {};
+      const rdeps = { db: { getMeta: (k) => st2[k], setMeta: (k, v) => { st2[k] = v; }, getDb: () => rdb } };
+      const reg = [
+        { table: 'exhaust', kind: 'ring', maxRows: 5 },
+        { table: 'thoughts', kind: 'age', tsCol: 'ts', maxAgeMs: 90 * 86400e3, guard: 'consolidated = 1' },
+      ];
+      const dry = dh.retentionSweep({ deps: rdeps, nowMs: T0, registry: reg });
+      ok(!dry.armed && dry.report.length === 2 && dry.report.every((l) => /WOULD prune/.test(l)),
+        `⭐ retention: DRY-RUN by default — reports, deletes nothing (${dry.report.join(' · ')})`);
+      ok(rdb.prepare('SELECT COUNT(*) c FROM exhaust').get().c === 12, 'retention dry-run: every row survives');
+      ok(dh.retentionSweep({ deps: rdeps, nowMs: T0 + 60e3, registry: reg }) === null, 'retention: due-gated daily (a second pass inside 24h no-ops)');
+      st2['retention.armed'] = 'on';
+      const armed = dh.retentionSweep({ deps: rdeps, nowMs: T0 + 25 * 3600e3, registry: reg });
+      ok(armed.armed && rdb.prepare('SELECT COUNT(*) c FROM exhaust').get().c === 5, '⭐ retention ARMED: the ring prunes to exactly maxRows');
+      ok(rdb.prepare('SELECT COUNT(*) c FROM thoughts').get().c === 2 && rdb.prepare('SELECT id FROM thoughts ORDER BY id').all().map(r => r.id).join(',') === '2,3',
+        '⭐ retention: the DISTILL-GUARD holds — an old UNCONSOLIDATED thought survives; only the old consolidated one prunes (and the recent one stays)');
+      const batched = dh.retentionSweep({ deps: rdeps, nowMs: T0 + 50 * 3600e3, registry: [{ table: 'exhaust', kind: 'ring', maxRows: 1 }], batch: 2 });
+      ok(/pruned 2 of 4/.test(batched.report[0]), `retention: deletes are BATCHED — never a long lock (${batched.report[0]})`);
+      ok(!dh.RETENTION.some((r) => /^(knowledge|graph_entities|graph_relations|documents|turns|self_model|owner_world)$/.test(r.table)),
+        '⭐ retention: NO long-term store is ever in the registry (the investment is untouchable)');
+      ok(dh.RETENTION.find((r) => r.table === 'monologue').guard === 'consolidated = 1', 'retention: monologue prunes only what consolidation has eaten');
+      rdb.close();
+    }
+
     // quick_check child script on a PRISTINE real store → ok:true
     const cleanDb = path.join(tmpDir, 'clean.db');
     { const D = require(ROOT + '/node_modules/better-sqlite3'); const d2 = new D(cleanDb); d2.exec('CREATE TABLE t(x); INSERT INTO t VALUES (1)'); d2.close(); }
