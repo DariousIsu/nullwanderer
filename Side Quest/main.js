@@ -17885,8 +17885,10 @@ async function runPenWorkPass(focus) {
       : `Either emit 1-3 <source-read path="..."/> tags for the exact files whose lines you need next, or — once you have READ the lines you intend to change — exactly one <propose-change title="..." rationale="...">unified diff</propose-change>. An announced intention is not an act; the tag is the act.`);
   // ROAD-WRITER PATTERN (fix-forward, p222 passes 1-2: ZERO reads — the operator agent-loop's own
   // tool grammar competed with the pen tags and the doors never fired). A pen pass is a PLAIN
-  // completion turn: the pen tags are the only grammar on the table.
-  const _chain = [...new Set([require('./lib/config').subconsciousModel(), process.env.ZOE_PAPER_MODEL, 'gemma4:31b-cloud'].filter(Boolean))];
+  // completion turn: the pen tags are the only grammar on the table. THE SPECIALIST LEADS (his
+  // 08-06 standing order: "run all programming related calls through kimi 2.7 code" — codeModel()
+  // is env-overridable, so kimi 3 lands with one .env line): code model first, general chain behind.
+  const _chain = [...new Set([require('./lib/config').codeModel(), require('./lib/config').subconsciousModel(), process.env.ZOE_PAPER_MODEL, 'gemma4:31b-cloud'].filter(Boolean))];
   let out = '';
   for (const _m of _chain) {
     try {
