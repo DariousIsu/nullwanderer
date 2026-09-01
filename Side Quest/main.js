@@ -1881,7 +1881,14 @@ app.whenReady().then(() => {
   setInterval(() => { _agentConsumeTick().catch((e) => console.error('[agent-consume] tick failed:', e && e.message)); }, 45 * 1000).unref?.();
   const echoCfg = readEchoConfig(ECHO_CWD);
   echoHttp = { base: `http://${echoCfg.host}:${echoCfg.port}`, token: echoCfg.token };   // for GET /canvas
-  echoSuit = echoSuitLib.createSuit({ client: require('./lib/echo').fromEnv({ url: echoCfg.url, token: echoCfg.token }) });
+  // p211 (08-31): THE RESET-REBUILD TRAP — reset() (the p208 cure) nulls the client, and the
+  // rebuild seam fell to bare spawnEcho() (python='python', cwd=null → ModuleNotFoundError →
+  // "echo stdio exited (code 1)") because only `client` was passed. ONE early failed attach
+  // (engine child still coming up at boot) then poisoned EVERY retry — 20 not-ok beats beside a
+  // healthy engine. spawnFn is the designed factory seam: a reset now rebuilds the SAME HTTP
+  // client the suit was born with.
+  const _echoClientFactory = () => require('./lib/echo').fromEnv({ url: echoCfg.url, token: echoCfg.token });
+  echoSuit = echoSuitLib.createSuit({ client: _echoClientFactory(), spawnFn: _echoClientFactory });
   // Register this connected suit as the live singleton so active_recall can query the master DB
   // (search_knowledge) through the SAME connection — automatic recall, not just her explicit tags.
   try { echoSuitLib.setLiveSuit(echoSuit); } catch {}

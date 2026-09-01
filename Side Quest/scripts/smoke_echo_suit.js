@@ -401,6 +401,21 @@ function mockClient(overrides = {}) {
     // transport, so the same dead client quiet-failed forever. Both halves pinned.
     ok('wiring attach-not-ok: a settled NOT-OK attach NAMES ITSELF and resets the client (the quiet-fail sibling of the hang cure)',
       /echo suit attach settled NOT-OK/.test(_mainSrc) && /echoSuit\.reset\('attach not-ok'\)/.test(_mainSrc));
+    // p211 (08-31): THE RESET-REBUILD TRAP — reset() nulls the client and the rebuild seam fell to
+    // bare spawnEcho() (python='python', cwd=null → instant exit 1), because main.js passed only
+    // `client`. One early failed attach (engine child still booting) then poisoned EVERY retry:
+    // 20 not-ok beats beside a healthy engine. The factory seam must ride beside the client.
+    ok('wiring reset-rebuild: main.js passes spawnFn (the client FACTORY) beside client — a reset rebuilds the SAME HTTP client, never the bare-spawnEcho default',
+      /_echoClientFactory = \(\) => require\('\.\/lib\/echo'\)\.fromEnv/.test(_mainSrc) && /createSuit\(\{ client: _echoClientFactory\(\), spawnFn: _echoClientFactory \}\)/.test(_mainSrc));
+    {
+      let factoryCalls = 0;
+      const suit = S.createSuit({ client: mockClient(), spawnFn: () => { factoryCalls++; return mockClient(); } });
+      await suit.connect();
+      suit.reset('attach not-ok');
+      await suit.connect();
+      ok('behavior reset-rebuild: after a reset, connect() rebuilds via the injected factory (not the stdio default)',
+        factoryCalls === 1 && suit.connected === true);
+    }
   }
 
   console.log('\n' + (fail === 0 ? 'ALL PASS' : 'FAILURES') + ` - ${pass} passed, ${fail} failed`);
