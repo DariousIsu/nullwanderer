@@ -17870,8 +17870,18 @@ async function runPenWorkPass(focus) {
     (st.gateNote ? `YOUR LAST PROPOSAL FAILED THE GATE — fix exactly this and re-file:\n${String(st.gateNote).slice(0, 800)}\n\n` : '') +
     (notes ? `WHAT YOU HAVE READ SO FAR:\n${notes}\n\n` : '') +
     `This is pass ${st.passes} of ${MAX_PEN_PASSES}. Use <source-list>/<source-read> to find and read the EXACT lines involved (start from lib/ and main.js; grep-like guessing wastes a pass), and when — and only when — you have read the lines you intend to change, emit ONE <propose-change> with a unified diff. If you cannot yet, end with the single next file you need to read.`;
-  const sp = await runCloudOperator({ userMessage: prompt, task: true, autonomous: true, lane: 'directed' });
-  const out = `${(sp && sp.answer) || ''}\n${(sp && sp.thought) || ''}`;
+  // ROAD-WRITER PATTERN (fix-forward, p222 passes 1-2: ZERO reads — the operator agent-loop's own
+  // tool grammar competed with the pen tags and the doors never fired). A pen pass is a PLAIN
+  // completion turn: the pen tags are the only grammar on the table.
+  const _chain = [...new Set([require('./lib/config').subconsciousModel(), process.env.ZOE_PAPER_MODEL, 'gemma4:31b-cloud'].filter(Boolean))];
+  let out = '';
+  for (const _m of _chain) {
+    try {
+      out = String(await require('./lib/ollama').complete({ model: _m, messages: [{ role: 'user', content: prompt }], options: { temperature: 0.3, num_predict: 2500 }, lane: 'directed', think: false, timeoutMs: 240000 }) || '').trim();
+      if (out) break;
+    } catch (e) { console.error(`[pen] pass model ${_m} failed:`, e.message); }
+  }
+  if (!out) { console.warn('[pen] pass produced no output (models unavailable) — the pass count stands'); return { action: 'continue' }; }
   let filed = null, reads = 0;
   for (const t of pen.parseTags(out).slice(0, 5)) {
     const r = pen.dispatch(t);
@@ -17891,6 +17901,7 @@ async function runPenWorkPass(focus) {
   }
   if (filed) { st.proposalId = filed; delete st.gateNote; }
   pen.setPenState(focus.id, st);
+  if (!filed && !reads) console.log(`[pen] pass answer carried NO pen tags — head: ${out.slice(0, 240).replace(/\n/g, ' ⏎ ')}`);
   console.log(`[pen] work #${focus.id} pass ${st.passes}: ${reads} read(s)${filed ? `, proposal #${filed} filed` : ''}`);
   return { action: 'continue' };
 }
