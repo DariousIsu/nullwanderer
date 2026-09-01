@@ -17864,12 +17864,20 @@ async function runPenWorkPass(focus) {
     return { action: 'done' };
   }
   st.passes = (st.passes || 0) + 1;
+  // WARM START (p223 pass 1: "I'll start by exploring the project structure" — narration, zero
+  // tags): there is nothing to "explore" in prose — the listings are handed over up front.
+  if (!(st.notes || []).length) {
+    for (const d of ['.', 'lib', 'renderer']) {
+      const l = pen.listSource(d);
+      if (l.ok) st.notes = [...(st.notes || []), `— dir ${l.path}: ${(l.entries || []).join(', ')}`];
+    }
+  }
   pen.setPenState(focus.id, st);
-  const notes = (st.notes || []).slice(-6).join('\n');
+  const notes = (st.notes || []).slice(-8).join('\n');
   const prompt = `${pen.buildPromptBlock()}\n\nTHE CODE-CHANGE ORDER (Lucas): ${String(focus.content || '').slice(0, 500)}\n\n` +
     (st.gateNote ? `YOUR LAST PROPOSAL FAILED THE GATE — fix exactly this and re-file:\n${String(st.gateNote).slice(0, 800)}\n\n` : '') +
     (notes ? `WHAT YOU HAVE READ SO FAR:\n${notes}\n\n` : '') +
-    `This is pass ${st.passes} of ${MAX_PEN_PASSES}. Use <source-list>/<source-read> to find and read the EXACT lines involved (start from lib/ and main.js; grep-like guessing wastes a pass), and when — and only when — you have read the lines you intend to change, emit ONE <propose-change> with a unified diff. If you cannot yet, end with the single next file you need to read.`;
+    `Pass ${st.passes} of ${MAX_PEN_PASSES}. YOUR ENTIRE REPLY MUST BE TAGS — no prose, no plan, no preamble; words outside tags are DISCARDED and the pass is wasted. Either emit 1-3 <source-read path="..."/> tags for the exact files whose lines you need next, or — once you have READ the lines you intend to change — exactly one <propose-change title="..." rationale="...">unified diff</propose-change>. An announced intention is not an act; the tag is the act.`;
   // ROAD-WRITER PATTERN (fix-forward, p222 passes 1-2: ZERO reads — the operator agent-loop's own
   // tool grammar competed with the pen tags and the doors never fired). A pen pass is a PLAIN
   // completion turn: the pen tags are the only grammar on the table.
