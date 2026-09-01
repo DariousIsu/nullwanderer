@@ -416,6 +416,11 @@ function mockClient(overrides = {}) {
       ok('behavior reset-rebuild: after a reset, connect() rebuilds via the injected factory (not the stdio default)',
         factoryCalls === 1 && suit.connected === true);
     }
+    // THE CHIP SYNC (09-01: "echo: offline" on screen beside a fully-attached suit — the lazy
+    // dispatch attach never pushed the status chip). The heartbeat syncs the chip to the suit's
+    // TRUE state every beat.
+    ok('wiring chip-sync: the heartbeat pushes the chip from echoSuit.connected every beat (a lazy attach can never leave it lying)',
+      /THE CHIP SYNC/.test(_mainSrc) && /pushEchoStatus\(echoSuit && echoSuit\.connected \? \{ ok: true, tools: echoSuit\.toolCount \|\| 0 \} : null\)/.test(_mainSrc));
   }
 
   console.log('\n' + (fail === 0 ? 'ALL PASS' : 'FAILURES') + ` - ${pass} passed, ${fail} failed`);

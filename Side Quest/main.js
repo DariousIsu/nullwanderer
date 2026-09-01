@@ -1996,6 +1996,11 @@ app.whenReady().then(() => {
     // the next beat re-attaches and refreshes the status light) — and finishes the board replay if
     // boot never got one in.
     const iv = setInterval(() => {
+      // THE CHIP SYNC (09-01, his screenshot: "echo: offline" beside a fully-attached suit): the
+      // suit attaches LAZILY inside dispatch, and that path never pushed the status chip — only
+      // tryEchoAttach's own branches did. The heartbeat now syncs the chip to the suit's TRUE
+      // state every beat, so no attach path (or drop) can leave it lying.
+      try { pushEchoStatus(echoSuit && echoSuit.connected ? { ok: true, tools: echoSuit.toolCount || 0 } : null); } catch {}
       if (!echoSuit || echoSuit.connected) {
         if (!echoSuit || !echoSuit.connected) return;
         if (!canvasReplayDone) { replayBoardOnce('heartbeat').catch(() => {}); return; }
