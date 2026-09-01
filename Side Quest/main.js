@@ -17628,8 +17628,18 @@ async function startFocusSwarm(focus, { requestedK = null, requestedBy = 'auto' 
   try { cur = JSON.parse(db.getMeta(`focus.${fid}.target`) || 'null'); } catch {}
   try { plan = JSON.parse(db.getMeta(`focus.${fid}.plan`) || '{}'); } catch {}
   const rs = require('./lib/research');
-  // partitions take the UNCOVERED remainder; the in-flight target stays with the parent
-  const remaining = intended.filter((t) => !rs.targetIsCovered(covered, t) && (!cur || String(t).toLowerCase() !== String(cur.name || '').toLowerCase()));
+  // THE ROSTER (first-fire fix, p219): his live runs carry their targets in the PLAN (rev-synced),
+  // not intended_targets — #4154/#4165 both sat at intended=0 while plan.targets held the orgs.
+  // Union both; partitions take the UNCOVERED remainder; the in-flight target stays with the parent.
+  const rosterSeen = new Set();
+  const roster = [...intended, ...(Array.isArray(plan.targets) ? plan.targets : [])]
+    .map((t) => String(t || '').trim()).filter((t) => {
+      const k = t.toLowerCase();
+      if (!t || rosterSeen.has(k)) return false;
+      rosterSeen.add(k);
+      return true;
+    });
+  const remaining = roster.filter((t) => !rs.targetIsCovered(covered, t) && (!cur || String(t).toLowerCase() !== String(cur.name || '').toLowerCase()));
   if (remaining.length < 2) return { ok: false, reason: 'below-threshold' };
   const total = _workerCount();
   const { swarmWorkers } = swarmLib.planSwarmSlots({ totalWorkers: total, requestedK, floor: swarmLib.DEFAULT_SWARM_FLOOR });
@@ -17669,17 +17679,23 @@ async function maybeAutoSwarm(focus) {
   try {
     if (!focus || !focus.id) return;
     if (db.getMeta(`focus.${focus.id}.swarm_spawned`) === '1') return;
-    if ((db.getMeta(`focus.${focus.id}.scope`) || '') !== 'bounded') return;   // open discovery has no roster to split
     if (db.getMeta(`focus.${focus.id}.background`) === '1') return;            // partitions never re-swarm
     const focusLib = require('./lib/focus');
     if (!focusLib.isDirected(focus)) return;   // auto serves HIS runs; beats swarm by command as before
     const swarmLib = require('./lib/swarm');
-    let intended = [], covered = [], cur = null;
+    // first-fire fix (p219): his runs hold their rosters in plan.targets (intended sat at 0 on
+    // #4154/#4165) — count the union, same as startFocusSwarm partitions it. No scope gate: the
+    // partitions are bounded by construction (targetsOverride), whatever the parent's scope.
+    let intended = [], covered = [], cur = null, plan = {};
     try { intended = JSON.parse(db.getMeta(`focus.${focus.id}.intended_targets`) || '[]'); } catch {}
     try { covered = JSON.parse(db.getMeta(`focus.${focus.id}.covered`) || '[]'); } catch {}
     try { cur = JSON.parse(db.getMeta(`focus.${focus.id}.target`) || 'null'); } catch {}
+    try { plan = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || '{}'); } catch {}
     const rs = require('./lib/research');
-    const remaining = intended.filter((t) => !rs.targetIsCovered(covered, t) && (!cur || String(t).toLowerCase() !== String(cur.name || '').toLowerCase())).length;
+    const seen = new Set();
+    const roster = [...intended, ...(Array.isArray(plan.targets) ? plan.targets : [])]
+      .map((t) => String(t || '').trim()).filter((t) => { const k = t.toLowerCase(); if (!t || seen.has(k)) return false; seen.add(k); return true; });
+    const remaining = roster.filter((t) => !rs.targetIsCovered(covered, t) && (!cur || String(t).toLowerCase() !== String(cur.name || '').toLowerCase())).length;
     const d = swarmLib.shouldAutoSwarm({ remaining, totalWorkers: _workerCount(), swarmLive: !!_loadSchedState().swarm });
     if (!d.swarm) return;
     const r = await startFocusSwarm(focus, { requestedBy: 'auto' });
