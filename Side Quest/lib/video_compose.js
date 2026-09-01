@@ -146,7 +146,9 @@ async function compose(opts) {
     if (o.wav) args.push('-i', o.wav);
     args.push('-vf', vf.join(','), '-t', String(dur));
     if (o.wav) args.push('-map', '0:v:0', '-map', '1:a:0');
-    args.push('-c:v', 'libx264', '-preset', 'medium', '-crf', '21', '-pix_fmt', 'yuv420p', '-r', '30');
+    // -bf 0 + cfr = strictly-monotonic, constant-rate stream: the most decode-friendly for embedded
+    // players (the workspace webview stalled on B-frame reordering under load). faststart already set below.
+    args.push('-c:v', 'libx264', '-preset', 'medium', '-crf', '21', '-pix_fmt', 'yuv420p', '-r', '30', '-fps_mode', 'cfr', '-bf', '0');
     if (o.image) args.push('-tune', 'stillimage');
     args.push('-c:a', 'aac', '-b:a', '192k', '-shortest', '-movflags', '+faststart', outPath);
 

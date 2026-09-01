@@ -109,6 +109,13 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, roster);
     }
 
+    // refine an avatar by compositing it with more real images (uploaded refs → IPAdapter → fold back in)
+    const mRefine = u.pathname.match(/^\/api\/avatars\/([\w.-]+)\/refine$/);
+    if (req.method === 'POST' && mRefine) {
+      const b = await body(req);
+      return json(res, 200, images.startRefine(mRefine[1], b || {}));
+    }
+
     // --- personas (the cloner) ---
     if (req.method === 'GET' && u.pathname === '/api/personas') {
       return json(res, 200, cloner.listPersonas().map(p => ({
@@ -258,7 +265,8 @@ const server = http.createServer(async (req, res) => {
       return res.end(fs.readFileSync(path.join(__dirname, 'image.html')));
     }
     if (req.method === 'GET' && u.pathname === '/api/images') {
-      return json(res, 200, images.listImages());
+      // pending (in-flight/errored) first so the "generating…" card persists across tab switches
+      return json(res, 200, [...images.pendingList(), ...images.listImages()]);
     }
     if (req.method === 'GET' && u.pathname === '/api/image_models') {
       return json(res, 200, await require('./image_client').listModels());
@@ -266,8 +274,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && u.pathname === '/api/images') {
       const b = await body(req);
       if (!b || !b.prompt) return json(res, 400, { error: 'prompt required' });
-      const r = await images.create(b);
-      return json(res, r.ok ? 200 : 400, r.ok ? r.image : { error: r.error });
+      const r = images.start(b);   // returns immediately; generation runs in the background (tracked)
+      return json(res, r.ok ? 200 : 400, r);
     }
     const mImgSave = u.pathname.match(/^\/api\/images\/([\w.-]+)\/save_avatar$/);
     if (req.method === 'POST' && mImgSave) {

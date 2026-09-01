@@ -54,7 +54,7 @@ function resolveBaseModel(OI, override) {
  * duration, an output prefix, and the performance direction. Steps default to 4 (the lightx2v
  * distill's native operating point); frames are capped to the audio so nothing renders padding.
  */
-async function buildTakeGraph({ image, audio, durSec, prefix, prompt, steps = 4, seed = 7 }) {
+async function buildTakeGraph({ image, audio, durSec, prefix, prompt, steps = 4, seed = 7, baseModel = null }) {
   const OI = await objectInfo();
   const graph = {}; let n = 0;
   const node = (cls, inputs) => {
@@ -78,12 +78,12 @@ async function buildTakeGraph({ image, audio, durSec, prefix, prompt, steps = 4,
   // thrashing the pagefile. Prefer the SMALLEST available i2v base (Q3 ≈ 8GB fits; Q4 ≈ 10.6GB tips
   // it into paging). Auto-picks whatever is on disk today (Q4) and upgrades to Q3 the moment it lands
   // — no code change needed. Override with ZOE_WAN_BASE.
-  const baseModel = resolveBaseModel(OI, opts.baseModel || process.env.ZOE_WAN_BASE);
+  const resolvedBase = resolveBaseModel(OI, baseModel || process.env.ZOE_WAN_BASE);
 
   const swap = node('WanVideoBlockSwap', { blocks_to_swap: 20, offload_img_emb: false, offload_txt_emb: false });
   const lora = node('WanVideoLoraSelect', { lora: 'lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors', strength: 1.0, low_mem_load: false, merge_loras: false });
   const mtalk = node('MultiTalkModelLoader', { model: 'Wan2_1-InfiniteTalk_Single_Q8.gguf' });
-  const model = node('WanVideoModelLoader', { model: baseModel, base_precision: 'fp16_fast', quantization: 'disabled', load_device: 'offload_device', attention_mode: 'sdpa', block_swap_args: out(swap), lora: out(lora), multitalk_model: out(mtalk) });
+  const model = node('WanVideoModelLoader', { model: resolvedBase, base_precision: 'fp16_fast', quantization: 'disabled', load_device: 'offload_device', attention_mode: 'sdpa', block_swap_args: out(swap), lora: out(lora), multitalk_model: out(mtalk) });
   const vae = node('WanVideoVAELoader', { model_name: 'Wan2_1_VAE_bf16.safetensors', precision: 'bf16' });
   const clipv = node('CLIPVisionLoader', { clip_name: 'clip_vision_h.safetensors' });
   const img = node('LoadImage', { image });

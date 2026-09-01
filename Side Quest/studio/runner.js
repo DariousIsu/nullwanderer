@@ -68,9 +68,21 @@ function parseScript(script) {
     segs.push({ kind: /b-?roll/i.test(parens) ? 'broll' : 'avatar', text: spoken.trim(), direction: parens || null });
   }
   if (!segs.length) {
-    warnings.push('script format not recognized — treating entire text as one on-camera segment');
+    // No timed house format → split into sentence-sized on-camera segments (short takes cut together),
+    // NEVER one giant render: a 60s single InfiniteTalk take is impractical. Group sentences so each
+    // segment stays roughly a breath long (≤ ~30 words), which also gives natural jump cuts.
     const flat = String(script).replace(/\s+/g, ' ').trim();
-    if (flat) segs.push({ kind: 'avatar', text: flat, direction: null });
+    if (flat) {
+      const sentences = (flat.match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) || [flat]).map(s => s.trim()).filter(Boolean);
+      let cur = '';
+      const flush = () => { if (cur.trim()) { segs.push({ kind: 'avatar', text: cur.trim(), direction: null }); cur = ''; } };
+      for (const s of sentences) {
+        cur = cur ? `${cur} ${s}` : s;
+        if (cur.split(/\s+/).length >= 30) flush();   // ~a breath's worth per take
+      }
+      flush();
+      warnings.push(`no timed script format — split into ${segs.length} short on-camera segment(s)`);
+    }
   }
   return { segments: segs, warnings };
 }

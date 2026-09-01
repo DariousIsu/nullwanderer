@@ -36,6 +36,7 @@
   .card button:hover { border-color:var(--accent); color:var(--tx); }
   .empty { color:var(--tx-dim); padding:40px 10px; text-align:center; }
   #status { font-size:12px; color:var(--warn); min-height:16px; margin-top:8px; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.5;} }
 </style>
 </head>
 <body>
@@ -79,7 +80,10 @@
     <input id="tags" placeholder="e.g. red hair, confident, studio background">
     <label class="fld">Name (optional)</label>
     <input id="name" placeholder="what to call it">
-    <button class="go" id="gen" onclick="generate()">Generate</button>
+    <div class="row" style="gap:8px;">
+      <button class="go" id="gen" onclick="generate()">Generate</button>
+      <button class="go" id="refine" onclick="refineAvatar()" style="border-color:var(--line-strong);color:var(--tx-muted);" title="Composite the selected avatar with the uploaded real images and fold the result back into it">Refine avatar</button>
+    </div>
     <div id="status"></div>
     <div class="hint">1024px SDXL on the GPU — ~30–60s per image. A <b>Persona</b> you like can be saved as an <b>avatar</b>, which then appears in the clip maker's roster to drive videos.<br><br>Reference upload + face-lock (carry a specific face across images) is the next layer; this version is description-driven.</div>
   </div>
@@ -115,6 +119,17 @@ async function generate(){
   btn.disabled=false;
   refresh();
 }
+async function refineAvatar(){
+  const av=document.getElementById('avatar').value; const st=document.getElementById('status');
+  if(av==='__none__'){ st.textContent='Pick an existing avatar to refine.'; return; }
+  if(!collectedRefs.length){ st.textContent='Add at least one real reference photo/clip to composite with.'; return; }
+  st.textContent='Refining — compositing the avatar with your real images…';
+  const prompt=document.getElementById('prompt').value.trim();
+  const r=await fetch('/api/avatars/'+av+'/refine',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({refIds:collectedRefs.map(x=>x.id), prompt: prompt||undefined})}).then(r=>r.json()).catch(e=>({error:String(e)}));
+  st.textContent = r.id ? 'Refining in the background — the result folds back into the avatar.' : ('Failed: '+(r.error||'?'));
+  refresh();
+}
 async function saveAvatar(id){
   const name=prompt('Name this avatar:'); if(name===null) return;
   const r=await fetch('/api/images/'+id+'/save_avatar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})}).then(r=>r.json());
@@ -128,6 +143,18 @@ async function refresh(){
   g.innerHTML = list.length ? '' : '<div class="empty">Nothing generated yet.</div>';
   for(const im of list){
     const d=document.createElement('div'); d.className='card';
+    if(im.pending){
+      const err=im.status==='error';
+      d.innerHTML=`<div style="width:100%;aspect-ratio:3/4;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:var(--panel);${err?'':'animation:pulse 1.6s infinite;'}">
+          <div style="font-size:22px;">${err?'⚠':'⏳'}</div>
+          <div style="font-size:12px;color:${err?'var(--warn)':'var(--tx-muted)'};text-align:center;padding:0 10px;">${err?'failed':'generating…'}</div>
+        </div>
+        <div class="meta"><div class="k">${im.kind} · ${err?'error':'in progress'}</div>
+          <div class="n">${esc(im.name)}</div>
+          ${err?`<div class="hint" style="font-size:10px;">${esc((im.error||'').slice(0,90))}</div>`:''}
+          <div class="row"><button onclick="del('${im.id}')">${err?'dismiss':'cancel card'}</button></div></div>`;
+      g.appendChild(d); continue;
+    }
     d.innerHTML=`<img src="/file?path=${encodeURIComponent(im.file)}" style="cursor:zoom-in;" onclick="enlarge('${encodeURIComponent(im.file)}')">
       <div class="meta"><div class="k">${im.kind}${im.identityLocked?' · 🔒 locked':''}${im.savedAvatarId?' · ★ avatar':''}</div>
         <div class="n">${esc(im.name)}</div>

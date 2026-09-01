@@ -47,6 +47,12 @@ const SCAFFOLD = {
 };
 const ASPECT = { persona: 'portrait', scenery: 'landscape', scene: 'vertical' };
 
+// In-flight generations, tracked server-side so the gallery shows a persistent "generating…" card that
+// survives leaving/returning the tab (the GPU keeps working; the UI state used to live only in the page).
+const _pending = new Map();
+function pendingList() { return [..._pending.values()].sort((a, b) => b.createdAt - a.createdAt); }
+function dismissPending(id) { return _pending.delete(id); }
+
 function listImages() {
   try {
     return fs.readdirSync(IMG_DIR)
@@ -61,18 +67,29 @@ function readImage(id) {
 }
 
 /*
- * create({ kind, prompt, negative?, aspect?, tags?, name? }) → { ok, image } | { ok:false, error }
- * Generates one image and files it. Does NOT auto-register as an avatar — that's an explicit save step.
+ * start({ kind, prompt, ... }) → { ok, id, status:'generating' } IMMEDIATELY. The generation runs in the
+ * background; a pending entry stays in the gallery (pendingList) until it finishes or errors, so switching
+ * away from the tab and back still shows it working. Never a synchronous block on the request.
  */
-async function create(opts) {
-  try {
-    const o = opts || {};
-    const kind = ['persona', 'scenery', 'scene'].includes(o.kind) ? o.kind : 'persona';
-    const base = String(o.prompt || '').trim();
-    if (!base) return { ok: false, error: 'a description is required' };
+function start(opts) {
+  const o = opts || {};
+  const kind = ['persona', 'scenery', 'scene'].includes(o.kind) ? o.kind : 'persona';
+  const base = String(o.prompt || '').trim();
+  if (!base) return { ok: false, error: 'a description is required' };
+  const id = `img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  _pending.set(id, { id, kind, name: o.name || `${kind}…`, prompt: base, pending: true, status: 'generating', createdAt: Date.now() });
+  create(id, o, kind, base)
+    .then(() => { _pending.delete(id); })
+    .catch((e) => { const p = _pending.get(id); if (p) { p.status = 'error'; p.error = String(e && e.message || e); } });
+  return { ok: true, id, status: 'generating' };
+}
+
+// the actual generation (runs in the background from start()); throws on failure so start() marks it errored
+async function create(id, opts, kind, base) {
+  {
+    const o = opts;
     const tags = Array.isArray(o.tags) ? o.tags.filter(Boolean).join(', ') : (o.tags || '');
     const fullPrompt = SCAFFOLD[kind]([base, tags].filter(Boolean).join(', '));
-    const id = `img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const dir = path.join(IMG_DIR, id);
     fs.mkdirSync(dir, { recursive: true });
 
@@ -87,7 +104,7 @@ async function create(opts) {
       tier: o.tier === 'lower' ? 'lower' : 'upper', checkpoint: o.checkpoint || null,
       timeoutMs: o.timeoutMs || 300000,
     });
-    if (!gen.ok) { fs.rmSync(dir, { recursive: true, force: true }); return gen; }
+    if (!gen.ok) { fs.rmSync(dir, { recursive: true, force: true }); throw new Error(gen.error || 'generation failed'); }
     const dst = path.join(dir, 'image.png');
     fs.copyFileSync(gen.file, dst);
     const meta = {
@@ -99,8 +116,8 @@ async function create(opts) {
       tier: o.tier === 'lower' ? 'lower' : 'upper',
     };
     fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta, null, 2));
-    return { ok: true, image: meta };
-  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+    return meta;
+  }
 }
 
 /*
@@ -134,8 +151,35 @@ function saveAsAvatar(imageId, name) {
 }
 
 function remove(id) {
+  if (dismissPending(id)) return { ok: true };   // dismiss an in-flight / errored pending card
   try { fs.rmSync(path.join(IMG_DIR, id), { recursive: true, force: true }); return { ok: true }; }
   catch (e) { return { ok: false, error: String(e.message || e) }; }
 }
 
-module.exports = { create, listImages, readImage, saveAsAvatar, remove, IMG_DIR };
+/*
+ * startRefine(avatarId, { refIds, prompt, ipWeight }) — REFINE an existing avatar by compositing it with
+ * more REAL images. Generates a portrait conditioned on the avatar's whole set PLUS the uploaded real
+ * references (IPAdapter, high identity weight), then folds the result back into the avatar (addSource) so
+ * its identity set is permanently strengthened. Async + pending-tracked like start(). Zero cloud.
+ */
+function startRefine(avatarId, opts) {
+  const p = cloner.readPersona(avatarId);
+  if (!p) return { ok: false, error: 'no such avatar' };
+  const id = `refine_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  _pending.set(id, { id, kind: 'refine', name: `refining ${p.name}`, prompt: 'compositing with real photos', pending: true, status: 'generating', createdAt: Date.now() });
+  _refine(id, avatarId, opts || {})
+    .then(() => { _pending.delete(id); })
+    .catch((e) => { const q = _pending.get(id); if (q) { q.status = 'error'; q.error = String(e && e.message || e); } });
+  return { ok: true, id, status: 'generating' };
+}
+async function _refine(id, avatarId, o) {
+  const base = String(o.prompt || 'the same person, natural expression, photorealistic, natural skin texture').trim();
+  // create() combines avatarRefs(avatarId) + uploaded refIds into the IPAdapter conditioning
+  const meta = await create(id, { ...o, avatarId, kind: 'persona', ipWeight: o.ipWeight || 0.9 }, 'persona', base);
+  // fold the refined result back into the avatar → future images AND video takes inherit the improvement
+  try { await cloner.addSource(avatarId, meta.file); } catch { /* non-fatal: the gallery image still stands */ }
+  try { meta.refinedAvatarId = avatarId; fs.writeFileSync(path.join(IMG_DIR, id, 'meta.json'), JSON.stringify(meta, null, 2)); } catch {}
+  return meta;
+}
+
+module.exports = { start, startRefine, create, listImages, pendingList, dismissPending, readImage, saveAsAvatar, remove, avatarRefs, IMG_DIR };
