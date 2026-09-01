@@ -316,6 +316,9 @@ let workspaceWindow = null;
 // onto every webview so embedded surfaces (the Editor) get window.sq.* untouched.
 function createWorkspaceWindow() {
   if (workspaceWindow && !workspaceWindow.isDestroyed()) { workspaceWindow.focus(); return workspaceWindow; }
+  // Ensure the Clip/Image Studio server (:8790) is up — the "Clip Studio" / "Image Studio" surfaces are
+  // webviews that load it. Adopt-or-spawn, fail-soft, idempotent (studio/studio_supervisor.js).
+  try { require('./studio/studio_supervisor').ensure(); } catch (e) { console.error('[main] studio supervisor:', e.message); }
   const windowState = require('./lib/window_state');
   workspaceWindow = new BrowserWindow({
     ...windowState.options('workspace', { width: 1280, height: 860 }),
@@ -5400,6 +5403,10 @@ try {
     // passes ride this tick DARK — due-gated (30 min), idle-gated, sequential, below-normal priority,
     // mode=ro reads only. Manifests land in data/affect/; nothing consumes them yet.
     try { require('./lib/affect_tissues').maybeRun({ deps: { lastUserTurnTs } }); } catch {}
+    // NEEDS CARD, UN-HITCHED (Lucas 09-01): the daily consolidated card only aired when an
+    // external-class triage happened to run — proposed cards waited on triage luck. The tick now
+    // owns the cadence (the 24h gate lives inside; a no-op costs a few meta reads).
+    try { _surfaceExternalNeeds(Date.now()); } catch {}
   }, 10 * 60 * 1000);
   if (_dbhTick.unref) _dbhTick.unref();
   // AMBIENT SCREEN BEAT (senses §2): titles-only sample every 120s → code-computed deltas → one
@@ -9748,6 +9755,30 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let capabilityProposalBlock = null;
   if (idleSinceLastTurn > RETURN_IDLE_MS && !socialTurn) {
     try { capabilityProposalBlock = gapsLib.buildReturnProposalBlock(userName); } catch (e) { console.error('[main] gap proposal failed:', e.message); }
+    // AWAITING-HIS-WORD ON RETURN (Lucas 09-01: "there is nowhere that a card comes through — if
+    // she has been looking for authorization we need to make that more obvious"): the needs cards
+    // aired ONCE in scrolling chat (daily at most, weekly re-air per card) and only when an
+    // external triage happened to run — miss the moment and the ask was invisible. Now every
+    // return-after-a-gap NAMES what waits on him, in her own reply, paced 6h so a busy evening
+    // isn't nagged. The full card still airs through _surfaceExternalNeeds.
+    try {
+      const _awNow = Date.now();
+      if (_awNow - (parseInt(db.getMeta('needs.return_aired_at') || '0', 10) || 0) > 6 * 3600e3) {
+        const _blocked = db.getDb().prepare("SELECT id, need FROM capability_needs WHERE status = 'blocked_external' ORDER BY updated_ts DESC LIMIT 4").all();
+        const _prop = db.getDb().prepare("SELECT id, need FROM capability_needs WHERE status = 'proposed' ORDER BY updated_ts DESC LIMIT 5").all();
+        if (_blocked.length || _prop.length) {
+          const _vd = (id) => { try { return require('./lib/capability_need').getVerdict(id); } catch { return null; } };
+          const lines = [
+            ..._blocked.map((r) => `• BLOCKED ON HIM — need #${r.id}: ${String(r.need).replace(/\s+/g, ' ').slice(0, 110)}`),
+            ..._prop.map((r) => { const v = _vd(r.id); return `• proposed #${r.id}${v ? (v.v === 'verified' ? ' (✓ verified)' : ' (⚠ rejected — never build from it)') : ''}: ${String(r.need).replace(/\s+/g, ' ').slice(0, 110)}`; }),
+          ];
+          const aw = `AWAITING HIS WORD (${lines.length} item${lines.length === 1 ? '' : 's'}) — he said these asks were invisible to him, so NAME them briefly and naturally near the top of your reply (one or two plain lines — what's waiting and that he can say "show me the cards" for detail; never a wall):\n${lines.join('\n')}`;
+          capabilityProposalBlock = capabilityProposalBlock ? `${capabilityProposalBlock}\n\n${aw}` : aw;
+          db.setMeta('needs.return_aired_at', String(_awNow));
+          console.log(`[needs] return-air: ${lines.length} item(s) awaiting his word ride this reply`);
+        }
+      }
+    } catch (e) { console.error('[needs] return-air failed:', e.message); }
   }
 
   // ── SINGLE-DISPATCH TURN ROUTER (turn→object-graph Phase A) ──────────────────────────────────────
@@ -19721,8 +19752,10 @@ function _surfaceExternalNeeds(now = Date.now()) {
     if (now - (parseInt(db.getMeta('needs.external_surfaced_at') || '0', 10) || 0) < 24 * 3600e3) return;
     const rows = db.getDb().prepare("SELECT id, need FROM capability_needs WHERE status = 'blocked_external' ORDER BY updated_ts DESC LIMIT 6").all()
       .map((r) => ({ ...r, ask: (() => { try { return db.getMeta(`need.${r.id}.ask`) || ''; } catch { return ''; } })() }));
+    // Re-air dropped 7d → 48h (Lucas 09-01: the cards were invisible — a week between airings on a
+    // scrolling surface is a black hole; the return-air block above is the always-on companion).
     const proposed = db.getDb().prepare("SELECT id, need, diagnosis FROM capability_needs WHERE status = 'proposed' ORDER BY updated_ts DESC LIMIT 4").all()
-      .filter((r) => now - (parseInt(db.getMeta(`need.${r.id}.proposed_surfaced_at`) || '0', 10) || 0) >= 7 * 24 * 3600e3);
+      .filter((r) => now - (parseInt(db.getMeta(`need.${r.id}.proposed_surfaced_at`) || '0', 10) || 0) >= 48 * 3600e3);
     if (!rows.length && !proposed.length) return;
     let msg = rows.length ? require('./lib/need_triage').renderExternalAsk(rows) : '';
     if (proposed.length) {

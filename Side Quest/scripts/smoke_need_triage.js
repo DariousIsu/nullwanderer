@@ -120,6 +120,16 @@ ok(nt.renderExternalAsk([]) === '' && nt.renderExternalAsk(null) === '', 'nothin
   // M2.5.6: the reaper runs in the tick and its result excludes those needs from this pick
   ok(/nt\.staleReap\(\{ needs, nowMs: now \}\)/.test(m) && /reaped \$\{stale\.size\} stale need/.test(m), 'the stale-need reaper runs in the pressure tick and parks past-age needs');
   ok(/openNeeds = needs\.filter\(\(n\) => !stale\.has\(n\.id\)\)/.test(m) && /needs: openNeeds/.test(m), 'a just-reaped need is excluded from this tick\'s pressure pick');
+
+  // ── THE INVISIBLE-CARD CURE (Lucas 09-01: "there is nowhere that a card comes through — make it
+  // more obvious"): the consolidated card aired only when an EXTERNAL triage happened to run, once
+  // daily, weekly re-air per card, on a scrolling surface. Three rails now pinned:
+  ok(/NEEDS CARD, UN-HITCHED/.test(m) && /try \{ _surfaceExternalNeeds\(Date\.now\(\)\); \} catch \{\}/.test(m),
+    '⭐ the daily card rides the 10-min tick (never again hostage to triage luck)');
+  ok(/>= 48 \* 3600e3/.test(m) && !/>= 7 \* 24 \* 3600e3/.test(m), 'proposed cards re-air at 48h, not weekly');
+  ok(/AWAITING HIS WORD/.test(m) && /needs\.return_aired_at/.test(m) && /BLOCKED ON HIM/.test(m),
+    '⭐ return-after-a-gap NAMES what waits on him in her own reply (paced 6h; verdicts ride the line)');
+  ok(/rejected — never build from it/.test(m), 'the return-air line carries the verdict channel (a rejected diagnosis can never read as a clean ask)');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
