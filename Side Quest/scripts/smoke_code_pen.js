@@ -91,6 +91,25 @@ ok(pen.get(p2.id).status === 'applied' && /green/.test(pen.get(p2.id).gate_note)
   ok(/approval card/.test(pen.buildPromptBlock()) && /REVERTS on red/.test(pen.buildPromptBlock()) && /never land code yourself/i.test(pen.buildPromptBlock()), 'the prompt block teaches the constitution: propose, his card, the gate');
 }
 
+// ── ⭐ v1.1 THE PEN-WORK LANE (the first-hour finding: his "make the voice mute" edit order had
+// NO lane — clarify noise on the AZ research run while the pen sat dark) ──
+ok(pen.isEditIntent({ intent: 'edit:voice mute', confidence: 0.92 }) === true, '⭐ a confident edit verdict routes to pen work');
+ok(pen.isEditIntent({ intent: 'fix the reaper', confidence: 0.8 }) === true, 'fix/change/modify/implement verbs route too');
+ok(pen.isEditIntent({ intent: 'deliver:list', confidence: 0.99 }) === false, 'a deliver verdict never routes to the pen (the road owns it)');
+ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confidence never seeds work');
+{
+  const s1 = pen.seedPenWork({ ask: 'make the voice mute when I say I am in a meeting' });
+  ok(s1.ok === true && !s1.reused && pen.workQueue().includes(s1.id), '⭐ an edit order seeds a pen-work thread onto the drive queue');
+  const s2 = pen.seedPenWork({ ask: 'make the voice mute when I say I am in a meeting' });
+  ok(s2.ok === true && s2.reused === true && s2.id === s1.id, 'the same ask re-said REUSES the thread (churn guard) — one commitment, one row');
+  const st0 = pen.penState(s1.id);
+  ok(st0.passes === 0 && st0.proposalId === null, 'born with clean pen state');
+  pen.setPenState(s1.id, { passes: 2, proposalId: 7 });
+  ok(pen.penState(s1.id).passes === 2 && pen.penState(s1.id).proposalId === 7, 'pen state round-trips');
+  pen.dropFromQueue(s1.id);
+  ok(!pen.workQueue().includes(s1.id), 'dropFromQueue releases the slot');
+}
+
 // ── wiring pins (grep-scope only — presence of the seams in main.js/renderer) ──
 {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
@@ -100,6 +119,10 @@ ok(pen.get(p2.id).status === 'applied' && /green/.test(pen.get(p2.id).gate_note)
   ok(/const penBlock = require\('\.\/lib\/code_pen'\)\.buildPromptBlock\(\)/.test(main) && /penLib\.stripTags/.test(main), 'wiring: the pen block rides her prompt; leaked tags are stripped from thought AND say');
   const chat = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'chat.js'), 'utf8');
   ok(/pen-/.test(chat) && /code change/.test(chat), 'wiring: the card bar renders pen cards with string ids');
+  ok(/isEditIntent\(_pv\)/.test(main) && /seedPenWork\(/.test(main), '⭐ v1.1 wiring: the order backstop routes edit intents to pen work BEFORE the road');
+  ok(/kind === 'pen'\) return runPenWorkPass/.test(main), 'v1.1 wiring: the dispatcher routes pen threads to the pen pass');
+  ok(/code_pen'\)\.workQueue\(\)\) backgroundWorkerPass/.test(main), 'v1.1 wiring: the worker loop drives the pen queue even during his directed work');
+  ok(/MAX_PEN_PASSES/.test(main) && /gate-failed' && !st\.redrove/.test(main), 'v1.1 wiring: pass cap = honest stall; one re-drive on a gate failure, never a grind');
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);

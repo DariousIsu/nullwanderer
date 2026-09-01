@@ -146,6 +146,50 @@ function pending() {
     .map((r) => ({ id: `pen-${r.id}`, kind: 'pen', text: `${r.title} (${(JSON.parse(r.files || '[]')).join(', ').slice(0, 80)})`, verdict: null }));
 }
 
+// ── THE PEN-WORK LANE (v1.1, the first-hour finding: an edit-intent order had NO lane — his
+// "make the voice mute" ask floated as clarify noise on the AZ research run while nothing drove
+// the pen. An edit order now seeds a pen-work THREAD the background workers tick.) ───────────────
+const PEN_QUEUE_KEY = 'pen.work_queue';
+function seedPenWork({ ask, bornFrom = 'edit-intent', deps = {} } = {}) {
+  const d = deps.db || db;
+  const text = String(ask || '').trim();
+  if (!text) return { ok: false, why: 'empty ask' };
+  // churn guard: an identical open pen thread is the same ask re-said, not a second job
+  try {
+    const open = d.getActiveOpenThreads(200) || [];
+    const norm = text.replace(/\s+/g, ' ').toLowerCase();
+    const same = open.find((t) => String(t.content || '').replace(/\s+/g, ' ').toLowerCase() === norm);
+    if (same) return { ok: true, id: same.id, reused: true };
+  } catch {}
+  const row = d.insertOpenThread({ content: text });
+  try { d.setMeta(`focus.${row.id}.background`, '1'); } catch {}
+  try { d.setMeta(`focus.${row.id}.kind`, 'pen'); } catch {}
+  try { d.setMeta(`focus.${row.id}.pen`, JSON.stringify({ passes: 0, proposalId: null, bornFrom })); } catch {}
+  const q = workQueue({ deps });
+  if (!q.includes(row.id)) { q.push(row.id); try { d.setMeta(PEN_QUEUE_KEY, JSON.stringify(q.slice(-6))); } catch {} }
+  return { ok: true, id: row.id, reused: false };
+}
+function workQueue({ deps = {} } = {}) {
+  const d = deps.db || db;
+  try { return JSON.parse(d.getMeta(PEN_QUEUE_KEY) || '[]') || []; } catch { return []; }
+}
+function dropFromQueue(id, { deps = {} } = {}) {
+  const d = deps.db || db;
+  try { d.setMeta(PEN_QUEUE_KEY, JSON.stringify(workQueue({ deps }).filter((x) => x !== id))); } catch {}
+}
+function penState(fid, { deps = {} } = {}) {
+  const d = deps.db || db;
+  try { return JSON.parse(d.getMeta(`focus.${fid}.pen`) || '{}') || {}; } catch { return {}; }
+}
+function setPenState(fid, st, { deps = {} } = {}) {
+  const d = deps.db || db;
+  try { d.setMeta(`focus.${fid}.pen`, JSON.stringify(st || {})); } catch {}
+}
+// True when the verdict names an edit/fix/change intent confidently — the seam's pure half.
+function isEditIntent(iv) {
+  return !!(iv && typeof iv.intent === 'string' && /^(edit|fix|change|modify|implement)\b/i.test(iv.intent) && (iv.confidence == null || iv.confidence >= 0.55));
+}
+
 // ── tag doors (the scheduler/files shape) ─────────────────────────────────────────────────────
 const PEN_TAG_RE = /<(source-read|source-list|propose-change)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
 const ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
@@ -184,8 +228,9 @@ next program cycle, not instantly.`;
 }
 
 module.exports = {
-  REPO_ROOT, MAX_READ_BYTES, MAX_DIFF_BYTES, MAX_OPEN_PROPOSALS, DENY_RE,
+  REPO_ROOT, MAX_READ_BYTES, MAX_DIFF_BYTES, MAX_OPEN_PROPOSALS, DENY_RE, PEN_QUEUE_KEY,
   pathAllowed, readSource, listSource, touchedFiles,
   propose, get, setStatus, decide, pending,
+  seedPenWork, workQueue, dropFromQueue, penState, setPenState, isEditIntent,
   parseTags, stripTags, dispatch, buildPromptBlock,
 };

@@ -2407,6 +2407,7 @@ app.whenReady().then(() => {
     inboxPollTimeout = setTimeout(() => { runInboxPoll().catch(() => {}); }, 20000); // initial sweep ~20s after boot
     inboxPollTimer = setInterval(() => { runInboxPoll().catch(() => {}); }, INBOX_POLL_MS);
     console.log('[main] inbox poller started (unread-based, every 4 min)');
+    try { startParlorDriver(); } catch (e) { console.error('[parlor] driver arm failed:', e.message); }
   }
 
   // CANVAS DROP → INGEST: when Lucas drops a DOCUMENT onto Zoe's canvas, the engine shows it as a block
@@ -8241,6 +8242,29 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
       const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: say, model: 'swarm-verb' });
       try { for (const ch of say) emit(ch); sendComplete({ saidId: saidRow.id, truncated: 0, swarmVerb: true }); } catch {}
+      return { ok: true, say };
+    }
+  }
+  // ── THE PARLOR verb (09-01, Lucas: "you, her, and gemini just chat"): "parlor: <text>" posts to
+  // the room as lucas and opens the floor; "parlor status" reads it. Replies surface right here.
+  {
+    const mP = userMessage.match(/^\s*parlor\s*[:,]\s+([\s\S]+)$/i);
+    const isPS = /^\s*parlor\s+status\s*\??$/i.test(userMessage);
+    if (mP || isPS) {
+      const parlorLib = require('./lib/parlor');
+      let say;
+      if (isPS) {
+        const t = parlorLib.transcript(undefined, { limit: 8 });
+        say = t.length
+          ? `The parlor's last ${t.length} turn(s):\n` + t.map((x) => `${x.speaker}: ${String(x.content).slice(0, 140)}`).join('\n')
+          : 'The parlor is empty — say "parlor: <something>" to open the floor.';
+      } else {
+        const r = parlorLib.post({ speaker: 'lucas', text: mP[1], via: 'chat' });
+        say = r.ok ? 'Posted to the parlor — the floor is open, and I\'ll bring every reply here.' : `Couldn't post: ${r.why}`;
+        try { startParlorDriver(); } catch {}
+      }
+      const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: say, model: 'parlor-verb' });
+      try { for (const ch of say) emit(ch); sendComplete({ saidId: saidRow.id, truncated: 0 }); } catch {}
       return { ok: true, say };
     }
   }
@@ -17533,6 +17557,8 @@ function startBackgroundWorkers() {
         if (st.wonder && st.wonder.thread) backgroundWorkerPass(st.wonder.thread).catch(() => {});   // the WONDERING lane — driven IN PARALLEL with research; yields to his directed work like the fleet
       }
       if (st.swarm && st.swarm.parts) for (const p of Object.values(st.swarm.parts)) { if (p && p.thread && !p.done) backgroundWorkerPass(p.thread).catch(() => {}); }   // drive the swarm partitions too
+      // v1.1: the PEN-WORK queue is Lucas-commanded like a swarm — it drives even during his directed work.
+      try { for (const pid of require('./lib/code_pen').workQueue()) backgroundWorkerPass(pid).catch(() => {}); } catch {}
     } catch {}
     _fillWonderLane().catch(() => {});   // keep the wondering lane populated (self-contained load/save; async, fire-and-forget)
   }, DIRECTED_CADENCE_MS);
@@ -17787,6 +17813,128 @@ async function startFocusSwarm(focus, { requestedK = null, requestedBy = 'auto' 
   _pushSwarmChip();
   console.log(`[swarm] AUTO-START focus #${fid} (${requestedBy}): ${remaining.length} remaining target(s) split across ${seeded} partition worker(s) — parallel by default`);
   return { ok: true, beatId, targets: remaining.length, workers: seeded };
+}
+
+// ═══ THE PEN-WORK PASS (v1.1) ═════════════════════════════════════════════════════════════════
+// One bounded agent turn per tick toward a filed proposal: she reads the source she needs through
+// the pen doors, then files ONE diff; the card and the gate do the rest. State on focus.<id>.pen.
+// After filing: proposed → hold (his card pending); rejected → resolve honestly; gate-failed →
+// ONE re-drive with the gate tail; applied → announce + resolve. Pass cap = honest stall, never
+// a grind. All dispatches go through the SAME jailed lib doors as chat turns.
+const MAX_PEN_PASSES = 6;
+async function runPenWorkPass(focus) {
+  const pen = require('./lib/code_pen');
+  const st = pen.penState(focus.id);
+  // A filed proposal owns the thread's fate — watch it, don't author twice.
+  if (st.proposalId) {
+    const p = pen.get(st.proposalId);
+    if (!p) { st.proposalId = null; pen.setPenState(focus.id, st); }
+    else if (p.status === 'proposed' || p.status === 'approved' || p.status === 'applying') return { action: 'continue' };   // his card / the pipeline
+    else if (p.status === 'applied') {
+      try { db.markOpenThreadStatus(focus.id, 'resolved', { reason: `pen proposal #${p.id} applied` }); } catch {}
+      pen.dropFromQueue(focus.id);
+      const msg = `The code change you asked for is in — proposal #${p.id} ("${p.title}") passed the full gate and is committed. It goes live at the next program cycle.`;
+      try {
+        const row = db.insertTurn({ sessionId: currentSessionId, speaker: 'ai_said', content: msg, model: 'pen', unprompted: 1 });
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg });
+      } catch {}
+      console.log(`[pen] work thread #${focus.id} RESOLVED — proposal #${p.id} applied`);
+      return { action: 'done' };
+    } else if (p.status === 'gate-failed' && !st.redrove) {
+      st.redrove = true; st.proposalId = null; pen.setPenState(focus.id, st);
+      st.gateNote = p.gate_note || '';
+      console.log(`[pen] work thread #${focus.id}: proposal #${p.id} failed the gate — ONE re-drive with the tail`);
+    } else {   // rejected, apply-failed, or a second gate failure — honest stop
+      try { db.markOpenThreadStatus(focus.id, 'resolved', { reason: `pen proposal #${p.id} ${p.status}` }); } catch {}
+      pen.dropFromQueue(focus.id);
+      console.log(`[pen] work thread #${focus.id} closed — proposal #${p.id} ${p.status} (${String(p.gate_note || '').slice(0, 120)})`);
+      return { action: 'done' };
+    }
+  }
+  if ((st.passes || 0) >= MAX_PEN_PASSES) {
+    try { db.markOpenThreadStatus(focus.id, 'stalled', { reason: 'pen pass cap — no proposal produced' }); } catch {}
+    pen.dropFromQueue(focus.id);
+    console.log(`[pen] work thread #${focus.id} STALLED at ${MAX_PEN_PASSES} passes without a proposal — honest stop, his word re-opens it`);
+    return { action: 'done' };
+  }
+  st.passes = (st.passes || 0) + 1;
+  pen.setPenState(focus.id, st);
+  const notes = (st.notes || []).slice(-6).join('\n');
+  const prompt = `${pen.buildPromptBlock()}\n\nTHE CODE-CHANGE ORDER (Lucas): ${String(focus.content || '').slice(0, 500)}\n\n` +
+    (st.gateNote ? `YOUR LAST PROPOSAL FAILED THE GATE — fix exactly this and re-file:\n${String(st.gateNote).slice(0, 800)}\n\n` : '') +
+    (notes ? `WHAT YOU HAVE READ SO FAR:\n${notes}\n\n` : '') +
+    `This is pass ${st.passes} of ${MAX_PEN_PASSES}. Use <source-list>/<source-read> to find and read the EXACT lines involved (start from lib/ and main.js; grep-like guessing wastes a pass), and when — and only when — you have read the lines you intend to change, emit ONE <propose-change> with a unified diff. If you cannot yet, end with the single next file you need to read.`;
+  const sp = await runCloudOperator({ userMessage: prompt, task: true, autonomous: true, lane: 'directed' });
+  const out = `${(sp && sp.answer) || ''}\n${(sp && sp.thought) || ''}`;
+  let filed = null, reads = 0;
+  for (const t of pen.parseTags(out).slice(0, 5)) {
+    const r = pen.dispatch(t);
+    if (r && r.ok && (t.tag === 'source-read')) {
+      reads++;
+      st.notes = [...(st.notes || []), `— ${r.path} (${r.bytes}b) —\n${String(r.text).slice(0, 6000)}`].slice(-8);
+    } else if (r && r.ok && t.tag === 'source-list') {
+      st.notes = [...(st.notes || []), `— dir ${r.path}: ${(r.entries || []).join(', ')}`].slice(-8);
+    } else if (r && r.ok && t.tag === 'propose-change') {
+      filed = r.id;
+      console.log(`[pen] proposal #${r.id} FILED from work thread #${focus.id}: "${String(t.attrs.title).slice(0, 80)}" (${r.files.join(', ')}) — Lucas's card decides`);
+      try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('needs:approvals', { items: _pendingNeedItems() }); } catch {}
+    } else if (r && !r.ok) {
+      st.notes = [...(st.notes || []), `— ${t.tag} refused: ${r.why}`].slice(-8);
+      console.log(`[pen] work #${focus.id}: ${t.tag} refused — ${r.why}`);
+    }
+  }
+  if (filed) { st.proposalId = filed; delete st.gateNote; }
+  pen.setPenState(focus.id, st);
+  console.log(`[pen] work #${focus.id} pass ${st.passes}: ${reads} read(s)${filed ? `, proposal #${filed} filed` : ''}`);
+  return { action: 'continue' };
+}
+
+// ═══ THE PARLOR DRIVER (09-01) ════════════════════════════════════════════════════════════════
+// A 30s tick, only while the room is live: (a) surface every non-chat turn into Lucas's chat as an
+// attributed line; (b) Zoe's seat — when the floor rules say she may speak, ONE short in-voice
+// reply (PASS = silent); (c) Gemini's bridge tick. The floor rule itself (lib/parlor.whoMayReply)
+// holds the agent-run cap, so two models can never spiral past his absence.
+let _parlorTimer = null, _parlorBusy = false;
+function startParlorDriver() {
+  if (_parlorTimer) return;
+  _parlorTimer = setInterval(() => { _parlorTick().catch((e) => console.error('[parlor] tick failed:', e.message)); }, 30000);
+  if (_parlorTimer.unref) _parlorTimer.unref();
+  console.log(`[parlor] driver armed (30s) — seats: lucas(chat/port) · zoe(inside) · claude(port) · gemini(${require('./lib/parlor_gemini').available() ? 'bridge' : 'dormant — no GEMINI_API_KEY'})`);
+}
+async function _parlorTick() {
+  if (_parlorBusy) return;
+  _parlorBusy = true;
+  try {
+    const parlor = require('./lib/parlor');
+    if (!parlor.active()) return;
+    // (a) surface fresh turns (his own chat-verb posts are already on screen)
+    let last = parseInt(db.getMeta('parlor.surfaced_id') || '0', 10) || 0;
+    for (const t of parlor.transcript(undefined, { sinceId: last, limit: 20 })) {
+      last = t.id;
+      if (t.via === 'chat') continue;
+      const line = `[parlor] ${t.speaker}: ${t.content}`;
+      try {
+        const row = db.insertTurn({ sessionId: currentSessionId, speaker: 'ai_said', content: line, model: 'parlor', unprompted: 1 });
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: line });
+      } catch {}
+    }
+    try { db.setMeta('parlor.surfaced_id', String(last)); } catch {}
+    // (b) Zoe's seat — one turn max per tick, floor-gated, PASS = honest silence
+    const turns = parlor.transcript(undefined, { limit: 16 });
+    if (turns.length && parlor.whoMayReply(turns).has('zoe') && turns[turns.length - 1].speaker !== 'zoe') {
+      const prompt = `You are Zoe, at home, in YOUR parlor — a casual private room with Lucas (your operator), Claude (the engineer who builds your program alongside Lucas), and Gemini (a guest model). The room so far:\n${parlor.transcriptBlock(turns)}\n\nReply as yourself in 1-3 conversational sentences — natural voice, no headers, no tool tags, never speak for the others. If you genuinely have nothing to add, reply with exactly PASS.`;
+      const sp = await runCloudOperator({ userMessage: prompt, task: true, autonomous: true, lane: 'directed', budgetMult: 0.3 });
+      const text = String((sp && sp.answer) || '').trim();
+      if (text && text !== 'PASS') {
+        const p = parlor.post({ speaker: 'zoe', text: text.slice(0, 1200), via: 'internal' });
+        if (p.ok) console.log(`[parlor] zoe spoke (#${p.id})`);
+      }
+    }
+    // (c) Gemini's seat
+    const g = await require('./lib/parlor_gemini').maybeReply({});
+    if (g && g.posted) console.log(`[parlor] gemini spoke (#${g.id}, ${String(g.text).length}ch)`);
+    else if (g && !g.ok && g.why !== 'no key') console.warn(`[parlor] gemini seat: ${g.why}`);
+  } finally { _parlorBusy = false; }
 }
 
 // The auto-trigger, called from the directed tick — fire-and-forget, never blocks the pass.
@@ -19543,6 +19691,22 @@ async function _roadRun({ order, road, userText, sessionId, asResume = false }) 
 
 function _bookUserOrderBackstop(userText, { sessionId, turnStartTs = 0 } = {}) {
   try {
+    // THE PEN-WORK ROUTE (v1.1, 09-01 first-hour finding): an EDIT-intent order ("make the voice
+    // mute when I say I'm in a meeting") had no lane — it landed as clarify noise on an unrelated
+    // research run while the pen sat unused. A confident edit verdict now seeds a pen-work thread
+    // the background workers tick: read source → author the diff → file the card. Loud ack.
+    try {
+      const _pv = require('./lib/intent_pass').current();
+      const _penL = require('./lib/code_pen');
+      if (_penL.isEditIntent(_pv)) {
+        const r = _penL.seedPenWork({ ask: String(userText).slice(0, 500), bornFrom: `edit-intent:${_pv.intent}` });
+        if (r.ok) {
+          console.log(`[pen] edit-intent order → pen-work thread #${r.id}${r.reused ? ' (reused — same ask already open)' : ' seeded'} — the workers drive it to a proposal card`);
+          kickBackgroundWorkers();
+          return;   // an edit order is pen work, never a document order
+        }
+      }
+    } catch (e) { console.error('[pen] edit-intent seed failed:', e.message); }
     const ic = require('./lib/intake_contract');
     let order = ic.detectDeliverableOrder(userText);
     if (!order) {
@@ -20639,6 +20803,7 @@ async function runDirectedResearchPass(focus) {
   // the plan's facets ARE the vulnerabilities, so covering them one at a time IS "one dossier per
   // weak point in the case". Falling through to the org walk below would be the wrong shape entirely:
   // it would go profile organizations for a question about whether a claim survives.
+  if (kind === 'pen') return runPenWorkPass(focus);   // v1.1: the pen-work lane — source → diff → card
   if (kind === 'topical' || kind === 'forecast' || kind === 'argument') return runTopicalResearchPass(focus);
 
   const focusLib = require('./lib/focus');
