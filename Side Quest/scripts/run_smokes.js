@@ -22,6 +22,7 @@ const dir = __dirname;
 const smokes = [
   'smoke_manifest.js',
   'smoke_video_tools.js',
+  'smoke_report_graphics.js',   // report-graphics door: deterministic charts/maps/orgcharts/schematics; anti-fabrication guards (offline)
   'smoke_fallthrough.js',
   'smoke_media_cc.js',
   'smoke_teams.js',

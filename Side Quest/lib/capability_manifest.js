@@ -29,6 +29,8 @@ const _PROBES = [
   { name: 'Echo research suite', probe: () => { const es = require('./echo_suit'); return !!(es && es.createSuit); }, detail: 'hundreds of grounded data/research tools (LegiScan, FEC, census, courts, news, agents you can delegate to) via your Echo connection' },
   { name: 'talking-head video', probe: () => require('./talking_head').available(), detail: 'render YOUR photoreal avatar (data/avatars/zoe_ref.jpg) speaking a voice WAV — offline lip-synced MP4 via lib/talking_head.render()' },
   { name: 'vertical video compose', probe: () => !!require('ffmpeg-static') && !!require('./video_compose').compose, detail: 'assemble a 1080x1920 short-form MP4 (your head video or a still + voice WAV + burned captions) via lib/video_compose.compose() — the talking-head output feeds straight into it' },
+  { name: 'report graphics', probe: () => !!require('./report_graphics').render, detail: 'deterministic charts (bar/hbar/line), org charts, and schematics as SVG+PNG for documents via lib/report_graphics.render(spec) — you author the spec from GROUNDED data (the DB); this renderer never invents a number or a name, and diffusion image-gen is never used for data-bearing graphics' },
+  { name: 'US report maps', probe: () => !!require('./report_graphics').render && require('./report_maps').available(), detail: 'US state/county maps on real census boundaries (choropleth/bubble, exact key resolution, honest no-data fill) via lib/report_graphics.render({kind:"map",...}) — geometry is measured-present this boot, never assumed' },
 ];
 
 let _cache = null;
