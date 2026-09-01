@@ -9772,10 +9772,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             ..._blocked.map((r) => `• BLOCKED ON HIM — need #${r.id}: ${String(r.need).replace(/\s+/g, ' ').slice(0, 110)}`),
             ..._prop.map((r) => { const v = _vd(r.id); return `• proposed #${r.id}${v ? (v.v === 'verified' ? ' (✓ verified)' : ' (⚠ rejected — never build from it)') : ''}: ${String(r.need).replace(/\s+/g, ' ').slice(0, 110)}`; }),
           ];
-          const aw = `AWAITING HIS WORD (${lines.length} item${lines.length === 1 ? '' : 's'}) — he said these asks were invisible to him, so NAME them briefly and naturally near the top of your reply (one or two plain lines — what's waiting and that he can say "show me the cards" for detail; never a wall):\n${lines.join('\n')}`;
+          // ENFORCED, NOT REQUESTED (09-01, the first live firing: the block rode the prompt and
+          // the model DROPPED it under a work-heavy turn — reply #14847 named zero of six items.
+          // A prompt rule is a request, a gate is enforcement): the card is now POSTED as its own
+          // chat message, code-side — the same insertTurn+push mechanism the daily card uses,
+          // proven to render. The model can't drop what it never carries.
+          const cardMsg = `⏳ WAITING ON YOUR WORD (${lines.length}):\n${lines.join('\n')}\n(say "show me the cards" for the full detail on any of them)`;
+          try {
+            const _cardRow = db.insertTurn({ sessionId: currentSessionId, speaker: 'ai_said', content: cardMsg, model: 'research', unprompted: 1 });
+            try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: _cardRow.id, truncated: 0, unprompted: true, say: cardMsg }); } catch {}
+            try { require('./lib/blackboard').append({ source: 'research', kind: 'utterance', refTable: 'turns', refId: _cardRow.id, content: cardMsg }); } catch {}
+          } catch (e) { console.error('[needs] return-air card post failed:', e.message); }
+          const aw = `A card listing ${lines.length} item(s) AWAITING HIS WORD was just posted above your reply — acknowledge it in one short natural line if it fits; never re-list the items.`;
           capabilityProposalBlock = capabilityProposalBlock ? `${capabilityProposalBlock}\n\n${aw}` : aw;
           db.setMeta('needs.return_aired_at', String(_awNow));
-          console.log(`[needs] return-air: ${lines.length} item(s) awaiting his word ride this reply`);
+          console.log(`[needs] return-air: ${lines.length} item(s) POSTED as a card (turn-level, enforced)`);
         }
       }
     } catch (e) { console.error('[needs] return-air failed:', e.message); }

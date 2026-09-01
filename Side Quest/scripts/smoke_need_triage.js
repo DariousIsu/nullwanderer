@@ -128,8 +128,14 @@ ok(nt.renderExternalAsk([]) === '' && nt.renderExternalAsk(null) === '', 'nothin
     '⭐ the daily card rides the 10-min tick (never again hostage to triage luck)');
   ok(/>= 48 \* 3600e3/.test(m) && !/>= 7 \* 24 \* 3600e3/.test(m), 'proposed cards re-air at 48h, not weekly');
   ok(/AWAITING HIS WORD/.test(m) && /needs\.return_aired_at/.test(m) && /BLOCKED ON HIM/.test(m),
-    '⭐ return-after-a-gap NAMES what waits on him in her own reply (paced 6h; verdicts ride the line)');
+    '⭐ return-after-a-gap surfaces what waits on him (paced 6h; verdicts ride the line)');
   ok(/rejected — never build from it/.test(m), 'the return-air line carries the verdict channel (a rejected diagnosis can never read as a clean ask)');
+  // 09-01 second firing lesson: the prompt block ALONE was dropped by the model on a work-heavy
+  // turn (reply #14847 named zero of six). A prompt rule is a request, a gate is enforcement —
+  // the card is now POSTED as its own turn, code-side, before her reply.
+  ok(/WAITING ON YOUR WORD \(\$\{lines\.length\}\)/.test(m) && /insertTurn\(\{ sessionId: currentSessionId, speaker: 'ai_said', content: cardMsg/.test(m),
+    '⭐ ENFORCED: the card posts as its own chat turn (the model cannot drop what it never carries)');
+  ok(/never re-list the items/.test(m), 'the prompt block shrinks to acknowledge-only (no duplicate wall)');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
