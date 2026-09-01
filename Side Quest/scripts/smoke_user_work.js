@@ -385,5 +385,23 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
   ok(!/DELIVERABLE ASK/.test(g2), 'research lane guidance unchanged');
 }
 
+// ── 09-01 wiring pins: the trusted-guess cure + the convergence rein (both in main.js) ─────────
+{
+  const fs2 = require('fs'), path2 = require('path');
+  const m = fs2.readFileSync(path2.join(__dirname, '..', 'main.js'), 'utf8');
+  // THE TRUSTED-GUESS CURE (sched#96: "at 1330" → an 11:48 booking off the classifier's guessed
+  // days≈0.02; every step looked green; her say confirmed 13:30 while the row held the guess).
+  ok(/THE TRUSTED-GUESS CURE/.test(m) && /schedulerLib\.parseWhen\(String\(cand\)\.trim\(\)\)/.test(m),
+    '⭐ agenda-capture: a clock time in HIS OWN WORDS is the contract — parsed via parseWhen, never overridden by the classifier estimate');
+  ok(/classifier estimate \(~/.test(m) && /fire time from \$\{_timeSrc\}/.test(m),
+    'agenda-capture: the days guess survives only as the FALLBACK for fuzzy holds, and the chosen source logs loud');
+  // THE CONVERGENCE REIN ("the honest open question thing was a great beta test, but it hurts us
+  // now" — three plan revs added five orgs during his directed run before a 13:30 checkpoint).
+  ok(/FILED as proposed facets — noted, not steering/.test(m) && /proposed_facets/.test(m),
+    '⭐ user-work runs: novel synthesis questions FILE + SURFACE, never auto-steer (his runs converge; he promotes with a word)');
+  ok(/the brief grows to chase them/.test(m),
+    'the topical (her-own) lane still steers by questions — exploration stays hers');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

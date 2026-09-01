@@ -10723,9 +10723,30 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           composedUserMessage += `\n\n[VAGUE HOLD — ${userName} asked you to hold "${ag.item}", but it names no concrete item. NOTHING was registered. Ask ONE short question: which thing they mean. Do NOT claim anything is saved, booked, or logged.]`;
           console.log(`[agenda] hold REFUSED as vague ("${String(ag.item).slice(0, 60)}") — asking instead of booking`);
         } else {
-          const days = Math.max(0.1, Math.min(60, Number(ag.days) || 7));
-          const fireAt = Date.now() + Math.round(days * 86400e3);
+          // THE TRUSTED-GUESS CURE (09-01, sched#96: "at 1330" became an 11:48 booking — the
+          // classifier GUESSED days≈0.02, the code trusted it, every step looked green, and her
+          // reply confirmed "13:30" from the conversation while the row held the guess. No error
+          // ever fired because nothing failed — a trusted guess is the disease. When HIS OWN
+          // WORDS name a clock time, that is the contract: parse it from the message (or the
+          // classifier's whenText) via schedulerLib.parseWhen; the days estimate is the fallback
+          // for genuinely fuzzy holds ("next week"), never the override of a stated time.
+          let fireAt = null, _timeSrc = '';
+          try {
+            const _clockM = String(userMessage).match(/\bat\s+(\d{1,2}:?\d{2}\s*(?:am|pm)?)\b/i) || String(userMessage).match(/\b(\d{1,2}:\d{2}\s*(?:am|pm)?)\b/i);
+            const _cands = [[_clockM && _clockM[1], 'his message'], [ag.whenText, 'classifier whenText']];
+            for (const [cand, src] of _cands) {
+              if (!cand) continue;
+              const t = schedulerLib.parseWhen(String(cand).trim());
+              if (t && t > Date.now()) { fireAt = t; _timeSrc = src; break; }
+            }
+          } catch {}
+          if (!fireAt) {
+            const days = Math.max(0.1, Math.min(60, Number(ag.days) || 7));
+            fireAt = Date.now() + Math.round(days * 86400e3);
+            _timeSrc = `classifier estimate (~${Math.round(days * 10) / 10}d)`;
+          }
           const st = db.insertScheduledTask({ kind: 'once', note: `AGENDA (Lucas asked to hold this): ${ag.item}${ag.whenText ? ` — for: ${ag.whenText}` : ''}`.slice(0, 400), fireAt, source: 'agenda-capture' });
+          console.log(`[agenda] fire time from ${_timeSrc} → ${new Date(fireAt).toLocaleString()}`);
           composedUserMessage += `\n\n[${userName} asked you to HOLD something for later: "${ag.item}" (${ag.whenText || `in ~${Math.round(days)} day(s)`}). This IS registered: reminder #${st.id} on your own clock will surface it then. Confirm plainly what is held IN THE NOTE'S OWN WORDS ("${ag.item}") and for when — never resolve a vague reference into a specific topic of your own; if you believe you know what it refers to, ask to confirm instead of asserting. Do NOT claim any other saving happened.]`;
           console.log(`[agenda] deferred item registered → task #${st.id} fires ${new Date(fireAt).toISOString().slice(0, 10)} — "${String(ag.item).slice(0, 60)}"`);
         }
@@ -20687,11 +20708,17 @@ async function runDirectedResearchPass(focus) {
           try { db.setMeta(_nnKey, String(novel.length ? 0 : (parseInt(db.getMeta(_nnKey) || '0', 10) + 1))); } catch {}
           try { db.setMeta(`focus.${focus.id}.last_open_qs`, JSON.stringify(oq.slice(0, 3))); } catch {}
           if (novel.length) {
-            const plan = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || '{}');
-            plan.facets = [...new Set([...(Array.isArray(plan.facets) ? plan.facets : []), ...novel])].slice(-14);
-            db.setMeta(`focus.${focus.id}.plan`, JSON.stringify(plan));
-            console.log(`[user-work] ${novel.length} novel open question(s) from the synthesis now steer the run${oq.length > novel.length ? ` (${oq.length - novel.length} already asked)` : ''}`);
-            try { surfaceResearchPivot(focus, novel); } catch { /* surfacing is additive — steering already applied */ }
+            // THE CONVERGENCE REIN (Lucas 09-01: "the honest open question thing was a great beta
+            // test, but it hurts us now" — during his directed water-angle run, synthesis questions
+            // auto-added five orgs across three plan revs while a 13:30 checkpoint loomed). On HIS
+            // runs, novel questions are FILED AND SURFACED — never auto-steering: expansion belongs
+            // to her own research lanes, convergence to his. He promotes a proposed facet with a
+            // word; the ledger/streak bookkeeping above is untouched (closure still senses the
+            // frontier), and the topical (her-own) lane keeps steering by questions.
+            let _props = []; try { _props = JSON.parse(db.getMeta(`focus.${focus.id}.proposed_facets`) || '[]'); } catch {}
+            db.setMeta(`focus.${focus.id}.proposed_facets`, JSON.stringify([...new Set([..._props, ...novel])].slice(-14)));
+            console.log(`[user-work] ${novel.length} novel open question(s) FILED as proposed facets — noted, not steering (his run converges; he promotes with a word)${oq.length > novel.length ? ` (${oq.length - novel.length} already asked)` : ''}`);
+            try { surfaceResearchPivot(focus, novel); } catch { /* surfacing is additive */ }
           } else if (oq.length) {
             console.log(`[closure] synthesis raised ${oq.length} question(s), all already asked — frontier narrowing (streak ${parseInt(db.getMeta(_nnKey) || '0', 10)})`);
           }
