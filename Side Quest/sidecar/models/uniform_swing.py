@@ -12,7 +12,7 @@ class UniformSwing(Model):
     def run(self, inputs, config):
         t0 = time.time()
         cfg = config or {}
-        time.sleep(float(cfg.get("stub_delay", 0.8)))
+        time.sleep(float(cfg.get("stub_delay", 0.0)))   # default 0 — see poll_baseline (selftest passes it explicitly)
         swing = float(cfg.get("national_swing", 0.0))   # e.g. the fundamentals/env lean
         seats = []
         for r in inputs.get("races", []):

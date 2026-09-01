@@ -129,6 +129,26 @@ ok('applyMidterm: swing 0 → untouched', L.applyMidterm([{ margin: 3 }], { swin
   ok('runOnce: coverage keeps polled seats + adds lean priors', covRes.work.coverage.polled >= 2 && covRes.work.coverage.lean >= 3);
   ok('runOnce: coverage sets senate holdovers, zero house holdovers', covRes.work.inputs.config.holdovers.house.A === 0 && covRes.work.inputs.config.holdovers.senate.B === 22);
 
+  // --- ⭐ THE MODEL-POOL BRIDGE (2026-09-01): poolRacesFrom maps the reacted JS slate into the
+  // Python pool's race contract. First production wiring of the sidecar pool (runModels had ZERO
+  // live callers); the mapper is the pure seam, so it pins offline.
+  {
+    const parseSubject = require('../lib/forecast_registry').parseSubject;
+    const slate = [
+      { subject: '2026 Arizona', chamber: 'senate', margin: 1.25 },
+      { subject: '2026 CA-22', chamber: 'house', margin: -0.2 },
+      { subject: '2026 Somewhere Unparseable', chamber: 'senate', margin: 3 },
+      { subject: '2026 Texas', chamber: 'governor', margin: 9 },
+    ];
+    const pr = L.poolRacesFrom(slate, parseSubject, { 'S-AZ': 'B' });
+    ok('unparseable geography + non-congressional chambers are SKIPPED, never guessed', pr.length === 2, JSON.stringify(pr.map((r) => r.seat)));
+    const az = pr.find((r) => r.seat === 'S-AZ');
+    ok('senate seat carries margin + incumbency in the pool grammar', !!az && az.poll_margin === 1.25 && az.base === 1.25 && az.incumbent_party === 'B' && az.chamber === 'senate');
+    const ca = pr.find((r) => r.seat === 'H-CA-22');
+    ok('house seat id in the pool grammar (H-CA-22), no invented incumbent', !!ca && ca.state === 'CA' && ca.district === 22 && ca.incumbent_party === null);
+    ok('null/empty slates map to empty, no throw', L.poolRacesFrom(null, parseSubject).length === 0 && L.poolRacesFrom([{ subject: null, chamber: 'senate' }], parseSubject).length === 0);
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

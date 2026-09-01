@@ -12,7 +12,9 @@ class PollBaseline(Model):
 
     def run(self, inputs, config):
         t0 = time.time()
-        time.sleep(float((config or {}).get("stub_delay", 0.8)))   # simulate compute (proves parallelism)
+        # stub_delay default 0 (2026-09-01): the 0.8s sleep was the skeleton's concurrency PROOF —
+        # selftest still passes it explicitly; a production run must not pay fake latency.
+        time.sleep(float((config or {}).get("stub_delay", 0.0)))
         seats = []
         for r in inputs.get("races", []):
             m = float(r.get("poll_margin", r.get("margin", 0.0)))

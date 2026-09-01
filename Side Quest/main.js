@@ -3229,6 +3229,38 @@ app.whenReady().then(() => {
           const cov = res.work.coverage ? ` · coverage ${res.work.coverage.races} seats` : '';
           const jd = res.work.assess ? ` · ${res.work.assess.assessed}/${res.work.assess.pairs} judged` : '';
           console.log(`[forecast] recompute: ${res.work.margins.polled}/${res.work.margins.total} polled${cov} · House P(D) ${(res.payload.house.pD_control * 100).toFixed(0)}% · Senate P(D) ${(res.payload.senate.pD_control * 100).toFixed(0)}%${env}${mt}${jd}${res.live ? ' · LIVE' : ''} · ${res.work.timing_ms}ms`);
+          // THE MODEL-POOL LEG (2026-09-01, Lucas: "the forecasting substructure is paramount"):
+          // the Python pool (sidecar/orchestrator.py — fundamentals prior + XGBoost quantile) runs
+          // on the SAME reacted slate every recompute and rides the cached forecast as modelPool:
+          // per-seat margin DISTRIBUTIONS (median + 95% CI) beside the JS point sim. First live
+          // wiring — runModels had zero production callers before this. Fail-soft: a missing venv
+          // degrades to the JS forecast alone, logged, never a throw. Fire-and-forget so the pool's
+          // wall time never delays the recompute log or the payload cache.
+          (async () => {
+            try {
+              const _t0 = Date.now();
+              const slate = (res.work && res.work.inputs && res.work.inputs.races) || [];
+              const L = loadLeans();
+              const poolRaces = loop.poolRacesFrom(slate, registry.parseSubject, (L && L.incumbentBySeat) || {});
+              if (!poolRaces.length) { console.log('[forecast] model pool skipped: no mappable seats'); return; }
+              const fx = res.work.fundamentals;
+              const pr = await require('./lib/sidecar').runModels({
+                inputs: { races: poolRaces },
+                models: ['fundamentals', 'xgboost_quantile'],
+                config: { national_env: (fx && fx.has_data && Number.isFinite(fx.lean)) ? fx.lean : 0.0 },
+              }, { timeoutMs: 240000 });
+              if (!pr || pr.ok === false) { console.log(`[forecast] model pool unavailable (JS forecast stands alone): ${String(pr && pr.error).slice(0, 160)}`); return; }
+              const xgb = (pr.results || []).find((r) => r.model === 'xgboost_quantile');
+              lastForecast.modelPool = {
+                at: Date.now(), wall_ms: Date.now() - _t0, pool: pr.pool, ran: pr.ran,
+                ensemble: pr.ensemble,
+                models: (pr.results || []).map((r) => ({ model: r.model, ok: r.ok, chambers: r.chambers, diagnostics: r.diagnostics, elapsed_ms: r.elapsed_ms })),
+                seatsCI: (xgb && xgb.ok) ? xgb.seats : null,   // per-seat median + 95% CI — the pool's unique contribution
+              };
+              const okN = (pr.results || []).filter((r) => r.ok).length;
+              console.log(`[forecast] model pool: ${okN}/${(pr.results || []).length} models ok on ${poolRaces.length} seats${xgb && xgb.ok ? ` · quantile CIs attached (${xgb.seats.length})` : ''} · ${lastForecast.modelPool.wall_ms}ms`);
+            } catch (e) { console.error('[forecast] model pool leg failed:', e.message); }
+          })().catch(() => {});
         } else if (res) { console.log(`[forecast] recompute skipped: ${res.error}`); }
       } catch (e) { console.error('[forecast] recompute loop failed:', e.message); }
       finally { markActivity('idle'); }

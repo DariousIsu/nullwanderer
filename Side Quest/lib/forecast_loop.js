@@ -255,9 +255,37 @@ async function runOnce(opts = {}) {
   return res;
 }
 
+// THE MODEL-POOL BRIDGE (2026-09-01, "the forecasting substructure is paramount"): map the reacted
+// JS slate into the Python pool's race contract (sidecar/orchestrator.py). Seat ids in the pool's
+// grammar (S-AZ / H-CA-22, zero-pad tolerated by the models' int() strip); a race whose subject
+// doesn't parse to a state is skipped (the pool must never guess geography). Pure — pins offline.
+function poolRacesFrom(races, parseSubject, incumbentBySeat = {}) {
+  const out = [];
+  for (const r of (Array.isArray(races) ? races : [])) {
+    if (!r || (r.chamber !== 'house' && r.chamber !== 'senate')) continue;
+    let ps = {};
+    try { ps = parseSubject(String(r.subject || '')) || {}; } catch { ps = {}; }
+    const abbr = ps.stateAbbr || null;
+    if (!abbr) continue;
+    const seat = r.chamber === 'senate'
+      ? `S-${abbr}`
+      : (ps.district != null ? `H-${abbr}-${ps.district}` : null);
+    if (!seat) continue;
+    const m = Number(r.margin);
+    out.push({
+      seat, chamber: r.chamber,
+      poll_margin: Number.isFinite(m) ? m : 0,
+      base: Number.isFinite(m) ? m : 0,
+      state: abbr, district: ps.district != null ? ps.district : null,
+      incumbent_party: (incumbentBySeat && incumbentBySeat[seat]) || null,
+    });
+  }
+  return out;
+}
+
 module.exports = {
   DEFAULT_CONFIG, DEFAULT_TARGET_YEAR, PRIOR_SIGMA,
   defaultPartyOf, signMargin, pollSigma, computeMargins,
-  buildAssessPairs, applyMidterm, preAssess, slateEntities, recompute, runOnce,
+  buildAssessPairs, applyMidterm, preAssess, slateEntities, recompute, runOnce, poolRacesFrom,
   detectLive: reactor.detectLive,
 };
