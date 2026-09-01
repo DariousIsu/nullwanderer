@@ -320,6 +320,22 @@ sent, identityLocked:true). TRADEOFF (honest): weight 0.82 preserves face AND cl
 — ties to the appearance-vs-identity answer. VIDEO side: InfiniteTalk already reference-driven; next =
 use IPAdapter to seed identity-locked reference frames for takes.
 
+## WAVE 9 (2026-09-01) — image suite reconciled onto the program's LOCAL image gen (his correction)
+
+His correction: ZERO cloud; the original system had TWO LOCAL image models (upper/lower). I had built
+the image suite as a PARALLEL path on :8288 (the video ComfyUI) — wrong. Findings: the program's own
+image gen (lib/vision.js) uses ComfyUI on :8188 (AMD-tuned: --use-split-cross-attention
+--disable-smart-memory/pinned-memory), and there are TWO ComfyUI on the SAME ComfyUI-Zluda models dir
+(:8188 image, :8288 video). Both now hold RealVisXL_V5.0 (added — the UPPER/photoreal model; a second
+model was likely pruned in the disk emergency) + sd_xl_base (LOWER/fast). The :8288 RealVis gen ERRORED
+(NoneType/timeout = video-instance contention); :8188 generates RealVis CLEANLY (has IPAdapter too).
+FIX: studio/image_client.js now targets :8188 (ZOE_IMG_COMFY_URL), LOCAL-ONLY (never any cloud API),
+with a TWO-LOCAL-MODEL tier: UPPER=RealVis / LOWER=sd_xl_base (tier→checkpoint resolver, /api/image_models,
+UI selector). Also added this wave: reference upload (studio/image_refs.js — photos / clips / YouTube URLs
+→ a frame → IPAdapter steering, reuses yt-dlp+ffmpeg) + lightbox (click-to-enlarge) + checkpoint prefer.
+PROVEN: upper-tier RealVis gen through the suite on :8188 — noticeably more photoreal than base SDXL (sent).
+⚠the two-ComfyUI-on-:8188 process contention is a SYSTEM/other-lane matter — left untouched.
+
 ## NOT built (deliberately, in order)
 
 1. **Publishing door** — waits for the account (his word). When it comes: lib/browser.js (her own

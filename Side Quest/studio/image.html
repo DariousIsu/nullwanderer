@@ -52,11 +52,27 @@
       <button data-kind="scene" onclick="setKind('scene')">Scene</button>
     </div>
     <div class="desc" id="kinddesc"></div>
+    <label class="fld">Model (local · zero cloud)</label>
+    <select id="model" style="width:100%;background:var(--panel);border:1px solid var(--line-strong);color:var(--tx);border-radius:6px;padding:8px;font:inherit;">
+      <option value="upper">Upper — RealVisXL (photoreal)</option>
+      <option value="lower">Lower — SDXL base (fast)</option>
+    </select>
     <label class="fld">Use existing avatar (locks face + body)</label>
     <select id="avatar" style="width:100%;background:var(--panel);border:1px solid var(--line-strong);color:var(--tx);border-radius:6px;padding:8px;font:inherit;">
       <option value="__none__">— none (create a new character) —</option>
     </select>
     <div class="hint" id="lockhint" style="margin-top:4px;"></div>
+    <label class="fld">Reference photos / clips / URLs (optional — steers the look)</label>
+    <div id="refstrip" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;"></div>
+    <div class="row" style="gap:6px;">
+      <input type="file" id="reffile" accept="image/*,video/*" style="flex:1;font-size:11px;padding:5px;">
+      <button onclick="addRefFile()" style="font-size:11px;padding:6px 10px;">+ add</button>
+    </div>
+    <div class="row" style="gap:6px;margin-top:5px;">
+      <input id="refurl" placeholder="YouTube / video URL" style="flex:1;">
+      <button onclick="addRefUrl()" style="font-size:11px;padding:6px 10px;">+ URL</button>
+    </div>
+    <div class="hint" id="refstatus"></div>
     <label class="fld">Description</label>
     <textarea id="prompt" placeholder="Describe it in plain language…"></textarea>
     <label class="fld">Tags (comma-separated, optional)</label>
@@ -71,6 +87,9 @@
     <h3>Gallery</h3>
     <div class="gallery" id="gallery"><div class="empty">Nothing generated yet.</div></div>
   </div>
+</div>
+<div id="lightbox" onclick="this.style.display='none'" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:100;align-items:center;justify-content:center;cursor:zoom-out;">
+  <img id="lightimg" style="max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,.6);">
 </div>
 <script>
 let kind = 'persona';
@@ -87,9 +106,10 @@ async function generate(){
   const tags=document.getElementById('tags').value.split(',').map(s=>s.trim()).filter(Boolean);
   const name=document.getElementById('name').value.trim();
   const av=document.getElementById('avatar').value;
-  const payload={kind,prompt,tags,name};
+  const payload={kind,prompt,tags,name,tier:document.getElementById('model').value};
   if(av!=='__none__') payload.avatarId=av;   // selecting an avatar → IPAdapter identity lock
-  btn.disabled=true; st.textContent = av!=='__none__' ? 'Generating — locked to the selected avatar…' : 'Generating on the GPU… (~30–60s)';
+  if(collectedRefs.length) payload.refIds=collectedRefs.map(r=>r.id);  // uploaded references steer the look
+  btn.disabled=true; st.textContent = (av!=='__none__'||collectedRefs.length) ? 'Generating — steered by your references…' : 'Generating on the GPU… (~30–60s)';
   const r=await fetch('/api/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(r=>r.json()).catch(e=>({error:String(e)}));
   st.textContent = r.id ? 'Done.' : ('Failed: '+(r.error||'unknown'));
   btn.disabled=false;
@@ -108,8 +128,8 @@ async function refresh(){
   g.innerHTML = list.length ? '' : '<div class="empty">Nothing generated yet.</div>';
   for(const im of list){
     const d=document.createElement('div'); d.className='card';
-    d.innerHTML=`<img src="/file?path=${encodeURIComponent(im.file)}">
-      <div class="meta"><div class="k">${im.kind}${im.savedAvatarId?' · ★ avatar':''}</div>
+    d.innerHTML=`<img src="/file?path=${encodeURIComponent(im.file)}" style="cursor:zoom-in;" onclick="enlarge('${encodeURIComponent(im.file)}')">
+      <div class="meta"><div class="k">${im.kind}${im.identityLocked?' · 🔒 locked':''}${im.savedAvatarId?' · ★ avatar':''}</div>
         <div class="n">${esc(im.name)}</div>
         <div class="row">
           ${im.kind==='persona'&&!im.savedAvatarId?`<button onclick="saveAvatar('${im.id}')">save as avatar</button>`:''}
@@ -118,6 +138,36 @@ async function refresh(){
     g.appendChild(d);
   }
 }
+function enlarge(encPath){ const lb=document.getElementById('lightbox'); document.getElementById('lightimg').src='/file?path='+encPath; lb.style.display='flex'; }
+
+// --- reference inputs (photos / clips / URLs → IPAdapter steering) ---
+let collectedRefs=[];
+function renderRefStrip(){
+  const el=document.getElementById('refstrip');
+  el.innerHTML=collectedRefs.map(r=>`<div style="position:relative;">
+    <img src="/file?path=${encodeURIComponent(r.file)}" style="width:44px;height:44px;object-fit:cover;border-radius:5px;border:1px solid var(--line-strong);">
+    <span onclick="removeRef('${r.id}')" title="remove" style="position:absolute;top:-6px;right:-6px;background:var(--panel);border:1px solid var(--line-strong);border-radius:50%;width:16px;height:16px;line-height:14px;text-align:center;font-size:10px;cursor:pointer;">✕</span></div>`).join('');
+}
+async function removeRef(id){ collectedRefs=collectedRefs.filter(r=>r.id!==id); fetch('/api/image_refs/'+id,{method:'DELETE'}).catch(()=>{}); renderRefStrip(); }
+async function addRefFile(){
+  const f=document.getElementById('reffile').files[0]; const st=document.getElementById('refstatus');
+  if(!f){ st.textContent='Pick a photo or video first.'; return; }
+  const isVideo=/^video\//.test(f.type); const ext=(f.name.split('.').pop()||(isVideo?'mp4':'png'));
+  st.textContent = isVideo ? 'Extracting a frame from the clip…' : 'Adding reference…';
+  const qs=new URLSearchParams({kind:isVideo?'video':'image', ext, label:(f.name||'ref').slice(0,12)});
+  const r=await fetch('/api/image_refs?'+qs,{method:'POST',body:f}).then(r=>r.json()).catch(e=>({error:String(e)}));
+  st.textContent = r.id ? 'Reference added.' : ('Failed: '+(r.error||'?'));
+  if(r.id){ collectedRefs.push(r); document.getElementById('reffile').value=''; renderRefStrip(); }
+}
+async function addRefUrl(){
+  const url=document.getElementById('refurl').value.trim(); const st=document.getElementById('refstatus');
+  if(!url){ st.textContent='Paste a URL first.'; return; }
+  st.textContent='Downloading + extracting a frame… (a moment)';
+  const r=await fetch('/api/image_refs?'+new URLSearchParams({url,label:'url'}),{method:'POST'}).then(r=>r.json()).catch(e=>({error:String(e)}));
+  st.textContent = r.id ? 'Reference added from URL.' : ('Failed: '+(r.error||'?'));
+  if(r.id){ collectedRefs.push(r); document.getElementById('refurl').value=''; renderRefStrip(); }
+}
+
 async function refreshAvatarPicker(){
   const roster=await fetch('/api/avatars').then(r=>r.json()).catch(()=>[]);
   const sel=document.getElementById('avatar'); const cur=sel.value;

@@ -11,7 +11,9 @@
 const path = require('path');
 const fs = require('fs');
 
-const BASE = process.env.ZOE_COMFY_URL || 'http://127.0.0.1:8288';
+// Images run on the program's own image ComfyUI (:8188, AMD-tuned) — NOT the :8288 video instance.
+// LOCAL ONLY: this client never calls any cloud image API. Two local checkpoints serve as the tiers.
+const BASE = process.env.ZOE_IMG_COMFY_URL || 'http://127.0.0.1:8188';
 const COMFY_ROOT = process.env.ZOE_COMFY_ROOT || 'C:\\Users\\azrae\\Desktop\\ComfyUI-Zluda';
 
 let _oi = null, _oiTs = 0;
@@ -39,7 +41,7 @@ function stageInput(file) {
   return path.basename(file);
 }
 
-async function buildGraph({ prompt, negative, aspect = 'portrait', steps = 28, cfg = 6.5, seed, prefix = 'img', references = [], ipWeight = 0.8 }) {
+async function buildGraph({ prompt, negative, aspect = 'portrait', steps = 28, cfg = 6.5, seed, prefix = 'img', references = [], ipWeight = 0.8, tier = 'upper', checkpoint = null }) {
   const OI = await objectInfo();
   const graph = {}; let n = 0;
   const node = (cls, inputs) => {
@@ -56,8 +58,15 @@ async function buildGraph({ prompt, negative, aspect = 'portrait', steps = 28, c
   };
   const out = (id, i = 0) => [id, i];
   const [W, H] = SIZES[aspect] || SIZES.portrait;
+  // TWO LOCAL MODELS as tiers (zero cloud): UPPER = a photoreal finetune (RealVis/Juggernaut), LOWER =
+  // the SDXL base (faster/simpler). An explicit checkpoint (in the enum) wins; else the tier decides.
   const ckptEnum = OI.CheckpointLoaderSimple.input.required.ckpt_name[0];
-  const ckpt = ckptEnum.find(c => /sd_xl_base/i.test(c)) || ckptEnum[0];
+  const UPPER_PREF = [/realvis/i, /juggernaut/i, /dreamshaper/i, /sd_xl_base/i];
+  const LOWER_PREF = [/sd_xl_base/i, /sdxl/i];
+  const pref = (tier === 'lower' ? LOWER_PREF : UPPER_PREF);
+  const ckpt = (checkpoint && ckptEnum.includes(checkpoint)) ? checkpoint
+    : (process.env.ZOE_IMG_CKPT && ckptEnum.includes(process.env.ZOE_IMG_CKPT)) ? process.env.ZOE_IMG_CKPT
+    : (pref.map(rx => ckptEnum.find(c => rx.test(c))).find(Boolean) || ckptEnum[0]);
   const sampEnum = OI.KSampler.input.required.sampler_name[0];
   const sampler = ['dpmpp_2m', 'euler', 'dpmpp_2m_sde'].find(s => sampEnum.includes(s)) || sampEnum[0];
   const schedEnum = OI.KSampler.input.required.scheduler[0];
@@ -143,4 +152,17 @@ async function generate(opts) {
   } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
 }
 
-module.exports = { generate, alive, SIZES, BASE, COMFY_ROOT };
+// the local checkpoints available as tiers (for the UI selector) — labeled upper/lower by preference
+async function listModels() {
+  try {
+    const OI = await objectInfo();
+    const enum_ = OI.CheckpointLoaderSimple.input.required.ckpt_name[0] || [];
+    return enum_.map(c => ({
+      ckpt: c,
+      tier: /realvis|juggernaut|dreamshaper/i.test(c) ? 'upper' : 'lower',
+      label: /realvis/i.test(c) ? 'RealVisXL (photoreal)' : /sd_xl_base/i.test(c) ? 'SDXL base (fast)' : c.replace(/\.safetensors$/i, ''),
+    }));
+  } catch { return []; }
+}
+
+module.exports = { generate, alive, listModels, SIZES, BASE, COMFY_ROOT };

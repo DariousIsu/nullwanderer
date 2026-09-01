@@ -76,11 +76,16 @@ async function create(opts) {
     const dir = path.join(IMG_DIR, id);
     fs.mkdirSync(dir, { recursive: true });
 
-    // when an avatar is selected, lock the identity to its full reference set (face + body preserved)
-    const references = (o.avatarId !== undefined) ? avatarRefs(o.avatarId) : [];
+    // References that steer generation via IPAdapter: a selected avatar's full set (identity lock) PLUS
+    // any ad-hoc references the operator uploaded (photos / video frames / a URL frame). Combined + capped.
+    const imageRefs = require('./image_refs');
+    const explicit = (Array.isArray(o.refIds) ? o.refIds : []).map(id => imageRefs.refPath(id)).filter(Boolean);
+    const references = [...new Set([...((o.avatarId !== undefined) ? avatarRefs(o.avatarId) : []), ...explicit])];
     const gen = await img.generate({
       prompt: fullPrompt, negative: o.negative || '', aspect: o.aspect || ASPECT[kind],
-      prefix: `suite_${kind}`, references, ipWeight: o.ipWeight || 0.82, timeoutMs: o.timeoutMs || 300000,
+      prefix: `suite_${kind}`, references, ipWeight: o.ipWeight || 0.82,
+      tier: o.tier === 'lower' ? 'lower' : 'upper', checkpoint: o.checkpoint || null,
+      timeoutMs: o.timeoutMs || 300000,
     });
     if (!gen.ok) { fs.rmSync(dir, { recursive: true, force: true }); return gen; }
     const dst = path.join(dir, 'image.png');
@@ -91,6 +96,7 @@ async function create(opts) {
       file: dst, createdAt: Date.now(), savedAvatarId: null,
       avatarId: (o.avatarId !== undefined && o.avatarId !== '') ? o.avatarId : null,
       identityLocked: references.length > 0, refsUsed: references.length,
+      tier: o.tier === 'lower' ? 'lower' : 'upper',
     };
     fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta, null, 2));
     return { ok: true, image: meta };

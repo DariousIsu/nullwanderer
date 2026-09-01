@@ -17,12 +17,13 @@ const cloner = require('./cloner');
 const motion = require('./motion');
 const charVoices = require('./char_voices');
 const images = require('./images');
+const imageRefs = require('./image_refs');
 const voiceKokoro = require(path.join(__dirname, '..', 'lib', 'voice_kokoro'));
 
 const ROOT = path.resolve(__dirname, '..');
 const PORT = parseInt(process.env.ZOE_STUDIO_PORT || '8790', 10);
 const UPLOAD_DIR = path.join(ROOT, 'data', 'studio', 'uploads');
-const ALLOWED = [runner.JOBS_DIR, cloner.PERSONAS_DIR, motion.LIB_DIR, images.IMG_DIR, path.join(ROOT, 'data', 'video_out'), path.join(ROOT, 'data', 'avatars')];
+const ALLOWED = [runner.JOBS_DIR, cloner.PERSONAS_DIR, motion.LIB_DIR, images.IMG_DIR, imageRefs.REF_DIR, path.join(ROOT, 'data', 'video_out'), path.join(ROOT, 'data', 'avatars')];
 
 const MIME = { '.html': 'text/html', '.mp4': 'video/mp4', '.wav': 'audio/wav', '.png': 'image/png', '.jpg': 'image/jpeg', '.json': 'application/json' };
 
@@ -259,6 +260,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && u.pathname === '/api/images') {
       return json(res, 200, images.listImages());
     }
+    if (req.method === 'GET' && u.pathname === '/api/image_models') {
+      return json(res, 200, await require('./image_client').listModels());
+    }
     if (req.method === 'POST' && u.pathname === '/api/images') {
       const b = await body(req);
       if (!b || !b.prompt) return json(res, 400, { error: 'prompt required' });
@@ -272,6 +276,31 @@ const server = http.createServer(async (req, res) => {
     }
     const mImgDel = u.pathname.match(/^\/api\/images\/([\w.-]+)$/);
     if (req.method === 'DELETE' && mImgDel) return json(res, 200, images.remove(mImgDel[1]));
+
+    // reference inputs for image gen: photos, videos/clips, or a YouTube/URL → a reference frame
+    if (req.method === 'GET' && u.pathname === '/api/image_refs') {
+      return json(res, 200, imageRefs.list().map(r => ({ id: r.id, file: r.file })));
+    }
+    if (req.method === 'POST' && u.pathname === '/api/image_refs') {
+      const url = u.searchParams.get('url');
+      const label = u.searchParams.get('label') || 'ref';
+      if (url) return json(res, 200, await imageRefs.fromUrl(url, label).then(r => r.ok ? { id: r.id, file: r.file } : { error: r.error }));
+      // raw upload (image or video) — dispatch by declared kind
+      const kind = u.searchParams.get('kind') || 'image'; // 'image' | 'video'
+      const ext = (u.searchParams.get('ext') || (kind === 'video' ? 'mp4' : 'png')).replace(/[^a-z0-9]/gi, '').slice(0, 5);
+      fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+      const dst = path.join(UPLOAD_DIR, `ref_${Date.now()}.${ext}`);
+      await new Promise((resolve, reject) => {
+        const ws = fs.createWriteStream(dst); let size = 0;
+        req.on('data', d => { size += d.length; if (size > 800 * 1024 * 1024) { req.destroy(); reject(new Error('too large')); } });
+        req.pipe(ws); ws.on('finish', resolve); ws.on('error', reject); req.on('error', reject);
+      });
+      const r = kind === 'video' ? await imageRefs.fromVideo(dst, label) : await imageRefs.fromImage(dst, label);
+      try { fs.unlinkSync(dst); } catch { /* keep only the reference frame */ }
+      return json(res, r.ok ? 200 : 400, r.ok ? { id: r.id, file: r.file } : { error: r.error });
+    }
+    const mRefDel = u.pathname.match(/^\/api\/image_refs\/([\w.-]+)$/);
+    if (req.method === 'DELETE' && mRefDel) return json(res, 200, imageRefs.remove(mRefDel[1]));
 
     if (req.method === 'GET' && u.pathname === '/file') {
       const abs = safePath(u.searchParams.get('path') || '');
