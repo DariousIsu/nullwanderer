@@ -29,6 +29,14 @@ const comfy = require('./comfy_client');
 
 const DEFAULT_REF = path.join(ROOT, 'data', 'avatars', 'zoe_ref.jpg');
 
+// HARD CAP on a single InfiniteTalk take's length. A take renders as ceil(frames/81) overlapping 81-frame
+// windows inside ONE ComfyUI job; a long take (many windows) holds large latent buffers and tips the 31GB
+// machine into paging — the memory overrun. Bounding every take to a few seconds keeps each render job's
+// peak memory small; the cut stitches the short clips back with continuous audio (a jump cut every few
+// seconds — the short-form grammar). Tunable via ZOE_MAX_TAKE_SEC; one 81-frame window ≈ 3.24s at 25fps.
+const MAX_TAKE_SEC = Math.max(2, parseFloat(process.env.ZOE_MAX_TAKE_SEC) || 4);
+const WORDS_PER_SEC = 2.6; // ~156 wpm — the PRE-voice prose estimate only; measured audio is the real gate
+
 function listJobs() {
   try {
     return fs.readdirSync(JOBS_DIR)
@@ -74,14 +82,15 @@ function parseScript(script) {
     const flat = String(script).replace(/\s+/g, ' ').trim();
     if (flat) {
       const sentences = (flat.match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) || [flat]).map(s => s.trim()).filter(Boolean);
+      const capWords = Math.max(6, Math.round(MAX_TAKE_SEC * WORDS_PER_SEC)); // ~one short take of speech
       let cur = '';
       const flush = () => { if (cur.trim()) { segs.push({ kind: 'avatar', text: cur.trim(), direction: null }); cur = ''; } };
       for (const s of sentences) {
         cur = cur ? `${cur} ${s}` : s;
-        if (cur.split(/\s+/).length >= 30) flush();   // ~a breath's worth per take
+        if (cur.split(/\s+/).length >= capWords) flush();   // keep each take ~<= MAX_TAKE_SEC of speech
       }
       flush();
-      warnings.push(`no timed script format — split into ${segs.length} short on-camera segment(s)`);
+      warnings.push(`no timed script format — split into ${segs.length} short on-camera segment(s), ~${MAX_TAKE_SEC}s cap each`);
     }
   }
   return { segments: segs, warnings };
@@ -131,7 +140,7 @@ async function tick() {
       job.status = job.timeline ? 'cutting' : 'voicing';
     } else if (job.status === 'voicing') {
       const seg = job.segments.find(s => !s.wav);
-      if (!seg) { job.status = 'rendering'; log(job, 'voice complete'); }
+      if (!seg) { job.status = 'chunking'; log(job, 'voice complete'); }
       else {
         // Voice routing, in preference order:
         //  - a real cloned voice (F5, the person's own timbre) IF built and the engine runs;
@@ -158,6 +167,34 @@ async function tick() {
         seg.wav = wav; seg.dur = p ? p.duration : null;
         log(job, `voiced segment ${seg.i} (${seg.dur}s)`);
       }
+    } else if (job.status === 'chunking') {
+      // THE MEMORY GUARD. Split any on-camera segment whose MEASURED voice exceeds MAX_TAKE_SEC into equal
+      // sub-clips — each becomes its own short InfiniteTalk take, so no single render job carries a long
+      // take's window buffers. Measured-audio split catches EVERY path (house-format ZO: lines and slow TTS
+      // included), where the pre-voice word estimate can't. b-roll voice-over is never a take → left whole.
+      const rebuilt = [];
+      let splits = 0;
+      for (const s of job.segments) {
+        if (s.kind !== 'avatar' || !s.wav || !(s.dur > MAX_TAKE_SEC + 0.25)) { rebuilt.push(s); continue; }
+        const n = Math.ceil(s.dur / MAX_TAKE_SEC);
+        const piece = s.dur / n;
+        const words = String(s.text || '').split(/\s+/).filter(Boolean);
+        for (let k = 0; k < n; k++) {
+          const sub = path.join(dir, `seg${s.i}_${k}.wav`);
+          const sr = await vc.sliceAudio(s.wav, sub, k * piece, piece);
+          if (!sr.ok) throw new Error(`chunk seg ${s.i}.${k}: ${sr.error}`);
+          const p = await vc.probe(sub);
+          const text = words.slice(Math.floor(k * words.length / n), Math.floor((k + 1) * words.length / n)).join(' ');
+          rebuilt.push({ kind: 'avatar', text, direction: s.direction, wav: sub, dur: p ? p.duration : piece, take: null, promptId: null });
+        }
+        splits++;
+        log(job, `chunked segment ${s.i} (${s.dur.toFixed(1)}s) → ${n} clips of ~${piece.toFixed(1)}s`);
+      }
+      job.segments = rebuilt.map((s, i) => ({ ...s, i }));
+      log(job, splits
+        ? `chunking: ${splits} long segment(s) split → ${job.segments.length} clips total (≤${MAX_TAKE_SEC}s each)`
+        : `chunking: all ${job.segments.length} segment(s) already ≤${MAX_TAKE_SEC}s`);
+      job.status = 'rendering';
     } else if (job.status === 'rendering') {
       if (!(await comfy.alive())) { log(job, '⚠ render server unreachable — will retry'); saveJob(job); return; }
       const inFlight = job.segments.find(s => s.kind === 'avatar' && s.promptId && !s.take);

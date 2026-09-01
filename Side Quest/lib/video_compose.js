@@ -283,4 +283,23 @@ async function assemble(timeline) {
   }
 }
 
-module.exports = { compose, assemble, probe, scriptToCaptions };
+/*
+ * sliceAudio(src, dst, startSec, durSec) → { ok, path } | { ok:false, error }
+ * Sample-exact slice of a voice WAV. The runner uses it to cut a long take's audio into short sub-clips
+ * so each InfiniteTalk render job stays small (the memory guard). Re-encodes to pcm_s16le (exact, cheap);
+ * -ss before -i is sample-accurate on PCM. One module owns the ffmpeg flags — callers never touch them.
+ */
+async function sliceAudio(src, dst, startSec, durSec) {
+  try {
+    const b = bins();
+    if (!b || !b.ffmpeg) return { ok: false, error: 'ffmpeg-static not installed' };
+    if (!fs.existsSync(src)) return { ok: false, error: `src missing: ${src}` };
+    const args = ['-y', '-v', 'error', '-ss', String(Math.max(0, startSec)), '-t', String(durSec), '-i', src, '-c:a', 'pcm_s16le', dst];
+    const r = await run(b.ffmpeg, args, 60000);
+    if (r.err) return { ok: false, error: `ffmpeg slice failed: ${r.stderr.split('\n').filter(Boolean).slice(-2).join(' | ')}` };
+    if (!fs.existsSync(dst)) return { ok: false, error: 'slice produced no file' };
+    return { ok: true, path: dst };
+  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+}
+
+module.exports = { compose, assemble, probe, scriptToCaptions, sliceAudio };
