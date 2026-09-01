@@ -80,7 +80,12 @@ async function buildTakeGraph({ image, audio, durSec, prefix, prompt, steps = 4,
   // — no code change needed. Override with ZOE_WAN_BASE.
   const resolvedBase = resolveBaseModel(OI, baseModel || process.env.ZOE_WAN_BASE);
 
-  const swap = node('WanVideoBlockSwap', { blocks_to_swap: 20, offload_img_emb: false, offload_txt_emb: false });
+  // blocks_to_swap = how many of the 40 transformer blocks to OFFLOAD to RAM (higher = more RAM, less
+  // VRAM). On 31GB RAM the RAM is the tighter resource, so a SHORT 1-window take can afford to keep more
+  // blocks in the 20GB VRAM — LOWER this to relieve RAM (risk: too low overflows VRAM). Env-tunable; the
+  // default stays 20 (the known VRAM-safe value) so the committed code never regresses.
+  const blockSwap = parseInt(process.env.ZOE_WAN_BLOCK_SWAP, 10) || 20;
+  const swap = node('WanVideoBlockSwap', { blocks_to_swap: blockSwap, offload_img_emb: false, offload_txt_emb: false });
   const lora = node('WanVideoLoraSelect', { lora: 'lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors', strength: 1.0, low_mem_load: false, merge_loras: false });
   const mtalk = node('MultiTalkModelLoader', { model: 'Wan2_1-InfiniteTalk_Single_Q8.gguf' });
   const model = node('WanVideoModelLoader', { model: resolvedBase, base_precision: 'fp16_fast', quantization: 'disabled', load_device: 'offload_device', attention_mode: 'sdpa', block_swap_args: out(swap), lora: out(lora), multitalk_model: out(mtalk) });
