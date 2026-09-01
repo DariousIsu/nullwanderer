@@ -17890,6 +17890,14 @@ async function runPenWorkPass(focus) {
     } catch (e) { console.error(`[pen] pass model ${_m} failed:`, e.message); }
   }
   if (!out) { console.warn('[pen] pass produced no output (models unavailable) — the pass count stands'); return { action: 'continue' }; }
+  // ENTITY-ESCAPE CURE (p223 pass 2, the instrument's second catch: the model DID emit the tag —
+  // as &lt;source-list…&gt;. The cloud path entity-escapes angle brackets). Unescape ONLY when raw
+  // parsing finds nothing and an escaped pen tag is visibly present — a blanket unescape would
+  // corrupt a diff that legitimately contains entities.
+  if (!pen.parseTags(out).length && /&lt;(source-read|source-list|propose-change)/.test(out)) {
+    out = out.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+    console.log('[pen] tags arrived entity-escaped — unescaped and re-parsed');
+  }
   let filed = null, reads = 0;
   for (const t of pen.parseTags(out).slice(0, 5)) {
     const r = pen.dispatch(t);
