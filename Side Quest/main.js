@@ -8147,7 +8147,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                 const asm = _lr.assembleDeliverable(_rosterState);
                 const so = require('./lib/spreadsheet_out');
                 const out = await so.deliverSpreadsheet({ dir: require('./lib/files').resolvePath('notes'), basename: `${_rosterState}_local_roster_${new Date().toISOString().slice(0, 10)}`, rows: asm.rows, sheetName: `${_frame.state} roster` });
-                if (out && out.ok) sheetLine = ` → ${path.relative(__dirname, out.path)}${out.openable ? ' (openable)' : ''}`;
+                if (out && out.ok) {
+                  sheetLine = ` → ${path.relative(__dirname, out.path)}${out.openable ? ' (openable)' : ''}`;
+                  // THE CANVAS EMIT (2026-09-01): the sheet lands on the Deliveries tab too — a
+                  // delivery that only exists on disk is invisible on the surface he works from.
+                  try {
+                    canvasUpsertBlock({ focusId: 'deliveries', blockId: `sheet-${_rosterState}-roster`, title: 'Deliveries', tabMode: 'DOC', blockType: 'paragraph', data: { markdown: `**${_frame.state} local roster** — ${cov.filled}/${cov.denominator} localities filled\n\n\`${path.relative(__dirname, out.path)}\` (${out.rows} rows${out.openable ? ', openable' : ''})` } }).catch(() => {});
+                  } catch {}
+                }
               } catch (e) { console.error('[swarm-roster] sheet re-assemble failed:', e.message); }
               console.log(`[swarm] DONE local-roster ${_rosterState}: coverage ${cov.filled}/${cov.denominator}${sheetLine}`);
               await fireToolFollowup({ io, channel, sessionId, resultText: `[The ${_frame.state} roster swarm just finished. Coverage is now ${cov.filled}/${cov.denominator} localities filled${sheetLine}. Tell Lucas the honest count in one or two sentences — every blank that remains is a verified "not found", never an un-attempted lookup.]` });
@@ -19321,8 +19328,22 @@ async function _roadRun({ order, road, userText, sessionId, asResume = false }) 
       if (w2 && w2.text.length > w.text.length) w = w2;
     }
     const doc = (w && w.text) || '';
+    // THE NO-PIVOT GATE (2026-09-01, the Summit UT delivery): a wrong-subject document must be
+    // UNREACHABLE as a done-claim — the pre-announce audit law extended to subject fidelity. On a
+    // hit, the draft is kept as evidence (unregistered), the say is an honest gap + plan, and the
+    // debt stands so the resumer retries with the anchor.
+    const _pv = doc ? dr.pivotCheck({ topic: (order && order.topic) || String(userText).slice(0, 120), doc }) : { ok: true };
     let msg;
-    if (doc) {
+    if (doc && !_pv.ok) {
+      try {
+        const _off = require('path').join(__dirname, 'data', 'zoe_workspace', 'notes', `offtarget-${Date.now()}.md`);
+        require('fs').writeFileSync(_off, doc, 'utf8');
+        console.log(`[road] PIVOT BLOCKED: ${_pv.why} — draft kept unregistered at ${_off}`);
+      } catch {}
+      msg = `I have to stop short of delivering the ${String(order.deliverable || 'document')} — the draft that came back is about the wrong "${String(order.topic || '').slice(0, 60)}" (${_pv.why}). Our stores don't yet hold what this needs on YOUR subject, so instead of handing you a namesake, it stays on my ledger: I'll gather the right material and retry.`;
+      try { dr.noteResume({ slug: road.slug, ask: (order && order.topic) || String(userText).slice(0, 200), note: `pivot-blocked: ${_pv.why}`, size: road.size }); } catch {}
+      try { dr.meter(road, 'road-pivot-blocked'); } catch {}
+    } else if (doc) {
       // Deterministic delivery: the ROAD writes the file, registers it, and points — the pointer
       // cannot be fabricated because the same code that saved the file composes the pointer.
       const _reg = require('./lib/artifact_registry');
@@ -19358,7 +19379,33 @@ async function _roadRun({ order, road, userText, sessionId, asResume = false }) 
       const words = (doc.match(/\S+/g) || []).length;
       const lead = (doc.split(/\n+/).find((l) => l.trim() && !/^#/.test(l.trim())) || '').slice(0, 300);
       const _who = _spawned.filter((s) => deposits.some((d) => d.startsWith(`— ${s.agent}`))).map((s) => s.agent.replace(/_/g, ' ')).join(', ');
-      msg = `The ${String(order.deliverable || 'document')} is done — saved at ${rel} (${kb}KB, ~${words} words${_who ? `, with section research from ${_who}` : ''}).${w.text.length < _floor ? ' It ran thinner than the sources warrant — flagged for a follow-up pass.' : ''}\n\n${lead}`;
+      // THE FORM CURE (2026-09-01, "the spreadsheet is done — saved at …md"): a sheet-shaped order
+      // exports the document's table as a REAL sheet beside the report; if no table exists, the say
+      // never calls a report a spreadsheet. And the pointer is the RESOLVABLE repo path — the
+      // workspace-relative "notes/…" said tonight pointed him at a directory that doesn't hold it.
+      const _fullRel = `data/zoe_workspace/${rel}`;
+      const _sheetish = /\b(spread\s*sheet|sheet|xlsx|csv|table|roster|grid)\b/i.test(String(order.deliverable || ''));
+      let _sheetLine = '';
+      if (_sheetish) {
+        try {
+          const _tbl = dr.mdTableRows(doc);
+          if (_tbl && _tbl.rows.length) {
+            const _so = require('./lib/spreadsheet_out');
+            const _out = await _so.deliverSpreadsheet({ dir: require('path').dirname(abs), basename: _r.slug, rows: _tbl.rows });
+            if (_out && _out.ok) {
+              _sheetLine = ` The sheet itself: data/zoe_workspace/notes/${require('path').basename(_out.path)} (${_out.rows} rows${_out.openable ? ', openable' : ''}).`;
+              console.log(`[road] sheet exported beside the report: ${_out.path} (${_out.rows} rows, ${_out.format})`);
+            }
+          } else console.log('[road] sheet-shaped order but the document carries no table — the say stays honest ("report")');
+        } catch (e) { console.error('[road] sheet export failed:', e.message); }
+      }
+      const _label = (_sheetish && !_sheetLine) ? `${String(order.deliverable)} (delivered as a report — no exportable table)` : String(order.deliverable || 'document');
+      msg = `The ${_label} is done — saved at ${_fullRel} (${kb}KB, ~${words} words${_who ? `, with section research from ${_who}` : ''}).${_sheetLine}${w.text.length < _floor ? ' It ran thinner than the sources warrant — flagged for a follow-up pass.' : ''}\n\n${lead}`;
+      // THE CANVAS EMIT (2026-09-01, "delivered a spreadsheet that is not on the canvas"): every
+      // road delivery lands a block on the Deliveries tab — the one surface he works from.
+      try {
+        canvasUpsertBlock({ focusId: 'deliveries', blockId: `road-${_r.slug}`, title: 'Deliveries', tabMode: 'DOC', blockType: 'paragraph', data: { markdown: `**${String(order.topic || _r.slug).slice(0, 100)}**\n\n\`${_fullRel}\` (${kb}KB, ~${words}w)${_sheetLine ? `\n${_sheetLine.trim()}` : ''}\n\n${lead}` } }).catch(() => {});
+      } catch {}
       console.log(`[road] WRITER'S TURN delivered: ${rel} (${kb}KB, ${words}w, model ${w.model}, ${deposits.length}/${_spawned.length} deposit(s), ${Math.round((Date.now() - t0) / 1000)}s)`);
       // A registered delivery is a competence win — the affect substrate's second win channel
       // (internal_state v3; the pursuit-resolved channel lives in recheck_queue.complete).

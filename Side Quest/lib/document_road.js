@@ -150,14 +150,27 @@ const SWARM = {
     { agent: 'opposition-researcher', ask: 'Collect the counter-arguments, opposition, vetoes, and criticisms on record.' },
   ],
 };
+// THE SUBJECT ANCHOR (2026-09-01, the Summit UT delivery): the road's mandate went to the swarm
+// agents and writer WITHOUT the owner-anchor — "elected official outreach for Summit" (HIS event,
+// FL/MS/AL/GA scope, established in the same conversation) came back as a fully-cited roster of
+// Summit County, UTAH, because the corpus had no legislative match and the writer pivoted to a
+// namesake rather than an honest gap. His world outranks every namesake — on deliverables too.
+function subjectAnchor({ topic, userText } = {}) {
+  const t = String(topic || '').trim() || String(userText || '').slice(0, 120).trim();
+  if (!t) return '';
+  return `SUBJECT ANCHOR (frozen from Lucas's order): the subject is "${t}" exactly as LUCAS means it in this program's world — his projects, his events, his people. Resolve every name against HIS context, never against an outside namesake (a county, town, company, or bill that merely shares the word). If the stores and searches hold nothing on HIS subject, say that plainly and list the gaps — NEVER reinterpret the subject or substitute a same-named different entity. A document about the wrong entity is worse than an honest gap.`;
+}
+
 function swarmPlan(size, topic) {
-  return (SWARM[size] || []).map((s) => ({ agent: s.agent, prompt: `${s.ask}\nTopic: ${String(topic || '').slice(0, 200)}` }));
+  const anchor = subjectAnchor({ topic });
+  return (SWARM[size] || []).map((s) => ({ agent: s.agent, prompt: `${s.ask}\nTopic: ${String(topic || '').slice(0, 200)}${anchor ? `\n${anchor}` : ''}` }));
 }
 
 // Phase B's operator mandate: GATHER AND DIGEST — the writer's turn owns all prose.
 function gatherMandate({ order, road, userText, held = '' } = {}) {
   const heldBlock = held ? `\nYOU ALREADY HOLD this source material — read it with your tools:\n${held}\n` : '';
-  return `GATHER for a document (the document road): ${String(userText || '').slice(0, 400)}\n${heldBlock}` +
+  const anchor = subjectAnchor({ topic: order && order.topic, userText });
+  return `GATHER for a document (the document road): ${String(userText || '').slice(0, 400)}\n${anchor ? `${anchor}\n` : ''}${heldBlock}` +
     'Do NOT write the document — a dedicated writing pass follows this run. Your job is the DIGEST: ' +
     'read the held material and the stores, and return the raw substance the writer needs — the facts, ' +
     'numbers (with their sources), structure, key quotes, and per-section bullet points. Dense and complete ' +
@@ -168,7 +181,8 @@ function gatherMandate({ order, road, userText, held = '' } = {}) {
 function writerPrompt({ order, road, userText, digest = '', deposits = [], held = '' } = {}) {
   const size = (road && road.size) || 'report';
   const sizeLine = size === 'brief' ? 'a tight 1-2 page brief' : size === 'dossier' ? 'a full dossier — as long as the material warrants' : 'a thorough report (roughly 5-10 pages)';
-  return `Write ${sizeLine} in Markdown, now, as your ENTIRE reply.\n\nTHE ORDER: ${String(userText || '').slice(0, 400)}\n\n` +
+  const anchor = subjectAnchor({ topic: order && order.topic, userText });
+  return `Write ${sizeLine} in Markdown, now, as your ENTIRE reply.\n\nTHE ORDER: ${String(userText || '').slice(0, 400)}\n\n${anchor ? `${anchor}\n\n` : ''}` +
     (deposits.length ? `SECTION RESEARCH (from the agent team):\n${deposits.join('\n\n')}\n\n` : '') +
     (digest ? `THE GATHERED DIGEST:\n${digest}\n\n` : '') +
     (held ? `HELD SOURCE MATERIAL (already acquired):\n${held}\n\n` : '') +
@@ -264,6 +278,46 @@ function resolveAnaphor({ projects = null, nowMs = Date.now() } = {}) {
 // topic-tokened matches from the documents store + the downloads directory, names normalized
 // space/hyphen-blind (the 35fe34d lesson).
 function _norm(s) { return String(s || '').toLowerCase().replace(/[-_.\s]+/g, ''); }
+
+// ── THE NO-PIVOT GATE (2026-09-01, the Summit UT delivery): a writer that finds the corpus empty
+// on the subject must deliver the honest-absence report, never a namesake substitute. The observed
+// failure announced itself IN the document ("Therefore, this document focuses on the geographic
+// interpretation of Summit County, Utah") — the pivot marker is the load-bearing detector; the
+// token-overlap floor catches a total subject miss. Pure; the road refuses delivery on a hit.
+const PIVOT_RE = /\b(?:geographic|alternate|alternative|different|broader|literal)\s+interpretation\b|\btherefore,?\s+this\s+(?:document|report|brief|dossier|roster)\s+(?:focuses|will\s+focus|centers|centres)\s+on\b|\binterpret(?:s|ed|ing)?\s+["“«']?[\w\s]{1,40}["”»']?\s+as\s+(?:the|a)\b/i;
+function pivotCheck({ topic, doc } = {}) {
+  const d = String(doc || '');
+  if (!d) return { ok: true };
+  const head = d.slice(0, 2500);
+  if (PIVOT_RE.test(head)) return { ok: false, why: 'the document announces a subject pivot ("…interpretation of / focuses on" a different entity than the order names)' };
+  const toks = _topicTokens(topic);
+  if (toks.length >= 2) {
+    const hn = _norm(head);
+    if (!toks.some((t) => hn.includes(_norm(t)))) return { ok: false, why: `the title/lead shares no subject token with the order (${toks.join(', ')})` };
+  }
+  return { ok: true };
+}
+
+// First Markdown table in a document → { header, rows } (rows as objects keyed by header), or null.
+// Feeds the spreadsheet-form cure: a "spreadsheet" order exports the doc's table as a real sheet.
+function mdTableRows(doc) {
+  const lines = String(doc || '').split(/\r?\n/);
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (/^\s*\|.+\|\s*$/.test(lines[i]) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.replace(/\*\*/g, '').trim());
+      const header = cells(lines[i]);
+      const rows = [];
+      for (let j = i + 2; j < lines.length && /^\s*\|.+\|\s*$/.test(lines[j]); j++) {
+        const vals = cells(lines[j]);
+        const row = {};
+        header.forEach((h, k) => { row[h || `col${k + 1}`] = vals[k] || ''; });
+        rows.push(row);
+      }
+      return rows.length ? { header, rows } : null;
+    }
+  }
+  return null;
+}
 // §59c PORTED (08-29 live: topic "just get the information" bound Texas "Information Disclosure"
 // bills through the token "information" — a wrong-topic document rode the mandate): a GENERIC
 // token never binds. Only specific tokens survive; a topic that is ALL generics yields nothing.
@@ -337,4 +391,4 @@ function mandate({ order, road, userText, held = '' } = {}) {
 
 function _resetForTest() { _lastClaim = null; _preNotes = []; }
 
-module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, tap, claims, mandate, BUDGET, anaphoricOrder, resolveAnaphor, heldMaterial, hasSpecificTopic, planShapedFinal, artifactAbsenceClaim, findHeldArtifact, noteResume, pendingResume, markResumeTry, resumeDue, clearResume, swarmPlan, gatherMandate, writerPrompt, WRITE_BUDGET, WRITE_FLOOR, SWARM, _resetForTest, CLAIMS_KEY, CLAIMS_CAP, ANAPHOR_WINDOW_MS, RESUME_KEY, RESUME_PACE_MS };
+module.exports = { sizeClass, claim, meter, meterIfRecent, notePreClaim, tap, claims, mandate, BUDGET, anaphoricOrder, resolveAnaphor, heldMaterial, hasSpecificTopic, planShapedFinal, artifactAbsenceClaim, findHeldArtifact, noteResume, pendingResume, markResumeTry, resumeDue, clearResume, swarmPlan, gatherMandate, writerPrompt, subjectAnchor, pivotCheck, mdTableRows, WRITE_BUDGET, WRITE_FLOOR, SWARM, _resetForTest, CLAIMS_KEY, CLAIMS_CAP, ANAPHOR_WINDOW_MS, RESUME_KEY, RESUME_PACE_MS };

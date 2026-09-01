@@ -242,5 +242,35 @@ ok(/_verifyArtifactAbsenceFollowup\(finalSaid/.test(main) && /ARTIFACT false bla
   'wiring S3a: every reply is checked for artifact false blanks; a hit posts the correction with the pointer');
 ok(/document_road'\)\.tap\('assignment'\)/.test(main), 'wiring S3a: the assignment lane (the eighth owner door) taps the meter');
 
+// ── ⭐ S4: THE SUMMIT-UT DELIVERY CURES (2026-09-01: a fully-cited roster of Summit County UTAH
+// delivered against his "Summit" EVENT — wrong subject, "spreadsheet" said of an md report,
+// workspace-relative pointer he couldn't resolve, and a real sheet that never reached the canvas).
+const SUMMIT_TOPIC = 'elected official outreach for Summit';
+ok(/exactly as LUCAS means it/.test(road.subjectAnchor({ topic: SUMMIT_TOPIC })) && /never against an outside namesake/i.test(road.subjectAnchor({ topic: SUMMIT_TOPIC })),
+  '⭐ subjectAnchor carries the owner rail (his world outranks every namesake)');
+ok(road.swarmPlan('report', SUMMIT_TOPIC).every((s) => /SUBJECT ANCHOR/.test(s.prompt)) &&
+   /SUBJECT ANCHOR/.test(road.gatherMandate({ order: { topic: SUMMIT_TOPIC }, road: { size: 'report' }, userText: 'x' })) &&
+   /SUBJECT ANCHOR/.test(road.writerPrompt({ order: { topic: SUMMIT_TOPIC }, road: { size: 'report' }, userText: 'x' })),
+  '⭐ the anchor rides ALL THREE mandate surfaces: swarm prompts, gather, writer');
+ok(road.subjectAnchor({}) === '', 'no topic → no anchor (never an empty rail)');
+{
+  const pv = road.pivotCheck({ topic: SUMMIT_TOPIC, doc: '# Roster\n\nNo legislative match was found. Therefore, this document focuses on the geographic interpretation of Summit County, Utah, providing a roster of its officials.' });
+  ok(pv.ok === false && /pivot/.test(pv.why), '⭐ the LIVE pivot sentence is caught — a namesake delivery is unreachable');
+}
+ok(road.pivotCheck({ topic: SUMMIT_TOPIC, doc: '# Elected Official Outreach for Summit\n\nThe roster below covers the FL/MS/AL/GA scope for outreach.' }).ok === true,
+  'an on-subject document passes the gate untouched');
+ok(road.pivotCheck({ topic: 'florida targeting outreach', doc: '# Kansas Wheat Futures\n\nAn analysis of grain markets in the plains states.' }).ok === false,
+  'a total subject miss (zero shared tokens in the lead) also fails');
+ok(road.pivotCheck({ topic: SUMMIT_TOPIC, doc: '' }).ok === true, 'an empty doc is the writer-empty branch, not a pivot');
+{
+  const t = road.mdTableRows('# R\n\n| Name | Office | Contact |\n| :--- | :--- | :--- |\n| **A B** | Mayor | a@b.gov |\n| C D | Council | c@d.gov |\n\ntail');
+  ok(t && t.rows.length === 2 && t.rows[0].Name === 'A B' && t.rows[1].Contact === 'c@d.gov',
+    '⭐ mdTableRows lifts the doc table (bold stripped) — a sheet order exports a REAL sheet');
+  ok(road.mdTableRows('no table here') === null, 'no table → null, the say stays honest ("report")');
+}
+ok(/data\/zoe_workspace\/\$\{rel\}/.test(main), '⭐ wiring: the delivery say points at the RESOLVABLE repo path, not the workspace-relative one');
+ok(/pivotCheck\(\{ topic/.test(main) && /road-pivot-blocked/.test(main), 'wiring: the no-pivot gate sits before registration + announce, with the debt recorded');
+ok(/road-\$\{_r\.slug\}/.test(main) && /sheet-\$\{_rosterState\}-roster/.test(main), '⭐ wiring: BOTH delivery lanes (road + R4 roster) emit to the Deliveries canvas tab');
+
 console.log(`\nsmoke_document_road: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
