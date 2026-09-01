@@ -110,6 +110,21 @@ function clear(threadId) { try { db.setMeta(KEY(threadId), ''); } catch {} }
  *  Legislature. Two gates: parse the JSON shape for the real name/summary, and REQUIRE a shared
  *  distinctive token between name and topic — a resolution that doesn't name the topic is a
  *  spurious semantic hit, and NO anchor (topic-as-written) beats a wrong one. */
+// SECOND LIVE MISFIRE CLASS (#4162/#4163, boot_p216): one shared GENERIC token bound namesakes —
+// topic "…center urban future cuf… funding…" anchored to "URBAN DEVELOPMENT FUND [C00727420]" (an
+// FEC committee) on the lone token "urban", and the sibling thread anchored to a Colorado task
+// force on "housing" — in a FUNDER-BIAS investigation, where a wrong-entity anchor poisons worst.
+// The suiteFor law (§55b) applies here verbatim: a single generic token never binds; one SPECIFIC
+// token or two shared tokens still do. Org-type nouns and civic-domain adjectives are the generic
+// class for entity names.
+const _GENERIC_ANCHOR_TOKENS = new Set([
+  'urban', 'housing', 'affordable', 'affordability', 'national', 'american', 'america', 'center', 'centre',
+  'institute', 'foundation', 'fund', 'funding', 'future', 'policy', 'research', 'project', 'council',
+  'association', 'committee', 'task', 'force', 'development', 'conference', 'coalition', 'network',
+  'partnership', 'group', 'alliance', 'federal', 'state', 'public', 'county', 'city', 'united', 'states',
+  'office', 'department', 'agency', 'initiative', 'program', 'society', 'union', 'league', 'trust',
+  'house', 'senate', 'congress', 'district', 'new', 'the', 'for', 'and',
+]);
 function entityAnchorFrom(topic, rawText) {
   const raw = String(rawText || '').trim();
   if (!raw || !topic) return null;
@@ -120,8 +135,11 @@ function entityAnchorFrom(topic, rawText) {
   if (!name || name.startsWith('[') || name.startsWith('{')) return null;   // never a raw blob as a name
   const toks = (s) => new Set(String(s).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length >= 3));
   const t = toks(topic), n = toks(name);
-  let shared = 0; for (const w of t) if (n.has(w)) shared++;
-  if (shared === 0) return null;
+  const shared = [...t].filter((w) => n.has(w));
+  const specific = shared.filter((w) => !_GENERIC_ANCHOR_TOKENS.has(w));
+  // Bind on ≥2 shared tokens or ≥1 specific token; a lone generic hit anchors nothing —
+  // topic-as-written (the no-anchor line) beats a namesake.
+  if (!(specific.length >= 1 || shared.length >= 2)) return null;
   return { name: name.slice(0, 120), evidence: (summary || name).replace(/\s+/g, ' ').slice(0, 300) };
 }
 

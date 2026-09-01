@@ -65,6 +65,33 @@ ok(base.targets.length === 2 && base.approach === 'old approach', 'applyPlanDelt
   ok(s3.changed === false && s3.intended.length === 3, 'an add duplicating an existing intended target (case-insensitive) is a no-op');
 }
 
+// --- ⭐ THE COMPLETION-CREDIT GATE (boot_p216, five instances one afternoon): the revalidator
+// re-added the org the run had JUST completed — NLIHC/Urban/NHC/FREOPP/HPN, each within a line of
+// its completion. `covered` rode the verdict INPUT and the model ignored it (a prompt rule is a
+// request, a gate is enforcement); the deterministic gate credits done work instead of re-adding.
+{
+  const covered = ['National Low Income Housing Coalition (NLIHC)', 'Urban Institute'];
+  const plan = { objective: 'o', approach: 'a', targets: ['Cato Institute'], facets: [] };
+  const g1 = rp.applyPlanDelta(plan, { add_targets: ['Urban Institute'] }, { covered });
+  ok(g1.changed === false && !g1.plan.targets.some((t) => /urban institute/i.test(t)) && g1.credited.length === 1,
+    '⭐ an exact re-add of a completed target is credited — no plan change, no rev, no steering note');
+  const g2 = rp.applyPlanDelta(plan, { add_targets: ['National Low Income Housing Coalition (NLIHC) publications, methodology documents, advocacy impact data'] }, { covered });
+  ok(g2.changed === false && g2.credited.length === 1,
+    '⭐ the PHRASED re-add (rev 4\'s live shape: completed org + facet tail) is credited too');
+  const g3 = rp.applyPlanDelta(plan, { add_targets: ['NLIHC funder information'] }, { covered });
+  ok(g3.changed === false && g3.credited.length === 1,
+    'an acronym-prefixed re-add ("NLIHC funder information") credits against "(NLIHC)" in the covered name');
+  const g4 = rp.applyPlanDelta(plan, { add_targets: ['Mercatus Center'] }, { covered });
+  ok(g4.changed === true && g4.plan.targets.includes('Mercatus Center') && g4.credited.length === 0,
+    'a genuinely new org still enters the plan — the gate credits, it never blocks discovery');
+  const g5 = rp.applyPlanDelta(plan, { add_targets: ['Urban Institute'], approach_update: 'new tactics: cross-tab the funder rolls against the grant databases' }, { covered });
+  ok(g5.changed === true && g5.notes.length === 1 && /tactics revised/.test(g5.notes[0]),
+    'a real tactics change beside a credited add still lands — as tactics only, never as "added target"');
+  const g6 = rp.applyDeltaToIntended(['Cato Institute'], { add_targets: ['NLIHC publications and methodology'] }, { covered });
+  ok(g6.changed === false && g6.intended.length === 1,
+    '⭐ the walkable set refuses the phrased re-add too — a saturated org is never re-opened under a longer name');
+}
+
 // --- planValidator: accepts a real plan, rejects junk/empty ---
 ok(rp.planValidator('{"objective":"x","approach":"y","targets":["A"]}').valid === true, 'validator accepts a real plan object');
 ok(rp.planValidator('no json here').valid === false, 'validator rejects non-JSON');

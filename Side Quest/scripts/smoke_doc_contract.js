@@ -75,6 +75,23 @@ ok('a plain-text resolution line still anchors when it names the topic', (() => 
 })());
 ok('unparseable / empty resolutions anchor nothing', dc.entityAnchorFrom('applied digital', '') === null && dc.entityAnchorFrom('', 'Applied Digital') === null);
 
+// ⭐ THE SECOND MISFIRE CLASS (#4162/#4163 boot_p216): one shared GENERIC token bound namesakes.
+// The suiteFor law verbatim: a single generic token never binds; one SPECIFIC token or two do.
+const CUF_TOPIC = 'investigate what are center urban future cuf major funding sources total revenue any funder relationships create potential bias its affordability agenda';
+ok('⭐ the live #4163 misfire anchors NOTHING ("urban" alone is generic — an FEC committee is not CUF)',
+  dc.entityAnchorFrom(CUF_TOPIC, '[{"name":"URBAN DEVELOPMENT FUND [C00727420]","summary":"FEC committee"}]') === null);
+ok('⭐ the live #4162 misfire anchors NOTHING ("housing" alone is generic — a CO task force is not CUF)',
+  dc.entityAnchorFrom('investigate how does center urban future cuf frame causal relationship between housing affordability economic mobility',
+    '[{"name":"Affordable Housing Transformational Task Force (CO)","summary":"Colorado legislative task force"}]') === null);
+ok('the TRUE entity still binds (3 shared tokens: center + urban + future)', (() => {
+  const a = dc.entityAnchorFrom(CUF_TOPIC, '[{"name":"Center for an Urban Future","summary":"NYC think tank, economic mobility research"}]');
+  return a && a.name === 'Center for an Urban Future';
+})());
+ok('one SPECIFIC shared token still binds (mercatus is nobody\'s generic)', (() => {
+  const a = dc.entityAnchorFrom('profile mercatus funding sources', '[{"name":"Mercatus Center at George Mason University","summary":"free-market think tank"}]');
+  return a && /Mercatus/.test(a.name);
+})());
+
 // The repair door: clear → a fresh freeze takes (a wrong anchor is never pinned forever).
 dc.clear(9001);
 const c3 = dc.freeze({ threadId: 9001, topic: 'applied digital corp' });

@@ -320,7 +320,33 @@ function revalidateValidator(raw) {
 }
 
 // PURE delta application: returns { plan, changed, notes } — never throws, never mutates the input.
-function applyPlanDelta(plan = {}, verdict = {}) {
+// THE COMPLETION-CREDIT GATE (boot_p216, five clean instances in one afternoon): the revalidator
+// re-added the org the run had JUST completed, every time — NLIHC finished at log line 227 and rev 4
+// "added" it at 246; Urban Institute 502→503; NHC 666→668; FREOPP 857→859; HPN 990→991, one line
+// apart. Mechanism: the cloud verdict diffs the synthesis (which features the just-finished org
+// prominently) against plan.targets, and completed orgs live in `covered`, not the plan list — so
+// "the plan omits X" was manufactured from the run's own success. `covered` was already IN the
+// verdict's input; the model ignoring it proves the law again: a prompt rule is a request, a gate is
+// enforcement. An add that names a completed target is CREDITED (dropped from adds, noted), never
+// re-added — and a rev whose only "change" was crediting done work is NOT a change (no rev bump,
+// no misleading "coverage incomplete" steering note to Lucas).
+const _normTarget = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+function _completedMatcher(covered) {
+  const names = _arr(covered, 60).map(_normTarget).filter(Boolean);
+  // "(NLIHC)"-style acronyms credit facet-phrased re-adds too ("NHC Paycheck to Paycheck database").
+  const acronyms = _arr(covered, 60)
+    .map((c) => (String(c).match(/\(([A-Z]{2,8})\)/) || [])[1])
+    .filter(Boolean)
+    .map((a) => a.toLowerCase());
+  return (add) => {
+    const a = _normTarget(add);
+    if (!a) return false;
+    if (names.some((n) => a.includes(n) || n.includes(a))) return true;
+    const first = a.split(' ')[0];
+    return acronyms.includes(first);
+  };
+}
+function applyPlanDelta(plan = {}, verdict = {}, { covered = [] } = {}) {
   const p = { ...plan, targets: _arr(plan.targets, 60), facets: _arr(plan.facets, 20) };
   const notes = [];
   const drop = new Set(_arr(verdict.drop_targets, 20).map((t) => t.toLowerCase()));
@@ -329,11 +355,15 @@ function applyPlanDelta(plan = {}, verdict = {}) {
     p.targets = p.targets.filter((t) => !drop.has(String(t).toLowerCase()));
     if (p.targets.length !== before) notes.push(`dropped ${before - p.targets.length} target(s)`);
   }
-  const adds = _arr(verdict.add_targets, 20).filter((t) => !p.targets.some((x) => String(x).toLowerCase() === t.toLowerCase()));
+  const isDone = _completedMatcher(covered);
+  const proposed = _arr(verdict.add_targets, 20).filter((t) => !p.targets.some((x) => String(x).toLowerCase() === t.toLowerCase()));
+  const credited = proposed.filter(isDone);
+  const adds = proposed.filter((t) => !isDone(t));
+  if (credited.length) console.log(`[plan] completion-credit: ${credited.length} "add" target(s) already completed this run — credited, not re-added (${credited.slice(0, 3).map((c) => String(c).slice(0, 50)).join('; ')})`);
   if (adds.length) { p.targets = p.targets.concat(adds).slice(0, 60); notes.push(`added target(s): ${adds.slice(0, 4).join(', ')}${adds.length > 4 ? '…' : ''}`); }
   const au = verdict.approach_update && String(verdict.approach_update).trim();
   if (au && au.length > 20 && au !== p.approach) { p.approach = au.slice(0, 1200); notes.push('tactics revised'); }
-  return { plan: p, changed: notes.length > 0, notes };
+  return { plan: p, changed: notes.length > 0, notes, credited };
 }
 
 // REV→WALK SYNC (#3890 boot_p34): applyPlanDelta revises the PLAN, but a bounded run's coverage
@@ -341,11 +371,16 @@ function applyPlanDelta(plan = {}, verdict = {}) {
 // enters that set is never started, and ALL-COVERED fires with plan-revision work still pending.
 // Apply the SAME delta to the walkable set: adds extend it, explicit drops release it. Pure,
 // never mutates its input.
-function applyDeltaToIntended(intended = [], verdict = {}) {
+function applyDeltaToIntended(intended = [], verdict = {}, { covered = [] } = {}) {
   const list = _arr(intended, 60);
   const drop = new Set(_arr(verdict.drop_targets, 20).map((t) => t.toLowerCase()));
   const kept = drop.size ? list.filter((t) => !drop.has(String(t).toLowerCase())) : list;
-  const adds = _arr(verdict.add_targets, 20).filter((t) => !kept.some((x) => String(x).toLowerCase() === t.toLowerCase()));
+  // Completion-credit here too: exact-match dedupe misses the phrased re-add ("NLIHC publications,
+  // methodology documents…") — without this the walk re-opens a saturated org under a longer name.
+  const isDone = _completedMatcher(covered);
+  const adds = _arr(verdict.add_targets, 20)
+    .filter((t) => !kept.some((x) => String(x).toLowerCase() === t.toLowerCase()))
+    .filter((t) => !isDone(t));
   return { intended: kept.concat(adds).slice(0, 60), changed: adds.length > 0 || kept.length !== list.length };
 }
 

@@ -20767,7 +20767,7 @@ async function runDirectedResearchPass(focus) {
                 // would un-stick a non-converging plan.
                 if (!verdict) return;
                 db.setMeta(`focus.${focus.id}.reval_hash`, _rvHash);
-                const { plan: plan1, changed, notes } = require('./lib/research_plan').applyPlanDelta(plan0, verdict);
+                const { plan: plan1, changed, notes } = require('./lib/research_plan').applyPlanDelta(plan0, verdict, { covered });
                 for (const need of (Array.isArray(verdict.tool_needs) ? verdict.tool_needs : []).slice(0, 3)) {
                   try { require('./lib/capability_need').record(String(need).slice(0, 300), { bornFrom: `plan-revalidate:${focus.id}` }); } catch {}
                 }
@@ -20783,7 +20783,7 @@ async function runDirectedResearchPass(focus) {
                 try {
                   let _int = []; try { _int = JSON.parse(db.getMeta(`focus.${focus.id}.intended_targets`) || '[]'); } catch {}
                   if (Array.isArray(_int) && _int.length) {
-                    const synced = rpm.applyDeltaToIntended(_int, verdict);
+                    const synced = rpm.applyDeltaToIntended(_int, verdict, { covered });
                     if (synced.changed) {
                       db.setMeta(`focus.${focus.id}.intended_targets`, JSON.stringify(synced.intended));
                       console.log(`[user-work] plan rev ${rev} → intended_targets synced (${_int.length} → ${synced.intended.length}) — the coverage walk now carries the revision`);
@@ -21443,7 +21443,7 @@ Reply ONLY: {"verdict": "survives"|"refuted", "attack": "<the strongest single a
             });
             if (!verdict) return;   // no verdict (transient) → don't cache; retry next pass (backcheck fix)
             db.setMeta(`focus.${focus.id}.reval_hash`, _rvHash);
-            const { plan: plan1, changed, notes } = rpm.applyPlanDelta(plan0, verdict);
+            const { plan: plan1, changed, notes } = rpm.applyPlanDelta(plan0, verdict, { covered });
             for (const need of (Array.isArray(verdict.tool_needs) ? verdict.tool_needs : []).slice(0, 3)) {
               try { require('./lib/capability_need').record(String(need).slice(0, 300), { bornFrom: `plan-revalidate:${focus.id}` }); } catch {}
             }
