@@ -17846,11 +17846,15 @@ async function runPenWorkPass(focus) {
       } catch {}
       console.log(`[pen] work thread #${focus.id} RESOLVED — proposal #${p.id} applied`);
       return { action: 'done' };
-    } else if (p.status === 'gate-failed' && !st.redrove) {
-      st.redrove = true; st.proposalId = null; pen.setPenState(focus.id, st);
-      st.gateNote = p.gate_note || '';
-      console.log(`[pen] work thread #${focus.id}: proposal #${p.id} failed the gate — ONE re-drive with the tail`);
-    } else {   // rejected, apply-failed, or a second gate failure — honest stop
+    } else if ((p.status === 'gate-failed' || p.status === 'apply-failed') && !st.redrove) {
+      // apply-failed = the diff didn't fit the tree (first live ✓: she diffed against a 6000-char
+      // truncated read of a 7075b file) — the MOST re-drivable failure: re-read fresh, re-diff.
+      st.redrove = true; st.proposalId = null;
+      st.gateNote = `${p.status}: ${p.gate_note || ''}${p.status === 'apply-failed' ? ' — RE-READ the file fresh with <source-read> and diff against the EXACT lines you receive; your last diff did not match the tree.' : ''}`;
+      st.notes = [];   // stale reads caused this — start the re-drive clean
+      pen.setPenState(focus.id, st);
+      console.log(`[pen] work thread #${focus.id}: proposal #${p.id} ${p.status} — ONE re-drive with the why (notes cleared for fresh reads)`);
+    } else {   // rejected, or a second failure — honest stop
       try { db.markOpenThreadStatus(focus.id, 'resolved', { reason: `pen proposal #${p.id} ${p.status}` }); } catch {}
       pen.dropFromQueue(focus.id);
       console.log(`[pen] work thread #${focus.id} closed — proposal #${p.id} ${p.status} (${String(p.gate_note || '').slice(0, 120)})`);
@@ -17911,7 +17915,8 @@ async function runPenWorkPass(focus) {
     if (r && r.ok && (t.tag === 'source-read')) {
       reads++;
       // dedupe by path — a re-read REFRESHES its slot, never stacks duplicates that squeeze out context
-      st.notes = [...(st.notes || []).filter((n) => !n.startsWith(`— ${r.path} (`)), `— ${r.path} (${r.bytes}b) —\n${String(r.text).slice(0, 6000)}`].slice(-8);
+      // 12000-char slot (first ✓ lesson: 6000 truncated a 7075b file and she diffed against the cut)
+      st.notes = [...(st.notes || []).filter((n) => !n.startsWith(`— ${r.path} (`)), `— ${r.path} (${r.bytes}b${r.bytes > 12000 ? ', PARTIAL — diff only against lines you can SEE' : ''}) —\n${String(r.text).slice(0, 12000)}`].slice(-8);
     } else if (r && r.ok && t.tag === 'source-list') {
       st.notes = [...(st.notes || []), `— dir ${r.path}: ${(r.entries || []).join(', ')}`].slice(-8);
     } else if (r && r.ok && t.tag === 'propose-change') {
