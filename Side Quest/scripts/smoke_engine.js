@@ -29,6 +29,16 @@ ok('healthy wins even if spawn disabled', E.decideAction(true, { spawnIfDown: fa
 const args = E.serveArgs('127.0.0.1', 8765);
 ok('serveArgs targets echo.main serve http', args.join(' ') === '-m echo.main serve --transport http --host 127.0.0.1 --port 8765', args.join(' '));
 
+// --- clipForLog (audit S27 follow-up): a clipped traceback keeps its LAST line — the cause ---
+// The live shape: 295 teed "orchestrator cycle N failed" headers, never the OperationalError
+// on the traceback's final line, because the head-only slice cut it every time.
+const tb = 'Traceback (most recent call last):\n' + '  File "graph.py", line 129, in observe_state\n'.repeat(30) + 'sqlite3.OperationalError: unable to open database file';
+const clipped = E.clipForLog(tb, 600);
+ok('clipForLog bounds the chunk to the cap', tb.length > 600 && clipped.length <= 600, `len=${clipped.length}`);
+ok('clipForLog keeps the head', clipped.startsWith('Traceback (most recent call last):'));
+ok('clipForLog keeps the TAIL (the exception line)', clipped.endsWith('sqlite3.OperationalError: unable to open database file'));
+ok('clipForLog passes a short chunk through untouched', E.clipForLog('short line', 600) === 'short line');
+
 // --- ADOPT path: a fake-healthy engine must NOT spawn ---
 (async () => {
   // monkeypatch probeHealth by overriding global fetch to a healthy response

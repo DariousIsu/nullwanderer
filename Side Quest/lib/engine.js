@@ -38,6 +38,17 @@ function decideAction(healthy, { spawnIfDown = true } = {}) {
   return spawnIfDown ? 'spawn' : 'down';
 }
 
+// Clip a child's stderr chunk for the tee WITHOUT losing its cause. A Python traceback puts
+// the exception on its LAST line; the head-only slice (audit S27's cap) teed 295 identical
+// "orchestrator cycle N failed" headers over five hours and never once the OperationalError
+// that explained them. Keep the head AND the tail; the cap still bounds the tee.
+function clipForLog(s, max = 600) {
+  s = String(s);
+  if (s.length <= max) return s;
+  const half = Math.floor((max - 3) / 2);
+  return `${s.slice(0, half)} … ${s.slice(-half)}`;
+}
+
 // The engine launch argv (HTTP transport on the shared port).
 function serveArgs(host = HOST, port = PORT) {
   return ['-m', 'echo.main', 'serve', '--transport', 'http', '--host', host, '--port', String(port)];
@@ -132,7 +143,7 @@ class EngineSupervisor {
     this.owned = true; this.adopted = false;
     // capture the child's stderr (audit S27: it was stdio:'ignore', so the Python traceback that
     // explains a per-cycle crash was discarded at the source — undiagnosable from the app side).
-    try { if (this.child.stderr) this.child.stderr.on('data', (d) => { const s = String(d).trim(); if (s) this.onLog(`[engine:stderr] ${s.slice(0, 600)}`); }); } catch {}
+    try { if (this.child.stderr) this.child.stderr.on('data', (d) => { const s = String(d).trim(); if (s) this.onLog(`[engine:stderr] ${clipForLog(s, 600)}`); }); } catch {}
     this.child.on('exit', (code) => this._onExit(code));
     const ok = await waitHealthy({ timeoutMs: bootTimeoutMs });
     if (!ok) { this.onLog('engine: spawned but never became healthy'); return { state: 'failed', pid: this.child && this.child.pid }; }
@@ -165,7 +176,7 @@ class EngineSupervisor {
       try {
         const proc = this.spawnFn(this.python, def.args, { cwd: this.cwd, env, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
         this.sidecarProcs[def.name] = proc;
-        try { if (proc.stderr) proc.stderr.on('data', (d) => { const s = String(d).trim(); if (s) this.onLog(`[sidecar ${def.name}:stderr] ${s.slice(0, 400)}`); }); } catch {}   // audit S27
+        try { if (proc.stderr) proc.stderr.on('data', (d) => { const s = String(d).trim(); if (s) this.onLog(`[sidecar ${def.name}:stderr] ${clipForLog(s, 600)}`); }); } catch {}   // audit S27 (+ tail kept)
         proc.on('exit', (code) => { this.onLog(`sidecar ${def.name}: exited (code ${code})`); delete this.sidecarProcs[def.name]; });
         this.onLog(`sidecar ${def.name}: spawned (pid ${proc.pid})`);
       } catch (e) { this.onLog(`sidecar ${def.name}: spawn failed — ${e.message}`); }
@@ -245,6 +256,7 @@ module.exports = {
   // pure helpers (exported for the smoke)
   nextBackoff,
   decideAction,
+  clipForLog,
   serveArgs,
   sidecarDefs,
   HEALTH_URL,
