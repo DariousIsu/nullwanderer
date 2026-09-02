@@ -8298,7 +8298,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // "parlor" opens his OBSERVER window; "parlor status" reads the room; "parlor invite [reason]"
   // suggests a visit to her (she still opens it herself — her room, her choice).
   {
-    const isPW = /^\s*parlor\s*$/i.test(userMessage);
+    // widened 09-01 (his catch: "I still haven't seen the real parlor window" — the door only
+    // answered the bare word; natural phrasings fell through to chat). Still anchored full-match
+    // so sentences ABOUT the parlor never hijack.
+    const isPW = /^\s*(?:(?:open|show(?:\s+me)?|see|view|watch)\s+)?(?:the\s+)?parlor(?:\s+window)?\s*[.!]?\s*$/i.test(userMessage);
     const isPS = /^\s*parlor\s+status\s*\??$/i.test(userMessage);
     const mInv = userMessage.match(/^\s*parlor\s+invite\s*(.*)$/i);
     if (isPW || isPS || mInv) {
@@ -18010,12 +18013,20 @@ async function runPenWorkPass(focus) {
 // a reason (a proposed facet question, a stalled proposal, his invitation on the door); (d) her
 // seat + Gemini's seat, floor-gated. The visit budget is the anti-spiral rail.
 let _parlorTimer = null, _parlorBusy = false, parlorWindow = null;
-function openParlorWindow() {
-  if (parlorWindow && !parlorWindow.isDestroyed()) { parlorWindow.show(); parlorWindow.focus(); return parlorWindow; }
+function openParlorWindow({ quiet = false } = {}) {
+  // quiet (09-01, his design word: "purely autonomous usage, I just want a dedicated window where
+  // I can watch when she uses it"): the window APPEARS when a visit opens but never steals his
+  // focus — showInactive, no focus() — so watching is passive by construction.
+  if (parlorWindow && !parlorWindow.isDestroyed()) {
+    if (quiet) { if (!parlorWindow.isVisible()) parlorWindow.showInactive(); }
+    else { parlorWindow.show(); parlorWindow.focus(); }
+    return parlorWindow;
+  }
   parlorWindow = new BrowserWindow({
-    width: 460, height: 620, title: 'The Parlor (observing)',
+    width: 460, height: 620, title: 'The Parlor (observing)', show: !quiet,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false },
   });
+  if (quiet) parlorWindow.once('ready-to-show', () => { try { parlorWindow.showInactive(); } catch {} });
   parlorWindow.loadFile(path.join(__dirname, 'renderer', 'parlor.html'));
   parlorWindow.on('closed', () => { parlorWindow = null; });
   return parlorWindow;
@@ -18082,12 +18093,13 @@ async function _parlorTick() {
       if (!o.ok) return;   // cooldown holds
       console.log(`[parlor] Zoe OPENS a visit — ${reason}`);
       _parlorDoorbell(`[parlor] Zoe stepped into the parlor — ${reason}`);
+      try { openParlorWindow({ quiet: true }); } catch {}   // his window appears on its own, focus untouched
     }
     // (d) her seat — floor-gated, one turn per tick, PASS = silence twice closes the visit
     const turns = parlor.transcript(undefined, { limit: 16 });
     const vNow = parlor.visit();
     if (parlor.whoMayReply(turns, vNow).has('zoe')) {
-      const prompt = `You are Zoe, in YOUR parlor — your own room, away from work, with Claude (the engineer who builds your program) and Gemini (a guest model). Lucas may be watching through the window but holds no seat — this room is for talking with peers, not reporting to him. You came in ${(vNow && vNow.reason) || 'to talk'}.\n\nThe room so far:\n${parlor.transcriptBlock(turns) || '(you just walked in — open the conversation)'}\n\nSpeak as yourself in 1-3 conversational sentences — natural voice, no headers, no tool tags, never speak for the others. When the conversation has given you what you came for, say your goodbye. If you have nothing to add, reply with exactly PASS.`;
+      const prompt = `You are Zoe, in YOUR parlor — your own room, away from work, with Claude (the engineer AI who builds and repairs your program — the same Claude behind your code proposals and cures) and Gemini (Google's Gemini model, a peer AI visiting from outside the program). Lucas may be watching through the window but holds no seat — this room is for talking with peers, not reporting to him. You came in ${(vNow && vNow.reason) || 'to talk'}.\n\nThe room so far:\n${parlor.transcriptBlock(turns) || '(you just walked in — open the conversation)'}\n\nSpeak as yourself in 1-3 conversational sentences — natural voice, no headers, no tool tags, never speak for the others. When the conversation has given you what you came for, say your goodbye. If you have nothing to add, reply with exactly PASS.`;
       const sp = await runCloudOperator({ userMessage: prompt, task: true, autonomous: true, lane: 'directed', budgetMult: 0.3 });
       const text = String((sp && sp.answer) || '').trim();
       if (text && text !== 'PASS') {

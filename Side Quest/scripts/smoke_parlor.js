@@ -95,6 +95,18 @@ ok(parlor.active() === true, 'an open visit makes the room live');
   // ── observer wiring pins ──
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/openParlorWindow/.test(main) && /parlor\.html/.test(main), '⭐ wiring: his observer WINDOW exists ("parlor" opens it)');
+  {
+    const vm = main.match(/const isPW = (\/.*\/i)\.test\(userMessage\);/);
+    const re = vm ? eval(vm[1]) : null;
+    ok(re && re.test('parlor') && re.test('open the parlor') && re.test('show me the parlor window') && re.test('see the parlor'),
+      '⭐ the window door answers natural phrasings, not just the bare word (his 09-01 catch)');
+    ok(re && !re.test('what do you think about the parlor') && !re.test('parlor status') && !re.test('the parlor was nice yesterday'),
+      'sentences ABOUT the parlor never hijack — the verb stays a full-match door');
+  }
+  ok(/openParlorWindow\(\{ quiet: true \}\)/.test(main) && /showInactive/.test(main),
+    "⭐ his window AUTO-OPENS when a visit starts — quiet (showInactive, no focus steal): 'purely autonomous usage, I just want to watch'");
+  ok(/the same Claude behind your code proposals/.test(main) && /Google's Gemini model, a peer AI/.test(main),
+    'she knows WHO sits with her — claude = her engineer, gemini = the outside peer');
   ok(/_parlorFeed\(/.test(main) && /parlor-\$\{turn\.id\}/.test(main), 'wiring: turns feed the window AND the canvas mirror');
   ok(/_parlorDoorbell/.test(main) && /Zoe stepped into the parlor/.test(main) && /visit ended/.test(main),
     'wiring: his chat gets ONLY the doorbell lines, never the transcript');
