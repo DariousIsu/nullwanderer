@@ -12,6 +12,8 @@ const beats = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
 ok(s.chooseNext({ beats, state: {} }) === 'a', 'empty state → first registry beat (all never-run, tie → order)');
 ok(s.chooseNext({ beats, state: { beats: { a: { lastRun: 100 } } } }) === 'b', 'a run, b/c never-run → b (registry order among never-run)');
 ok(s.chooseNext({ beats, state: { beats: { a: { lastRun: 100 }, b: { lastRun: 200 }, c: { lastRun: 50 } } } }) === 'c', 'all run → least-recently-run (c)');
+ok(s.chooseNext({ beats, state: {}, held: new Set(['a']) }) === 'b', '⭐ a HELD beat is excluded (audit S1: the round-robin primary could re-pick a worker-held beat)');
+ok(s.chooseNext({ beats, state: {}, held: new Set(['a', 'b', 'c']) }) === null, 'all held → nothing to pick (no double-drive)');
 ok(s.chooseNext({ beats, state: { beats: { a: { lastRun: 100 }, b: { lastRun: 50 }, c: { lastRun: 200 } } } }) === 'b', 'least-recently-run picks b');
 
 // --- done beats drop out ---

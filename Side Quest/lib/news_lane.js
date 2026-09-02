@@ -590,8 +590,18 @@ function startOfDayMs(now = Date.now()) { const d = new Date(now); d.setHours(0,
 // THE ONE COMPRESSION PATH — used BOTH by the hourly cadence (writeLayer:true) and the on-demand
 // snapshot (writeLayer:false). Reads UN-CLUSTERED reservoir items in the window, clusters them into the
 // rolling stories, closes stale stories, and returns a briefing over the stories active in the window.
-// Idempotent via the story_id-IS-NULL guard in the store, so on-demand + scheduled runs never collide.
-async function runCompression({ store, startMs, endMs = Date.now(), now = Date.now(), adjudicate = null, classifyAds = null, classifyEmailAds = null, reconstructVideo = null, tuner = null, writeLayer = false, coldMs = 6 * 3600 * 1000, log } = {}) {
+// SERIALIZED (audit S17): the story_id-IS-NULL guard is a READ-time filter, and both callers read
+// then await before writing — concurrent passes double-counted corroboration. The chain makes
+// every compression wait for the prior one, so the read-set is never shared across two writers.
+let _compressionChain = Promise.resolve();
+async function runCompression(opts = {}) {
+  const prev = _compressionChain;
+  let release;
+  _compressionChain = new Promise((r) => { release = r; });
+  try { await prev; } catch {}
+  try { return await _runCompressionInner(opts); } finally { release(); }
+}
+async function _runCompressionInner({ store, startMs, endMs = Date.now(), now = Date.now(), adjudicate = null, classifyAds = null, classifyEmailAds = null, reconstructVideo = null, tuner = null, writeLayer = false, coldMs = 6 * 3600 * 1000, log } = {}) {
   ensureSchema();
   let items = (store && typeof store.unclusteredInWindow === 'function') ? store.unclusteredInWindow(startMs, endMs) : [];
   // Stage-0 VIDEO RECONSTRUCTION: group broadcast caption flushes into segments, reconstruct a clean headline

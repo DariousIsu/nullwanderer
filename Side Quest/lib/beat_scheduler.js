@@ -22,9 +22,13 @@ const DEFAULT_SLICE_BUDGET = 3;   // deep dossiers one beat completes before yie
 // Choose the next beat to run: the not-done beat that was run LEAST RECENTLY (never-run sorts first, so a
 // brand-new beat is picked up before an already-cycled one), tie-broken by registry order so the ordering is
 // deterministic. `state.beats[id] = { status, lastRun }`. Returns the beat id, or null if every beat is done.
-function chooseNext({ beats = [], state = {} } = {}) {
+function chooseNext({ beats = [], state = {}, held = null } = {}) {
   const stOf = (id) => (state.beats && state.beats[id]) || {};
-  const candidates = (beats || []).filter((b) => b && b.id && stOf(b.id).status !== 'done');
+  // EXCLUDE held (in-flight-on-a-worker) beats (audit S1): ladderFilter keeps a held beat in the
+  // pool as a rung-blocker, so without this the round-robin primary could re-pick a beat a
+  // background worker is already driving — two lanes on one thread.
+  const heldSet = held instanceof Set ? held : new Set(held || []);
+  const candidates = (beats || []).filter((b) => b && b.id && stOf(b.id).status !== 'done' && !heldSet.has(b.id));
   if (!candidates.length) return null;
   let bestId = null, bestLast = null, bestIdx = -1;
   candidates.forEach((b, i) => {

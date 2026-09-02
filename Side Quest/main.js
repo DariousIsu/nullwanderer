@@ -2337,6 +2337,18 @@ app.whenReady().then(() => {
   // inbound (the heartbeat surfaces it to Lucas unprompted) + integrate into the
   // knowledge store. Baselines on first run so the existing backlog isn't surfaced.
   if (inboxLib.isConfigured()) {
+    // ONE writer for the surfaced-UID dedup ledger (audit S16): read fresh + merge + write in a
+    // single synchronous tick (no await between), so the 4-min poll and 5-min intake timers can
+    // never clobber each other's additions; one cap (500) for both.
+    const _markInboxSurfaced = (uids) => {
+      try {
+        const cur = JSON.parse(db.getMeta('inbox_surfaced_uids') || '[]');
+        const merged = [...cur, ...(uids || [])];
+        const seen = new Set(); const dedup = [];
+        for (let i = merged.length - 1; i >= 0 && dedup.length < 500; i--) { if (!seen.has(merged[i])) { seen.add(merged[i]); dedup.unshift(merged[i]); } }
+        db.setMeta('inbox_surfaced_uids', JSON.stringify(dedup));
+      } catch {}
+    };
     const INBOX_POLL_MS = 4 * 60 * 1000;
     const runInboxPoll = async () => {
       markActivity('inbox-poll');   // stall-attrib (diagnostic)
@@ -2350,8 +2362,7 @@ app.whenReady().then(() => {
             try { db.insertInbound({ tabUrl: 'email', speaker: m.from, text: blurb, source: 'email' }); } catch {}
             memoryLib.storeDeduped({ kind: 'reference', content: `Email I received — from ${m.from}, subject "${m.subject}": ${(m.snippet || '').slice(0, 300)}`, source: 'inbox', importance: 0.55 }).catch(() => {});
           }
-          const merged = [...surfaced, ...r.messages.map(m => m.uid)].slice(-300);
-          db.setMeta('inbox_surfaced_uids', JSON.stringify(merged));
+          _markInboxSurfaced(r.messages.map(m => m.uid));   // audit S16: fresh-read merge, not the pre-await snapshot (the two timers clobbered each other)
           // last_inbound_* is the "reply to the email" target — keep it on the newest REAL
           // PERSON, never a newsletter/daemon/no-reply (else "reply" fires at junk + bounces).
           const realNewest = [...r.messages].reverse().find(m => m.fromAddr && !inboxLib.isJunkSender(m.fromAddr));
@@ -3101,10 +3112,7 @@ app.whenReady().then(() => {
           saveCursor: (uid) => { try { db.setMeta('email_intake_cursor_uid', String(uid)); } catch {} },
           onRouted: (uids) => {
             // Mark lane-claimed UIDs as already-surfaced so runInboxPoll skips them (no chat nudge).
-            try {
-              const surfaced = JSON.parse(db.getMeta('inbox_surfaced_uids') || '[]');
-              db.setMeta('inbox_surfaced_uids', JSON.stringify([...surfaced, ...uids].slice(-500)));
-            } catch {}
+            _markInboxSurfaced(uids);   // audit S16: one shared fresh-read-merge helper, one cap
           },
           cap: parseInt(process.env.EMAIL_INTAKE_CAP || '', 10) || 12,
           log: (m) => console.log(m),
@@ -3216,6 +3224,8 @@ app.whenReady().then(() => {
     const SENATE_HOLDOVERS = { A: parseInt(process.env.SENATE_HOLDOVER_A || '', 10) || 34, B: parseInt(process.env.SENATE_HOLDOVER_B || '', 10) || 31 };
     const runForecastLoop = async () => {
       if (_penGateQuiet()) return;   // a pen gate is running — the recompute holds one interval
+      if (_forecastInFlight) return;   // audit S18: a recompute can exceed 30min under 429 backoff — a concurrent run double-spends FEC/cloud and races lastForecast
+      _forecastInFlight = true;
       markActivity('forecast');   // stall-attrib (diagnostic — Monte-Carlo sim runs in-process)
       try {
         // one bulk poll fetch per race poll-type → index by subject (avoids an HTTP call per race)
@@ -3308,7 +3318,7 @@ app.whenReady().then(() => {
           })().catch(() => {});
         } else if (res) { console.log(`[forecast] recompute skipped: ${res.error}`); }
       } catch (e) { console.error('[forecast] recompute loop failed:', e.message); }
-      finally { markActivity('idle'); }
+      finally { _forecastInFlight = false; markActivity('idle'); }
     };
     forecastLoopTimeout = setTimeout(() => { runForecastLoop().catch(() => {}); }, 2 * 60 * 1000);   // first run ~2m after boot
     forecastLoopTimer = setInterval(() => { runForecastLoop().catch(() => {}); }, FORECAST_LOOP_MS);
@@ -15722,6 +15732,10 @@ function kickDirectedFocusDriver() {
 // self-initiated engagement through the same door research announcements use.
 let autonomyTimer = null;
 let autonomyInFlight = false;
+// re-entrancy guards for the two async loops whose awaited cloud work can outlast their own
+// cadence (audit S0/S18): a second overlapping run clobbered shared state / double-spent cloud.
+let _autonomicInFlight = false;
+let _forecastInFlight = false;
 let _autonomySlot = null;          // the pool cloud slot the current tick holds (board, 2b)
 // AUDIBLE DEFERRALS (catalog O0, measured on boot40: a full day with ZERO decisions was invisible —
 // every gate returned silently, so a starved day read identical to a working one). Each deferral
@@ -15872,6 +15886,8 @@ async function _agentConsumeTick() {
 
 async function autonomyTick() {
   if (autonomyInFlight || !_autonomyEnabled()) return;
+  try { if ((db.getMeta('operator.mode') || 'full').trim() === 'off') return; } catch {}   // audit S9: the off-switch must stop THIS lane too — it spends cloud + runs tool operator passes
+  if (_penGateQuiet()) return;   // and honor the pen quiet window like every sibling lane
   const now = Date.now();
   try {
     // The inbox drains on its OWN pace, before the decide gates — finished delegated work must
@@ -17128,7 +17144,7 @@ function _chooseBeat(pool, state, now, held) {
   // and priority modes honor the top-down structure; held (in-flight) beats still block their state's
   // lower rungs — see beat_scheduler.ladderFilter.
   const laddered = sched.ladderFilter(pool, state, heldSet);
-  if (_allocMode() !== 'priority') return sched.chooseNext({ beats: laddered, state });
+  if (_allocMode() !== 'priority') return sched.chooseNext({ beats: laddered, state, held: heldSet });
   const weights = _allocWeights();
   const dirTokens = _directionTokens();
   return sched.chooseNextByPriority({
@@ -17233,9 +17249,11 @@ function _maintenanceSweep(state, beats) {
 // that never goes through runCloudOperator — recallObject/quick_lookup/relatedEntities called
 // straight off the suit, which is most of the beat machinery's traffic.
 async function autonomicSchedulerTick() {
+  if (_autonomicInFlight) return;   // audit S0: an awaited cloud pass can outlast the 90s cadence — a second tick clobbered the sched.autonomic blob (lost beats)
+  _autonomicInFlight = true;
   markActivity('autonomic-tick');   // stall-attrib (diagnostic — scheduler state + thread scans are synchronous)
   try { return await require('./lib/lane').run({ autonomous: true }, () => _autonomicSchedulerTick()); }
-  finally { markActivity('idle'); }
+  finally { _autonomicInFlight = false; markActivity('idle'); }
 }
 
 async function _autonomicSchedulerTick() {
