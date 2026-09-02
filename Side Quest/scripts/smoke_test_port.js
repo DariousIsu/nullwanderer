@@ -50,6 +50,20 @@ async function fakeRunChatTurn(text, _atts, io) {
   const st = await get('/status');
   ok('status answers', st.code === 200 && st.body.ok && st.body.inFlight === false);
 
+  // ── THE ONE PACING LAW's read door (unification stage 4): GET /quota?lane=… is the gate's verdict, read-only ──
+  const q0 = await get('/quota?lane=research');
+  ok('/quota answers with the lane echoed and fails open when no pool is configured', q0.code === 200 && q0.body.ok && q0.body.lane === 'research' && q0.body.allow === true && q0.body.known === false && /no quota configured/.test(q0.body.reason), JSON.stringify(q0.body));
+  const nowMs = Date.now();
+  db.setMeta('quota.limit_compute', '1000000'); db.setMeta('quota.mark_pct', '0.95'); db.setMeta('quota.mark_at', String(nowMs)); db.setMeta('quota.reset_at', String(nowMs + 48 * 3600e3));
+  const qi = await get('/quota?lane=idle');
+  ok('/quota applies the real law: idle is STOPPED at 95% used (the floor)', qi.code === 200 && qi.body.allow === false && qi.body.known === true && Math.abs(qi.body.usedPct - 0.95) < 1e-6 && /stops at 85% of the pool/.test(qi.body.reason), JSON.stringify(qi.body));
+  const qc = await get('/quota?lane=interactive');
+  ok('/quota: interactive is never throttled', qc.body.allow === true && /never throttled/.test(qc.body.reason));
+  ok('/quota is READ-ONLY: no closure stamp was written by the peek', !db.getMeta('quota.closed_since.idle'));
+  const qd = await get('/quota');
+  ok('/quota defaults to the research lane', qd.body.lane === 'research');
+  db.setMeta('quota.limit_compute', ''); db.setMeta('quota.mark_pct', ''); db.setMeta('quota.mark_at', ''); db.setMeta('quota.reset_at', '');
+
   const r1 = await post({ text: 'convert the doc', settleMs: 1200, maxMs: 15000 });
   ok('turn runs and reply is captured', r1.code === 200 && r1.body.ok && /CONVERT THE DOC/.test(r1.body.say));
   // `say` concatenates every stream (it can double-count); `says` = the stored rows, the truth.

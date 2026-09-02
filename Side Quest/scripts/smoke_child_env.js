@@ -56,8 +56,8 @@ const BASE = {
 // ── nothing to strip is not an error ────────────────────────────────────────────────────────────
 {
   const out = childEnv.forEcho({ PATH: '/bin' });
-  ok(out.PATH === '/bin' && Object.keys(out).length === 2 && 'NX_ECHO_FS_ROOTS' in out,
-    'a clean env passes through with only the fs-roots addition');
+  ok(out.PATH === '/bin' && Object.keys(out).length === 3 && 'NX_ECHO_FS_ROOTS' in out && 'NX_ECHO_APP_QUOTA_URL' in out,
+    'a clean env passes through with only the two additions (fs-roots + the quota door)');
 }
 
 // ── NX_ECHO_FS_ROOTS (O5 review fan-out): Echo may read Zoe's SOURCE, never her data/secrets ────
@@ -84,6 +84,11 @@ const BASE = {
   const echo = read('echo.js'), engine = read('engine.js');
   ok(/env: require\('\.\/child_env'\)\.forEcho\(env \|\| process\.env\)/.test(echo),
     'echo.js stdio transport strips the pins');
+  // ── the one pacing law's door (unification stage 4): every Echo child learns where /quota answers ──
+  const CE = require('../lib/child_env');
+  ok('forEcho sets NX_ECHO_APP_QUOTA_URL to the control port (default 8767)', CE.forEcho({}).NX_ECHO_APP_QUOTA_URL === 'http://127.0.0.1:8767/quota');
+  ok('…following ZOE_TEST_PORT when the port is moved', CE.forEcho({ ZOE_TEST_PORT: '9911' }).NX_ECHO_APP_QUOTA_URL === 'http://127.0.0.1:9911/quota');
+  ok('…and keeping an operator-set door', CE.forEcho({ NX_ECHO_APP_QUOTA_URL: 'http://127.0.0.1:1/x' }).NX_ECHO_APP_QUOTA_URL === 'http://127.0.0.1:1/x');
   // Every python spawn site in engine.js must strip — count the sites, count the strips, they match.
   const pySpawns = (engine.match(/spawnFn\((?:this\.)?python, /g) || []).length;
   const strips = (engine.match(/child_env'\)\.forEcho\(process\.env\)/g) || []).length;

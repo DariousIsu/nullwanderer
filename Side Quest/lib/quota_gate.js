@@ -131,7 +131,29 @@ function closedSince(lane) {
   try { const v = require('./db').getMeta(`quota.closed_since.${String(lane)}`); const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : null; } catch { return null; }
 }
 
+/** THE ONE PACING LAW, READ-ONLY (unification stage 4, 09-02): the same verdict allow() gives, with
+ * NO side effects — no closure stamp, no log line — so another process (Echo's governor, over the
+ * control port's GET /quota) can ask "may a background call spend now?" as often as it likes without
+ * moving this gate's own state. Echo used to pace its passes against a made-up local budget
+ * (14,400 GPU-seconds a day) blind to the real pool; this is how it sees the pool. */
+function peek(lane, { now = Date.now() } = {}) {
+  try {
+    const st = state(now);
+    const spent = spentLastHour(now), spentBg = spentLastHourBackground(now);
+    const r = quota.check({ lane, st, spentLastHour: spent, spentLastHourBg: spentBg, estimate: 0, reopening: !!closedSince(lane) });
+    const since = closedSince(lane);
+    return {
+      lane: String(lane), allow: !!r.allow, reason: r.reason || '',
+      known: !!st.known, usedPct: st.known ? st.usedPct : null, hoursLeft: st.known && Number.isFinite(st.hoursLeft) ? st.hoursLeft : null,
+      pacePerHour: st.known && Number.isFinite(st.pacePerHour) ? st.pacePerHour : null,
+      spentLastHour: spent, spentLastHourBg: spentBg, closedSinceMs: since ? now - since : null,
+    };
+  } catch (e) {
+    return { lane: String(lane), allow: true, reason: `quota peek failed open: ${e.message}`, known: false, usedPct: null, hoursLeft: null, pacePerHour: null, spentLastHour: 0, spentLastHourBg: 0, closedSinceMs: null };
+  }
+}
+
 /** One line for boot / status. */
 function describe(now = Date.now()) { return quota.describe(state(now)); }
 
-module.exports = { allow, state, describe, spentLastHour, spentLastHourBackground, closedSince, _noteClosure };
+module.exports = { allow, peek, state, describe, spentLastHour, spentLastHourBackground, closedSince, _noteClosure };

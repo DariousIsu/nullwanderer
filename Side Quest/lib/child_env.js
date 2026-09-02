@@ -45,6 +45,7 @@ function forEcho(base = process.env, { passthrough = null } = {}) {
     : !!passthrough;
   const out = { ...src };
   _addFsRoots(out);
+  _addAppQuotaDoor(out);
   if (allow) return out;
   const stripped = [];
   for (const k of MODEL_PIN_KEYS) {
@@ -68,6 +69,19 @@ function _addFsRoots(out) {
     for (const r of ours) if (!seen.has(r.toLowerCase())) existing.push(r);
     out.NX_ECHO_FS_ROOTS = existing.join(path.delimiter);
   } catch { /* env stays as-is — Echo just keeps its own repo scope */ }
+}
+
+// NX_ECHO_APP_QUOTA_URL — THE ONE PACING LAW's read door (unification stage 4, 09-02). Every Echo
+// child the app spawns learns where the app's quota gate answers (GET /quota?lane=… on the loopback
+// control port), so Echo's governor paces its background classes against the REAL pool instead of
+// its own made-up daily budget. Only the app sets this: a hand-run or a unit test has no door and
+// consults nothing. An operator-set value is kept.
+function _addAppQuotaDoor(out) {
+  try {
+    if (String(out.NX_ECHO_APP_QUOTA_URL || '').trim()) return;
+    const port = parseInt(out.ZOE_TEST_PORT, 10) || 8767;
+    out.NX_ECHO_APP_QUOTA_URL = `http://127.0.0.1:${port}/quota`;
+  } catch { /* env stays as-is — Echo keeps its local law */ }
 }
 
 module.exports = { forEcho, MODEL_PIN_KEYS };

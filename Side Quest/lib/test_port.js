@@ -201,6 +201,16 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
         return send(200, { ok: true, inFlight: _inFlight, lastUserTurnAgoMs: _lastUserTurnAgoMs(),
           lastRealUserTurnAgoMs: real.agoMs, realUnanswered: real.unanswered, port });
       }
+      // ── THE ONE PACING LAW's read door (unification stage 4, 09-02): GET /quota?lane=research →
+      // the quota gate's verdict for that lane, read-only (no closure stamp, no log). Echo's governor
+      // asks it before every background class instead of pacing against its own made-up budget.
+      // Loopback-only like /status; fail-open is the caller's law, this door only reports.
+      if (req.method === 'GET' && req.url.startsWith('/quota')) {
+        const u = new URL(req.url, 'http://x');
+        const lane = String(u.searchParams.get('lane') || 'research').trim().toLowerCase();
+        const v = require('./quota_gate').peek(lane);
+        return send(200, { ok: true, ...v, at: Date.now() });
+      }
       // ── THE PARLOR doors (09-01): outside seats post attributed turns; zoe's seat posts only
       // from inside the process (a port caller may not speak AS her). Loopback-only server.
       if (req.method === 'POST' && req.url === '/parlor/say') {
