@@ -2304,8 +2304,12 @@ app.whenReady().then(() => {
   // Email: surface a credential problem early rather than at first send.
   if (emailLib.isConfigured()) {
     emailLib.verify().then(r => {
-      console.log(r.ok ? '[main] email SMTP verified, ready to send'
-                       : '[main] email NOT ready (check ZOE_EMAIL_PASS — Gmail needs an App Password): ' + r.reason);
+      if (!r.ok) { console.log('[main] email NOT ready (check ZOE_EMAIL_PASS — Gmail needs an App Password): ' + r.reason); return; }
+      // report the ACTUAL send posture, not just credential validity (audit S28): 'ready to send'
+      // implied outbound was live even when the send kill-switch (default OFF) blocks every send.
+      const _sendOn = (() => { try { return emailLib.isSendEnabled(); } catch { return false; } })();
+      console.log(_sendOn ? '[main] email SMTP verified — outbound ENABLED (send kill-switch ON)'
+                          : '[main] email SMTP verified (read-only — outbound OFF at the send kill-switch, the default)');
     }).catch(() => {});
   } else {
     console.log('[main] email not configured (.env ZOE_EMAIL_USER/PASS blank) — email tool hidden');

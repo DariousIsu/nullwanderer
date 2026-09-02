@@ -38,8 +38,12 @@ function isMeetingNotes(msg) {
   const from = clean(msg && msg.fromAddr).toLowerCase();
   const subj = clean(msg && msg.subject).toLowerCase();
   if (from === 'meetings-noreply@google.com') return true;
-  if (/@google\.com$/.test(from) && /\bnotes\b/.test(subj)) return true;
-  if (/\bgemini\b/.test(subj) && /\bnotes\b/.test(subj)) return true;
+  // EVERY other branch requires a GOOGLE-AUTHENTICATED sender (audit S5): a meeting-notes message
+  // becomes a durable FIRST-PARTY document (read by doc-QA, promoted nightly into Echo long-term),
+  // so a subject-only match from any sender let external mail inject trusted content — and Zoe's
+  // address is a public subscription surface. Gemini/Workspace recaps all originate at google.com.
+  if (!/@google\.com$/.test(from)) return false;
+  if (/\bnotes\b/.test(subj)) return true;
   if (/\bmeeting notes\b/.test(subj)) return true;
   if (/\bnotes (?:from|for) (?:your |the )?meeting\b/.test(subj)) return true;
   return false;
@@ -73,8 +77,13 @@ function newsIdOf(msg) {
 // briefing attributes it; source_kind='newsletter' marks provenance (and keeps it clear of the video
 // ad-filter, which only touches source_kind='video').
 function toNewsRow(msg) {
+  // OUTLET = the sending DOMAIN, never the free-text From DISPLAY name (audit S14): the display
+  // name is attacker-controlled, so a forged "Reuters" could ride the corroboration rail. The
+  // domain is what the sender actually controls, and it dedups honestly across a newsletter's runs.
+  const fromAddr = clean(msg.fromAddr).toLowerCase();
+  const domain = (fromAddr.split('@')[1] || '').trim();
   return {
-    source: clean(msg.from) || clean(msg.fromAddr) || 'newsletter',
+    source: domain || fromAddr || 'newsletter',
     sourceKind: 'newsletter',
     sourceUrl: clean(msg.fromAddr) || null,
     title: clean(msg.subject) || '(newsletter)',

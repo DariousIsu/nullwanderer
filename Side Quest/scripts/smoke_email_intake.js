@@ -20,8 +20,8 @@ ok(intake.classify({ fromAddr: 'newsletter@thedispatch.com', subject: 'Today', h
 // --- classify: meeting-notes ---
 ok(intake.classify({ fromAddr: 'meetings-noreply@google.com', subject: 'Notes from your meeting', headersRaw: 'List-Unsubscribe: <x>\r\n' }) === 'meeting-notes', 'Gemini sender → meeting-notes (wins over a list header)');
 ok(intake.classify({ fromAddr: 'noreply@google.com', subject: 'Your meeting notes are ready', headersRaw: '' }) === 'meeting-notes', 'google.com + "notes" subject → meeting-notes');
-ok(intake.classify({ fromAddr: 'x@y.com', subject: 'Gemini notes: standup', headersRaw: '' }) === 'meeting-notes', 'Gemini + notes subject → meeting-notes');
-ok(intake.classify({ fromAddr: 'x@y.com', subject: 'Meeting notes attached', headersRaw: '' }) === 'meeting-notes', '"meeting notes" subject → meeting-notes');
+ok(intake.classify({ fromAddr: 'aa@google.com', subject: 'Gemini notes: standup', headersRaw: '' }) === 'meeting-notes', 'Gemini + notes subject FROM GOOGLE → meeting-notes (audit S5: sender must be authenticated)');
+ok(intake.classify({ fromAddr: 'bb@google.com', subject: 'Meeting notes attached', headersRaw: '' }) === 'meeting-notes', '"meeting notes" subject FROM GOOGLE → meeting-notes');
 
 // --- classify: other ---
 ok(intake.classify({ fromAddr: 'lucas@gmail.com', subject: 'hey did you see this', headersRaw: 'From: Lucas\r\n' }) === 'other', 'plain person-to-person → other');
@@ -29,7 +29,7 @@ ok(intake.classify(null) === 'other', 'null → other (fail-soft)');
 
 // --- row shapes ---
 const nr = intake.toNewsRow({ from: 'Robert Reich', fromAddr: 'robertreich@substack.com', subject: 'The oligarchy', messageId: '<abc@substack.com>', ts: 123, body: 'x'.repeat(5000) });
-ok(nr.source === 'Robert Reich' && nr.sourceKind === 'newsletter' && nr.urlOrGuid === 'abc@substack.com' && nr.title === 'The oligarchy' && nr.ts === 123, 'toNewsRow maps sender/subject/message-id/ts');
+ok(nr.source === 'substack.com' && nr.sourceKind === 'newsletter' && nr.urlOrGuid === 'abc@substack.com' && nr.title === 'The oligarchy' && nr.ts === 123, 'toNewsRow maps sending-DOMAIN outlet/subject/message-id/ts (audit S14: outlet = domain, not display name)');
 ok(nr.summary.length === 2000, 'toNewsRow caps summary at 2000');
 const nr2 = intake.toNewsRow({ from: 'X', fromAddr: 'x@y', subject: 'S', messageId: '', uid: 42, ts: 0 });
 ok(nr2.urlOrGuid === 'email-uid|42', 'toNewsRow falls back to uid key when no Message-ID');
@@ -73,6 +73,15 @@ const store = { insertItem: (r) => { inserted.push(r); return { inserted: true }
   // missing deps
   const r4 = await intake.runIntakeTick({});
   ok(r4.ok === false && r4.error === 'missing deps', 'missing deps → ok:false');
+
+  // ── ⭐ trust-boundary cures (audit S5/S14) ──
+  ok(intake.classify({ fromAddr: 'attacker@evil.com', subject: 'Meeting notes from your meeting' }) === 'other',
+    '⭐ S5: a subject-only "meeting notes" from a NON-google sender is NOT a first-party meeting-notes doc');
+  ok(intake.classify({ fromAddr: 'meetings-noreply@google.com', subject: 'Notes from your meeting' }) === 'meeting-notes'
+    && intake.classify({ fromAddr: 'x@google.com', subject: 'Gemini notes' }) === 'meeting-notes',
+    'S5: a real Google/Gemini recap still classifies as meeting-notes');
+  ok(intake.toNewsRow({ from: 'Reuters Breaking <spoof@evil.com>', fromAddr: 'spoof@evil.com', subject: 'x', body: 'y' }).source === 'evil.com',
+    '⭐ S14: the newsletter OUTLET is the sending DOMAIN, never the forgeable From display name');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

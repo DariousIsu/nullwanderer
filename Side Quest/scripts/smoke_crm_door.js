@@ -51,7 +51,7 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
             CREATE TABLE account (id INTEGER PRIMARY KEY, Name TEXT);
             INSERT INTO account VALUES (10,'Stanford University'),(20,'Acme Corp'),(30,'Tulane University');
             INSERT INTO contact (id,FirstName,LastName,AccountId) VALUES
-              (1,'Laila','Pirnazar',10),(2,'John','Smith',20),(3,'Pat','O''Brien',30);`);
+              (1,'Laila','Pirnazar',10),(2,'John','Smith',20),(3,'Pat','O''Brien',30),(4,'Robert','Nguyen',20);`);
   crm.close();
   const suit = { connected: true, dispatch: async () => ({ ok: true, text: '{}' }) };
   door._resetForTest();
@@ -66,6 +66,11 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(r3.action === 'would-update' && r3.contactId === 3, "O'Brien still blocks despite punctuation (normalized surname compare)");
   const r4 = await d.upsertPersonObject({ name: 'John Smith', attributeFacts: {}, edgeFacts: {}, identifiers: {}, org: null }, dry);
   ok(r4.action === 'would-create', 'no corroborator at all → a name alone NEVER matches → mint');
+  // ⭐ audit S4: same surname + same INITIAL + same org but a DIFFERENT first name must NOT collapse.
+  const rS4a = await d.upsertPersonObject(door.personObjectFromCard({ name: 'Rachel Nguyen', company: 'Acme Corp' }, [{ type: 'email', value: 'rachel@acme.com' }]), dry);
+  ok(rS4a.action === 'would-create', `⭐ Rachel Nguyen never merges onto Robert Nguyen (same 'nguyen|r' block + org) — MINT (got ${rS4a.action})`);
+  const rS4b = await d.upsertPersonObject(door.personObjectFromCard({ name: 'Rob Nguyen', company: 'Acme Corp' }, [{ type: 'email', value: 'rob@acme.com' }]), dry);
+  ok(rS4b.action === 'would-update' && rS4b.contactId === 4, 'a true nickname (Rob→Robert, prefix) still resolves to the existing row');
 
   // 3b. SESSION MEMORY (boot111: Edson Beall ×3): a repeat discovery of a person the door just
   // created must land on the SAME row — one create, then updates — even though the new contact has

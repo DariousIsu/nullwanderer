@@ -74,7 +74,16 @@ function getDoor(echoSuit) {
         const rows = _crm.prepare(
           `SELECT c.id, c.FirstName FROM contact c LEFT JOIN account a ON a.id = c.AccountId WHERE ${where.join(' AND ')} LIMIT 500`
         ).all(...params);
-        return rows.filter((r) => !fi || String(r.FirstName || '').toLowerCase().startsWith(fi)).map((r) => r.id);
+        // FULL first name must actually match (audit S4): filtering by the first INITIAL alone
+        // collapsed different colleagues — 'Rachel Nguyen' merged onto 'Robert Nguyen' (both
+        // 'nguyen|r', same org). Exact, or one a prefix of the other (Rob/Robert), NOT same-initial.
+        // Fall back to the initial only when a full first name is absent on one side (a false MERGE
+        // is unrecoverable; a duplicate mint is not — the door's own doctrine).
+        return rows.filter((r) => {
+          const rf = String(r.FirstName || '').toLowerCase().trim();
+          if (firstLower && rf) return rf === firstLower || rf.startsWith(firstLower) || firstLower.startsWith(rf);
+          return !fi || rf.startsWith(fi);
+        }).map((r) => r.id);
       },
     };
     // DELIBERATE write ({autonomous:false}) so the tier gate permits create/update — this is a user-facing
