@@ -848,6 +848,13 @@ function runSuite(s, { quiet = false } = {}) {
   else if (!m && childOk && !/✗|FAIL/.test(out) && (out.trim() === '' || /✓/.test(out))) { ok = true; label = '(exit 0 — result line lost to the stdout pipe race)'; fallbackPasses.push(s); }
   else { ok = false; label = m ? `(${m[3]} failed)` : '(no result line — crashed?)'; }
   if (!quiet) console.log(`${ok ? 'PASS' : 'FAIL'}  ${s.padEnd(30)} ${label}`);
+  if (!ok) {
+    // the pen false-red hunt (09-01): three gate reds in a row died anonymous because only this
+    // suite-level line survived — the failing PIN never reached any log. Keep the evidence.
+    runSuite.lastFailPins = out.split('\n').filter((l) => /✗/.test(l)).slice(0, 6);
+    runSuite.lastFailTail = out.trim().split('\n').slice(-4).join('\n').slice(0, 400);
+    if (!quiet && runSuite.lastFailPins.length) console.log(runSuite.lastFailPins.map((l) => '   ' + l.trimEnd()).join('\n'));
+  }
   return ok;
 }
 
@@ -885,7 +892,12 @@ if (failures.length && failures.length <= RETRY_MAX) {
       if (runSuite(s, { quiet: true })) recovered = true;
     }
     if (recovered) { flakes.push(s); passed++; console.log(`  ✓ ${s.padEnd(30)} passed on retry (attempt ${tries}/${RETRY_ATTEMPTS}) → FLAKE (absolved)`); }
-    else { stillFailed.push(s); console.log(`  ✗ ${s.padEnd(30)} failed all ${RETRY_ATTEMPTS} retries → REAL failure`); }
+    else {
+      stillFailed.push(s);
+      console.log(`  ✗ ${s.padEnd(30)} failed all ${RETRY_ATTEMPTS} retries → REAL failure`);
+      const pins = runSuite.lastFailPins || [];
+      console.log(pins.length ? pins.map((l) => '     ' + l.trimEnd()).join('\n') : `     (no ✗ pin lines — tail) ${String(runSuite.lastFailTail || '').replace(/\n/g, ' ⏎ ')}`);
+    }
   }
   failures = stillFailed;
 } else if (failures.length > RETRY_MAX) {

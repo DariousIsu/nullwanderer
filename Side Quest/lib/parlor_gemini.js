@@ -30,6 +30,10 @@ async function maybeReply({ room = parlor.DEFAULT_ROOM, deps = {} } = {}) {
   }
   const turns = deps.turns || parlor.transcript(room, { limit: 16 });
   if (!turns.length) return { ok: true, posted: false };
+  // a resting room has no floor for the bridge (09-01 goodbye-loop: the seat answered a farewell
+  // in a visit that was already over — floor rules alone don't know the visit ended)
+  const v = deps.visit !== undefined ? deps.visit : parlor.visit();
+  if (!v || !v.open) return { ok: true, posted: false };
   const floor = parlor.whoMayReply(turns);
   if (!floor.has('gemini')) return { ok: true, posted: false };
   const doFetch = deps.fetchFn || fetch;

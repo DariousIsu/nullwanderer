@@ -18040,6 +18040,7 @@ function _parlorReason() {
 }
 async function _parlorTick() {
   if (_parlorBusy) return;
+  if (_penGateQuiet()) return;   // 8th lane in the quiet window: zoe's seat is a full cloud-operator run and #4's gate had one mid-flight
   _parlorBusy = true;
   try {
     const parlor = require('./lib/parlor');
@@ -18073,7 +18074,15 @@ async function _parlorTick() {
       const text = String((sp && sp.answer) || '').trim();
       if (text && text !== 'PASS') {
         const p = parlor.post({ speaker: 'zoe', text: text.slice(0, 1200), via: 'internal' });
-        if (p.ok) { console.log(`[parlor] zoe spoke (#${p.id})`); db.setMeta('parlor.zoe_passes', '0'); }
+        if (p.ok) {
+          console.log(`[parlor] zoe spoke (#${p.id})`); db.setMeta('parlor.zoe_passes', '0');
+          // her goodbye said in prose CLOSES the visit (09-01 loop: gemini answered her farewell,
+          // the floor came back, she farewelled again — API-billed pleasantries toward the budget)
+          if (parlor.FAREWELL_RE && parlor.FAREWELL_RE.test(text)) {
+            const closed = parlor.closeVisit({ why: 'her goodbye' });
+            if (closed.ok) { _parlorDoorbell(`[parlor] visit ended — Zoe said her goodbye (${closed.turns} turns)`); console.log('[parlor] visit CLOSED (her goodbye)'); return; }
+          }
+        }
       } else {
         const passes = (parseInt(db.getMeta('parlor.zoe_passes') || '0', 10) || 0) + 1;
         db.setMeta('parlor.zoe_passes', String(passes));

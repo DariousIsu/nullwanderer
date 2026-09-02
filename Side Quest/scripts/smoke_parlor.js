@@ -78,6 +78,20 @@ ok(parlor.active() === true, 'an open visit makes the room live');
   const r5 = await bridge.maybeReply({ deps: { apiKey: 'k', turns, fetchFn: async () => ({ ok: false, status: 429 }) } });
   ok(r5.ok === false && /429/.test(r5.why), 'an API failure is a soft why, never a throw');
 
+  // ── ⭐ the goodbye-loop cures (09-01: gemini answered her farewell in a visit that was already
+  // over; her prose goodbye closed nothing, so the floor ping-ponged toward the budget cap) ──
+  const r6 = await bridge.maybeReply({ deps: { apiKey: 'k', turns, fetchFn: async () => { throw new Error('must not be called'); }, visit: { open: false } } });
+  ok(r6.ok === true && r6.posted === false, '⭐ a resting room has no floor for the bridge — no API call, no reply');
+  ok(parlor.FAREWELL_RE.test("I've got what I came for — thanks, you two.") && parlor.FAREWELL_RE.test("I'll head out — thanks for the sanity check"),
+    'her real goodbyes match the farewell net (both verbatim shapes from the loop night)');
+  ok(!parlor.FAREWELL_RE.test('the priority chain with high-confidence phrases is the right shape to keep'),
+    'working talk never reads as a farewell');
+  const main2 = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/FAREWELL_RE\.test\(text\)/.test(main2) && /visit CLOSED \(her goodbye\)/.test(main2),
+    '⭐ wiring: her prose goodbye CLOSES the visit (and the early return keeps gemini from answering it)');
+  ok(/_penGateQuiet\(\)\) return;\s+_parlorBusy/.test(main2.replace(/\/\/[^\n]*/g, '')) || /8th lane in the quiet window/.test(main2),
+    'wiring: the parlor tick joins the quiet window — her seat is a cloud-operator run and #4 gated with one mid-flight');
+
   // ── observer wiring pins ──
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/openParlorWindow/.test(main) && /parlor\.html/.test(main), '⭐ wiring: his observer WINDOW exists ("parlor" opens it)');

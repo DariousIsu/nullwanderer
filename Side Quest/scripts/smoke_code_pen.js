@@ -174,7 +174,7 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
     '⭐ the apply seam normalizes too — rows filed BEFORE the propose-door recount (like #2) land without a live-DB rewrite');
   ok(/_penSay\(`Approval received/.test(main),
     '⭐ v1.2 wiring: his ✓ is acknowledged IMMEDIATELY in her voice (deterministic pipeline line, never model-authored)');
-  ok((main.match(/_penGateQuiet\(\)/g) || []).length >= 7 && /pen\.gate_until/.test(main),
+  ok((main.match(/_penGateQuiet\(\)/g) || []).length >= 8 && /pen\.gate_until/.test(main),
     '⭐ v1.2 wiring: the QUIET WINDOW — background lanes hold while a pen gate runs (the #2 false-red cure: contention faked a red on a good change)');
   ok(/pen\.stage\(id, 'stage: diff applied/.test(main) && /_pushApprovalsBar\(\)/.test(main) && /pipelineItems\(\)/.test(main),
     'v1.2 wiring: stage notes ride the row, the bar refreshes live, and pen-run cards join the payload');

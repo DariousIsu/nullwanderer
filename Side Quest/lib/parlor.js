@@ -33,6 +33,11 @@ function _ensure() {
     ts INTEGER NOT NULL)`).run();
 }
 
+// Her goodbye said in PROSE (the 09-01 goodbye-loop: "I'll head out" closed nothing, gemini
+// answered the farewell, the floor came back to her, she farewelled again — toward the budget
+// cap on API-billed pleasantries). A farewell-shaped zoe turn closes the visit mechanically.
+const FAREWELL_RE = /\b(goodbye|good ?night|i'?ll head (?:out|back)|heading out|i'?m done here|that'?s all i needed|got what i (?:came for|needed)|see you (?:both|around|next time)|i'?ll (?:leave|let) you (?:two|both))\b/i;
+
 // ── the visit lifecycle ───────────────────────────────────────────────────────────────────────
 function visit({ deps = {} } = {}) {
   const d = deps.db || db;
@@ -120,7 +125,7 @@ function transcriptBlock(turns) {
 }
 
 module.exports = {
-  PARTICIPANTS, OBSERVER, VISIT_TURN_BUDGET, VISIT_COOLDOWN_MS, DEFAULT_ROOM, VISIT_KEY,
+  PARTICIPANTS, OBSERVER, VISIT_TURN_BUDGET, VISIT_COOLDOWN_MS, DEFAULT_ROOM, VISIT_KEY, FAREWELL_RE,
   post, transcript, addressees, whoMayReply, active, transcriptBlock,
   visit, openVisit, closeVisit,
 };
