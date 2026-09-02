@@ -33,10 +33,11 @@ const MAX_OPEN_PROPOSALS = 3;
 // The denylist — what the pen must NEVER read or touch. Keys law: never expose key VALUES; the
 // stores/lexicons are data (NRC never redistributed); .git internals and deps are not source.
 const DENY_RE = [
-  /^\.env/i,                 // .env, .env.example variants — keys live here
+  /(^|\/|\\)\.env[^/\\]*$/i, // .env, .env.example variants at ANY depth — keys live here (audit F38)
   /^data(\/|\\|$)/i,         // sq.db, lexicons, workspace, voices — stores, not source
-  /^\.git(\/|\\|$)/i,
-  /^node_modules(\/|\\|$)/i,
+  /(^|\/|\\)\.git(\/|\\|$)/i,
+  /(^|\/|\\)node_modules(\/|\\|$)/i,
+  /^\.claude(\/|\\|$)/i,     // harness settings/hooks — a hook runs OUTSIDE the gate, and gitignored files have no revert (audit F11)
   /(^|\/|\\)[^/\\]*\.(db|db-wal|db-shm|sqlite3?)$/i,
   /(^|\/|\\)boot_p\d+.*\.log$/i,   // boot logs can carry pasted content; the organ watch owns them
   /(^|\/|\\)boot_self\.log(\.\d+)?$/i,   // the console tee (self-reboot generations) — same class
@@ -84,15 +85,57 @@ function listSource(rel, { deps = {} } = {}) {
   } catch (e) { return { ok: false, why: e.message }; }
 }
 
-/** Files a unified diff touches (from --- a/x and +++ b/x headers). Pure. */
-function touchedFiles(diff) {
-  const out = new Set();
-  for (const m of String(diff || '').matchAll(/^(?:---|\+\+\+)\s+(?:[ab]\/)?([^\s\n]+)/gm)) {
-    const f = m[1];
-    if (f && f !== '/dev/null') out.add(_rel(f));
+/**
+ * THE DIFF AUDIT (09-01, the rename hole): git apply executes MORE than the ---/+++ content
+ * hunks — rename/copy/mode/binary/symlink sections move and delete files no content header
+ * names, so a jail that reads only ---/+++ never sees the real targets. The pen writes CONTENT
+ * to text files; file-ops are not its business. The audit therefore REJECTS every file-op
+ * section outright (a legit move is expressed as delete+create content diffs), rejects path
+ * shapes git and we could read differently (quoted/escaped, spaced, dotted-up, or missing the
+ * a/ b/ prefixes that git apply -p1 strips — the parse-divergence hole), and returns the
+ * COMPLETE jailed path set from BOTH `diff --git` and header-pair lines. Fail-CLOSED: anything
+ * unparseable is refused with the why, never silently passed through. Pure.
+ */
+function auditDiff(diff) {
+  const src = String(diff || '').replace(/\r\n/g, '\n');
+  const files = new Set();
+  const done = () => [...files];
+  const bad = (why) => ({ ok: false, why, files: done() });
+  if (/^(rename (from|to)|copy (from|to)|old mode|new mode|similarity index|dissimilarity index)\b/m.test(src))
+    return bad('file-op sections (rename/copy/mode) are outside the pen — express a move as full delete+create content diffs');
+  if (/^GIT binary patch/m.test(src) || /^Binary files /m.test(src)) return bad('binary patches are outside the pen');
+  if (/^(new|deleted) file mode 120000/m.test(src)) return bad('symlinks are outside the pen');
+  const lines = src.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const L = lines[i];
+    if (/^diff --git /.test(L)) {
+      const g = /^diff --git a\/(\S+) b\/(\S+)\s*$/.exec(L);
+      if (!g) return bad(`unparseable diff --git line (quoted, spaced, or missing a/ b/ prefixes): ${L.slice(0, 120)}`);
+      if (g[1] !== g[2]) return bad(`diff --git names two different paths (${g[1]} vs ${g[2]}) — file-ops are outside the pen`);
+      files.add(_rel(g[1]));
+      continue;
+    }
+    // a header PAIR (git invariant: --- immediately precedes +++). A lone column-0 "--- x" is a
+    // hunk-body deletion of "-- x", never a header — leave it to the hunk scanner (audit F26).
+    if (/^--- /.test(L) && i + 1 < lines.length && /^\+\+\+ /.test(lines[i + 1])) {
+      for (const h of [L, lines[i + 1]]) {
+        const pm = /^(?:---|\+\+\+) ([ab]\/(\S+)|\/dev\/null)(\t[^\n]*)?$/.exec(h);
+        if (!pm) return bad(`unparseable file header (the pen takes a/ b/ git-style headers only): ${h.slice(0, 120)}`);
+        if (pm[2]) files.add(_rel(pm[2]));
+      }
+      i++;
+    }
   }
-  return [...out];
+  for (const f of files) {
+    if (/(^|\/)\.\.(\/|$)/.test(f)) return bad(`path climbs upward (${f})`);
+    const j = pathAllowed(f);
+    if (!j.ok) return { ok: false, why: `touched file "${f}": ${j.why}`, files: done() };
+  }
+  return { ok: true, files: done() };
 }
+
+/** Files a unified diff touches — the audit's COMPLETE set (diff --git + header pairs). Pure. */
+function touchedFiles(diff) { return auditDiff(diff).files; }
 
 /**
  * Recount every @@ hunk header from the body it actually carries. Pure.
@@ -142,7 +185,10 @@ function normalizeDiff(diff) {
     const body = [];
     let j = i + 1;
     for (; j < lines.length; j++) {
-      if (/^(@@ -|--- |\+\+\+ |diff --git )/.test(lines[j])) break;
+      // break only on REAL section boundaries: a new hunk, a new diff section, or a ---/+++
+      // header PAIR. A lone "--- x" is a body deletion of "-- x" (audit F26) — keep it.
+      if (/^@@ -/.test(lines[j]) || /^diff --git /.test(lines[j])
+        || (/^--- /.test(lines[j]) && j + 1 < lines.length && /^\+\+\+ /.test(lines[j + 1]))) break;
       body.push(lines[j] === '' ? ' ' : lines[j]);
     }
     let oldN = 0, newN = 0;
@@ -181,6 +227,14 @@ function _ensure() {
     born_from TEXT, gate_note TEXT,
     created_ts INTEGER, updated_ts INTEGER)`).run();
   try { db.getDb().prepare('ALTER TABLE code_proposals ADD COLUMN seen INTEGER DEFAULT 0').run(); } catch { /* column exists */ }
+  // parlor's second-opinion bookkeeping is its OWN column — it consumed `seen` and made his
+  // failed-run cards vanish without an operator click (audit F17/F24). One-time backfill inside
+  // the migration try: rows the old code already visited carried seen=1 — copy it so settled
+  // stories STAY settled (the backfill never runs again once the column exists).
+  try {
+    db.getDb().prepare('ALTER TABLE code_proposals ADD COLUMN parlor_seen INTEGER DEFAULT 0').run();
+    db.getDb().prepare('UPDATE code_proposals SET parlor_seen = COALESCE(seen, 0)').run();
+  } catch { /* column exists */ }
 }
 
 /** File a proposal. Validation is the front gate: parseable diff, every touched file inside the
@@ -193,9 +247,10 @@ function propose({ title, rationale = '', diff, bornFrom = '', nowMs = Date.now(
   if (!d0) return { ok: false, why: 'a proposal needs a unified diff — the diff IS the claim' };
   const d = normalizeDiff(d0); // recounted headers: the body is the claim, the arithmetic is derived
   if (Buffer.byteLength(d, 'utf8') > MAX_DIFF_BYTES) return { ok: false, why: `diff too large (> ${MAX_DIFF_BYTES} bytes) — split the change` };
-  const files = touchedFiles(d);
+  const audit = auditDiff(d);
+  if (!audit.ok) return { ok: false, why: audit.why };
+  const files = audit.files;
   if (!files.length) return { ok: false, why: 'no file headers found — send a real unified diff (--- a/x / +++ b/x)' };
-  for (const f of files) { const g = pathAllowed(f); if (!g.ok) return { ok: false, why: `touched file "${f}": ${g.why}` }; }
   const open = db.getDb().prepare("SELECT COUNT(*) n FROM code_proposals WHERE status IN ('proposed','approved','applying')").get().n;
   if (open >= MAX_OPEN_PROPOSALS) return { ok: false, why: `${open} proposal(s) already open — the pen is one-change-at-a-time discipline; wait for Lucas's word` };
   const r = db.getDb().prepare('INSERT INTO code_proposals (title, rationale, diff, files, status, born_from, created_ts, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
@@ -352,7 +407,7 @@ next program cycle, not instantly.`;
 
 module.exports = {
   REPO_ROOT, MAX_READ_BYTES, MAX_DIFF_BYTES, MAX_OPEN_PROPOSALS, DENY_RE, PEN_QUEUE_KEY,
-  pathAllowed, readSource, listSource, touchedFiles, normalizeDiff,
+  pathAllowed, readSource, listSource, touchedFiles, auditDiff, normalizeDiff,
   propose, get, setStatus, decide, pending, pipelineItems, stage, markSeen, RUN_WINDOW_MS,
   seedPenWork, workQueue, dropFromQueue, penState, setPenState, isEditIntent,
   parseTags, stripTags, dispatch, buildPromptBlock,

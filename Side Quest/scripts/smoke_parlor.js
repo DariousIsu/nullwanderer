@@ -93,8 +93,8 @@ ok(parlor.active() === true, 'an open visit makes the room live');
   const main2 = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/FAREWELL_RE\.test\(text\)/.test(main2) && /visit CLOSED \(her goodbye\)/.test(main2),
     '⭐ wiring: her prose goodbye CLOSES the visit (and the early return keeps gemini from answering it)');
-  ok(/_penGateQuiet\(\)\) return;\s+_parlorBusy/.test(main2.replace(/\/\/[^\n]*/g, '')) || /8th lane in the quiet window/.test(main2),
-    'wiring: the parlor tick joins the quiet window — her seat is a cloud-operator run and #4 gated with one mid-flight');
+  ok(/if \(_penGateQuiet\(\)\) return;/.test(main2) && /function _parlorTick\(\) \{\s+if \(_parlorBusy\) return;\s+if \(_penGateQuiet\(\)\)/.test(main2.replace(/\/\/[^\n]*/g, '').replace(/ +/g, ' ')),
+    'wiring: the parlor tick joins the quiet window — pinned on the CODE shape, not a comment (audit F41)');
 
   // ── observer wiring pins ──
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
@@ -113,8 +113,18 @@ ok(parlor.active() === true, 'an open visit makes the room live');
     'she knows WHO sits with her — claude = her engineer, gemini = the outside peer');
   ok(/_parlorFeed\(\{ id: `bell-/.test(main) && !/model: 'parlor', unprompted: 1/.test(main),
     "⭐ v1.3 ISOLATION (his catch: 'all landing in the unprompted channel'): doorbells feed ONLY the window + mirror — no chat turn, no unprompted say, no voice");
-  ok(/COALESCE\(p\.seen, 0\) = 0/.test(main) && /q\.status = 'applied' AND q\.title = p\.title/.test(main) && /SET seen = 1 WHERE id = \?'\)\.run\(gf\.id\)/.test(main),
-    '⭐ a failure earns ONE visit — consumed at open, and a landed same-title successor ends the story (she re-entered for a settled red)');
+  ok(/COALESCE\(p\.parlor_seen, 0\) = 0/.test(main) && /q\.status = 'applied' AND q\.title = p\.title/.test(main) && /SET parlor_seen = 1 WHERE id = \?'\)\.run\(gf\.id\)/.test(main),
+    '⭐ a failure earns ONE visit — consumed at open via the parlor\'s OWN column (audit F17/F24: consuming `seen` made his failed-run cards vanish), and a landed same-title successor ends the story');
+  ok(/r\.commit\(\)/.test(main) && /the reason is NOT consumed/.test(main),
+    '⭐ reasons are consumed only AFTER the visit opens (audit F14/F29: a cooldown-refused open silently destroyed invitations)');
+  ok(/wall clock — the room went quiet/.test(main),
+    '⭐ the WALL CLOCK closes a quiet visit (audit F5/F12: a floor handed to an absent seat held the room open forever)');
+  ok(/floor unchanged, not a PASS/.test(main),
+    'a deferred/failed operator run is never her deliberate PASS (audit F15: a quota outage insta-closed visits)');
+  ok(/\(t\.ts \|\| 0\) >= \(vNow\.since \|\| 0\)/.test(main),
+    'the floor is VISIT-scoped (audit F16: a new visit inherited the last visit\'s closing turn and locked her out)');
+  ok(/working talk, not a goodbye/.test(main) && /FAREWELL_RE\.test\(text\) && !\/\\\?\//.test(main),
+    'a farewell that still ASKS something never closes the room (audit F28)');
   ok(/_parlorFeed\(/.test(main) && /parlor-\$\{turn\.id\}/.test(main), 'wiring: turns feed the window AND the canvas mirror');
   ok(/_parlorDoorbell/.test(main) && /Zoe stepped into the parlor/.test(main) && /visit ended/.test(main),
     'wiring: his chat gets ONLY the doorbell lines, never the transcript');

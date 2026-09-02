@@ -28,7 +28,26 @@ ok(pen.pathAllowed('.git/config').ok === false, '.git internals sealed');
 ok(pen.pathAllowed('node_modules/electron/index.js').ok === false, 'node_modules is not source');
 ok(pen.pathAllowed('../../../Windows/system32/config').ok === false, '⭐ traversal outside the repo refused (the jail holds)');
 ok(pen.pathAllowed('lib/../.env').ok === false, 'traversal-to-denied refused after resolution');
-ok(pen.pathAllowed('canvas_docs.db').ok === false || pen.pathAllowed('data/canvas_docs.db').ok === false, 'db files sealed wherever they sit');
+ok(pen.pathAllowed('canvas_docs.db').ok === false && pen.pathAllowed('data/canvas_docs.db').ok === false, 'db files sealed wherever they sit (audit F42: was OR — the generic *.db rule went unguarded)');
+ok(pen.pathAllowed('.claude/settings.local.json').ok === false, '⭐ harness settings are OUTSIDE the pen (audit F11: a hook runs outside the gate, and gitignored files have no revert)');
+ok(pen.pathAllowed('lib/.env.backup').ok === false && pen.pathAllowed('sidecar/.env').ok === false, 'nested .env copies denied at any depth (audit F38)');
+
+// ── ⭐ THE DIFF AUDIT (audit F0/F1: the rename hole — git apply executes file-ops the ---/+++ jail never saw) ──
+ok(pen.auditDiff('diff --git a/lib/a.js b/lib/b.js\nsimilarity index 100%\nrename from lib/a.js\nrename to lib/b.js\n').ok === false,
+  '⭐ rename sections are REFUSED outright — a move is expressed as delete+create content diffs or not at all');
+ok(pen.auditDiff('diff --git a/.env b/.env\nnew file mode 100644\n--- /dev/null\n+++ b/.env\n@@ -0,0 +1 @@\n+KEY=1\n').ok === false,
+  'a denied path in ANY header form is refused');
+ok(pen.auditDiff('--- lib/x.js\n+++ lib/x.js\n@@ -1 +1 @@\n-a\n+b\n').ok === false,
+  'headers without a/ b/ prefixes are refused — git apply -p1 strips a DIFFERENT first component than a bare path records (audit F0)');
+ok(pen.auditDiff('diff --git "a/lib/x.js" "b/lib/x.js"\n--- "a/lib/x.js"\n+++ "b/lib/x.js"\n@@ -1 +1 @@\n-a\n+b\n').ok === false,
+  'quoted/escaped paths are refused (audit F27: tokenization divergence)');
+ok(pen.touchedFiles('diff --git a/lib/x.js b/lib/x.js\n--- a/lib/x.js\n+++ b/lib/x.js\n@@ -1 +1 @@\n-a\n+b\n').includes('lib/x.js'),
+  'the audited file set spans diff --git AND header pairs');
+{
+  const nd = pen.normalizeDiff('--- a/lib/zz_f26.js\n+++ b/lib/zz_f26.js\n@@ -1,3 +1,2 @@\n a\n--- q\n b\n');
+  ok(/^--- q$/m.test(nd) && /@@ -1,3 \+1,2 @@/.test(nd),
+    'a deletion of "-- q" is hunk BODY, not a header — the scanner keeps it and the recount holds (audit F26)');
+}
 
 // ── read-only bounded reads ──
 {
@@ -167,7 +186,8 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
 {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/\^pen-\(\\d\+\)\$/.test(main) && /_applyPenProposal\(r\.id\)/.test(main), 'wiring: pen-N card decisions route to the enforce pipeline on his ✓');
-  ok(/git.*apply.*--check/.test(main) && /'npm', \['test'\]/.test(main) && /checkout', \['--'/.test(main.replace(/\['checkout', '--'/g, "checkout', ['--")) || /'checkout', '--'/.test(main), 'wiring: apply-check → full gate → revert-on-red all present');
+  ok(/'apply', '--check'/.test(main) && /'npm', \['test'\]/.test(main) && /'checkout', '--'/.test(main) && /revertScope\(\)/.test(main),
+    'wiring: apply-check → full gate → revert-on-red all present (audit F21: the old pin was vacuous by operator precedence)');
   ok(/uncommitted local changes on/.test(main), 'wiring: a dirty tree BLOCKS the apply — my in-flight work is never clobbered');
   ok(/const penBlock = require\('\.\/lib\/code_pen'\)\.buildPromptBlock\(\)/.test(main) && /penLib\.stripTags/.test(main), 'wiring: the pen block rides her prompt; leaked tags are stripped from thought AND say');
   const chat = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'chat.js'), 'utf8');
@@ -182,8 +202,8 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
     '⭐ the apply seam normalizes too — rows filed BEFORE the propose-door recount (like #2) land without a live-DB rewrite');
   ok(/_penSay\(`Approval received/.test(main),
     '⭐ v1.2 wiring: his ✓ is acknowledged IMMEDIATELY in her voice (deterministic pipeline line, never model-authored)');
-  ok((main.match(/_penGateQuiet\(\)/g) || []).length >= 8 && /pen\.gate_until/.test(main),
-    '⭐ v1.2 wiring: the QUIET WINDOW — background lanes hold while a pen gate runs (the #2 false-red cure: contention faked a red on a good change)');
+  ok((main.match(/if \(_penGateQuiet\(\)\)/g) || []).length >= 9 && /pen\.gate_until/.test(main),
+    '⭐ v1.2 wiring: the QUIET WINDOW — 9 guarded CALL SITES (audit F32: the old count included the definition; audit F6 added the metabolism as the 9th lane)');
   ok(/pen\.stage\(id, 'stage: diff applied/.test(main) && /_pushApprovalsBar\(\)/.test(main) && /pipelineItems\(\)/.test(main),
     'v1.2 wiring: stage notes ride the row, the bar refreshes live, and pen-run cards join the payload');
   ok(/`Proposal #\$\{id\} landed — gate green/.test(main) && /_penSay\(`Proposal #\$\{id\} went RED/.test(main),
@@ -204,6 +224,28 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
     "⭐ THE PURSUIT (his law: we don't take no for an answer): a second gate red converts the thread to a diagnosis brief — the ✗ pins become HER problem, never a silent close");
   ok(/rejected \(his word\)/.test(main) && /STALLED after pursuit/.test(main),
     'pursuit bounds: his ✗ still closes instantly; ONE pursuit generation, then an honest voiced stall with the evidence on the rows');
+  // ── ⭐ the 09-01 AUDIT WAVE cures (43 confirmed findings; the pipeline/reboot cluster) ──
+  ok(/_penApplyBusy/.test(main) && /queued — another proposal is in its gate/.test(main),
+    '⭐ ONE pipeline at a time (audit F4/F10) — a second ✓ queues; interleaved gates cross-contaminated verdicts and dropped the quiet window mid-gate');
+  ok(/revertScope/.test(main) && /createdByPatch/.test(main),
+    '⭐ revert knows what the patch CREATED (audit F7) — created files revert by deletion; a checkout abort no longer strands a failed patch on disk');
+  ok(/git apply failed after the check passed/.test(main),
+    'the apply exit code is READ (audit F25) — the gate can never bless the unpatched tree');
+  ok(/gate green but commit failed — REVERTED/.test(main),
+    'a failed commit reverts and unstages (audit F8) — nothing stows away on the next proposal\'s commit');
+  ok(/BOOT RECOVERY/.test(main) && /wedged in 'applying'/.test(main) && /re-approve to run the gate/.test(main),
+    '⭐ boot recovery (audit F2/F9/F23) — a mid-pipeline death restores the tree, fails the row loudly, and returns an unrun ✓ to the bar');
+  ok(/_selfRebootGuardRed/.test(main) && /ABORTED at the fuse/.test(main),
+    '⭐ the fuse RE-CHECKS the guards (audit F3/F20) — a ✓ or a fresh turn landing inside the 5s stands the reboot down');
+  ok(/status IN \('approved','applying'\)\"\)\.get\(\)\.n/.test(main) || /never kill a ✓ that has not run/.test(main),
+    'her reboot never kills a pending ✓ or a mid-run pipeline (audit F20)');
+  ok(/died instantly \(code/.test(main),
+    'a stub python cannot strand her (audit P0) — instant cycler death falls back to app.relaunch before the exit');
+  {
+    const rs = fs.readFileSync(path.join(__dirname, 'run_smokes.js'), 'utf8');
+    ok(/printed pass but exited nonzero/.test(rs) && (rs.match(/childOk/g) || []).length >= 6,
+      '⭐ GATE BY EXIT CODE in every dialect (audit F22) — a suite that prints its pass line then crashes scores RED');
+  }
   // ⭐ THE OUTSIDE HAND (his 09-01 confirm: full reboot control = "spawn an outside boot cycle python")
   ok(fs.existsSync(path.join(__dirname, '..', 'scripts', 'boot_cycle.py')),
     '⭐ the outside boot-cycler exists — her reboot no longer depends on the dying process staying healthy');

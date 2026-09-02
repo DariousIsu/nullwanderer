@@ -714,6 +714,10 @@ const smokes = [
   // memory; floor rules (naming hands the floor; agent-run cap holds it for Lucas); the Gemini
   // bridge (key in HEADER never URL, PASS = silence, fail-soft); port doors + zoe-seat protection.
   'smoke_parlor.js',
+  // ── THE WORK BOARD (Lucas 09-01: "live charts and graphics" for running work): SELECTed lanes
+  // (pen runs/queue, parlor visit, quiet window, cycler lock) → deterministic escaped SVG; the
+  // model-never-draws-a-bar law; auto-open-quiet on run start; verb door; preload bridges.
+  'smoke_work_board.js',
   // ── the AFFECT TISSUES (B2/B3, 2026-08-31 — docs/AFFECT_SUBSTRATE_RESEARCH_2026-08-31.md): the
   // deterministic python passes (appraisal-with-reasons + per-subject impressions) + the paced
   // idle-gated driver. Hermetic fixtures; proves replay determinism, decay, the RO rail, and
@@ -817,12 +821,16 @@ function runSuite(s, { quiet = false } = {}) {
   // refactored without one gated test running.
   const m = out.match(/(ALL PASS|FAILURES|PASS|FAIL) — (\d+) (?:ok|passed), (\d+) failed/);
   let ok, label;
-  if (m && /^(ALL )?PASS$/.test(m[1])) { ok = true; label = `(${m[2]} ok)`; }
+  // GATE BY EXIT CODE, always (audit F22): a suite that PRINTS its pass line and then crashes
+  // or hangs into the timeout exits nonzero — the printed verdict never outranks the exit code,
+  // so every green dialect below also requires childOk.
+  if (m && /^(ALL )?PASS$/.test(m[1]) && !childOk) { ok = false; label = '(printed pass but exited nonzero — crashed after the verdict)'; }
+  else if (m && /^(ALL )?PASS$/.test(m[1])) { ok = true; label = `(${m[2]} ok)`; }
   // THIRD dialect: a suite that prints a bare "SMOKE PASSED"/"SMOKE FAILED" with no counts (e.g.
   // smoke_activity_coverage). It was reported as a FAILURE for want of a matching regex — the same
   // bug the comment above describes, one dialect later. A green suite counted as red is not the safe
   // direction it looks like: it trains everyone to read past a red gate.
-  else if (!m && /^\s*SMOKE PASSED\s*$/m.test(out)) { ok = true; label = '(no count reported)'; }
+  else if (!m && /^\s*SMOKE PASSED\s*$/m.test(out)) { ok = childOk; label = childOk ? '(no count reported)' : '(printed pass but exited nonzero — crashed after the verdict)'; }
   // FIFTH dialect, GENERALIZED (2026-08-12 review M6 follow-through + the wave-2 audit's dialect
   // zoo): the verdict is any count line `N passed, M failed` (em dash, hyphen, self-named prefix,
   // "CURATION OK —", "COMMIT GUARDRAIL OK —", "SOME FAILURES —" — all carry it) or a bare
@@ -831,9 +839,10 @@ function runSuite(s, { quiet = false } = {}) {
   // matcher ends the dialect whack-a-mole (three specific dialects grew to six in one audit).
   else if (!m && /\d+\s+passed,\s+\d+\s+failed/.test(out)) {
     const g = [...out.matchAll(/(\d+)\s+passed,\s+(\d+)\s+failed/g)].pop();
-    ok = Number(g[2]) === 0; label = ok ? `(${g[1]} ok)` : `(${g[2]} failed)`;
+    ok = Number(g[2]) === 0 && childOk;
+    label = Number(g[2]) !== 0 ? `(${g[2]} failed)` : (childOk ? `(${g[1]} ok)` : '(printed pass but exited nonzero — crashed after the verdict)');
   }
-  else if (!m && /:\s*\d+\s+ok\s*$/m.test(out) && !/✗|FAIL/i.test(out)) { ok = true; label = '(n-ok line)'; }
+  else if (!m && /:\s*\d+\s+ok\s*$/m.test(out) && !/✗|FAIL/i.test(out)) { ok = childOk; label = childOk ? '(n-ok line)' : '(printed pass but exited nonzero — crashed after the verdict)'; }
   // FOURTH dialect (measured 2026-08-06): Electron's piped stdout can DROP the final console.log
   // when process.exit fires before the pipe drains — a suite whose ok() is success-silent
   // (smoke_self_question) then produces ZERO output on a clean pass, and three others lose only

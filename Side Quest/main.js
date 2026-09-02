@@ -2891,6 +2891,7 @@ app.whenReady().then(() => {
     const runMetabolism = async () => {
       try {
         if (String(process.env.ZOE_RECHECK || '1') === '0') return;
+        if (_penGateQuiet()) return;   // the 9th lane in the quiet window (audit F6: metabolism's full cloud passes ran through every pen gate)
         const rq = require('./lib/recheck_queue');
         // B0 increment 2 (metabolism yield check, 2026-08-10): the tick's cloud passes already attribute
         // (markActivity('metabolism') below covers the pass + applyOutcome writes = the 346k in stall_attrib.log),
@@ -3547,6 +3548,7 @@ function _penGateQuiet() {
 // git apply --check → apply → FULL npm test with the exit code READ (never piped away) → commit
 // the named files on green; REVERT the files and attach the gate tail on red. Every outcome is
 // loud and lands back on the proposal row; the change goes LIVE at the next cycle, never hot.
+let _penApplyBusy = false;   // ONE pipeline at a time (audit F4/F10): interleaved gates cross-contaminate and the first finisher drops the quiet window mid-gate
 async function _applyPenProposal(id) {
   const pen = require('./lib/code_pen');
   const { execFile } = require('child_process');
@@ -3556,10 +3558,30 @@ async function _applyPenProposal(id) {
   });
   const p = pen.get(id);
   if (!p || p.status !== 'approved') return;
+  if (_penApplyBusy) {
+    pen.stage(id, 'stage: queued — another proposal is in its gate; this one runs next');
+    setTimeout(() => { try { _applyPenProposal(id); } catch {} }, 90 * 1000);
+    return;
+  }
+  _penApplyBusy = true;
+  try { openWorkBoard({ quiet: true }); } catch {}   // a run just started — his board appears on its own, focus untouched
   const files = JSON.parse(p.files || '[]');
   pen.setStatus(id, 'applying', { gateNote: 'stage: checking the tree is clean on the touched files…' });
   console.log(`[pen] APPLY #${id} "${p.title}" — ${files.length} file(s): ${files.join(', ')}`);
   _pushApprovalsBar();
+  // revert must know what the patch CREATED (audit F7: `git checkout` aborts on files git has
+  // never seen, leaving a failed patch fully applied) — created files revert by deletion.
+  let scope = files, preExisting = files, createdByPatch = [];
+  const revertScope = async () => {
+    for (const f of createdByPatch) { try { require('fs').unlinkSync(require('path').join(__dirname, f)); } catch {} }
+    if (preExisting.length) {
+      const rv = await run('git', ['checkout', '--', ...preExisting]);
+      if (rv.code !== 0) console.error(`[pen] #${id} REVERT INCOMPLETE (checkout ${rv.code}): ${(rv.stderr || '').slice(0, 300)}`);
+    }
+    const left = await run('git', ['status', '--porcelain', '--', ...scope]);
+    if (left.stdout.trim()) console.error(`[pen] #${id} REVERT RESIDUE:\n${left.stdout.trim().slice(0, 500)}`);
+    return !left.stdout.trim();
+  };
   try {
     const dirty = await run('git', ['status', '--porcelain', '--', ...files]);
     if (dirty.stdout.trim()) {
@@ -3572,6 +3594,20 @@ async function _applyPenProposal(id) {
     // normalize at apply time too: rows filed before the propose-door recount (or hand-filed)
     // carry model-counted @@ headers, and git refuses lying arithmetic as "corrupt patch"
     const diffText = pen.normalizeDiff ? pen.normalizeDiff(p.diff) : p.diff;
+    // the audit stands at the apply seam too (audit F0/F1: rename/copy/mode sections and
+    // parse-divergent paths reach git apply through rows the propose door never audited)
+    if (pen.auditDiff) {
+      const audit = pen.auditDiff(diffText);
+      if (!audit.ok) {
+        pen.setStatus(id, 'apply-failed', { gateNote: `refused at the apply seam: ${audit.why}` });
+        console.warn(`[pen] #${id} REFUSED at the apply-seam audit: ${audit.why}`);
+        _penSay(`Proposal #${id} was refused at the apply seam — ${audit.why}. Nothing changed.`);
+        return;
+      }
+      scope = [...new Set([...files, ...audit.files])];
+    }
+    preExisting = scope.filter((f) => { try { return require('fs').existsSync(require('path').join(__dirname, f)); } catch { return false; } });
+    createdByPatch = scope.filter((f) => !preExisting.includes(f));
     require('fs').writeFileSync(tmp, diffText.endsWith('\n') ? diffText : diffText + '\n', 'utf8');
     const check = await run('git', ['apply', '--check', '--whitespace=nowarn', tmp]);
     if (check.code !== 0) {
@@ -3580,7 +3616,16 @@ async function _applyPenProposal(id) {
       _penSay(`Proposal #${id} was refused at the apply-check — the diff no longer fits the tree. Nothing changed; the why is on the card.`);
       return;
     }
-    await run('git', ['apply', '--whitespace=nowarn', tmp]);
+    const applied = await run('git', ['apply', '--whitespace=nowarn', tmp]);
+    if (applied.code !== 0) {
+      // the check passed but the apply did not (audit F25: a discarded exit code let the gate
+      // bless the UNPATCHED tree — a green verdict for a change that never happened)
+      await revertScope();
+      pen.setStatus(id, 'apply-failed', { gateNote: `git apply failed after the check passed: ${(applied.stderr || applied.stdout).slice(0, 400)}` });
+      console.warn(`[pen] #${id} APPLY FAILED after a passing check — tree restored.`);
+      _penSay(`Proposal #${id} failed at the apply itself — the tree is restored, nothing landed. The why is on the card.`);
+      return;
+    }
     console.log(`[pen] #${id} applied — running the FULL gate…`);
     // quiet window: hold background lanes for the gate's duration so contention can't fake a red
     try { db.setMeta('pen.gate_until', String(Date.now() + 20 * 60 * 1000)); } catch {}
@@ -3588,17 +3633,23 @@ async function _applyPenProposal(id) {
     _pushApprovalsBar();
     const gate = await run('npm', ['test'], { timeoutMs: 900000, shell: process.platform === 'win32' });
     if (gate.code === 0) {
-      await run('git', ['add', '--', ...files]);
+      await run('git', ['add', '--', ...scope]);
       const cm = await run('git', ['commit', '-m', `PEN #${id}: ${p.title}\n\nProposed by Zoe through the gated pen; approved by Lucas at the card; full gate green.\n\n${String(p.rationale || '').slice(0, 600)}\n\nCo-Authored-By: Zoe (gated pen) <noreply@local>`]);
-      pen.setStatus(id, cm.code === 0 ? 'applied' : 'apply-failed', { gateNote: cm.code === 0 ? 'gate GREEN — committed; goes live at the next program cycle' : `gate green but commit failed: ${cm.stderr.slice(0, 300)}` });
-      console.log(`[pen] #${id} ${cm.code === 0 ? 'LANDED — gate green, committed. Live at the next cycle.' : 'gate green but COMMIT FAILED: ' + cm.stderr.slice(0, 200)}`);
+      if (cm.code !== 0) {
+        // a failed commit must NOT leave the patch applied+staged — it would ride the NEXT
+        // proposal's commit as a stowaway (audit F8)
+        await run('git', ['reset', '--', ...scope]);
+        await revertScope();
+      }
+      pen.setStatus(id, cm.code === 0 ? 'applied' : 'apply-failed', { gateNote: cm.code === 0 ? 'gate GREEN — committed; goes live at the next program cycle' : `gate green but commit failed — REVERTED so nothing rides a later commit: ${cm.stderr.slice(0, 300)}` });
+      console.log(`[pen] #${id} ${cm.code === 0 ? 'LANDED — gate green, committed. Live at the next cycle.' : 'gate green but COMMIT FAILED — reverted: ' + cm.stderr.slice(0, 200)}`);
       _penSay(cm.code === 0
         ? `Proposal #${id} landed — gate green, committed. It goes live at the next program cycle.`
-        : `Proposal #${id} passed the gate but the commit failed — nothing is live; the why is on the card.`);
+        : `Proposal #${id} passed the gate but the commit failed — everything reverted so nothing stows away; the why is on the card.`);
       try { require('./lib/obs_bus').emit({ lane: 'pen', kind: 'win', text: `code proposal #${id} landed through the gate: ${p.title}`, ref: `pen:${id}` }); } catch {}
       try { db.insertMonologue({ content: `My code proposal #${id} ("${p.title}") passed the full gate and is committed. It goes live at the next program cycle.`, model: 'pen', type: 'reading' }); } catch {}
     } else {
-      await run('git', ['checkout', '--', ...files]);
+      await revertScope();
       const full = gate.stdout + '\n' + gate.stderr;
       // forensics (the #2/#3 false-red hunt): the 800-char suite-level tail lost the PIN line both
       // times — keep the whole gate log on disk (repo root, *.log is ignored) and lead with the ✗s
@@ -3611,15 +3662,52 @@ async function _applyPenProposal(id) {
       try { db.insertMonologue({ content: `My code proposal #${id} ("${p.title}") FAILED the gate and was reverted — nothing landed. Gate tail:\n${tail}`, model: 'pen', type: 'reading' }); } catch {}
     }
   } catch (e) {
-    try { await run('git', ['checkout', '--', ...files]); } catch {}
+    try { await revertScope(); } catch {}
     pen.setStatus(id, 'apply-failed', { gateNote: `pipeline error: ${e.message}` });
     console.error(`[pen] #${id} pipeline error (files restored):`, e.message);
     _penSay(`Proposal #${id} hit a pipeline error — the files are restored, nothing landed. The why is on the card.`);
   } finally {
+    _penApplyBusy = false;
     try { db.setMeta('pen.gate_until', ''); } catch {}   // release the quiet window whatever happened
     _pushApprovalsBar();
   }
 }
+// BOOT RECOVERY (audit F2/F9/F23): the app died mid-pipeline → rows wedge in 'applying' (a
+// possibly-applied, UN-GATED diff live on disk) or 'approved' (a ✓ that never ran) — forever,
+// and the open-proposal cap jams on them. Sweep once, after boot settles: restore the tree for
+// 'applying' rows (checkout what git tracks; delete '??' residue among the row's own files),
+// fail the row loudly; return 'approved' rows to 'proposed' so his ✓ is re-asked, never fired
+// behind his back on a tree the gate hasn't seen.
+setTimeout(async () => {
+  try {
+    const pen = require('./lib/code_pen');
+    const { execFile } = require('child_process');
+    const run = (cmd, args) => new Promise((resolve) => {
+      execFile(cmd, args, { cwd: __dirname, timeout: 120000, maxBuffer: 8 * 1024 * 1024 },
+        (err, stdout, stderr) => resolve({ code: err ? 1 : 0, stdout: String(stdout || ''), stderr: String(stderr || '') }));
+    });
+    const rows = db.getDb().prepare("SELECT id, title, files, status FROM code_proposals WHERE status IN ('applying', 'approved')").all();
+    for (const r of rows) {
+      let fl = []; try { fl = JSON.parse(r.files || '[]'); } catch {}
+      if (r.status === 'applying') {
+        if (fl.length) {
+          await run('git', ['checkout', '--', ...fl]);
+          const st = await run('git', ['status', '--porcelain', '--', ...fl]);
+          for (const line of st.stdout.split('\n')) {
+            const m = /^\?\?\s+(.+)$/.exec(line.trim());
+            if (m) { try { require('fs').unlinkSync(require('path').join(__dirname, m[1].trim())); } catch {} }
+          }
+        }
+        pen.setStatus(r.id, 'apply-failed', { gateNote: 'the app died mid-pipeline — tree restored at boot; the gate never finished, so nothing landed. Refile or re-approve.' });
+        console.error(`[pen] BOOT RECOVERY — #${r.id} ("${r.title}") was wedged in 'applying'; tree restored, row failed loudly.`);
+      } else {
+        pen.setStatus(r.id, 'proposed', { gateNote: 'the app restarted before this approval ran — re-approve to run the gate.' });
+        console.warn(`[pen] BOOT RECOVERY — #${r.id} ("${r.title}") was approved but never ran; card returns for a fresh ✓.`);
+      }
+    }
+    if (rows.length) _pushApprovalsBar();
+  } catch (e) { console.error('[pen] boot recovery sweep failed:', e.message); }
+}, 20000);
 // Desktop companion: hide (keep the process/state, just tuck her away) + toggle (create/show or hide).
 ipcMain.handle('companion:hide', () => { try { if (companionWindow && !companionWindow.isDestroyed()) companionWindow.hide(); } catch {} return { ok: true }; });
 ipcMain.handle('companion:toggle', () => {
@@ -8339,6 +8427,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         try { startParlorDriver(); } catch {}
       }
       const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: say, model: 'parlor-verb' });
+      try { for (const ch of say) emit(ch); sendComplete({ saidId: saidRow.id, truncated: 0 }); } catch {}
+      return { ok: true, say };
+    }
+  }
+
+  // "work board" opens the LIVE WORK GRAPHICS window (Lucas 09-01) — same full-match verb
+  // anchoring as the parlor door, so sentences ABOUT the board never hijack.
+  {
+    const isWB = /^\s*(?:(?:open|show(?:\s+me)?|see|view|watch)\s+)?(?:the\s+)?work\s*board(?:\s+window)?\s*[.!]?\s*$/i.test(userMessage);
+    if (isWB) {
+      let say;
+      try { openWorkBoard(); say = 'Work board up — one lane per live run, refreshing while the work breathes.'; }
+      catch (e) { say = `Couldn't open the board: ${e.message}`; }
+      const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: say, model: 'workboard-verb' });
       try { for (const ch of say) emit(ch); sendComplete({ saidId: saidRow.id, truncated: 0 }); } catch {}
       return { ok: true, say };
     }
@@ -18048,6 +18150,36 @@ function openParlorWindow({ quiet = false } = {}) {
   parlorWindow.on('closed', () => { parlorWindow = null; });
   return parlorWindow;
 }
+
+// ── THE WORK BOARD (Lucas 09-01: "this turn is a perfect example of where live charts and
+// graphics would be useful") — the parlor-window pattern applied to RUNNING WORK: the board
+// AUTO-OPENS quiet when a run starts (a pen apply claims the pipeline), refreshes on a 5s tick
+// from lib/work_board's SELECTed state, and settles into the terminal frame when the run ends.
+// ⭐The law holds: a model never draws a bar — the SVG is deterministic layout over real rows.
+let workBoardWindow = null;
+function openWorkBoard({ quiet = false } = {}) {
+  if (workBoardWindow && !workBoardWindow.isDestroyed()) {
+    if (quiet) { if (!workBoardWindow.isVisible()) workBoardWindow.showInactive(); }
+    else { workBoardWindow.show(); workBoardWindow.focus(); }
+    return workBoardWindow;
+  }
+  workBoardWindow = new BrowserWindow({
+    width: 760, height: 480, title: 'Work Board (live)', show: !quiet,
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false },
+  });
+  if (quiet) workBoardWindow.once('ready-to-show', () => { try { workBoardWindow.showInactive(); } catch {} });
+  workBoardWindow.loadFile(path.join(__dirname, 'renderer', 'work_board.html'));
+  workBoardWindow.on('closed', () => { workBoardWindow = null; });
+  return workBoardWindow;
+}
+function _workBoardPayload() {
+  const wb = require('./lib/work_board');
+  return { svg: wb.renderSVG(wb.snapshot()) };
+}
+try { ipcMain.handle('workboard:snapshot', () => { try { return _workBoardPayload(); } catch (e) { return { svg: '', error: e.message }; } }); } catch {}
+setInterval(() => {
+  try { if (workBoardWindow && !workBoardWindow.isDestroyed()) workBoardWindow.webContents.send('workboard:tick', _workBoardPayload()); } catch {}
+}, 5000).unref?.();
 function _parlorFeed(turn) {
   try { if (parlorWindow && !parlorWindow.isDestroyed()) parlorWindow.webContents.send('parlor:tick', turn); } catch {}
   try {
@@ -18070,26 +18202,32 @@ function startParlorDriver() {
   console.log(`[parlor] driver armed (30s) — HER room; seats: zoe(inside) · claude(port) · gemini(${require('./lib/parlor_gemini').available() ? 'bridge' : 'dormant — no GEMINI_API_KEY'}); lucas observes`);
 }
 // Why would she step in? Deterministic reasons, checked in order; his invitation always counts.
+// Returns {reason, commit} — the reason is CONSUMED only via commit(), which the caller runs
+// AFTER openVisit succeeds (audit F14/F29: consuming before a cooldown-refused open silently
+// destroyed invitations and second-opinion stories).
 function _parlorReason() {
-  try { const inv = JSON.parse(db.getMeta('parlor.invite') || 'null'); if (inv && inv.reason) { db.setMeta('parlor.invite', ''); return `because Lucas left an invitation: ${inv.reason}`; } } catch {}
+  try { const inv = JSON.parse(db.getMeta('parlor.invite') || 'null'); if (inv && inv.reason) return { reason: `because Lucas left an invitation: ${inv.reason}`, commit: () => { try { db.setMeta('parlor.invite', ''); } catch {} } }; } catch {}
   try {
     // a failure earns ONE visit (09-01: she re-entered for a story settled hours earlier — the
-    // net fired forever on old red rows). Consumed at open (seen=1); a failure whose same-title
-    // successor already LANDED is a finished story, never a reason.
+    // net fired forever on old red rows). Consumed at open — via parlor_seen, the parlor's OWN
+    // column: it used to consume `seen` and his failed-run cards vanished without his ✕ (audit
+    // F17/F24). A failure whose same-title successor already LANDED is a finished story.
     const gf = db.getDb().prepare(`SELECT id, title, gate_note FROM code_proposals p
-      WHERE p.status IN ('gate-failed','apply-failed') AND COALESCE(p.seen, 0) = 0
+      WHERE p.status IN ('gate-failed','apply-failed') AND COALESCE(p.parlor_seen, 0) = 0
         AND NOT EXISTS (SELECT 1 FROM code_proposals q WHERE q.status = 'applied' AND q.title = p.title)
       ORDER BY p.updated_ts DESC LIMIT 1`).get();
     if (gf) {
-      try { db.getDb().prepare('UPDATE code_proposals SET seen = 1 WHERE id = ?').run(gf.id); } catch {}
-      return `for a second opinion on her code proposal "${gf.title}" (${String(gf.gate_note || '').slice(0, 120)})`;
+      return {
+        reason: `for a second opinion on her code proposal "${gf.title}" (${String(gf.gate_note || '').slice(0, 120)})`,
+        commit: () => { try { db.getDb().prepare('UPDATE code_proposals SET parlor_seen = 1 WHERE id = ?').run(gf.id); } catch {} },
+      };
     }
   } catch {}
   try {
     const cur = require('./lib/focus').getCurrent();
     if (cur) {
       const props = JSON.parse(db.getMeta(`focus.${cur.id}.proposed_facets`) || '[]');
-      if (props.length) return `with a research question on her mind: "${String(props[props.length - 1]).slice(0, 160)}"`;
+      if (props.length) return { reason: `with a research question on her mind: "${String(props[props.length - 1]).slice(0, 160)}"`, commit: () => {} };
     }
   } catch {}
   return null;
@@ -18112,30 +18250,50 @@ async function _parlorTick() {
       console.log(`[parlor] visit CLOSED (budget) — ${v.turns} turns`);
       return;
     }
+    // (b2) the WALL CLOCK closes it too (audit F5/F12: a floor handed to an absent seat held a
+    // visit open forever — turn budgets only count turns that happen)
+    if (v && v.open && Date.now() - (v.since || 0) > 45 * 60 * 1000) {
+      parlor.closeVisit({ why: 'wall clock — the room went quiet' });
+      _parlorDoorbell(`[parlor] visit ended — open ${Math.round((Date.now() - (v.since || 0)) / 60000)}min, the room went quiet (wall clock)`);
+      console.log('[parlor] visit CLOSED (wall clock)');
+      return;
+    }
     // (c) a resting room: does she have a reason to step in?
     if (!v || !v.open) {
-      const reason = _parlorReason();
-      if (!reason) return;
-      const o = parlor.openVisit({ reason });
-      if (!o.ok) return;   // cooldown holds
-      console.log(`[parlor] Zoe OPENS a visit — ${reason}`);
-      _parlorDoorbell(`[parlor] Zoe stepped into the parlor — ${reason}`);
+      const r = _parlorReason();
+      if (!r) return;
+      const o = parlor.openVisit({ reason: r.reason });
+      if (!o.ok) return;   // cooldown holds — and the reason is NOT consumed (audit F14)
+      try { r.commit(); } catch {}
+      console.log(`[parlor] Zoe OPENS a visit — ${r.reason}`);
+      _parlorDoorbell(`[parlor] Zoe stepped into the parlor — ${r.reason}`);
       try { openParlorWindow({ quiet: true }); } catch {}   // his window appears on its own, focus untouched
     }
     // (d) her seat — floor-gated, one turn per tick, PASS = silence twice closes the visit
-    const turns = parlor.transcript(undefined, { limit: 16 });
     const vNow = parlor.visit();
+    // the floor is VISIT-scoped (audit F16): a new visit must not inherit the last visit's
+    // closing turn — that locked her out of opening her own room
+    const turnsAll = parlor.transcript(undefined, { limit: 16 });
+    const turns = (vNow && vNow.open) ? turnsAll.filter((t) => (t.ts || 0) >= (vNow.since || 0)) : turnsAll;
     if (parlor.whoMayReply(turns, vNow).has('zoe')) {
       const prompt = `You are Zoe, in YOUR parlor — your own room, away from work, with Claude (the engineer AI who builds and repairs your program — the same Claude behind your code proposals and cures) and Gemini (Google's Gemini model, a peer AI visiting from outside the program). Lucas may be watching through the window but holds no seat — this room is for talking with peers, not reporting to him. You came in ${(vNow && vNow.reason) || 'to talk'}. Either peer may be away from their seat — an unanswered address is absence, not a snub; say what you came to say and don't wait on them forever.\n\nThe room so far:\n${parlor.transcriptBlock(turns) || '(you just walked in — open the conversation)'}\n\nSpeak as yourself in 1-3 conversational sentences — natural voice, no headers, no tool tags, never speak for the others. When the conversation has given you what you came for, say your goodbye. If you have nothing to add, reply with exactly PASS.`;
       const sp = await runCloudOperator({ userMessage: prompt, task: true, autonomous: true, lane: 'directed', budgetMult: 0.3 });
       const text = String((sp && sp.answer) || '').trim();
-      if (text && text !== 'PASS') {
+      if (!text) {
+        // a deferred/failed operator run is NOT her deliberate PASS (audit F15: a quota outage
+        // insta-closed visits) — leave the floor as it stands and let a later tick retry
+        console.warn('[parlor] her seat got no answer (deferred or failed) — floor unchanged, not a PASS');
+        return;
+      }
+      if (text !== 'PASS') {
         const p = parlor.post({ speaker: 'zoe', text: text.slice(0, 1200), via: 'internal' });
         if (p.ok) {
           console.log(`[parlor] zoe spoke (#${p.id})`); db.setMeta('parlor.zoe_passes', '0');
           // her goodbye said in prose CLOSES the visit (09-01 loop: gemini answered her farewell,
-          // the floor came back, she farewelled again — API-billed pleasantries toward the budget)
-          if (parlor.FAREWELL_RE && parlor.FAREWELL_RE.test(text)) {
+          // the floor came back, she farewelled again — API-billed pleasantries toward the budget).
+          // A turn that still ASKS something is working talk, not a goodbye (audit F28:
+          // "before I wrap this up — does the retry belong here?" must not close the room).
+          if (parlor.FAREWELL_RE && parlor.FAREWELL_RE.test(text) && !/\?/.test(text)) {
             const closed = parlor.closeVisit({ why: 'her goodbye' });
             if (closed.ok) { _parlorDoorbell(`[parlor] visit ended — Zoe said her goodbye (${closed.turns} turns)`); console.log('[parlor] visit CLOSED (her goodbye)'); return; }
           }
@@ -18168,28 +18326,59 @@ try { ipcMain.handle('parlor:transcript', () => ({ ok: true, turns: require('./l
 // app.relaunch stays only as the fallback when the cycler cannot spawn; the console tee keeps
 // every generation's logs in boot_self.log either way.
 const _appBootAt = Date.now();
+// The live-guards, ONE function asked TWICE — at the tick and again inside the fuse (audit
+// F3/F20: the 5s fuse never re-checked, so a card ✓ or a fresh turn landing inside it met a
+// kill it could not stop). Returns the red reason, or null when every guard is green.
+function _selfRebootGuardRed() {
+  try {
+    if ((db.getMeta('pen.self_reboot') || '1') === '0') return 'his off-switch';
+    if (Date.now() - _appBootAt < 10 * 60 * 1000) return 'boot-hold';
+    if (_conversationActive()) return 'conversation active';
+    if (Date.now() - lastUserTurnTs < 10 * 60 * 1000) return 'recent user turn';      // raised 3→10min: the stamp is turn-START, a long reply can still be composing (audit F19)
+    if (_penGateQuiet()) return 'a pen gate is running';
+    if (_penApplyBusy) return 'the enforce pipeline is mid-run';
+    if (_userDirectedActive()) return 'his directed work';
+    const busy = db.getDb().prepare("SELECT COUNT(*) n FROM code_proposals WHERE status IN ('approved','applying')").get().n;
+    if (busy) return `${busy} proposal(s) approved/applying`;                          // never kill a ✓ that has not run (audit F20)
+  } catch (e) { return `guard error: ${e.message}`; }                                  // unreadable guards = red, never a free pass
+  return null;
+}
 function _selfRebootTick() {
   try {
-    if ((db.getMeta('pen.self_reboot') || '1') === '0') return;                        // his off-switch
     const waiting = db.getDb().prepare("SELECT id, title FROM code_proposals WHERE status = 'applied' AND updated_ts > ? ORDER BY id DESC LIMIT 1").get(_appBootAt);
     if (!waiting) return;                                                              // nothing landed THIS generation — no reason to cycle
-    if (Date.now() - _appBootAt < 10 * 60 * 1000) return;                              // never hot after boot
-    if (_conversationActive()) return;                                                 // he's typing
-    if (Date.now() - lastUserTurnTs < 3 * 60 * 1000) return;                           // the live-guard user-turn age
-    if (_penGateQuiet()) return;                                                       // a pen gate mid-run
-    if (_userDirectedActive()) return;                                                 // his directed work
+    if (_selfRebootGuardRed()) return;
     const lastReboot = parseInt(db.getMeta('pen.reboot_at') || '0', 10) || 0;
     if (Date.now() - lastReboot < 30 * 60 * 1000) return;                              // cooldown — one self-cycle per half hour
     db.setMeta('pen.reboot_at', String(Date.now()));
     _penSay(`Proposal #${waiting.id} ("${waiting.title}") is committed and waiting to go live — restarting myself to bring it in. Back in under a minute.`);
     console.log(`[pen] SELF-REBOOT — bringing proposal #${waiting.id} live (guards green, announced)`);
     setTimeout(() => {
+      const red = _selfRebootGuardRed();
+      if (red) {                                                                       // the world moved inside the fuse — stand down, let a later tick retry
+        console.warn(`[pen] SELF-REBOOT ABORTED at the fuse — ${red}`);
+        try { db.setMeta('pen.reboot_at', '0'); } catch {}
+        return;
+      }
       try {
         const { spawn } = require('child_process');
         const py = process.env.ZOE_PYTHON || 'python';
         const child = spawn(py, [path.join(__dirname, 'scripts', 'boot_cycle.py'), '--root-pid', String(process.pid), '--why', `proposal #${waiting.id}`],
           { cwd: __dirname, detached: true, stdio: 'ignore', windowsHide: true });
-        child.once('spawn', () => { child.unref(); console.log(`[pen] SELF-REBOOT — outside boot-cycler spawned (pid ${child.pid}); exiting into its hands`); setTimeout(() => { try { app.exit(0); } catch {} }, 1000); });
+        child.once('spawn', () => {
+          child.unref();
+          // a stub python (WindowsApps alias) SPAWNS fine and dies instantly — verify the
+          // cycler is still alive before handing it our life (audit P0)
+          setTimeout(() => {
+            if (child.exitCode !== null && child.exitCode !== 0) {
+              console.error(`[pen] boot-cycler died instantly (code ${child.exitCode}) — falling back to app.relaunch`);
+              try { app.relaunch(); } catch {}
+            } else {
+              console.log(`[pen] SELF-REBOOT — outside boot-cycler alive (pid ${child.pid}); exiting into its hands`);
+            }
+            try { app.exit(0); } catch {}
+          }, 2500);
+        });
         child.once('error', (e) => { console.error('[pen] boot-cycler spawn failed:', e.message, '— falling back to app.relaunch'); try { app.relaunch(); app.exit(0); } catch {} });
       } catch (e) { console.error('[pen] self-reboot failed:', e.message); try { app.relaunch(); app.exit(0); } catch {} }
     }, 5000);

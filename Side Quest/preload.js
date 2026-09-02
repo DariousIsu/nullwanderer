@@ -48,6 +48,10 @@ contextBridge.exposeInMainWorld('sq', {
   onParlorTick: (cb) => ipcRenderer.on('parlor:tick', (_e, turn) => cb(turn)),
   parlorTranscript: () => ipcRenderer.invoke('parlor:transcript'),
 
+  // The Work Board (09-01, his word: live charts for running work) — deterministic SVG ticks.
+  onWorkBoardTick: (cb) => ipcRenderer.on('workboard:tick', (_e, p) => cb(p)),
+  workBoardSnapshot: () => ipcRenderer.invoke('workboard:snapshot'),
+
   // Open the Editor Studio window directly (kept for back-compat / direct access)
   openEditor: () => ipcRenderer.invoke('editor:open'),
   // Open the My Workspace workbench — the operator surfaces + studios
