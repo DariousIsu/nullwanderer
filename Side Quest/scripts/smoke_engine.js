@@ -238,6 +238,38 @@ ok('clipForLog passes a short chunk through untouched', E.clipForLog('short line
     ok('probeHealth: no ready field → healthy (older engines)', (await E.probeHealth()) === true);
   }
 
+  // ── THE LATE BOOT (boot_p246, 09-02): a child alive past the cap is watched, then given its fleet ──
+  {
+    let healthy = false; global.fetch = async () => { if (!healthy) throw new Error('ECONNREFUSED'); return { ok: true, json: async () => ({ ok: true, ready: true, pid: 1 }) }; };
+    const lLogs = [], lErrs = []; let lSpawns = 0;
+    const lSpawn = () => { lSpawns++; return { pid: 7000 + lSpawns, exitCode: null, on() {}, kill() {}, killed: false }; };
+    const l1 = new E.EngineSupervisor({ cwd: 'x', spawnFn: lSpawn, manifestFn: async () => { throw new Error('n/a'); }, onLog: (l) => lLogs.push(l), onError: (l) => lErrs.push(l), healthIntervalMs: 5, latePollMs: 15, lateCeilingMs: 2000 });
+    const lr = await l1.ensure({ bootTimeoutMs: 30 });
+    ok('late boot: past the cap with the child ALIVE → state failed + a late watch, said at error level', lr.state === 'failed' && lr.lateWatch === true && lErrs.some((l) => /not healthy after 0s — child ALIVE \(pid 7001\); watching for a late boot/.test(l)), lErrs.join(' | '));
+    ok('late boot: no fleet yet', lSpawns === 1 && Object.keys(l1.status().sidecars).length === 0);
+    healthy = true;
+    await new Promise((r) => setTimeout(r, 120));
+    ok('late boot: when the child answers, the fleet comes up and the tee says LATE-healthy', Object.keys(l1.status().sidecars).length === 3 && lLogs.some((l) => /engine: LATE-healthy \(pid 7001\) after \d+s — bringing up the fleet now/.test(l)), `sidecars=${Object.keys(l1.status().sidecars).length} logs=${lLogs.filter((l) => /LATE/.test(l)).join(' | ')}`);
+    ok('late boot: the watch is cleared after success (no second fleet)', l1._lateIv === null && lSpawns === 4);
+    await l1.shutdown();
+
+    // the ceiling: never healthy → one error line, the watch ends, nothing spawned
+    healthy = false; const cErrs = []; let cSpawns = 0;
+    const cSpawn = () => { cSpawns++; return { pid: 7100 + cSpawns, exitCode: null, on() {}, kill() {}, killed: false }; };
+    const c1 = new E.EngineSupervisor({ cwd: 'x', spawnFn: cSpawn, manifestFn: async () => { throw new Error('n/a'); }, onLog() {}, onError: (l) => cErrs.push(l), healthIntervalMs: 5, latePollMs: 15, lateCeilingMs: 60 });
+    await c1.ensure({ bootTimeoutMs: 30 });
+    await new Promise((r) => setTimeout(r, 150));
+    ok('late boot ceiling: still not healthy → one error line, watch ended, no fleet', c1._lateIv === null && cSpawns === 1 && cErrs.some((l) => /still not healthy .* — giving up the late watch/.test(l)), cErrs.join(' | '));
+    await c1.shutdown();
+
+    // a DEAD child past the cap is the real failure — no late watch (that is _onExit's law)
+    const dErrs = []; const dSpawn = () => ({ pid: 7200, exitCode: 1, on() {}, kill() {}, killed: false });
+    const d1 = new E.EngineSupervisor({ cwd: 'x', spawnFn: dSpawn, manifestFn: async () => { throw new Error('n/a'); }, onLog() {}, onError: (l) => dErrs.push(l), healthIntervalMs: 5 });
+    const dr = await d1.ensure({ bootTimeoutMs: 30 });
+    ok('a child that DIED past the cap → failed, no late watch, named as exited', dr.state === 'failed' && dr.lateWatch === false && d1._lateIv === null && dErrs.some((l) => /child exited/.test(l)));
+    ok('the boot cap is 90s (the external MCP mounts alone took 43s live)', E.BOOT_TIMEOUT_MS === 90000);
+  }
+
   global.fetch = realFetch;
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

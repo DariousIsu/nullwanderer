@@ -2166,11 +2166,15 @@ app.whenReady().then(() => {
   try { createCompanionWindow(); } catch (e) { console.error('[companion] spawn failed:', e.message); }   // floating desktop presence (gated on her .vrm)
   try { ensureYtPlayerServer(); } catch {}   // warm the clean-player server so the Monitors videos load fast
   try { ensureComfyUI(); } catch (e) { console.error('[comfyui] ensure failed:', e.message); }   // local image-gen server (SDXL/FLUX on the 7900 XT)
-  // SKULD AUTONOMY (2026-08-19, full restore per Lucas). The saga periodic scheduler + jobs worker
-  // went dark ~08-15 when the documented launcher (skuld-server.cjs) disappeared and nothing replaced
-  // it — so heartbeat reapers, 6h backups, integrity checks, calendar sync AND pass/dedup dispatch all
-  // stopped. Spawn both ~20s after boot so the engine + DBs settle first. See ensureSkuldStack below.
-  setTimeout(() => { try { ensureSkuldStack(); } catch (e) { console.error('[skuld] ensure failed:', e.message); } }, 20 * 1000);
+  // SKULD AUTONOMY (2026-08-19, full restore per Lucas) — FOLDED INTO THE ONE FLEET (unification
+  // stage 1, 09-02). The saga periodic scheduler + jobs worker went dark ~08-15 when skuld-server.cjs
+  // disappeared, and ensureSkuldStack (below) restored them as a SECOND fleet beside the engine
+  // supervisor's: two huey consumers on one saga.db queue (every periodic task firing twice), two
+  // pass workers. Echo's manifest (echo/launch.py) is the one fleet now and carries this stack's
+  // deliberate concurrency (scheduler -w 4, worker -w 4) plus the orchestrator; lib/engine.js spawns
+  // it after health (or after a LATE boot), restarts a dead organ under the backoff law, and tees its
+  // stdout/stderr — the per-process log files this stack wrote are no longer needed. Not spawned here.
+  console.log('[skuld] the autonomy stack rides the engine supervisor\'s fleet (Echo\'s manifest: scheduler -w 4, worker -w 4, orchestrator) — not spawned separately');
   // Zoe's Canvas auto-spawns AFTER the engine attaches (see the engine .finally above) so its first
   // load finds Echo connected — staggered behind the server, no "not connected" flash.
 

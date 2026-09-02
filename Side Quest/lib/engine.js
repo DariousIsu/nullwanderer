@@ -79,8 +79,8 @@ function serveArgs(host = HOST, port = PORT) {
 // by design, liveness is the process alone).
 function sidecarDefs() {
   return [
-    { name: 'huey-consumer', disableEnv: 'NX_ECHO_DISABLE_HUEY',         args: ['-m', 'huey.bin.huey_consumer', 'echo.queue.huey', '-w', '1', '-k', 'thread', '--quiet'], heartbeatS: null },
-    { name: 'pass-worker',   disableEnv: 'NX_ECHO_DISABLE_PASS_WORKER',  args: ['-m', 'echo.worker', '-w', '2'], heartbeatS: null },
+    { name: 'huey-consumer', disableEnv: 'NX_ECHO_DISABLE_HUEY',         args: ['-m', 'huey.bin.huey_consumer', 'echo.queue.huey', '-w', '4', '-k', 'thread', '--quiet'], heartbeatS: null },
+    { name: 'pass-worker',   disableEnv: 'NX_ECHO_DISABLE_PASS_WORKER',  args: ['-m', 'echo.worker', '-w', '4'], heartbeatS: null },
     { name: 'orchestrator',  disableEnv: 'NX_ECHO_DISABLE_ORCHESTRATOR', args: ['-m', 'echo.orchestrator.run', '--checkpoint-db', 'data/skuld_checkpoints.db', '--interval-s', '60'], heartbeatS: 60 },
   ];
 }
@@ -184,6 +184,13 @@ function readManifest({ python = ECHO_PYTHON, cwd = ECHO_CWD, timeoutMs = 20000,
 }
 
 const SIDECAR_SILENCE_FACTOR = 5;   // a heartbeat organ is "silent" after 5 missed beats
+// Boot budget. The engine's boot is dominated by the external MCP mounts ([[mcp_connections]]: the
+// BlenderMCP mount retries a dead socket three times before giving up, ~43s on 09-02) — the old 45s
+// cap missed a healthy engine by ONE second on boot_p246 and stranded the whole fleet. 90s is the
+// cap; and a child that outlives the cap ALIVE is watched for a late boot (below), never abandoned.
+const BOOT_TIMEOUT_MS = 90000;
+const LATE_BOOT_POLL_MS = 5000;
+const LATE_BOOT_CEILING_MS = 5 * 60 * 1000;
 
 class EngineSupervisor {
   constructor(opts = {}) {
@@ -217,12 +224,17 @@ class EngineSupervisor {
     this.sidecarProcs = {};   // name -> child (ONLY what WE spawned; never an adopted fleet)
     this._sidecarState = {};  // name -> { restarts: [ts], exits, lastEventTs, silent, starts }
     this._staleIv = null;
+    // late-boot watch knobs (injectable for the smoke)
+    this._healthIntervalMs = opts.healthIntervalMs || 1500;
+    this._latePollMs = opts.latePollMs || LATE_BOOT_POLL_MS;
+    this._lateCeilingMs = opts.lateCeilingMs || LATE_BOOT_CEILING_MS;
+    this._lateIv = null;
   }
 
   // Adopt a running engine if present; else spawn + wait for health.
   // SINGLE-FLIGHT (08-08 fresh46): two concurrent ensure() callers both probed a not-yet-up port
   // and both spawned — the loser of the bind race exited code 1 and seeded the respawn loop below.
-  async ensure({ spawnIfDown = true, bootTimeoutMs = 45000 } = {}) {
+  async ensure({ spawnIfDown = true, bootTimeoutMs = BOOT_TIMEOUT_MS } = {}) {
     if (this._ensuring) return this._ensuring;
     this._ensuring = this._ensureInner({ spawnIfDown, bootTimeoutMs })
       .finally(() => { this._ensuring = null; });
@@ -283,8 +295,18 @@ class EngineSupervisor {
     // explains a per-cycle crash was discarded at the source — undiagnosable from the app side).
     try { if (this.child.stderr) this.child.stderr.on('data', (d) => { const s = String(d).trim(); if (s) this.onLog(`[engine:stderr] ${clipForLog(s, 600)}`); }); } catch {}
     this.child.on('exit', (code) => this._onExit(code));
-    const ok = await waitHealthy({ timeoutMs: bootTimeoutMs });
-    if (!ok) { this.onLog('engine: spawned but never became healthy'); return { state: 'failed', pid: this.child && this.child.pid }; }
+    const ok = await waitHealthy({ timeoutMs: bootTimeoutMs, intervalMs: this._healthIntervalMs });
+    if (!ok) {
+      // THE LATE BOOT (boot_p246, 09-02): the engine turned healthy one second after the cap and the
+      // supervisor had already given up — no sidecars, no orchestrator, a fleet of nothing beside a
+      // healthy engine. A child that is still ALIVE past the cap is a slow boot, not a dead one: keep
+      // polling; when it answers, start the fleet as if it had been on time. A child that DIED is the
+      // real failure (and _onExit already owns the respawn law).
+      const alive = this.child && this.child.exitCode == null;
+      this.onError(`engine: not healthy after ${Math.round(bootTimeoutMs / 1000)}s — child ${alive ? `ALIVE (pid ${this.child.pid}); watching for a late boot up to ${Math.round(this._lateCeilingMs / 60000)}min` : 'exited'}`);
+      if (alive) this._watchLateBoot(bootTimeoutMs);
+      return { state: 'failed', pid: this.child && this.child.pid, lateWatch: !!alive };
+    }
     // WHO answered? (08-08 fresh46 zombie loop): a duplicate spawn lost the bind race and DIED,
     // but the health probe passed because the OTHER engine answered — so this logged "spawned +
     // healthy" for a dead child, and its exit re-triggered a respawn, 11+ cycles around a healthy
@@ -300,6 +322,30 @@ class EngineSupervisor {
     if (this.startSidecars) this._startSidecars();   // owned engine → bring up the agent fleet
     return { state: 'spawned', pid: this.child.pid };
   }
+
+  // Poll a slow child until it answers (then bring up the fleet) or the ceiling passes (then say so).
+  _watchLateBoot(alreadyWaitedMs = 0) {
+    if (this._lateIv) return;
+    const startedAt = Date.now();
+    const child = this.child;
+    this._lateIv = setInterval(async () => {
+      if (this._shuttingDown || this.child !== child || !this.owned) { this._clearLateWatch(); return; }
+      if (child.exitCode != null) { this._clearLateWatch(); return; }   // it died — _onExit owns that
+      if (await probeHealth()) {
+        this._clearLateWatch();
+        this.onLog(`engine: LATE-healthy (pid ${child.pid}) after ${Math.round((alreadyWaitedMs + Date.now() - startedAt) / 1000)}s — bringing up the fleet now`);
+        if (this.startSidecars) this._startSidecars();
+        return;
+      }
+      if (Date.now() - startedAt > this._lateCeilingMs) {
+        this._clearLateWatch();
+        this.onError(`engine: still not healthy ${Math.round((alreadyWaitedMs + this._lateCeilingMs) / 60000)}min after spawn (pid ${child.pid} alive) — giving up the late watch; the heartbeat keeps attaching`);
+      }
+    }, this._latePollMs);
+    this._lateIv.unref?.();
+  }
+
+  _clearLateWatch() { if (this._lateIv) { clearInterval(this._lateIv); this._lateIv = null; } }
 
   _stateFor(name) {
     if (!this._sidecarState[name]) this._sidecarState[name] = { restarts: [], exits: 0, starts: 0, lastEventTs: 0, silent: false };
@@ -425,18 +471,19 @@ class EngineSupervisor {
         // collision cleared) recovers on its own; a persistent one just re-cools.
         const coolMs = 5 * 60 * 1000;
         this.onLog(`engine: >5 restarts in 60s — cooling down ${Math.round(coolMs / 60000)}min, then one more attempt`);
-        setTimeout(() => { if (!this._shuttingDown && this.owned) { this._restarts = []; this._spawn(45000); } }, coolMs);
+        setTimeout(() => { if (!this._shuttingDown && this.owned) { this._restarts = []; this._spawn(BOOT_TIMEOUT_MS); } }, coolMs);
         return;
       }
       const delay = nextBackoff(this._restarts.length - 1);
       this.onLog(`engine: exited (code ${code}) — restarting in ${delay}ms (attempt ${this._restarts.length})`);
-      setTimeout(() => { if (!this._shuttingDown) this._spawn(45000); }, delay);
+      setTimeout(() => { if (!this._shuttingDown) this._spawn(BOOT_TIMEOUT_MS); }, delay);
     }).catch(() => {});
   }
 
   // Tree-kill ONLY what we spawned (never an adopted external engine).
   async shutdown() {
     this._shuttingDown = true;
+    this._clearLateWatch();
     this._stopSidecars();   // owned-only; no-op when we never spawned a fleet (adopt path)
     if (!this.owned || !this.child || this.child.killed) return;
     const pid = this.child.pid;
@@ -482,5 +529,6 @@ module.exports = {
   validateManifest,
   describeEvent,
   SIDECAR_SILENCE_FACTOR,
+  BOOT_TIMEOUT_MS,
   HEALTH_URL,
 };

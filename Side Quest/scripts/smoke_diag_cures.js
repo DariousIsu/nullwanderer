@@ -183,6 +183,9 @@ const ok = (c, m) => { if (c) { pass++; console.log('  \u2713', m); } else { fai
       'main.js: the breaker trips on halt OR zero yield at real batch size');
     ok(/BREAKER TRIPPED[^\n]*why: \$\{why\}/.test(main) && /rep\.park_reasons/.test(main) && /sample_parked\.reduce/.test(main),
       'main.js: the breaker line carries WHY it parked (Echo park_reasons histogram; the 8-row sample as fallback) — a 0/500 never stands 24h undiagnosed again');
+    // ── unification stage 1 (09-02): ONE Echo fleet — the skuld autonomy stack is not spawned beside it ──
+    ok(!/\[skuld\] ensure failed:/.test(main) && /the autonomy stack rides the engine supervisor/.test(main),
+      "main.js: the skuld scheduler/worker are NOT spawned as a second fleet — Echo's manifest (via lib/engine.js) is the one fleet (two huey consumers on one queue fired every periodic task twice)");
     ok(/run skipped pre-prep/.test(main) && /if \(autonomous && lane\)/.test(main),
       'main.js: autonomous operator runs probe the lane BEFORE brief assembly (interactive turns never probe)');
     ok(/mis-suited run "\$\{run\.slug\}" discarded/.test(main),
