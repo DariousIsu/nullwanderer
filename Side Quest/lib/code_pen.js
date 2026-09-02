@@ -39,6 +39,8 @@ const DENY_RE = [
   /^node_modules(\/|\\|$)/i,
   /(^|\/|\\)[^/\\]*\.(db|db-wal|db-shm|sqlite3?)$/i,
   /(^|\/|\\)boot_p\d+.*\.log$/i,   // boot logs can carry pasted content; the organ watch owns them
+  /(^|\/|\\)boot_self\.log(\.\d+)?$/i,   // the console tee (self-reboot generations) — same class
+  /(^|\/|\\)pen_gate_\d+\.log$/i,        // full gate logs — operator forensics, not her source
 ];
 
 function _rel(p) { return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '').trim(); }
@@ -177,6 +179,7 @@ function _ensure() {
     files TEXT, status TEXT NOT NULL DEFAULT 'proposed',
     born_from TEXT, gate_note TEXT,
     created_ts INTEGER, updated_ts INTEGER)`).run();
+  try { db.getDb().prepare('ALTER TABLE code_proposals ADD COLUMN seen INTEGER DEFAULT 0').run(); } catch { /* column exists */ }
 }
 
 /** File a proposal. Validation is the front gate: parseable diff, every touched file inside the
@@ -249,9 +252,20 @@ const RUN_WINDOW_MS = 15 * 60 * 1000;
 function pipelineItems(nowMs = Date.now()) {
   _ensure();
   return db.getDb().prepare(`SELECT id, title, rationale, diff, files, status, gate_note, born_from, updated_ts FROM code_proposals
-    WHERE status IN ('approved','applying') OR (status IN ('applied','gate-failed','apply-failed') AND updated_ts > ?)
+    WHERE status IN ('approved','applying') OR (status IN ('applied','gate-failed','apply-failed') AND updated_ts > ? AND COALESCE(seen, 0) = 0)
     ORDER BY id DESC LIMIT 4`).all(nowMs - RUN_WINDOW_MS)
     .map((r) => ({ id: `pen-${r.id}`, kind: 'pen-run', text: r.title, status: r.status, verdict: null, detail: _detail(r) }));
+}
+
+/** His ✕ on a terminal run card — clears it from the bar (Lucas 09-01: "no way to clear the pen
+ *  window"). Only terminal rows are clearable; a running card can never be waved away. */
+function markSeen(id) {
+  _ensure();
+  const p = get(id);
+  if (!p) return { ok: false, why: `no proposal #${id}` };
+  if (!['applied', 'gate-failed', 'apply-failed', 'rejected'].includes(p.status)) return { ok: false, why: `proposal #${id} is ${p.status} — only a finished run clears` };
+  db.getDb().prepare('UPDATE code_proposals SET seen = 1 WHERE id = ?').run(Number(id) || 0);
+  return { ok: true, id: p.id };
 }
 
 // ── THE PEN-WORK LANE (v1.1, the first-hour finding: an edit-intent order had NO lane — his
@@ -338,7 +352,7 @@ next program cycle, not instantly.`;
 module.exports = {
   REPO_ROOT, MAX_READ_BYTES, MAX_DIFF_BYTES, MAX_OPEN_PROPOSALS, DENY_RE, PEN_QUEUE_KEY,
   pathAllowed, readSource, listSource, touchedFiles, normalizeDiff,
-  propose, get, setStatus, decide, pending, pipelineItems, stage, RUN_WINDOW_MS,
+  propose, get, setStatus, decide, pending, pipelineItems, stage, markSeen, RUN_WINDOW_MS,
   seedPenWork, workQueue, dropFromQueue, penState, setPenState, isEditIntent,
   parseTags, stripTags, dispatch, buildPromptBlock,
 };

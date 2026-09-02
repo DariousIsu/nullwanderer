@@ -616,3 +616,5 @@ html, body {
 .approval-actions .approval-yes:hover { background: #2a4a2a; border-color: #4a7a4a; }
 .approval-actions .approval-no:hover { background: #4a2a2a; border-color: #7a4a4a; }
 .approval-actions button:disabled { opacity: 0.4; cursor: default; }
+.approval-actions .approval-seen { padding: 3px 8px; color: #8a8a94; }
+.approval-actions .approval-seen:hover { background: #33333c; color: #c8c8d0; }

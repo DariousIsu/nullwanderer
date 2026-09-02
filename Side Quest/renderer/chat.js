@@ -1293,7 +1293,9 @@ function renderApprovals(items) {
         <span class="approval-kind ${it.kind === 'blocked' ? 'blocked' : 'proposed'}">${chip}</span>
         ${it.verdict ? `<span class="approval-verdict ${it.verdict}">${it.verdict === 'verified' ? '✓ verified' : '✗ rejected'}</span>` : ''}
         <span class="approval-text">#${escapeHtml(String(it.id))} — ${escapeHtml(it.text)}</span>
-        ${isRun ? '' : `<span class="approval-actions">
+        ${isRun
+    ? (['applied', 'gate-failed', 'apply-failed'].includes(it.status) ? '<span class="approval-actions"><button type="button" class="approval-seen" title="Clear this finished run from the bar">✕</button></span>' : '')
+    : `<span class="approval-actions">
           <button type="button" class="approval-yes" title="${it.kind === 'blocked' ? 'Done / unblocked — she re-checks it' : it.kind === 'pen' ? 'Yes — apply it: clean tree, full gate, commit on green, revert on red' : 'Yes — build it (back into the open queue with your blessing)'}">✓ yes</button>
           <button type="button" class="approval-no" title="No — retire it">✗ no</button>
         </span>`}
@@ -1320,7 +1322,7 @@ if (approvalsBar) {
     const card = btn.closest('.approval-card');
     if (!card) return;
     const id = /^pen-/.test(card.dataset.id) ? card.dataset.id : Number(card.dataset.id);   // pen cards carry string ids
-    const decision = btn.classList.contains('approval-yes') ? 'yes' : 'no';
+    const decision = btn.classList.contains('approval-seen') ? 'seen' : btn.classList.contains('approval-yes') ? 'yes' : 'no';
     btn.disabled = true;
     try {
       const r = await window.sq.needsDecide(id, decision);

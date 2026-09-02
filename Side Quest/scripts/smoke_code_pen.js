@@ -134,6 +134,14 @@ ok(pen.get(p2.id).status === 'applied' && /green/.test(pen.get(p2.id).gate_note)
   pen.stage(p3.id, 'gate RED — fixture', Date.now() - pen.RUN_WINDOW_MS - 1000);
   ok(!pen.pipelineItems().some((x) => x.id === `pen-${p3.id}`), 'an old verdict leaves the bar after the linger window');
   ok(!pen.pipelineItems().some((x) => x.status === 'rejected'), "his ✗ is his own act — never re-shown as a run card");
+  // ── ⭐ v1.3 the clearable bar (Lucas 09-01: "no way to clear the pen window") ──
+  const p4 = pen.propose({ title: 'clear me', diff: GOOD_DIFF });
+  pen.decide(p4.id, 'yes');
+  ok(pen.markSeen(p4.id).ok === false, 'a RUNNING card can never be waved away — only finished runs clear');
+  pen.setStatus(p4.id, 'applied', { gateNote: 'fixture' });
+  ok(pen.pipelineItems().some((x) => x.id === `pen-${p4.id}`), 'the finished run shows before his ✕');
+  ok(pen.markSeen(p4.id).ok === true && !pen.pipelineItems().some((x) => x.id === `pen-${p4.id}`), '⭐ his ✕ clears it from the bar');
+  ok(pen.pathAllowed('boot_self.log').ok === false && pen.pathAllowed('pen_gate_3.log').ok === false, 'the tee + gate forensics logs join the jail');
 }
 
 // ── ⭐ v1.1 THE PEN-WORK LANE (the first-hour finding: his "make the voice mute" edit order had
@@ -186,6 +194,12 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
   ok(/pen\.gate_until/.test(mono), 'v1.2 wiring: the monologue tick honors the quiet window too');
   ok(/pen_gate_\$\{id\}\.log/.test(main) && /Failing pins:/.test(main),
     'v1.2 wiring: a gate red keeps the FULL log on disk and leads with the ✗ pin lines (the tail lost them twice)');
+  ok(/decision === 'seen'\) return \{ \.\.\.pen\.markSeen/.test(main) && /approval-seen/.test(chat),
+    'v1.3 wiring: the ✕ rides needs:decide as "seen"; the renderer shows it on finished runs only');
+  ok(/function _selfRebootTick/.test(main) && /pen\.self_reboot/.test(main) && /app\.relaunch\(\)/.test(main) && /pen\.reboot_at/.test(main),
+    '⭐ v1.3 HER REBOOT (his order): a landed change cycles HER program — kill-switch meta, cooldown, live-guards, announced');
+  ok(/boot_self\.log/.test(main) && /boot generation pid/.test(main),
+    'v1.3 wiring: the console tee — a self-relaunched generation keeps its logs regardless of launcher');
   ok(/st\.pursuit = true; st\.redrove = false/.test(main) && /PURSUIT: proposal #/.test(main),
     "⭐ THE PURSUIT (his law: we don't take no for an answer): a second gate red converts the thread to a diagnosis brief — the ✗ pins become HER problem, never a silent close");
   ok(/rejected \(his word\)/.test(main) && /STALLED after pursuit/.test(main),

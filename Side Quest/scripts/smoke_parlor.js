@@ -107,6 +107,8 @@ ok(parlor.active() === true, 'an open visit makes the room live');
     "⭐ his window AUTO-OPENS when a visit starts — quiet (showInactive, no focus steal): 'purely autonomous usage, I just want to watch'");
   ok(/the same Claude behind your code proposals/.test(main) && /Google's Gemini model, a peer AI/.test(main),
     'she knows WHO sits with her — claude = her engineer, gemini = the outside peer');
+  ok(/_parlorFeed\(\{ id: `bell-/.test(main) && !/model: 'parlor', unprompted: 1/.test(main),
+    "⭐ v1.3 ISOLATION (his catch: 'all landing in the unprompted channel'): doorbells feed ONLY the window + mirror — no chat turn, no unprompted say, no voice");
   ok(/_parlorFeed\(/.test(main) && /parlor-\$\{turn\.id\}/.test(main), 'wiring: turns feed the window AND the canvas mirror');
   ok(/_parlorDoorbell/.test(main) && /Zoe stepped into the parlor/.test(main) && /visit ended/.test(main),
     'wiring: his chat gets ONLY the doorbell lines, never the transcript');

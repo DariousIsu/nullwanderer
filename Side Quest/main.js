@@ -26,6 +26,22 @@ function logCrash(kind, info) {
 }
 process.on('unhandledRejection', (reason) => logCrash('unhandledRejection', reason));
 process.on('uncaughtException', (err) => logCrash('uncaughtException', err));
+// THE CONSOLE TEE (09-01, rides the self-reboot organ): a self-relaunched generation loses the
+// launcher's stdout redirect, so every console line ALSO lands in boot_self.log — evidence
+// survives whoever started the process. Rotates at 20MB. Generation header marks each boot.
+(() => {
+  const fs = require('fs');
+  const LOG = path.join(__dirname, 'boot_self.log');
+  try { if (fs.existsSync(LOG) && fs.statSync(LOG).size > 20 * 1024 * 1024) fs.renameSync(LOG, LOG + '.1'); } catch {}
+  let stream = null;
+  try { stream = fs.createWriteStream(LOG, { flags: 'a' }); stream.write(`\n══ boot generation pid ${process.pid} @ ${new Date().toISOString()} ══\n`); } catch {}
+  if (stream) {
+    for (const k of ['log', 'warn', 'error']) {
+      const orig = console[k].bind(console);
+      console[k] = (...a) => { orig(...a); try { stream.write(a.map((x) => (typeof x === 'string' ? x : (() => { try { return JSON.stringify(x); } catch { return String(x); } })())).join(' ') + '\n'); } catch {} };
+    }
+  }
+})();
 app.on('render-process-gone', (_e, _wc, details) => logCrash('render-process-gone', details));
 app.on('child-process-gone', (_e, details) => logCrash('child-process-gone', details));
 
@@ -3490,6 +3506,7 @@ ipcMain.handle('needs:decide', (_e, { id, decision } = {}) => {
     const _pm = String(id).match(/^pen-(\d+)$/);
     if (_pm) {
       const pen = require('./lib/code_pen');
+      if (decision === 'seen') return { ...pen.markSeen(Number(_pm[1])), items: _pendingNeedItems() };   // his ✕ clears a finished run card
       const r = pen.decide(Number(_pm[1]), decision);
       if (r.ok) {
         try { require('./lib/obs_bus').emit({ lane: 'pen', kind: 'decision', level: 'info', text: `code proposal #${r.id} decided ${String(decision).toLowerCase()} by Lucas → ${r.status}`, ref: `pen:${r.id}` }); } catch {}
@@ -18039,10 +18056,12 @@ function _parlorFeed(turn) {
   } catch {}
 }
 function _parlorDoorbell(line) {
-  try {
-    const row = db.insertTurn({ sessionId: currentSessionId, speaker: 'ai_said', content: line, model: 'parlor', unprompted: 1 });
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: line });
-  } catch {}
+  // ISOLATED (Lucas 09-01: "its all landing in the unprompted channel instead of its own isolated
+  // window"): parlor traffic stays in the parlor — the auto-opening window IS the notification.
+  // No chat turn, no unprompted say, no voice enqueue; the room line lands in the window + mirror.
+  const clean = String(line).replace(/^\[parlor\]\s*/, '');
+  try { _parlorFeed({ id: `bell-${Date.now()}`, speaker: 'room', content: clean, ts: Date.now() }); } catch {}
+  console.log(`[parlor] ${clean}`);
 }
 function startParlorDriver() {
   if (_parlorTimer) return;
@@ -18129,6 +18148,33 @@ async function _parlorTick() {
   } finally { _parlorBusy = false; }
 }
 try { ipcMain.handle('parlor:transcript', () => ({ ok: true, turns: require('./lib/parlor').transcript(undefined, { limit: 60 }), visit: require('./lib/parlor').visit() })); } catch {}
+
+// ── HER REBOOT (Lucas 09-01: "I need her to have reboot ability"): a landed pen change used to
+// wait on an operator cycle — she now cycles herself, under the SAME live-guard law that binds
+// every operator: only when a change is committed and waiting, never over his conversation,
+// never mid-gate or mid-directed-work, never hot after boot, cooldown-capped, ANNOUNCED in her
+// voice before firing. Kill switch: meta pen.self_reboot = '0'. app.relaunch keeps argv/cwd;
+// the console tee keeps the next generation's logs in boot_self.log.
+const _appBootAt = Date.now();
+function _selfRebootTick() {
+  try {
+    if ((db.getMeta('pen.self_reboot') || '1') === '0') return;                        // his off-switch
+    const waiting = db.getDb().prepare("SELECT id, title FROM code_proposals WHERE status = 'applied' AND updated_ts > ? ORDER BY id DESC LIMIT 1").get(_appBootAt);
+    if (!waiting) return;                                                              // nothing landed THIS generation — no reason to cycle
+    if (Date.now() - _appBootAt < 10 * 60 * 1000) return;                              // never hot after boot
+    if (_conversationActive()) return;                                                 // he's typing
+    if (Date.now() - lastUserTurnTs < 3 * 60 * 1000) return;                           // the live-guard user-turn age
+    if (_penGateQuiet()) return;                                                       // a pen gate mid-run
+    if (_userDirectedActive()) return;                                                 // his directed work
+    const lastReboot = parseInt(db.getMeta('pen.reboot_at') || '0', 10) || 0;
+    if (Date.now() - lastReboot < 30 * 60 * 1000) return;                              // cooldown — one self-cycle per half hour
+    db.setMeta('pen.reboot_at', String(Date.now()));
+    _penSay(`Proposal #${waiting.id} ("${waiting.title}") is committed and waiting to go live — restarting myself to bring it in. Back in under a minute.`);
+    console.log(`[pen] SELF-REBOOT — bringing proposal #${waiting.id} live (guards green, announced)`);
+    setTimeout(() => { try { app.relaunch(); app.exit(0); } catch (e) { console.error('[pen] self-reboot failed:', e.message); } }, 5000);
+  } catch (e) { console.error('[pen] self-reboot tick failed:', e.message); }
+}
+setInterval(() => { _selfRebootTick(); }, 5 * 60 * 1000).unref?.();
 
 // The auto-trigger, called from the directed tick — fire-and-forget, never blocks the pass.
 async function maybeAutoSwarm(focus) {
