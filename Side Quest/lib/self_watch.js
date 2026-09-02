@@ -81,7 +81,7 @@ function classify(line, level = 'info') {
   for (const p of SELF_PREFIXES) if (s.startsWith(p)) return { action: 'ignore' };
   const m = /^\[([a-z0-9-]+)\]/i.exec(s.trim());
   const prefix = m ? m[1].toLowerCase() : null;
-  const anomalous = level === 'error' || ANOMALY_RES.some((re) => re.test(s)) || (prefix === 'window') || (prefix && ANOMALY_PREFIXES.has(prefix));
+  const anomalous = level === 'error' || ANOMALY_RES.some((re) => re.test(s)) || (prefix === 'window' && !inBootWindow(Date.now())) || (prefix && ANOMALY_PREFIXES.has(prefix));
   if (anomalous) return { action: 'anomaly', prefix: prefix || '(raw)', lane: prefix && SIGNAL_LANES[prefix] ? SIGNAL_LANES[prefix] : 'anomaly', ref: _ref(s, prefix) };
   if (prefix && SIGNAL_LANES[prefix]) return { action: 'store', prefix, lane: SIGNAL_LANES[prefix], ref: _ref(s, prefix) };
   return { action: 'count', prefix: prefix || '(raw)' };
