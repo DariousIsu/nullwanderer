@@ -84,6 +84,8 @@ ok(parlor.active() === true, 'an open visit makes the room live');
   ok(r6.ok === true && r6.posted === false, '⭐ a resting room has no floor for the bridge — no API call, no reply');
   ok(parlor.FAREWELL_RE.test("I've got what I came for — thanks, you two.") && parlor.FAREWELL_RE.test("I'll head out — thanks for the sanity check"),
     'her real goodbyes match the farewell net (both verbatim shapes from the loop night)');
+  ok(parlor.FAREWELL_RE.test("I'm all set here. Thanks for the sanity check and the fix, you two — closing us out now.") && parlor.FAREWELL_RE.test('wrapping this up, thanks'),
+    "her THIRD goodbye shape matches too ('closing us out now' slipped the first net and hung a visit open on 429-billed ticks)");
   ok(!parlor.FAREWELL_RE.test('the priority chain with high-confidence phrases is the right shape to keep'),
     'working talk never reads as a farewell');
   const main2 = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
@@ -109,6 +111,8 @@ ok(parlor.active() === true, 'an open visit makes the room live');
     'she knows WHO sits with her — claude = her engineer, gemini = the outside peer');
   ok(/_parlorFeed\(\{ id: `bell-/.test(main) && !/model: 'parlor', unprompted: 1/.test(main),
     "⭐ v1.3 ISOLATION (his catch: 'all landing in the unprompted channel'): doorbells feed ONLY the window + mirror — no chat turn, no unprompted say, no voice");
+  ok(/COALESCE\(p\.seen, 0\) = 0/.test(main) && /q\.status = 'applied' AND q\.title = p\.title/.test(main) && /SET seen = 1 WHERE id = \?'\)\.run\(gf\.id\)/.test(main),
+    '⭐ a failure earns ONE visit — consumed at open, and a landed same-title successor ends the story (she re-entered for a settled red)');
   ok(/_parlorFeed\(/.test(main) && /parlor-\$\{turn\.id\}/.test(main), 'wiring: turns feed the window AND the canvas mirror');
   ok(/_parlorDoorbell/.test(main) && /Zoe stepped into the parlor/.test(main) && /visit ended/.test(main),
     'wiring: his chat gets ONLY the doorbell lines, never the transcript');

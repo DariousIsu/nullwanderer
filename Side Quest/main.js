@@ -18073,9 +18073,17 @@ function startParlorDriver() {
 function _parlorReason() {
   try { const inv = JSON.parse(db.getMeta('parlor.invite') || 'null'); if (inv && inv.reason) { db.setMeta('parlor.invite', ''); return `because Lucas left an invitation: ${inv.reason}`; } } catch {}
   try {
-    const pen = require('./lib/code_pen');
-    const gf = db.getDb().prepare("SELECT id, title, gate_note FROM code_proposals WHERE status IN ('gate-failed','apply-failed') ORDER BY updated_ts DESC LIMIT 1").get();
-    if (gf) return `for a second opinion on her code proposal "${gf.title}" (${String(gf.gate_note || '').slice(0, 120)})`;
+    // a failure earns ONE visit (09-01: she re-entered for a story settled hours earlier — the
+    // net fired forever on old red rows). Consumed at open (seen=1); a failure whose same-title
+    // successor already LANDED is a finished story, never a reason.
+    const gf = db.getDb().prepare(`SELECT id, title, gate_note FROM code_proposals p
+      WHERE p.status IN ('gate-failed','apply-failed') AND COALESCE(p.seen, 0) = 0
+        AND NOT EXISTS (SELECT 1 FROM code_proposals q WHERE q.status = 'applied' AND q.title = p.title)
+      ORDER BY p.updated_ts DESC LIMIT 1`).get();
+    if (gf) {
+      try { db.getDb().prepare('UPDATE code_proposals SET seen = 1 WHERE id = ?').run(gf.id); } catch {}
+      return `for a second opinion on her code proposal "${gf.title}" (${String(gf.gate_note || '').slice(0, 120)})`;
+    }
   } catch {}
   try {
     const cur = require('./lib/focus').getCurrent();

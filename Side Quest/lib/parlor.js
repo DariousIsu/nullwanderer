@@ -36,7 +36,7 @@ function _ensure() {
 // Her goodbye said in PROSE (the 09-01 goodbye-loop: "I'll head out" closed nothing, gemini
 // answered the farewell, the floor came back to her, she farewelled again — toward the budget
 // cap on API-billed pleasantries). A farewell-shaped zoe turn closes the visit mechanically.
-const FAREWELL_RE = /\b(goodbye|good ?night|i'?ll head (?:out|back)|heading out|i'?m done here|that'?s all i needed|got what i (?:came for|needed)|see you (?:both|around|next time)|i'?ll (?:leave|let) you (?:two|both))\b/i;
+const FAREWELL_RE = /\b(goodbye|good ?night|i'?ll head (?:out|back)|heading out|i'?m done here|that'?s all i needed|got what i (?:came for|needed)|see you (?:both|around|next time)|i'?ll (?:leave|let) you (?:two|both)|clos(?:e|ing) (?:us|this|it) out|i'?m all set|all set here|wrap(?:ping)? (?:this|us|it) up)\b/i;
 
 // ── the visit lifecycle ───────────────────────────────────────────────────────────────────────
 function visit({ deps = {} } = {}) {
