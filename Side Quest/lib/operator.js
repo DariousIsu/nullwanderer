@@ -359,11 +359,17 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
   // The history budget is a FRACTION OF THE RESOLVED WINDOW (O1 — never a constant): ~45% of
   // num_ctx at ~3.2 chars/token leaves the rest for identity/context/user message/generation.
   // Resolution failure holds the cloud_window FLOOR's share — still window-derived, just the floor.
-  let histBudget = Math.floor(require('./cloud_window').FLOOR * 3.2 * 0.45);
-  try {
-    const w = await require('./cloud_logic').resolveWindow(cOpts.model || null);
-    if (w && w.num_ctx) histBudget = Math.floor(w.num_ctx * 3.2 * 0.45);
-  } catch { /* floor share stands */ }
+  // deps.histBudget: injectable for DETERMINISM (the pen false-red root, 09-01: four gate reds
+  // traced to THIS lookup — resolveWindow finds the real cloud window only under the live app's
+  // inherited env, so the smoke's compaction pin passed in every shell and failed only inside
+  // app-spawned gates. A smoke that injects complete() must be able to inject the window too.)
+  let histBudget = deps.histBudget || Math.floor(require('./cloud_window').FLOOR * 3.2 * 0.45);
+  if (!deps.histBudget) {
+    try {
+      const w = await require('./cloud_logic').resolveWindow(cOpts.model || null);
+      if (w && w.num_ctx) histBudget = Math.floor(w.num_ctx * 3.2 * 0.45);
+    } catch { /* floor share stands */ }
+  }
   let repaired = false;
   // FORCE A FINAL from the work already gathered — the same compile the out-of-steps path uses.
   const _forceFinalFromWork = async () => {

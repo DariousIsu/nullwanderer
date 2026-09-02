@@ -232,9 +232,11 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
       if (/compacted to stubs to fit the window/.test(last)) sawNote = true;
       return { text: script3[si2++] };
     };
-    const rr3 = await op.runOperator({ userMessage: 'x', deps: { complete: complete3, tools: { source_read: bigTool } }, maxSteps: 6 });
+    // histBudget INJECTED (09-01 pen false-red root): without it, resolveWindow silently upgrades
+    // the budget to the real cloud window under app-spawned gates and the flood stops overflowing
+    const rr3 = await op.runOperator({ userMessage: 'x', deps: { complete: complete3, tools: { source_read: bigTool }, histBudget: 16000 }, maxSteps: 6 });
     ok(rr3 && rr3.answer === 'done' && sawNote,
-      'an over-budget history compacts mid-loop and the prompt carries the visible note');
+      'an over-budget history compacts mid-loop and the prompt carries the visible note (budget injected — window resolution never reaches the network in a smoke)');
   }
 
   // --- 2.5.4 self_test OUT-OF-BAND: the gate run refunds the wall-clock ---

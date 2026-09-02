@@ -17905,10 +17905,28 @@ async function runPenWorkPass(focus) {
       st.notes = [];   // stale reads caused this — start the re-drive clean
       pen.setPenState(focus.id, st);
       console.log(`[pen] work thread #${focus.id}: proposal #${p.id} ${p.status} — ONE re-drive with the why (notes cleared for fresh reads)`);
-    } else {   // rejected, or a second failure — honest stop
-      try { db.markOpenThreadStatus(focus.id, 'resolved', { reason: `pen proposal #${p.id} ${p.status}` }); } catch {}
+    } else if (p.status === 'rejected') {   // his ✗ IS the answer — the thread honors it
+      try { db.markOpenThreadStatus(focus.id, 'resolved', { reason: `pen proposal #${p.id} rejected by Lucas` }); } catch {}
       pen.dropFromQueue(focus.id);
-      console.log(`[pen] work thread #${focus.id} closed — proposal #${p.id} ${p.status} (${String(p.gate_note || '').slice(0, 120)})`);
+      console.log(`[pen] work thread #${focus.id} closed — proposal #${p.id} rejected (his word)`);
+      return { action: 'done' };
+    } else if (!st.pursuit) {
+      // THE PURSUIT (Lucas 09-01: "why isn't she looking for solutions to the failures — we don't
+      // take no for an answer"): a second machine failure used to CLOSE the thread — resignation,
+      // against the pursue-the-deliverable law. Instead the thread converts ONCE to a diagnosis
+      // brief: the gate's named ✗ pins become HER problem — is the root the diff, the suite, or
+      // the environment? Her cure may touch a different file than the original ask. A failure of
+      // the pursuit generation itself is the honest stop (everything on the rows for his eyes).
+      st.pursuit = true; st.redrove = false; st.proposalId = null; st.passes = 0; st.notes = [];
+      st.gateNote = `PURSUIT: proposal #${p.id} ("${p.title}") failed the gate TWICE. The gate's evidence:\n${String(p.gate_note || '').slice(0, 700)}\nDo NOT re-send the same diff. Diagnose the TRUE root — read the failing suite and the code it exercises with <source-read>; decide whether the failure is caused by the diff, by the suite, or by the environment — and propose the cure for THAT.`;
+      pen.setPenState(focus.id, st);
+      _penSay(`Proposal #${p.id} failed the gate twice — I'm not dropping it. I'm reading the failing suite to find the real root before proposing again.`);
+      console.log(`[pen] work thread #${focus.id} → PURSUIT — the gate red becomes her diagnosis brief (pins attached)`);
+    } else {
+      try { db.markOpenThreadStatus(focus.id, 'stalled', { reason: `pen pursuit exhausted — proposal #${p.id} ${p.status}` }); } catch {}
+      pen.dropFromQueue(focus.id);
+      _penSay(`I chased proposal #${p.id} through a full diagnosis generation and the gate still refused it. Everything I found is on the cards — I need your eyes.`);
+      console.log(`[pen] work thread #${focus.id} STALLED after pursuit — honest stop with the evidence on the rows, his word re-opens it`);
       return { action: 'done' };
     }
   }

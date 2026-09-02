@@ -186,6 +186,10 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
   ok(/pen\.gate_until/.test(mono), 'v1.2 wiring: the monologue tick honors the quiet window too');
   ok(/pen_gate_\$\{id\}\.log/.test(main) && /Failing pins:/.test(main),
     'v1.2 wiring: a gate red keeps the FULL log on disk and leads with the ✗ pin lines (the tail lost them twice)');
+  ok(/st\.pursuit = true; st\.redrove = false/.test(main) && /PURSUIT: proposal #/.test(main),
+    "⭐ THE PURSUIT (his law: we don't take no for an answer): a second gate red converts the thread to a diagnosis brief — the ✗ pins become HER problem, never a silent close");
+  ok(/rejected \(his word\)/.test(main) && /STALLED after pursuit/.test(main),
+    'pursuit bounds: his ✗ still closes instantly; ONE pursuit generation, then an honest voiced stall with the evidence on the rows');
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
