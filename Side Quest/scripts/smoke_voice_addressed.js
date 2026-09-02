@@ -43,6 +43,10 @@ const chat = read('renderer/chat.js');
 ok(/sttTranscribe\(ab, \{ handsFree: true \}\)/.test(chat), 'the hands-free path declares itself');
 ok(/res\.addressed && res\.addressed\.turn === false/.test(chat), 'the renderer drops a non-addressed utterance at the same seam as the speaker gate');
 ok(/sttTranscribe: \(audioBuf, opts\)/.test(read('preload.js')), 'preload passes the lane marker through');
+// ⭐ audit S23: an unprompted say does not SPEAK over his in-progress utterance (half-duplex)
+ok(/window\.__micCapturing = true/.test(chat) && /startCapture/.test(chat), 'S23: mid-utterance capture raises the __micCapturing flag');
+ok((chat.match(/window\.sq\.speak && !\(info && info\.silent\) && !window\.__micCapturing|window\.sq\.speak && !window\.__micCapturing/g) || []).length >= 2,
+  '⭐ S23: BOTH unprompted speak sites hold the spoken say while he is mid-utterance (text still lands on the panel)');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

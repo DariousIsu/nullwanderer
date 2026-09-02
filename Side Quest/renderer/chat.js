@@ -418,7 +418,9 @@ window.sq.onComplete((info) => {
       ? info.say.trim() : cleanLiveSay(sheepBufs[info.s] || '').trim();
     if (text && !info.silent) {
       appendSheep({ ts: Date.now(), content: text, type: 'utterance' });
-      try { if (window.sq.speak) window.sq.speak(text); } catch (e) {}   // speak her unprompted utterance aloud
+      // HALF-DUPLEX (audit S23): never SPEAK an unprompted say over his in-progress utterance —
+      // the text is on the sheep panel either way; speaking it would abort his live mic capture.
+      try { if (window.sq.speak && !window.__micCapturing) window.sq.speak(text); } catch (e) {}
     }
     sheepBufs[info.s] = '';
     return;
@@ -440,7 +442,8 @@ window.sq.onComplete((info) => {
       ? info.say.trim() : cleanLiveSay(unpromptedBuffer).trim();
     if (text) {
       appendSheep({ ts: Date.now(), content: text, type: 'utterance' });
-      try { if (window.sq.speak && !(info && info.silent)) window.sq.speak(text); } catch (e) {}   // speak her unprompted utterance aloud
+      // HALF-DUPLEX (audit S23): hold the SPOKEN unprompted say while he is mid-utterance (text stays on the panel)
+      try { if (window.sq.speak && !(info && info.silent) && !window.__micCapturing) window.sq.speak(text); } catch (e) {}
     }
     unpromptedActive = false;
     unpromptedBuffer = '';
@@ -880,6 +883,7 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
 
   function abortCapture() {
     capturing = false; uttBuf = []; bargeCapture = false;
+    try { window.__micCapturing = false; } catch {}   // audit S23: he is no longer mid-utterance
   }
 
   function rmsLevel() {
@@ -904,6 +908,7 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
   function startCapture() {
     uttBuf = ringBuf.slice();   // PRE-ROLL: seed with the last ~PREROLL_MS so the onset isn't clipped
     capturing = true; captureMax = 0; captureStartTs = Date.now();
+    try { window.__micCapturing = true; } catch {}   // audit S23: he is MID-UTTERANCE — an unprompted say must not talk over him
     console.log(`[voice] capture start (+${uttBuf.length}-frame preroll)`);
     setLabel('● you\'re talking');
   }
@@ -911,6 +916,7 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
   function endCapture() {
     if (!capturing) return;
     capturing = false;
+    try { window.__micCapturing = false; } catch {}   // audit S23: utterance done — the floor is free
     console.log(`[voice] capture end peak=${captureMax.toFixed(4)} ${Date.now() - captureStartTs}ms`);
     setLabel('… transcribing');
     const frames = uttBuf; uttBuf = [];
