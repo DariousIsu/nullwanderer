@@ -20,6 +20,7 @@ data/
 # Logs / scratch
 *.log
 *.tmp
+boot_cycle.lock
 
 # OS
 .DS_Store

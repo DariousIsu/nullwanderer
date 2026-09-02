@@ -41,6 +41,7 @@ const DENY_RE = [
   /(^|\/|\\)boot_p\d+.*\.log$/i,   // boot logs can carry pasted content; the organ watch owns them
   /(^|\/|\\)boot_self\.log(\.\d+)?$/i,   // the console tee (self-reboot generations) — same class
   /(^|\/|\\)pen_gate_\d+\.log$/i,        // full gate logs — operator forensics, not her source
+  /(^|\/|\\)boot_cycle\.(log|lock)$/i,   // the outside cycler's log/lock — same class as every log
 ];
 
 function _rel(p) { return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '').trim(); }

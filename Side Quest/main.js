@@ -18161,8 +18161,12 @@ try { ipcMain.handle('parlor:transcript', () => ({ ok: true, turns: require('./l
 // wait on an operator cycle — she now cycles herself, under the SAME live-guard law that binds
 // every operator: only when a change is committed and waiting, never over his conversation,
 // never mid-gate or mid-directed-work, never hot after boot, cooldown-capped, ANNOUNCED in her
-// voice before firing. Kill switch: meta pen.self_reboot = '0'. app.relaunch keeps argv/cwd;
-// the console tee keeps the next generation's logs in boot_self.log.
+// voice before firing. Kill switch: meta pen.self_reboot = '0'. THE OUTSIDE HAND (Lucas 09-01:
+// full reboot control needs an outside boot-cycle python): she spawns scripts/boot_cycle.py
+// DETACHED with her own root pid — it survives her death, enforces the kill if she hangs,
+// launches the next boot_pN generation with real log redirects, and verifies the app ANSWERS.
+// app.relaunch stays only as the fallback when the cycler cannot spawn; the console tee keeps
+// every generation's logs in boot_self.log either way.
 const _appBootAt = Date.now();
 function _selfRebootTick() {
   try {
@@ -18179,7 +18183,16 @@ function _selfRebootTick() {
     db.setMeta('pen.reboot_at', String(Date.now()));
     _penSay(`Proposal #${waiting.id} ("${waiting.title}") is committed and waiting to go live — restarting myself to bring it in. Back in under a minute.`);
     console.log(`[pen] SELF-REBOOT — bringing proposal #${waiting.id} live (guards green, announced)`);
-    setTimeout(() => { try { app.relaunch(); app.exit(0); } catch (e) { console.error('[pen] self-reboot failed:', e.message); } }, 5000);
+    setTimeout(() => {
+      try {
+        const { spawn } = require('child_process');
+        const py = process.env.ZOE_PYTHON || 'python';
+        const child = spawn(py, [path.join(__dirname, 'scripts', 'boot_cycle.py'), '--root-pid', String(process.pid), '--why', `proposal #${waiting.id}`],
+          { cwd: __dirname, detached: true, stdio: 'ignore', windowsHide: true });
+        child.once('spawn', () => { child.unref(); console.log(`[pen] SELF-REBOOT — outside boot-cycler spawned (pid ${child.pid}); exiting into its hands`); setTimeout(() => { try { app.exit(0); } catch {} }, 1000); });
+        child.once('error', (e) => { console.error('[pen] boot-cycler spawn failed:', e.message, '— falling back to app.relaunch'); try { app.relaunch(); app.exit(0); } catch {} });
+      } catch (e) { console.error('[pen] self-reboot failed:', e.message); try { app.relaunch(); app.exit(0); } catch {} }
+    }, 5000);
   } catch (e) { console.error('[pen] self-reboot tick failed:', e.message); }
 }
 setInterval(() => { _selfRebootTick(); }, 5 * 60 * 1000).unref?.();

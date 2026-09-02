@@ -204,6 +204,21 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
     "⭐ THE PURSUIT (his law: we don't take no for an answer): a second gate red converts the thread to a diagnosis brief — the ✗ pins become HER problem, never a silent close");
   ok(/rejected \(his word\)/.test(main) && /STALLED after pursuit/.test(main),
     'pursuit bounds: his ✗ still closes instantly; ONE pursuit generation, then an honest voiced stall with the evidence on the rows');
+  // ⭐ THE OUTSIDE HAND (his 09-01 confirm: full reboot control = "spawn an outside boot cycle python")
+  ok(fs.existsSync(path.join(__dirname, '..', 'scripts', 'boot_cycle.py')),
+    '⭐ the outside boot-cycler exists — her reboot no longer depends on the dying process staying healthy');
+  ok(/boot_cycle\.py/.test(main) && /detached: true/.test(main) && /--root-pid/.test(main),
+    'wiring: her self-reboot spawns the DETACHED cycler with her own root pid (it survives her exit and enforces the kill if she hangs)');
+  ok(/falling back to app\.relaunch/.test(main),
+    'wiring: a failed cycler spawn falls back to app.relaunch — never a silent no-reboot');
+  ok(pen.pathAllowed('boot_cycle.log').ok === false && pen.pathAllowed('boot_cycle.lock').ok === false,
+    'jail: the cycler log/lock are denied like every log');
+  ok(pen.pathAllowed('scripts/boot_cycle.py').ok === true,
+    'jail: the cycler SOURCE stays inside the pen — her reboot hand is her own code, gated like the rest');
+  {
+    const pyc = require('child_process').spawnSync('python', ['-m', 'py_compile', path.join(__dirname, '..', 'scripts', 'boot_cycle.py')], { encoding: 'utf8' });
+    ok(pyc.error ? true : pyc.status === 0, pyc.error ? 'cycler py_compile SKIPPED (no python on PATH)' : 'the cycler COMPILES (py_compile clean)');
+  }
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
