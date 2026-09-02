@@ -2005,6 +2005,11 @@ app.whenReady().then(() => {
     python: ECHO_PYTHON,
     cwd: ECHO_CWD,
     onLog: (m) => console.log('[engine]', m),
+    // Stage 2 (unification): supervisor failures at error level so self_watch mints on them, and
+    // every Echo organ's stdout event under its OWN prefix ([orchestrator] cycle 3 done …) so the
+    // tee, self_watch's lanes and the organ watch read the engine's organs like her own.
+    onError: (m) => console.error('[engine]', m),
+    onOrgan: (name, text, level) => (level === 'error' ? console.error : console.log)(`[${name}]`, text),
   });
   const pushEchoStatus = (r) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('echo:status', { connected: !!(r && r.ok), tools: (r && r.tools) || 0 }); } catch {} };
   // A failed attach NAMES ITS DOOR — the heartbeat retried a poisoned session for 25 minutes on
@@ -2040,8 +2045,9 @@ app.whenReady().then(() => {
     // Adopt the running engine, or spawn + own one, THEN attach the suit. If ensure can't bring an
     // engine up (e.g. ECHO_CWD/ECHO_PYTHON wrong on the spawn path), still try to attach in case one
     // came online by another route — the heartbeat keeps retrying regardless.
-    engineSupervisor.ensure({ spawnIfDown: true })
-      .then(r => { console.log(`[main] engine ${r.state}${r.pid ? ' (pid ' + r.pid + ')' : ''}`); return tryEchoAttach(); })
+    // (Stage 2, 09-02: a SECOND identical ensure→attach chain used to sit here — two concurrent
+    // initialize handshakes on the one suit client every boot: "[main] engine spawned" twice, two
+    // attaches, and the boot-race NOT-OK/reset. One chain now; the heartbeat below is the retry.)
     // Restore the board after a restart: the durable mirror FIRST (rebuilds everything, including what the
     // operator dropped), then the file sweep as a backstop for deliverables the mirror never saw.
     // fresh44 ran a WHOLE SESSION with an unreplayed canvas because the engine was late at boot and
@@ -5760,6 +5766,9 @@ try {
       require('./lib/status_vector').refresh({
         deps: {
           echoConnected: !!(echoSuit && echoSuit.connected),
+          // Stage 2 (unification): the engine's process tree as the supervisor measures it —
+          // per-sidecar liveness, last event age, silence, and which authority defined the fleet.
+          engineStatus: (() => { try { return engineSupervisor ? engineSupervisor.status() : null; } catch { return null; } })(),
           guard: (() => { try { return _voiceGuard.state(); } catch { return null; } })(),
           working: (() => { try { return _workingNow(); } catch { return null; } })(),
         },

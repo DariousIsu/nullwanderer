@@ -179,9 +179,15 @@ const GB = 1073741824;
       working: { goal: 'Louisiana parish leadership', done: 12, universe: 64, workers: 2 },
       speakerStatus: { gate: true, enrolled: true, count: 5 },
       quotaGate: qgFix,
+      // stage 2 (unification): the supervisor's measured process tree — one sidecar down
+      engineStatus: { owned: true, adopted: false, pid: 4242, port: 8765, sidecars: { orchestrator: 11, 'huey-consumer': 12 },
+        organs: { orchestrator: { pid: 11, alive: true, lastEventAgoMs: 45e3, exits: 0, silent: false, heartbeatS: 60 }, 'huey-consumer': { pid: 12, alive: true, lastEventAgoMs: null, exits: 0, silent: false, heartbeatS: null }, 'pass-worker': { pid: null, alive: false, lastEventAgoMs: 900e3, exits: 2, silent: false, heartbeatS: null } },
+        manifest: { source: 'echo', warnings: 0, config: 'C:/echo/config.toml', error: null } },
     };
     const v1 = sv.assemble({ deps: deps1, nowMs: now });
     ok(v1.organs.echo === true && v1.organs.sharedBrowser === false, 'assemble: organ truths from deps');
+    ok(v1.organs.engine && v1.organs.engine.state === 'owned' && v1.organs.engine.pid === 4242 && v1.organs.engine.sidecars.orchestrator.alive === true && v1.organs.engine.sidecars['pass-worker'].alive === false && v1.organs.engine.manifest.source === 'echo', 'assemble: engine organ (stage 2) from the supervisor status');
+    ok(sv.assemble({ deps: { ...deps1, engineStatus: undefined }, nowMs: now }).organs.engine === undefined, 'assemble: engine organ ABSENT when main passes none (measured-never-asserted)');
     ok(v1.voice.gate === true && v1.voice.samples === 5, 'assemble: speaker gate state');
     ok(v1.quota.usedPct === 56 && v1.quota.idleOpen === true, 'assemble: quota pool + lane allowances');
     ok(v1.machine && v1.machine.at, 'assemble: machine section reads Loop C meta');
@@ -193,6 +199,7 @@ const GB = 1073741824;
     ok(r1.vector.at === now && JSON.parse(db.getMeta(sv.META_KEY)).at === now, 'refresh persists the vector');
     const line1 = sv.line({ nowMs: now + 1000 });
     ok(!!line1 && /Echo ✓/.test(line1) && /quota 56% used/.test(line1) && /gate (enforce|shadow)/.test(line1), `line renders from stored (${line1.slice(0, 110)}…)`);
+    ok(/Echo ✓ \(engine owned pid 4242 · sidecars 2\/3 up\)/.test(line1), `line: the engine's process tree rides the one-liner (${line1.slice(0, 80)}…)`);
     ok(!/may be stale/.test(line1), 'fresh line carries no stale flag');
     ok(/may be stale/.test(sv.line({ nowMs: now + 20 * 60e3 }) || ''), 'old vector → stale annotation');
 
@@ -210,6 +217,11 @@ const GB = 1073741824;
     ok(/12 of 64 done/.test(blk), 'block: focus progress');
     ok(/Machine \(your body\)/.test(blk) && /Memory substrate/.test(blk), 'block: interoception sections present');
     ok(/tier gate/i.test(blk), 'block: gate mode named');
+    ok(/Engine \(Echo's process tree\): owned pid 4242 · sidecars: orchestrator ✓ last event 45s ago · huey-consumer ✓ · pass-worker ✗ DOWN \(2 exits\) · fleet definition from Echo's manifest\./.test(blk), `block: engine organs, each with liveness + last event + authority (${(blk.match(/Engine \(Echo's process tree\)[^\n]*/) || [''])[0].slice(0, 160)})`);
+    // delta: a sidecar dying is felt on the next beat
+    const deps3 = { ...deps2, engineStatus: { ...deps1.engineStatus, organs: { ...deps1.engineStatus.organs, orchestrator: { ...deps1.engineStatus.organs.orchestrator, alive: false, pid: null } } } };
+    const r3 = sv.refresh({ deps: deps3, nowMs: now + 120e3 });
+    ok(r3.delta.some((d) => /engine sidecar orchestrator DIED/.test(d)), `delta: engine sidecar death detected (${JSON.stringify(r3.delta)})`);
 
     // fail-absent: empty store → null line/block, no throw
     db.setMeta(sv.META_KEY, '');

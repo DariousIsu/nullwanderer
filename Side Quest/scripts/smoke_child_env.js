@@ -75,17 +75,20 @@ const BASE = {
 }
 
 // ── WIRING: every Echo spawn site actually uses it ──────────────────────────────────────────────
-// Three separate spawns reach Echo (stdio MCP, the engine, the agent sidecars) and the fleet only
-// stays intact if ALL of them strip. The engine's own spawn passed no `env` at all, so it inherited
-// implicitly — the case a reviewer is most likely to miss.
+// Four separate spawns reach Echo (stdio MCP, the manifest read, the engine, the agent sidecars)
+// and the fleet only stays intact if ALL of them strip. The engine's own spawn passed no `env` at
+// all, so it inherited implicitly — the case a reviewer is most likely to miss.
 {
   const fs = require('fs'), path = require('path');
   const read = (f) => fs.readFileSync(path.join(__dirname, '..', 'lib', f), 'utf8');
   const echo = read('echo.js'), engine = read('engine.js');
   ok(/env: require\('\.\/child_env'\)\.forEcho\(env \|\| process\.env\)/.test(echo),
     'echo.js stdio transport strips the pins');
-  ok((engine.match(/child_env'\)\.forEcho\(process\.env\)/g) || []).length === 2,
-    'engine.js strips on BOTH the engine spawn and the sidecar spawn');
+  // Every python spawn site in engine.js must strip — count the sites, count the strips, they match.
+  const pySpawns = (engine.match(/spawnFn\((?:this\.)?python, /g) || []).length;
+  const strips = (engine.match(/child_env'\)\.forEcho\(process\.env\)/g) || []).length;
+  ok(pySpawns === 3 && strips === 3,
+    `engine.js strips on ALL its Echo spawns — manifest read, engine, sidecars (${strips} strips / ${pySpawns} spawn sites)`);
   ok(!/serveArgs\(this\.host, this\.port\), \{ cwd: this\.cwd, stdio:/.test(engine),
     'REGRESSION: the engine spawn no longer inherits process.env implicitly');
 }

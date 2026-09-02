@@ -50,6 +50,23 @@ function assemble({ deps = {}, nowMs = Date.now() } = {}) {
   try { v.organs.echo = deps.echoConnected !== undefined ? !!deps.echoConnected : null; } catch {}
   try { v.organs.ownBrowser = deps.ownBrowser !== undefined ? !!deps.ownBrowser : require('./web').isConnected(); } catch {}
   try { v.organs.sharedBrowser = deps.sharedBrowser !== undefined ? !!deps.sharedBrowser : require('./browser').isConnected(); } catch {}
+  // Stage 2 of the unification (09-02): the engine's process tree as the supervisor measures it —
+  // owned/adopted, pid, per-sidecar liveness + last-event age + silence, and WHICH authority
+  // defined the fleet (Echo's manifest, or the built-in fallback). Absent when main didn't pass
+  // it (measured-never-asserted).
+  try {
+    const es = deps.engineStatus;
+    if (es && typeof es === 'object') {
+      const sidecars = {};
+      for (const [n, o] of Object.entries(es.organs || {})) {
+        sidecars[n] = { alive: !!o.alive, pid: o.pid || null, lastEventAgoMs: o.lastEventAgoMs == null ? null : o.lastEventAgoMs, silent: !!o.silent, exits: o.exits || 0, heartbeatS: o.heartbeatS || null };
+      }
+      v.organs.engine = {
+        state: es.owned ? 'owned' : (es.adopted ? 'adopted' : 'down'), pid: es.pid || null, sidecars,
+        manifest: es.manifest ? { source: es.manifest.source, warnings: es.manifest.warnings || 0 } : null,
+      };
+    }
+  } catch {}
 
   // voice — speaker gate + guard seat
   try {
@@ -138,6 +155,14 @@ function _delta(prev, cur) {
     if (prev.organs && cur.organs && prev.organs.echo !== cur.organs.echo && cur.organs.echo != null) {
       out.push(cur.organs.echo ? 'Echo reconnected' : 'Echo DROPPED');
     }
+    // Stage 2: an engine sidecar dying or coming back is worth feeling on the next beat.
+    const pe = prev.organs && prev.organs.engine && prev.organs.engine.sidecars, ce = cur.organs && cur.organs.engine && cur.organs.engine.sidecars;
+    if (pe && ce) {
+      for (const n of Object.keys(ce)) {
+        if (pe[n] && pe[n].alive !== ce[n].alive) out.push(ce[n].alive ? `engine sidecar ${n} back` : `engine sidecar ${n} DIED`);
+        if (pe[n] && !pe[n].silent && ce[n].silent) out.push(`engine sidecar ${n} went SILENT`);
+      }
+    }
     if (prev.guard && cur.guard && prev.guard.paused !== cur.guard.paused) {
       out.push(cur.guard.paused ? `voice paused (${cur.guard.reason || 'guard'})` : 'voice resumed');
     }
@@ -181,7 +206,15 @@ function line({ deps = {}, nowMs = Date.now() } = {}) {
   if (!v || !v.at) return null;
   const ageMin = Math.round((nowMs - v.at) / 60000);
   const bits = [];
-  if (v.organs) bits.push(`Echo ${_flag(v.organs.echo)}`);
+  if (v.organs) {
+    // Stage 2: the engine's process tree rides the one-liner — owned/adopted + sidecars up/total.
+    const eng = v.organs.engine; let sc = '';
+    if (eng && eng.sidecars) {
+      const names = Object.keys(eng.sidecars); const up = names.filter((n) => eng.sidecars[n].alive).length;
+      if (names.length) sc = ` (engine ${eng.state}${eng.pid ? ` pid ${eng.pid}` : ''} · sidecars ${up}/${names.length} up${names.some((n) => eng.sidecars[n].silent) ? ', one SILENT' : ''})`;
+    }
+    bits.push(`Echo ${_flag(v.organs.echo)}${sc}`);
+  }
   if (v.voice) bits.push(`voice gate ${v.voice.gate ? 'on' : 'off'}${v.guard && v.guard.paused ? ` (PAUSED: ${v.guard.reason || 'guard'})` : ''}`);
   if (v.quota && v.quota.known) bits.push(`quota ${v.quota.usedPct}% used, ${v.quota.hoursLeft}h to reset${v.quota.idleOpen ? '' : ` (idle lane closed${v.quota.idleClosedH ? ` ${v.quota.idleClosedH}h` : ''})`}`);
   if (v.gateMode) bits.push(`gate ${v.gateMode}`);
@@ -208,6 +241,18 @@ function block({ deps = {}, nowMs = Date.now() } = {}) {
   const ageMin = Math.round((nowMs - v.at) / 60000);
   if (v.organs) {
     L.push(`Organs: Echo ${_flag(v.organs.echo, 'CONNECTED', 'disconnected')} · your browser ${_flag(v.organs.ownBrowser, 'open', 'closed')} · shared browser ${_flag(v.organs.sharedBrowser, 'connected', 'not connected')}.`);
+    // Stage 2: the engine's organs, each with its liveness and last event — the answer to "is the
+    // orchestrator running" comes from THIS, never from impression.
+    const eng = v.organs.engine;
+    if (eng) {
+      const parts = Object.entries(eng.sidecars || {}).map(([n, o]) => {
+        const age = o.lastEventAgoMs == null ? null : (o.lastEventAgoMs >= 120e3 ? `${Math.round(o.lastEventAgoMs / 60000)}m` : `${Math.round(o.lastEventAgoMs / 1000)}s`);
+        const live = !o.alive ? '✗ DOWN' : (o.silent ? `⚠ SILENT (last event ${age || '?'} ago)` : `✓${age && o.heartbeatS ? ` last event ${age} ago` : ''}`);
+        return `${n} ${live}${o.exits ? ` (${o.exits} exit${o.exits === 1 ? '' : 's'})` : ''}`;
+      });
+      const src = eng.manifest ? ` · fleet definition from ${eng.manifest.source === 'echo' ? "Echo's manifest" : 'the BUILT-IN fallback (stale authority)'}${eng.manifest.warnings ? ` with ${eng.manifest.warnings} config warning(s)` : ''}` : '';
+      L.push(`Engine (Echo's process tree): ${eng.state}${eng.pid ? ` pid ${eng.pid}` : ''} · sidecars: ${parts.length ? parts.join(' · ') : 'none'}${src}.`);
+    }
   }
   if (v.voice) {
     L.push(`Voice: speaker gate ${v.voice.gate ? `ON (${v.voice.samples} enrollment samples${v.voice.rejects ? `; ${v.voice.rejects} lifetime rejects` : ''})` : 'off'}${v.guard ? ` · guard ${v.guard.paused ? `PAUSED (${v.guard.reason || 'manual'})` : 'listening'} [${v.guard.mode}]` : ''}.`);

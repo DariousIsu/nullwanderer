@@ -31,6 +31,11 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   c = sw.classify('[window] gemma prompt ~29203ch ≈ 8112tok vs num_ctx 8192 — will SILENTLY truncate', 'warn');
   ok(c.action === 'anomaly' && c.lane === 'window', '[window] overruns are anomalies even at warn level');
   ok(sw.classify('suite FAILED — 3 of 12').action === 'anomaly', 'FAILED shapes are anomalies at any level');
+  // stage 2 (unification): the engine's organs speak under their own prefixes
+  c = sw.classify('[orchestrator] cycle 3 done: 0 dispatched, 0 skipped, no_runnable_passes (0.4s)');
+  ok(c.action === 'store' && c.lane === 'engine', "an Echo organ's stdout event is stored under the engine lane");
+  c = sw.classify('[orchestrator] cycle 4 FAILED: OperationalError: unable to open database file', 'error');
+  ok(c.action === 'anomaly' && c.lane === 'engine', "an Echo organ's failure is an anomaly in the engine lane (self-repair sees the engine)");
 
   // --- signatures blank the volatile parts ---
   ok(sw.signatureOf('[fit] prompt 29112ch > 25171ch budget') === sw.signatureOf('[fit] prompt 28467ch > 25171ch budget'),

@@ -66,6 +66,12 @@ const SIGNAL_LANES = {
   'warm': 'models',         // warm-keeper: which main model was held hot / skipped
   'idle-depth': 'idle',     // the anticipatory ladder's tier per tick
   'echo': 'echo',           // Echo transport events incl. the stale-socket reconnect+retry
+  // Stage 2 of the unification (2026-09-02): the engine's own organs speak in the tee under their
+  // own prefixes (lib/engine.js reads each sidecar's stdout JSON events). Their cycles are stored
+  // as first-class events; a failure arrives at error level and mints like any anomaly of hers.
+  'orchestrator': 'engine',
+  'pass-worker': 'engine',
+  'huey-consumer': 'engine',
 };
 const ANOMALY_RES = [/Traceback \(most recent/i, /\bUncaught\b/, /\bFAILED\b/, /\bUnhandled(?:PromiseRejection)?\b/i];
 // Diagnostic prefixes that denote a REAL failure even at warn level, so a RECURRENCE surfaces on the

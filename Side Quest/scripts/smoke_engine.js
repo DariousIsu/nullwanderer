@@ -145,6 +145,99 @@ ok('clipForLog passes a short chunk through untouched', E.clipForLog('short line
     ok('S27: sidecars pipe stderr too', /sidecar \$\{def\.name\}:stderr/.test(src));
   }
 
+  // ── UNIFICATION stage 1 (09-02): the fleet comes from Echo's manifest ─────────────────────────
+  {
+    const fakeManifest = {
+      manifest_version: 1, config: 'C:/echo/config.toml',
+      serve: { host: '127.0.0.1', port: 8765, args: ['-m', 'echo.main', 'serve', '--transport', 'http', '--host', '127.0.0.1', '--port', '8765'] },
+      sidecars: [
+        { name: 'huey-consumer', disable_env: 'NX_ECHO_DISABLE_HUEY', args: ['-m', 'huey.bin.huey_consumer', 'echo.queue.huey'], heartbeat_s: null },
+        { name: 'orchestrator', disable_env: 'NX_ECHO_DISABLE_ORCHESTRATOR', args: ['-m', 'echo.orchestrator.run', '--checkpoint-db', 'C:/echo/data/ck.db', '--rainey-db', 'C:/echo/data/foundations/civic_graph.db'], heartbeat_s: 60 },
+      ],
+      paths: { rainey_db: 'C:/echo/data/foundations/civic_graph.db' }, warnings: ['paths.corpus_root missing'],
+    };
+    const v = E.validateManifest(fakeManifest);
+    ok('validateManifest: normalizes sidecars (disable_env→disableEnv, heartbeat_s→heartbeatS)', v.source === 'echo' && v.sidecars.length === 2 && v.sidecars[1].disableEnv === 'NX_ECHO_DISABLE_ORCHESTRATOR' && v.sidecars[1].heartbeatS === 60 && v.sidecars[0].heartbeatS === null);
+    ok('validateManifest: the orchestrator argv carries the resolved --rainey-db', v.sidecars[1].args.includes('--rainey-db'));
+    let threw = 0;
+    for (const bad of [null, {}, { manifest_version: 2, sidecars: [{ name: 'x', args: ['a'] }] }, { manifest_version: 1, sidecars: [] }, { manifest_version: 1, sidecars: [{ name: 'x', args: [] }] }]) { try { E.validateManifest(bad); } catch { threw++; } }
+    ok('validateManifest: rejects wrong version / no sidecars / empty argv (never half a fleet)', threw === 5, `threw=${threw}`);
+
+    const mLogs = [], mErrs = [], mSpawns = [];
+    const mSpawn = (cmd, args) => { mSpawns.push(args); return { pid: 2000 + mSpawns.length, on() {}, kill() {}, killed: false }; };
+    const m1 = new E.EngineSupervisor({ cwd: 'x', spawnFn: mSpawn, manifestFn: async () => fakeManifest, onLog: (l) => mLogs.push(l), onError: (l) => mErrs.push(l) });
+    await m1._loadManifest();
+    m1.owned = true; m1._startSidecars();
+    ok('manifest → the fleet IS the manifest (2 sidecars, not the built-in 3)', Object.keys(m1.status().sidecars).length === 2 && mSpawns.some((a) => a.includes('--rainey-db')), JSON.stringify(Object.keys(m1.status().sidecars)));
+    ok('manifest warnings are teed at ERROR level (self_watch-mintable)', mErrs.some((l) => /manifest WARNING — paths\.corpus_root missing/.test(l)));
+    ok('status() names the authority', !!m1.status().manifest && m1.status().manifest.source === 'echo' && m1.status().manifest.warnings === 1);
+    ok('serve argv comes from the manifest when the port agrees', m1._serveArgs().join(' ') === fakeManifest.serve.args.join(' '));
+    await m1.shutdown();
+
+    const fErrs = []; const fSpawn = () => ({ pid: 3000, on() {}, kill() {}, killed: false });
+    const m2 = new E.EngineSupervisor({ cwd: 'x', spawnFn: fSpawn, manifestFn: async () => { throw new Error('python exploded'); }, onLog() {}, onError: (l) => fErrs.push(l) });
+    await m2._loadManifest();
+    ok('manifest unavailable → BUILT-IN fleet (3) + an error line naming the stale authority', m2.sidecars.length === 3 && m2.status().manifest.source === 'builtin' && fErrs.some((l) => /manifest unavailable \(python exploded\).*BUILT-IN/.test(l)), fErrs.join(' | '));
+    ok('the built-in fleet stays in step with Echo: the orchestrator declares a 60s heartbeat', E.sidecarDefs().find((d) => d.name === 'orchestrator').heartbeatS === 60);
+    const m3 = new E.EngineSupervisor({ cwd: 'x', spawnFn: fSpawn, onLog() {}, onError() {} });
+    let m3ok = false; try { await m3._loadManifest(); m3ok = m3.status().manifest.source === 'builtin'; } catch {}
+    ok('an injected spawnFn without a manifestFn resolves to the built-in fleet at once (tests never hang)', m3ok);
+    ok('manifestArgs is the Echo CLI door', E.manifestArgs().join(' ') === '-m echo.main manifest');
+  }
+
+  // ── UNIFICATION stage 2 (09-02): the sidecar lifecycle contract ───────────────────────────────
+  {
+    const d1 = E.describeEvent({ event: 'cycle_done', cycle: 3, dispatched: 1, skipped: 2, finish_reason: 'no_runnable_passes', elapsed_s: 1.2 });
+    ok('describeEvent: cycle_done renders at log level', d1.level === 'log' && /cycle 3 done: 1 dispatched, 2 skipped, no_runnable_passes/.test(d1.text), d1.text);
+    const d2 = E.describeEvent({ event: 'cycle_failed', cycle: 4, error: 'OperationalError: unable to open database file' });
+    ok('describeEvent: cycle_failed is ERROR level and carries the cause', d2.level === 'error' && /cycle 4 FAILED: OperationalError: unable to open database file/.test(d2.text));
+    ok('describeEvent: config_error is ERROR level', E.describeEvent({ event: 'config_error', error: 'rainey_db is a directory (tombstone)', rainey_db: 'C:/x/rainey.db' }).level === 'error');
+    ok('describeEvent: an unknown *_error event defaults to ERROR level, others to log', E.describeEvent({ event: 'weird_error', x: 1 }).level === 'error' && E.describeEvent({ event: 'something', x: 1 }).level === 'log');
+
+    // stdout events reach the tee under the organ's OWN prefix; failures at error level
+    const organ = []; const handlers = {};
+    const oSpawn = () => ({ pid: 4000, on(ev, fn) { handlers[ev] = fn; }, kill() {}, killed: false, stdout: { on(ev, fn) { handlers.stdout = fn; } }, stderr: { on() {} } });
+    const o1 = new E.EngineSupervisor({ cwd: 'x', spawnFn: oSpawn, sidecars: [{ name: 'orchestrator', disableEnv: null, args: ['-m', 'x'], heartbeatS: 60 }], manifestFn: async () => { throw new Error('n/a'); }, onLog() {}, onError() {}, onOrgan: (n, t, l) => organ.push([n, t, l]) });
+    o1.owned = true; o1._startSidecars();
+    handlers.stdout(Buffer.from('{"event": "start", "rainey_db": "C:/civic.db", "interval_s": 60, "classes": ["maintain"]}\n{"event": "cycle_done", "cycle": 1, "dispatched": 0, "skipped": 0, "finish_reason": "no_runnable_passes", "elapsed_s": 0.4}\n{"event": "cycle_fail'));
+    handlers.stdout(Buffer.from('ed", "cycle": 2, "error": "boom"}\nplain text line\n'));
+    ok('sidecar stdout → one organ line per JSON event, under [orchestrator]', organ.length === 4 && organ[0][0] === 'orchestrator' && /started \(rainey_db C:\/civic\.db/.test(organ[0][1]) && /cycle 1 done/.test(organ[1][1]), JSON.stringify(organ).slice(0, 220));
+    ok('a chunk split mid-line is reassembled; cycle_failed lands at ERROR level', organ[2][1] === 'cycle 2 FAILED: boom' && organ[2][2] === 'error');
+    ok('a non-JSON stdout line is teed raw', organ[3][1] === 'plain text line' && organ[3][2] === 'log');
+    const st = o1.status().organs.orchestrator;
+    ok('status(): per-organ liveness (alive, last event age, heartbeat)', !!st && st.alive && st.lastEventAgoMs != null && st.lastEventAgoMs < 5000 && st.heartbeatS === 60, JSON.stringify(st));
+
+    // silence: a heartbeat organ that misses 5 beats is NAMED at error level, not killed
+    const sErrs = []; o1.onError = (l) => sErrs.push(l);
+    o1._checkSilence(Date.now() + 60 * 1000 * E.SIDECAR_SILENCE_FACTOR + 60e3);
+    ok('silence past 5 missed beats → one SILENT error line (process left alive)', sErrs.length === 1 && /sidecar orchestrator: SILENT for \d+min/.test(sErrs[0]) && o1.status().organs.orchestrator.silent === true, sErrs[0]);
+    o1._checkSilence(Date.now() + 60 * 1000 * E.SIDECAR_SILENCE_FACTOR + 120e3);
+    ok('silence is flagged ONCE per silence', sErrs.length === 1);
+    handlers.stdout(Buffer.from('{"event": "cycle_done", "cycle": 3}\n'));
+    ok('the next event clears the silence flag', o1.status().organs.orchestrator.silent === false);
+    await o1.shutdown();
+
+    // exit → restart under the backoff law (attempt 1 = 1s)
+    let rSpawns = 0; const rErrs = []; const rHandlers = {};
+    const rSpawn = () => { rSpawns++; return { pid: 5000 + rSpawns, on(ev, fn) { rHandlers[ev] = fn; }, kill() {}, killed: false }; };
+    const r1 = new E.EngineSupervisor({ cwd: 'x', spawnFn: rSpawn, sidecars: [{ name: 'pass-worker', disableEnv: null, args: ['-m', 'x'], heartbeatS: null }], onLog() {}, onError: (l) => rErrs.push(l) });
+    r1.owned = true; r1._startSidecars();
+    rHandlers.exit(1);
+    ok('a sidecar exit is announced at ERROR level with the restart delay', rErrs.some((l) => /sidecar pass-worker: exited \(code 1\) — restarting in 1000ms \(attempt 1\)/.test(l)) && Object.keys(r1.status().sidecars).length === 0, rErrs.join(' | '));
+    await new Promise((r) => setTimeout(r, 1200));
+    ok('…and it IS restarted (a dead sidecar used to be deleted and forgotten)', rSpawns === 2 && r1.status().sidecars['pass-worker'] === 5002 && r1.status().organs['pass-worker'].exits === 1, `spawns=${rSpawns}`);
+    r1._shuttingDown = true; rHandlers.exit(0);
+    await new Promise((r) => setTimeout(r, 1200));
+    ok('no restart during shutdown', rSpawns === 2);
+    await r1.shutdown();
+
+    // /health readiness: ready:false is NOT healthy; a body without the field keeps the old contract
+    global.fetch = async () => ({ ok: true, json: async () => ({ ok: true, ready: false, pid: 1 }) });
+    ok('probeHealth: ready:false → not healthy (listening ≠ serving)', (await E.probeHealth()) === false);
+    global.fetch = async () => ({ ok: true, json: async () => ({ ok: true, pid: 1 }) });
+    ok('probeHealth: no ready field → healthy (older engines)', (await E.probeHealth()) === true);
+  }
+
   global.fetch = realFetch;
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
