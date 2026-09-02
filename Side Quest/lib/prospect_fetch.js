@@ -15,6 +15,10 @@
  */
 'use strict';
 
+// frame-safe cap (audit S21): browser reads are content-firewall-framed; a raw slice past the
+// box orphans the ⟦/EXTERNAL⟧ closer, so cap through truncateFramed which re-closes the frame.
+function _tf(text, n) { try { return require('./content_firewall').truncateFramed(String(text), n); } catch { return String(text || '').slice(0, n); } }
+
 // query → [{text,url,source}]. Her browser first (injected browserSearch), else the layered fallback.
 function makeWebFetcher({ browserSearch, fallback, log } = {}) {
   return async (query) => {
@@ -34,7 +38,7 @@ function makeWebFetcher({ browserSearch, fallback, log } = {}) {
 function pageResult(read, url, { minText = 200 } = {}) {
   const text = String((read && read.text) || '').trim();
   if (text.length < minText) return null;
-  return { text: text.slice(0, 8000), url: url || (read && read.url) || null, source: 'browser' };
+  return { text: _tf(text, 8000), url: url || (read && read.url) || null, source: 'browser' };   // audit S21: frame-safe cap, not a raw slice
 }
 
 // DATA-BROKER / contact-aggregator domains — paywalled "reveal email" walls (often Cloudflare-gated),
@@ -173,7 +177,7 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
       return rows;
     }
     const imgsAt = async () => { try { return (typeof browser.pageImages === 'function') ? (await browser.pageImages()) || [] : []; } catch { return []; } };
-    if (String(r.text || '').trim().length >= minText) { rows.push({ text: String(r.text).slice(0, 8000), url: landingUrl, source: 'browser', images: await imgsAt() }); }
+    if (String(r.text || '').trim().length >= minText) { rows.push({ text: _tf(r.text, 8000), url: landingUrl, source: 'browser', images: await imgsAt() }); }
     seenUrl.add(norm(landingUrl));
     // nav links first (reach the real team page if we landed on a homepage), then individual bios.
     const follow = [...pickFollowLinks(r.text, { maxHops }), ...pickPersonLinks(r.text, { max: maxBios })];
@@ -185,7 +189,7 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
           seenUrl.add(cu);
           const r2 = await browser.read();
           const t2 = String((r2 && r2.text) || '').trim();
-          if (r2 && r2.ok && t2.length >= minText) rows.push({ text: t2.slice(0, 8000), url: r2.url || c.url, source: 'browser', via: h.name, images: await imgsAt() });
+          if (r2 && r2.ok && t2.length >= minText) rows.push({ text: _tf(t2, 8000), url: r2.url || c.url, source: 'browser', via: h.name, images: await imgsAt() });
         }
       } catch {}
       try { await browser.back(); await browser.read(); } catch {}   // back to the index + rebuild the registry for the next hop

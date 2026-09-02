@@ -498,6 +498,9 @@ async function open(target, { autonomous = false, source = null } = {}) {
       console.error(`[web] F31 reroute REFUSED (${(r && r.reason) || 'no result'}) — falling through to a plain browser open`);
     } catch (e) { console.error('[web] F31 reroute failed — falling through to a plain browser open:', e.message); }
   }
+  // SSRF guard (audit S32) — after the meeting reroute (meet/zoom are public hosts), before any
+  // browser touch: block a model-authored loopback/link-local/private URL from reaching a fetch.
+  try { if (require('./web_search').isBlockedHost(url)) return { ok: false, reason: 'blocked host (loopback/link-local/private — SSRF guard)' }; } catch {}
   // RE-SPIN BRAKE: an autonomous re-open of a page read within the window is served from cache with
   // no goto. Returns the reading so the caller uses o.reading instead of a second web-read.
   const _hit = respinHit(url, { autonomous });
@@ -1289,6 +1292,7 @@ function sourceUrlForFile(fp) { try { return provenanceForFile(fp).origin; } cat
 async function downloadPdf(url, via = null) {
   const u = String(url || '').trim();
   if (!/^https?:\/\//i.test(u)) return { ok: false, reason: 'not http(s)' };
+  try { if (require('./web_search').isBlockedHost(u)) return { ok: false, reason: 'blocked host (SSRF guard)' }; } catch {}   // audit S32
   if (grabbedUrls.has(u)) return { ok: false, reason: 'already grabbed', dedup: true };
   // CROSS-BOOT dedup (the "(14).pdf" disease): grabbedUrls dies with the process — nine boots today
   // each re-grabbed the same PDFs. The site ledger remembers across boots.

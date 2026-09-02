@@ -61,7 +61,12 @@ function buildFollowupText({ action, expect = null, readText = '', verdict = nul
   if (verdict === 'confirmed') dir = ` It worked — continue the task or tell ${userName} the result, in your own voice.`;
   else if (verdict === 'failed' || verdict === 'unclear') dir = ` It may NOT have worked. Look at the fresh page state below, then recover: pick a different handle, scroll, re-read, or ask ${userName}. Do NOT re-click the same thing blindly, and never claim a success you can't actually see.`;
   else dir = ` Use the fresh page state below to decide your next step — don't claim an outcome you can't see.`;
-  const state = readText ? `\n\nThe page now (fresh read + handles):\n${String(readText).slice(0, 2500)}` : '\n\n(No readable page text came back — say so and consider re-reading.)';
+  // truncateFramed, never a raw slice (audit S21): the read is content-firewall-framed and can
+  // exceed the cap — a bare slice cuts inside the box and orphans the ⟦/EXTERNAL⟧ closer, so
+  // everything after reads as untrusted-but-unterminated to the model.
+  const _fw = (() => { try { return require('./content_firewall'); } catch { return null; } })();
+  const _framed = _fw ? _fw.truncateFramed(String(readText), 2500) : String(readText).slice(0, 2500);
+  const state = readText ? `\n\nThe page now (fresh read + handles):\n${_framed}` : '\n\n(No readable page text came back — say so and consider re-reading.)';
   return head + v + dir + state + ']';
 }
 

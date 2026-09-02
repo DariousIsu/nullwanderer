@@ -252,5 +252,18 @@ console.log('\ntruncateFramed — frame-safe caps');
   ok(cut3.endsWith(`⟦/EXTERNAL ${id}⟧`), 'with two frames, the cut re-closes the one actually open at the cut point');
 }
 
+// ── ⭐ the SSRF fetch guard (audit S32) ──
+{
+  const ws = require('../lib/web_search');
+  ok(ws.isBlockedHost('http://169.254.169.254/latest/meta-data/') === true, '⭐ cloud-metadata endpoint is blocked at the fetch layer');
+  ok(ws.isBlockedHost('http://127.0.0.1:8767/status') === true && ws.isBlockedHost('http://localhost:3000') === true, 'loopback is blocked (the app runs local services)');
+  ok(ws.isBlockedHost('http://10.0.0.5/') === true && ws.isBlockedHost('http://192.168.1.1/') === true && ws.isBlockedHost('http://172.16.0.1/') === true, 'RFC1918 private ranges are blocked');
+  ok(ws.isBlockedHost('https://www.example.gov/page') === false, 'a public host is allowed — the guard is a floor, not a wall');
+  const web = require('../lib/web');
+  const mainSrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/isFramed\(body\) \? fw\.truncateFramed\(body, 4000\) : fw\.frame\(body\.slice/.test(mainSrc),
+    '⭐ the open_page escalation VISION door FRAMES unframed stranger text (audit S8: truncateFramed only re-closes, never wraps)');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

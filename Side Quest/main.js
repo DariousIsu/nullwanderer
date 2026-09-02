@@ -15138,7 +15138,15 @@ const operatorTools = {
           onAccess: (door, ok) => { try { _sl.recordAccess(String(url || ''), { door, ok }); } catch {} },
           log: (m) => console.log(m),
         });
-        if (esc.ok) return `[${why} — read via ${esc.via}${esc.note ? '; ' + esc.note : ''}]\n${require('./lib/content_firewall').truncateFramed(String(esc.text).replace(/\n{3,}/g, '\n\n'), 4000)}`;
+        if (esc.ok) {
+          // FRAME-IF-UNFRAMED (audit S8): the vision door returns UNFRAMED stranger text, and
+          // truncateFramed only re-closes an already-open frame — it never wraps. So a page-
+          // injection line reached the operator prompt as instructions. Frame it like see_page.
+          const fw = require('./lib/content_firewall');
+          let body = String(esc.text).replace(/\n{3,}/g, '\n\n');
+          body = fw.isFramed(body) ? fw.truncateFramed(body, 4000) : fw.frame(body.slice(0, 4000), { url: String(url || ''), kind: esc.via || 'escalated' }).text;
+          return `[${why} — read via ${esc.via}${esc.note ? '; ' + esc.note : ''}]\n${body}`;
+        }
         const learned = (() => { try { return _sl.accessLine(_host); } catch { return null; } })();
         return `${url} ${why}, and ${esc.error}${learned ? `\n${learned}` : ''}`;
       };

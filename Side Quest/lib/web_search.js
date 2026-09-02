@@ -81,9 +81,30 @@ function parseBingResults(html) {
  * Strips script/style/nav/footer/header/aside; collapses whitespace.
  * Returns { title, text, url, ok, error? }.
  */
+// SSRF guard (audit S32): the operator's fetch tools open whatever URL the model emits — block
+// loopback / link-local (incl. the 169.254.169.254 cloud-metadata endpoint) / RFC1918 private
+// targets so a steered read can never reach the app's own local services or an internal host.
+function isBlockedHost(url) {
+  let h;
+  try { h = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, ''); } catch { return true; }
+  if (!h) return true;
+  if (h === 'localhost' || h.endsWith('.localhost') || h === '::1' || h === '0.0.0.0') return true;
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const a = Number(m[1]), b = Number(m[2]);
+    if (a === 127 || a === 10 || a === 0) return true;
+    if (a === 169 && b === 254) return true;                 // link-local + cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+  }
+  if (/^f[cd][0-9a-f]{2}:/.test(h) || /^fe80:/.test(h)) return true;   // IPv6 ULA / link-local
+  return false;
+}
+
 async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal, reuse = false } = {}) {
   if (!url || typeof url !== 'string') return { ok: false, url, error: 'invalid url' };
   if (!/^https?:\/\//i.test(url)) return { ok: false, url, error: 'not http(s)' };
+  if (isBlockedHost(url)) return { ok: false, url, error: 'blocked host (loopback/link-local/private — SSRF guard)' };
 
   // NEVER-SAME-PAGE-TWICE, fetch lane (measured 2026-08-08: springfield.il.us CityCouncilHome at
   // 139 visits with doc_id NULL — this lane counted visits but held nothing; 110 of 615 active
@@ -263,4 +284,4 @@ async function searchRaw(query, { signal } = {}) {
   }
 }
 
-module.exports = { search, fetchPage };
+module.exports = { search, fetchPage, isBlockedHost };
