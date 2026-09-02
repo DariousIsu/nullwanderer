@@ -128,6 +128,16 @@ ok('inline: ↩ footnote-return glyph dropped', DX.inlineMd('Stateline, "Red sta
   try { await DX.extractToMarkdown('/x/y.rtf'); } catch (e) { threw = /unsupported/.test(e.message); }
   ok('extractToMarkdown rejects unsupported ext', threw);
 
+  // ⭐ audit S2: the sanitizer must strip UNQUOTED event handlers + javascript: + dangerous tags
+  const S = DX.sanitizeHtml;
+  ok('unquoted onerror is stripped', !/onerror/i.test(S('<img src=x onerror=alert(1)>')));
+  ok('svg onload element is stripped', !/onload|<svg/i.test(S('<svg onload=alert(1)>')));
+  ok('unquoted javascript: href is neutralized', !/javascript:/i.test(S('<a href=javascript:alert(1)>x</a>')));
+  ok('quoted onerror still stripped', !/onerror/i.test(S('<img src="x" onerror="steal()">')));
+  ok('webview is stripped', !/<webview/i.test(S('<webview src=evil>')));
+  ok('safe image is preserved', /<img src="good.png">/.test(S('<img src="good.png">')));
+  ok('safe link is preserved', /href="https:\/\/ok\.gov"/.test(S('<a href="https://ok.gov">link</a>')));
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

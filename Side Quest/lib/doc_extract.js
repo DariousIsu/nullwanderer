@@ -87,8 +87,10 @@ async function extractDocx(filePath) {
 function sanitizeHtml(html) {
   return String(html || '')
     .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/\son\w+\s*=\s*"[^"]*"/gi, '').replace(/\son\w+\s*=\s*'[^']*'/gi, '')
-    .replace(/(href|src)\s*=\s*("|')\s*javascript:[^"']*\2/gi, '$1=$2#$2');
+    .replace(/<(iframe|object|embed|link|meta|base|form|svg|math|webview)\b[\s\S]*?>/gi, '')
+    // QUOTED and UNQUOTED event handlers (audit S2: the quoted-only regex let <img onerror=x> through)
+    .replace(/\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/(href|src|xlink:href)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, (m, attr) => (/javascript:/i.test(m) ? `${attr}="#"` : m));
 }
 async function extractDocxHtml(filePath) {
   const mammoth = require('mammoth');

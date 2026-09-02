@@ -6751,7 +6751,7 @@ async function buildSplitFromOrder({ io, channel, sessionId, labels }) {
   for (const doc of plan) {
     const splitFocusId = `${focusId}-${cs.slug(doc.label)}`;
     let n = 0;
-    try { await canvasUpsertBlock({ focusId: splitFocusId, blockId: `header-${cs.slug(doc.label)}`, title: doc.label, tabMode: 'RESEARCH', blockType: 'heading', data: { level: 1, text: doc.label } }); } catch {}
+    try { await canvasUpsertBlock({ focusId: splitFocusId, blockId: `header-${splitFocusId}-${cs.slug(doc.label)}`, title: doc.label, tabMode: 'RESEARCH', blockType: 'heading', data: { level: 1, text: doc.label } }); } catch {}   // audit S26: namespace the header id by split focus, like the sibling section blocks — a bare label slug re-homed a DIFFERENT document's header
     for (const b of doc.blocks) {
       // DESTINATION-NAMESPACED block id (2026-08-12 review H3, CONFIRMED live): reusing the SOURCE
       // block_id routed every copy through the tab-blind _canvasBlocks Set → saga_canvas_update_block

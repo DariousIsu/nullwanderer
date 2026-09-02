@@ -22,9 +22,11 @@ function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '
 function sanitizeHtml(html) {
   return String(html == null ? '' : html)
     .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<(iframe|object|embed|link|meta)\b[\s\S]*?>/gi, '')
-    .replace(/\son\w+\s*=\s*"[^"]*"/gi, '').replace(/\son\w+\s*=\s*'[^']*'/gi, '')
-    .replace(/(href|src)\s*=\s*("|')\s*javascript:[^"']*\2/gi, '$1=$2#$2');
+    .replace(/<(iframe|object|embed|link|meta|base|form|svg|math|webview)\b[\s\S]*?>/gi, '')
+    // strip inline event handlers — QUOTED and UNQUOTED (audit S2: <img src=x onerror=PAYLOAD> slipped the quoted-only regex)
+    .replace(/\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    // neutralize javascript: URLs in any (or no) quoting
+    .replace(/(href|src|xlink:href)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, (m, attr) => (/javascript:/i.test(m) ? `${attr}="#"` : m));
 }
 
 // markdown → HTML. Fuller than the old lite pass: fenced code, headings h1-h6, horizontal rules,
