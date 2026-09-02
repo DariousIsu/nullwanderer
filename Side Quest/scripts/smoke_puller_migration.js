@@ -21,6 +21,9 @@ raw.exec(`CREATE TABLE targets(id INTEGER PRIMARY KEY, kind TEXT, name TEXT, com
   CREATE TABLE observations(id INTEGER PRIMARY KEY, target_id INTEGER, attr TEXT, value TEXT, kind TEXT, source TEXT, source_url TEXT, source_date TEXT, confidence REAL, meta TEXT, captured_at INTEGER);
   CREATE TABLE beliefs(id INTEGER PRIMARY KEY, target_id INTEGER, type TEXT, value TEXT, confidence REAL, derivation TEXT, supporting_obs TEXT, status TEXT DEFAULT 'active', updated_at INTEGER, UNIQUE(target_id,type));`);
 raw.prepare(`INSERT INTO targets(id,kind,name,domain,status,created_at,last_accessed_at) VALUES(1,'person','Old Node','x.com','adhoc',1,1)`).run();
+// stage 3.4 (09-02): a pre-migration row carrying the FLOAT-STRING crm_id the identity audit found on all 955 links
+raw.prepare(`INSERT INTO targets(id,kind,name,domain,status,crm_id,created_at,last_accessed_at) VALUES(2,'person','Linked Node','y.com','promoted','106172.0',1,1)`).run();
+raw.prepare(`INSERT INTO targets(id,kind,name,domain,status,crm_id,created_at,last_accessed_at) VALUES(3,'person','SF Node','z.com','promoted','003ABC',1,1)`).run();
 raw.prepare(`INSERT INTO observations(target_id,attr,value,kind,source,captured_at) VALUES(1,'email','old@x.com','verified','verification',1)`).run();
 raw.prepare(`INSERT INTO beliefs(target_id,type,value,confidence,status,updated_at) VALUES(1,'email','old@x.com',0.95,'active',1)`).run();
 ok('precondition: old beliefs has NO send_state', !raw.prepare(`PRAGMA table_info(beliefs)`).all().map((c) => c.name).includes('send_state'));
@@ -35,6 +38,14 @@ ok('send_state column added by migration', b && ('send_state' in b));
 ok('backfill seeded verified from the verified obs', b && b.send_state === 'verified');
 ok('marker index exists', DB._raw ? true : !!DB.getBelief(1, 'email'));   // getBelief works → schema intact
 ok('markSendState works post-migration', DB.markSendState(1, 'email', 'rerun_pending').send_state === 'rerun_pending');
+// stage 3.4: the float-string crm_id is migrated to its integer text; a non-numeric key is left alone
+ok('migration normalizes a float-string crm_id ("106172.0" → "106172")', DB.getTarget(2).crm_id === '106172');
+ok('migration leaves a non-numeric crm_id untouched', DB.getTarget(3).crm_id === '003ABC');
+ok('promoteTarget stores a numeric id as integer text (114869.0 → "114869")', DB.promoteTarget(1, 114869.0).crm_id === '114869');
+ok('promoteTarget normalizes a float-string ("114870.0" → "114870")', DB.promoteTarget(1, '114870.0').crm_id === '114870');
+ok('promoteTarget passes a non-numeric key through', DB.promoteTarget(1, '003XYZ').crm_id === '003XYZ');
+ok('promoteTarget null stays null', DB.promoteTarget(1, null).crm_id === null);
+ok('normalizeCrmId is exported for the IPC seam', typeof DB.normalizeCrmId === 'function' && DB.normalizeCrmId(' 42.0 ') === '42');
 
 DB.close();
 for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.unlinkSync(f); } catch {} }

@@ -179,6 +179,11 @@ function init(opts = {}) {
     // index the marker AFTER the column is guaranteed present (fresh DB has it via SCHEMA; existing via the
     // ALTER above) — putting this in SCHEMA fails on an existing beliefs table that predates the column.
     db.exec(`CREATE INDEX IF NOT EXISTS idx_belief_sendstate ON beliefs(type, send_state)`);
+    // THE FLOAT-STRING LINK (unification stage 3.4, 2026-09-02): every promoted target's crm_id had
+    // landed as "106172.0", so none of the 955 CRM links resolved against electoral.contact.id. One
+    // idempotent pass rewrites a digits-and-dot ".0" id to its integer text; nothing else is touched.
+    db.exec(`UPDATE targets SET crm_id = CAST(CAST(crm_id AS REAL) AS INTEGER)
+             WHERE crm_id IS NOT NULL AND crm_id GLOB '[0-9]*.0' AND crm_id NOT GLOB '*[^0-9.]*'`);
   } catch (e) { /* fresh DB already has them via SCHEMA */ }
   return db;
 }
@@ -389,10 +394,23 @@ function getFaceEmbedding(id) {
   return r ? pj(r.face_embedding, null) : null;
 }
 
+// THE FLOAT-STRING LINK (unification stage 3.4, 2026-09-02): the identity audit found every one of the
+// 955 promoted targets' crm_id stored as "106172.0" — a JSON float rendered to text — so NOT ONE resolved
+// against electoral.contact.id. A CRM row id is an integer; keep it as its integer text. Non-numeric ids
+// (a Salesforce-style "003…" key) pass through untouched.
+function normalizeCrmId(crmId) {
+  if (crmId == null || crmId === '') return null;
+  const s = String(crmId).trim();
+  if (/^-?\d+(?:\.0+)?$/.test(s)) return String(parseInt(s, 10));
+  const n = typeof crmId === 'number' ? crmId : NaN;
+  if (Number.isFinite(n) && Number.isInteger(n)) return String(n);
+  return s;
+}
+
 // Promote an ad-hoc dossier into the CRM (records the crm row id; status → promoted).
 function promoteTarget(id, crmId) {
   _db().prepare(`UPDATE targets SET status = 'promoted', crm_id = ?, last_accessed_at = ? WHERE id = ?`)
-    .run(crmId, now(), id);
+    .run(normalizeCrmId(crmId), now(), id);
   return getTarget(id);
 }
 
@@ -665,7 +683,7 @@ function splitTarget(fromId, { obsIds = [], name, company = null, domain = null,
 
 module.exports = {
   init, close,
-  createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, listOrgTargets, bulkCompanies, eachTargetKey, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName, backfillOrgKinds,
+  createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, listOrgTargets, bulkCompanies, eachTargetKey, promoteTarget, normalizeCrmId, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName, backfillOrgKinds,
   addObservation, listObservations, observationCounts, failedAddresses,
   upsertBelief, getBelief, beliefValuesByType, listBeliefs, markSendState, listBeliefsBySendState,
   getPatternState, savePatternState,
