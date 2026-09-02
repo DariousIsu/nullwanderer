@@ -98,6 +98,22 @@ function createGuard({ detectApp = detectMeetingApp, calendarBusy = null, selfMe
   };
   return {
     state: () => ({ ...st }),
+    // Lucas's spoken phrase → the manual seat. 'in a meeting' (and kin) pause; 'clear' (and kin) resume.
+    // Returns the new state if the phrase matched, null otherwise (so callers can fall through).
+    phrase(text) {
+      const t = String(text || '').toLowerCase();
+      if (!t) return null;
+      if (/\b(i'?m |i am )?(in|heading into|joining|hopping (in|on)to|starting) (a |my |the )?(meeting|call|huddle|zoom|teams|meet)\b/.test(t)
+        || /\bmeeting (now|time|starting)\b/.test(t)) {
+        return this.manual('pause');
+      }
+      if (/\b(i'?m |i am )?(clear|free|out|done|back)\b/.test(t) && /\b(meeting|call|huddle|zoom|teams|meet)\b/.test(t)
+        || /\b(meeting|call) (is )?(over|done|ended|finished)\b/.test(t)
+        || /\byou'?re clear\b/.test(t) || /\ball clear\b/.test(t)) {
+        return this.manual('resume');
+      }
+      return null;
+    },
     manual(mode) {
       if (mode === 'pause') { st.mode = 'manual'; _set(true, 'manual'); }
       else if (mode === 'resume') { st.mode = 'manual'; _set(false, null); }
