@@ -64,6 +64,17 @@ async function fakeRunChatTurn(text, _atts, io) {
 
   ok('empty text is refused', (await post({ text: '  ' })).code === 400);
 
+  // ⭐ CSRF / drive-by guard (audit S3): a browser cross-origin POST and a no-cors simple-request
+  // (text/plain) are both refused before any door runs; curl-shaped JSON (the `post` helper) passes.
+  const postRaw = (headers, bodyStr) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: PORT, path: '/turn', method: 'POST', headers: { 'Content-Length': Buffer.byteLength(bodyStr), ...headers } },
+      (res) => { let d = ''; res.on('data', (c) => d += c); res.on('end', () => resolve({ code: res.statusCode, body: (() => { try { return JSON.parse(d); } catch { return {}; } })() })); });
+    req.on('error', reject); req.write(bodyStr); req.end();
+  });
+  ok('a cross-origin POST (Origin header) is refused 403', (await postRaw({ Origin: 'https://evil.example', 'Content-Type': 'application/json' }, '{"text":"x"}')).code === 403);
+  ok('a no-cors simple request (text/plain) is refused 415', (await postRaw({ 'Content-Type': 'text/plain' }, '{"text":"x"}')).code === 415);
+  ok('a Sec-Fetch-Site:cross-site POST is refused', (await postRaw({ 'Sec-Fetch-Site': 'cross-site', 'Content-Type': 'application/json' }, '{"text":"x"}')).code === 403);
+
   // The Lucas-live guard: a fresh REAL user turn → the pipeline is his; the port refuses.
   const sid = db.startSession();
   db.insertTurn({ sessionId: sid, speaker: 'user', content: 'a real live message' });

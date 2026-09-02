@@ -127,6 +127,14 @@ ok('serveArgs targets echo.main serve http', args.join(' ') === '-m echo.main se
   const [r1, r2] = await Promise.all([z4.ensure({ bootTimeoutMs: 10 }), z4.ensure({ bootTimeoutMs: 10 })]);
   ok('concurrent ensure() → ONE spawn (single-flight)', fSpawns === 1 && r1 === r2, `spawns=${fSpawns}`);
 
+  // ── audit S13/S27: giveup is NOT terminal + child stderr is captured ──
+  {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'engine.js'), 'utf8');
+    ok('S13: >5-restart giveup schedules a cooldown re-arm, not permanent death', /cooling down[\s\S]{0,200}this\._restarts = \[\];[\s\S]{0,40}this\._spawn/.test(src));
+    ok('S27: the engine child pipes stderr (not stdio:ignore) and logs it', /stdio: \['ignore', 'ignore', 'pipe'\]/.test(src) && /engine:stderr/.test(src));
+    ok('S27: sidecars pipe stderr too', /sidecar \$\{def\.name\}:stderr/.test(src));
+  }
+
   global.fetch = realFetch;
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

@@ -175,6 +175,27 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
   _server = http.createServer(async (req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
     try {
+      // ── CSRF / DRIVE-BY GUARD (audit S3) — the POST doors carry real operator authority (/turn
+      // runs a trusted pipeline turn; /local-roster floods the metabolism). A web page the user
+      // visits can fire a no-cors "simple request" here (text/plain, no preflight). So every
+      // state-mutating method must: carry NO cross-origin browser signal, AND declare JSON (a
+      // simple request cannot set application/json without a preflight this port never answers),
+      // AND — if ZOE_TEST_PORT_TOKEN is set — present it. curl and the boot-cycler send no Origin
+      // and the cycler only GETs /status, so nothing legitimate breaks.
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        const origin = req.headers['origin'];
+        const sfs = req.headers['sec-fetch-site'];
+        if (origin || (sfs && sfs !== 'same-origin' && sfs !== 'none')) {
+          return send(403, { ok: false, error: 'cross-origin refused — loopback-only control port' });
+        }
+        if (!/^application\/json\b/i.test(String(req.headers['content-type'] || ''))) {
+          return send(415, { ok: false, error: 'control doors require Content-Type: application/json' });
+        }
+        const tok = process.env.ZOE_TEST_PORT_TOKEN;
+        if (tok && req.headers['x-zoe-token'] !== tok) {
+          return send(403, { ok: false, error: 'invalid control token' });
+        }
+      }
       if (req.method === 'GET' && req.url === '/status') {
         const real = _realUserState();
         return send(200, { ok: true, inFlight: _inFlight, lastUserTurnAgoMs: _lastUserTurnAgoMs(),

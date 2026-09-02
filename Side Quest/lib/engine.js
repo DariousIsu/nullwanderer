@@ -128,8 +128,11 @@ class EngineSupervisor {
     this.onLog(`engine: spawning ${this.python} ${serveArgs(this.host, this.port).join(' ')} (cwd ${this.cwd})`);
     // Explicit env (it defaulted to inheriting process.env) so the engine itself gets the same
     // model-pin stripping as its sidecars — Saga's own slot is resolved in this process.
-    this.child = this.spawnFn(this.python, serveArgs(this.host, this.port), { cwd: this.cwd, env: require('./child_env').forEcho(process.env), stdio: 'ignore', windowsHide: true });
+    this.child = this.spawnFn(this.python, serveArgs(this.host, this.port), { cwd: this.cwd, env: require('./child_env').forEcho(process.env), stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
     this.owned = true; this.adopted = false;
+    // capture the child's stderr (audit S27: it was stdio:'ignore', so the Python traceback that
+    // explains a per-cycle crash was discarded at the source — undiagnosable from the app side).
+    try { if (this.child.stderr) this.child.stderr.on('data', (d) => { const s = String(d).trim(); if (s) this.onLog(`[engine:stderr] ${s.slice(0, 600)}`); }); } catch {}
     this.child.on('exit', (code) => this._onExit(code));
     const ok = await waitHealthy({ timeoutMs: bootTimeoutMs });
     if (!ok) { this.onLog('engine: spawned but never became healthy'); return { state: 'failed', pid: this.child && this.child.pid }; }
@@ -160,8 +163,9 @@ class EngineSupervisor {
       if (process.env[def.disableEnv] === '1') { this.onLog(`sidecar ${def.name}: disabled via ${def.disableEnv}`); continue; }
       if (this.sidecarProcs[def.name]) continue;
       try {
-        const proc = this.spawnFn(this.python, def.args, { cwd: this.cwd, env, stdio: 'ignore', windowsHide: true });
+        const proc = this.spawnFn(this.python, def.args, { cwd: this.cwd, env, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
         this.sidecarProcs[def.name] = proc;
+        try { if (proc.stderr) proc.stderr.on('data', (d) => { const s = String(d).trim(); if (s) this.onLog(`[sidecar ${def.name}:stderr] ${s.slice(0, 400)}`); }); } catch {}   // audit S27
         proc.on('exit', (code) => { this.onLog(`sidecar ${def.name}: exited (code ${code})`); delete this.sidecarProcs[def.name]; });
         this.onLog(`sidecar ${def.name}: spawned (pid ${proc.pid})`);
       } catch (e) { this.onLog(`sidecar ${def.name}: spawn failed — ${e.message}`); }
@@ -197,7 +201,16 @@ class EngineSupervisor {
       const now = Date.now();
       this._restarts = this._restarts.filter(t => now - t < 60000);
       this._restarts.push(now);
-      if (this._restarts.length > 5) { this.onLog('engine: >5 restarts in 60s — giving up (backoff window tripped)'); return; }
+      if (this._restarts.length > 5) {
+        // NOT terminal (audit S13): giving up forever left every Echo capability dead until a full
+        // app restart, while the heartbeat only re-attached the suit and never re-armed the engine.
+        // Cool down, clear the window, and try once more — a transient cause (env fix, port
+        // collision cleared) recovers on its own; a persistent one just re-cools.
+        const coolMs = 5 * 60 * 1000;
+        this.onLog(`engine: >5 restarts in 60s — cooling down ${Math.round(coolMs / 60000)}min, then one more attempt`);
+        setTimeout(() => { if (!this._shuttingDown && this.owned) { this._restarts = []; this._spawn(45000); } }, coolMs);
+        return;
+      }
       const delay = nextBackoff(this._restarts.length - 1);
       this.onLog(`engine: exited (code ${code}) — restarting in ${delay}ms (attempt ${this._restarts.length})`);
       setTimeout(() => { if (!this._shuttingDown) this._spawn(45000); }, delay);
