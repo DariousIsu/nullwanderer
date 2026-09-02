@@ -21,7 +21,15 @@ try { app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required'
 // replaces, and the log gives us the root cause to fix. Tighten to exit-on-uncaught later if needed.
 function logCrash(kind, info) {
   const detail = (info && info.stack) || (() => { try { return JSON.stringify(info); } catch { return String(info); } })();
-  try { require('fs').appendFileSync(path.join(__dirname, 'data', 'crash.log'), `[${new Date().toISOString()}] ${kind}: ${detail}\n`); } catch {}
+  try {
+    const fs = require('fs');
+    const p = path.join(__dirname, 'data', 'crash.log');
+    // ROTATE at 5MB (audit S24): the KEEP-HER-ALIVE policy means crash handlers re-fire forever,
+    // and this sync append is on the main thread — an un-rotated log grows without bound (the tee
+    // 11 lines below already rotates; this sibling never did).
+    try { if (fs.existsSync(p) && fs.statSync(p).size > 5 * 1024 * 1024) fs.renameSync(p, p + '.1'); } catch {}
+    fs.appendFileSync(p, `[${new Date().toISOString()}] ${kind}: ${detail}\n`);
+  } catch {}
   console.error(`[crash] ${kind}:`, detail);
 }
 process.on('unhandledRejection', (reason) => logCrash('unhandledRejection', reason));
@@ -42,7 +50,24 @@ process.on('uncaughtException', (err) => logCrash('uncaughtException', err));
     }
   }
 })();
-app.on('render-process-gone', (_e, _wc, details) => logCrash('render-process-gone', details));
+// RECOVER a crashed renderer (audit S10): Electron never auto-reloads a dead render process, and
+// the KEEP-HER-ALIVE backend runs on regardless — so a crashed chat/voice/avatar surface stayed
+// dead forever. Reload it, throttled so a genuinely broken page can't storm into a reload loop;
+// only a real crash reloads ('killed'/'clean-exit' are intentional and left alone).
+const _rendererReloads = new Map();
+app.on('render-process-gone', (_e, wc, details) => {
+  logCrash('render-process-gone', details);
+  try {
+    const reason = details && details.reason;
+    if (!wc || wc.isDestroyed() || reason === 'killed' || reason === 'clean-exit') return;
+    const id = wc.id, now = Date.now();
+    const hits = (_rendererReloads.get(id) || []).filter((t) => now - t < 60000);
+    if (hits.length >= 3) { console.error(`[crash] renderer ${id} gone ${hits.length}x in 60s (${reason}) — NOT reloading (storm guard); left for an operator`); _rendererReloads.set(id, hits); return; }
+    hits.push(now); _rendererReloads.set(id, hits);
+    console.warn(`[crash] reloading crashed renderer ${id} (${reason}, attempt ${hits.length})`);
+    setTimeout(() => { try { if (wc && !wc.isDestroyed()) wc.reload(); } catch (e) { console.error('[crash] renderer reload failed:', e.message); } }, 500);
+  } catch (e) { console.error('[crash] renderer recovery failed:', e.message); }
+});
 app.on('child-process-gone', (_e, details) => logCrash('child-process-gone', details));
 
 const db = require('./lib/db');
@@ -640,6 +665,25 @@ let _lastSttTs = 0;     // last mic-lane activity (stt:transcribe), for the guar
 // install with the mic on never auto-paused and meetings became turns). A truly voiceless+micless
 // install still does no PowerShell window sniffing. Manual pause/resume works regardless.
 setInterval(() => { try { if (config.ttsConfig().enabled || (Date.now() - _lastSttTs) < 10 * 60 * 1000) _voiceGuard.evaluate().catch(() => {}); } catch {} }, 60 * 1000).unref?.();
+
+// TTS WAV REAPER (audit S22): synthesize() drops one wav per spoken sentence into data/tts and
+// NOTHING ever deleted them (6536 already on disk). Sweep tts_*.wav older than 30 min (a playing
+// clip finishes well within that) — hourly on the interval, plus one pass ~2 min after boot to
+// clear the backlog. Bounded, fail-soft, only touches its own tts_*.wav files.
+function _reapTtsWavs() {
+  try {
+    const fs = require('fs'); const dir = path.join(__dirname, 'data', 'tts');
+    if (!fs.existsSync(dir)) return;
+    const now = Date.now(); let n = 0;
+    for (const f of fs.readdirSync(dir)) {
+      if (!/^tts_.*\.wav$/i.test(f)) continue;
+      try { if (now - fs.statSync(path.join(dir, f)).mtimeMs > 30 * 60 * 1000) { fs.unlinkSync(path.join(dir, f)); n++; } } catch {}
+    }
+    if (n) console.log(`[tts-reaper] swept ${n} stale wav(s) from data/tts`);
+  } catch {}
+}
+setTimeout(_reapTtsWavs, 2 * 60 * 1000).unref?.();
+setInterval(_reapTtsWavs, 60 * 60 * 1000).unref?.();
 
 const _speech = (() => {
   let synthChain = Promise.resolve();   // serial synth, runs ahead of playback
@@ -3783,6 +3827,16 @@ ipcMain.handle('stt:transcribe', async (_e, audioBuf, sttOpts) => {
             db.setMeta('room.overheard', JSON.stringify(ring.slice(-5)));
           } catch {}
         }
+      }
+    } catch {}
+    // PEN #6 WIRING (audit S33): route Lucas's spoken phrases into the voice guard, so "I'm heading
+    // into a meeting" / "the meeting's over" said ALOUD actually pauses/resumes the ear+voice. The
+    // guard.phrase() method shipped with PEN #6 but had ZERO callers. Only his voice drives it (the
+    // speaker gate passed); runs before the addressed gate so the command works even un-addressed.
+    try {
+      if (res && res.ok && (res.text || '').trim() && !(spkr && spkr.match === false)) {
+        const pr = _voiceGuard.phrase(res.text);
+        if (pr) console.log(`[voice-guard] spoken phrase → ${pr.paused ? 'PAUSED' : 'resumed'} (${pr.reason || 'manual'})`);
       }
     } catch {}
     // THE ADDRESSED GATE (campaign §22, 08-22): on the HANDS-FREE lane only, a transcription that

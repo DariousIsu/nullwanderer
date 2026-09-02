@@ -69,6 +69,13 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
   ok('below SIM_SAME → the model decides regardless', memory._tierSame('the parish seat is gretna', 'The parish seat is Gretna', 0.9) === false);
   ok('empty/degenerate inputs → never same', memory._tierSame('', 'x', 0.99) === false && memory._tierSame('a b', '', 0.99) === false);
 
+  // ⭐ audit S30: storeDeduped is serialized (read-then-await-then-insert races double-inserted)
+  {
+    const src = require('fs').readFileSync(path.join(__dirname, '..', 'lib', 'memory.js'), 'utf8');
+    ok('S30: storeDeduped runs through a serializing chain (no concurrent same-fact double-insert)',
+      /let _storeChain = Promise\.resolve\(\)/.test(src) && /_storeChain = new Promise/.test(src) && /_storeDedupedInner/.test(src));
+  }
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { require('fs').rmSync(path.dirname(process.env.SQ_DB_PATH), { recursive: true, force: true }); } catch {}
   process.exit(fail === 0 ? 0 : 1);

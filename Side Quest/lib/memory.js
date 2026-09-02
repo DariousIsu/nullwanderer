@@ -144,7 +144,20 @@ async function store({ kind = 'note', content, source = null, importance = 0.5, 
 // instead of piling up a near-duplicate. Otherwise ADD, linked to its nearest
 // neighbour. This is what keeps the store from exploding (critical once Echo's tool-
 // knowledge flows in). decideFn injectable for offline tests.
-async function storeDeduped({ kind = 'note', content, source = null, importance = 0.5, provenance = null, prefilter = 0.82, decideFn = null, relateFn = null, mergeFn = null }) {
+// SERIALIZED (audit S30): storeDeduped reads the whole embedding store, then awaits (embed +
+// relate/sameFact model calls) BEFORE inserting — so two concurrent fire-and-forget banks of the
+// SAME fact (e.g. the inbox poll + the reply path both banking one inbound email) each read the
+// pre-insert store and both insert a near-duplicate. open_threads was serialized for exactly this
+// race; mirror its _extractChain here so same-fact banks queue instead of colliding.
+let _storeChain = Promise.resolve();
+async function storeDeduped(args) {
+  const prev = _storeChain;
+  let release;
+  _storeChain = new Promise((r) => { release = r; });
+  try { await prev; } catch {}
+  try { return await _storeDedupedInner(args || {}); } finally { release(); }
+}
+async function _storeDedupedInner({ kind = 'note', content, source = null, importance = 0.5, provenance = null, prefilter = 0.82, decideFn = null, relateFn = null, mergeFn = null }) {
   const text = String(content || '').trim();
   if (text.length < 8) return { action: 'skip-empty' };
   let emb = null;

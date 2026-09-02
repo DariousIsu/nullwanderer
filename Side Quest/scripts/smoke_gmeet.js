@@ -132,6 +132,9 @@ function mockDeps(over = {}) {
   ok('unrelated line is NOT addressed', !g.addressesSelf('Let us move on to the next agenda item.'));
   ok('isSelfSpeaker matches her own caption', g.isSelfSpeaker('Zoe Lane', g.selfNames()));
   ok('isSelfSpeaker false for another speaker', !g.isSelfSpeaker('Lucas Overby', g.selfNames()));
+  // ⭐ audit S34: a DIFFERENT real person who merely CONTAINS her name is not self (was substring-matched)
+  ok('⭐ S34: "Zoe Smith" (a different participant) is NOT classified as her own echo', !g.isSelfSpeaker('Zoe Smith', ['zoe', 'zoe lane']));
+  ok('S34: a "(You)" parenthetical on her own badge still matches', g.isSelfSpeaker('Zoe Lane (You)', ['zoe', 'zoe lane']));
 
   // UPDATED 2026-08-12 (ungated-smokes audit): the address-reply is now gated by THE CHAT DOOR
   // (meetChatOpen — ZOE_MEET_CHAT, default OFF): closed → the reply is WITHHELD and surfaced to

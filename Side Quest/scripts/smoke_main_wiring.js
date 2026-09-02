@@ -95,6 +95,14 @@ ok('crash handler installed: uncaughtException', process.listeners('uncaughtExce
       /audit S25[\s\S]{0,120}msg = _antifabCorrect\(msg/.test(mainSrc) || /msg = _antifabCorrect\(msg, 0, ''\)/.test(mainSrc));
     ok('S19: a length-capped cloud reply (done_reason=length) keeps its real truncated flag',
       /cloudDoneReason !== 'length'/.test(mainSrc) && /cloudDoneReason = r\.doneReason/.test(mainSrc));
+    ok('S10: a crashed renderer is reloaded (storm-throttled), not left dead',
+      /_rendererReloads/.test(mainSrc) && /wc\.reload\(\)/.test(mainSrc) && /storm guard/.test(mainSrc));
+    ok('S24: crash.log rotates at a size cap (not an unbounded main-thread append)',
+      /audit S24/.test(mainSrc) && /crash\.log/.test(mainSrc) && /renameSync\(p, p \+ '\.1'\)/.test(mainSrc));
+    ok('S33: Lucas\'s spoken phrases are routed into the voice guard (PEN #6 wired)',
+      /audit S33/.test(mainSrc) && /_voiceGuard\.phrase\(res\.text\)/.test(mainSrc));
+    ok('S22: a TTS wav reaper sweeps data/tts (no unbounded wav pile)',
+      /_reapTtsWavs/.test(mainSrc) && /tts_\.\*\\\.wav/.test(mainSrc));
   }
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);

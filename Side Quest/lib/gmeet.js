@@ -260,9 +260,14 @@ function _nameAlt(names) {
   return (names || ['zoe']).map(n => String(n).trim().toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).filter(Boolean).join('|');
 }
 // Is this caption SPOKEN BY her (so she doesn't answer her own echoed lines)?
+// EXACT match, not substring (audit S34): a caption speaker badge is a participant's display
+// name, and her own badge is exactly her chosen name. The old includes() classified a DIFFERENT
+// real person ('Zoe Smith') as her own echo — dropping their lines from the meeting record. Strip
+// a trailing "(You)"-style parenthetical, then require a whole-name match (min length 3).
 function isSelfSpeaker(speaker, names = ['zoe']) {
-  const s = String(speaker || '').toLowerCase();
-  return (names || ['zoe']).some(n => n && s.includes(String(n).toLowerCase()));
+  const s = String(speaker || '').toLowerCase().trim().replace(/\s*\([^)]*\)\s*$/, '').trim();
+  if (!s) return false;
+  return (names || ['zoe']).some(n => { const nn = String(n || '').toLowerCase().trim(); return nn.length >= 3 && s === nn; });
 }
 /**
  * Is this caption ADDRESSED to her (a request/question directed at Zoe), vs merely a
