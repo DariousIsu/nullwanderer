@@ -39,6 +39,14 @@ ok(lane.resolveSpendTier({ explicit: 'interactive', ambient: 'research', autonom
 
   ok(lane.ambientSpendTier() === undefined, 'outside any run → undefined (bare legacy calls stay interactive at the choke)');
 
+  // ⭐ audit S7/S20: a BARE-AUTONOMOUS run (autonomous:true, no spendTier) must resolve 'research'
+  // at the READ point, not fall through to ollama's ungated 'interactive' — the subconscious
+  // thought and hourly news-compression cloud calls were invisible to the burn-down pace.
+  const bareAuto = await lane.run({ autonomous: true }, async () => { await new Promise((r) => setTimeout(r, 3)); return lane.ambientSpendTier(); });
+  ok(bareAuto === 'research', '⭐ bare-autonomous run resolves research at ambientSpendTier (paced + gated), never interactive');
+  const bareFg = await lane.run({}, async () => lane.ambientSpendTier());
+  ok(bareFg === undefined, 'a bare NON-autonomous run stays undefined (foreground chat is not force-paced)');
+
   // ── the choke-point contract (mirrors lib/ollama's fallback line) ──
   const chokeLane = (explicit) => explicit != null ? explicit : (lane.ambientSpendTier() || 'interactive');
   ok(chokeLane(undefined) === 'interactive', 'choke: bare call outside a run → interactive (legacy untouched)');

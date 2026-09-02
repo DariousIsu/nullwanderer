@@ -70,6 +70,11 @@ function resolveSpendTier({ explicit, ambient, autonomous } = {}) {
   if (ambient != null) return ambient;
   return autonomous ? 'research' : undefined;
 }
-function ambientSpendTier() { return current().spendTier; }
+// Apply the module's OWN resolution doctrine (see the order above) at the read point too (audit
+// S7/S20): a bare-autonomous run — {autonomous:true} with no spendTier — must resolve to 'research',
+// never fall through to ollama's ungated 'interactive' default. The subconscious between-turn
+// thought and the hourly news-compression cloud calls were billing 'interactive', so they skipped
+// the choke-point gate AND were invisible to the background burn-down pace they exist to be paced by.
+function ambientSpendTier() { const c = current(); return resolveSpendTier({ ambient: c.spendTier, autonomous: c.autonomous }); }
 
 module.exports = { run, current, isAutonomous, resolveSpendTier, ambientSpendTier };
