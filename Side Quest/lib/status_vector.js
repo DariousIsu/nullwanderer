@@ -108,6 +108,10 @@ function assemble({ deps = {}, nowMs = Date.now() } = {}) {
   try { const m = JSON.parse(_db(deps).getMeta('machine_vitals') || 'null'); if (m && m.at) v.machine = m; } catch {}
   try { const p = JSON.parse(_db(deps).getMeta('producer_vitals') || 'null'); if (p && p.at) v.producers = p; } catch {}
   try { const h = JSON.parse(_db(deps).getMeta('db_health') || 'null'); if (h && h.at) v.memory = h; } catch {}
+  // ONE MEMORY (unification stage 3): the memory map — both halves' tables by tier, the promotion
+  // bridges' measured backlog, the tier warnings. Refreshed by main's 15-min tick (lib/memory_map);
+  // absent until the first refresh (measured-never-asserted).
+  try { const mm = require('./memory_map').stored(deps); if (mm) v.memoryMap = mm; } catch {}
 
   // self-diagnostic needs (adversarial round 1 legs C/H, 2026-08-27): the ledger her own watch
   // organ files was absent from the self-read, so "what's broken" was answered from 18-day-old
@@ -178,6 +182,14 @@ function _delta(prev, cur) {
       && prev.memory.quickCheck.ok !== cur.memory.quickCheck.ok) {
       out.push(cur.memory.quickCheck.ok ? 'memory integrity back OK' : 'memory integrity FAILED');
     }
+    // Stage 3: the promotion backlog moving by a tenth (plus a floor) is worth feeling.
+    if (prev.memoryMap && cur.memoryMap && Number.isInteger(prev.memoryMap.backlog) && Number.isInteger(cur.memoryMap.backlog)) {
+      const a = prev.memoryMap.backlog, b = cur.memoryMap.backlog;
+      if (b > a * 1.1 + 100) out.push(`promotion backlog grew to ${b.toLocaleString('en-US')}`);
+      else if (b < a * 0.9 - 100) out.push(`promotion backlog fell to ${b.toLocaleString('en-US')}`);
+      const pw = (prev.memoryMap.warnings || []).length, cw = (cur.memoryMap.warnings || []).length;
+      if (cw > pw) out.push(`${cw - pw} new memory-tier warning(s)`);
+    }
   } catch {}
   return out;
 }
@@ -221,6 +233,7 @@ function line({ deps = {}, nowMs = Date.now() } = {}) {
   if (v.machine) { const m = require('./machine_vitals').describe(v.machine); if (m) bits.push(m); }
   if (v.producers) { const pd = require('./producer_vitals').describe(v.producers); if (pd) bits.push(pd); }
   if (v.memory && v.memory.sq && v.memory.sq.sizeMB != null) bits.push(`memory ${(v.memory.sq.sizeMB / 1024).toFixed(1)}GB${v.memory.quickCheck && !v.memory.quickCheck.ok ? ' INTEGRITY-FAIL' : ''}`);
+  if (v.memoryMap) { try { const d = require('./memory_map').describe(v.memoryMap); if (d.line) bits.push(d.line); } catch {} }
   if (v.needs && v.needs.newestRepair) bits.push(`self-repair need #${v.needs.newestRepair.id} ${v.needs.newestRepair.status}${v.needs.newestRepair.diagnosed ? ' (diagnosed)' : v.needs.newestRepair.tries ? ` (diagnosis try ${v.needs.newestRepair.tries}/3)` : ''}`);
   if (v.pen && v.pen.proposals && v.pen.proposals.some((p) => p.status === 'proposed')) bits.push(`🖊 code proposal #${v.pen.proposals.find((p) => p.status === 'proposed').id} WAITING on Lucas's card`);
   if (!bits.length) return null;
@@ -268,6 +281,9 @@ function block({ deps = {}, nowMs = Date.now() } = {}) {
   if (v.producers) { const pd = require('./producer_vitals').describe(v.producers); if (pd) L.push(`Producer lanes: ${pd}.`); }
   if (v.machine) { const m = require('./machine_vitals').describe(v.machine); if (m) L.push(`Machine (your body): ${m}${v.machine.uptimeMin != null ? ` · app up ${Math.round(v.machine.uptimeMin / 60 * 10) / 10}h` : ''}.`); }
   if (v.memory) { const h = require('./db_health').describe(v.memory); if (h) L.push(`Memory substrate: ${h}.`); }
+  // Stage 3: the one memory map — answer "what tier is X / how much is waiting to be promoted /
+  // is anything unclassified" from THIS.
+  if (v.memoryMap) { try { for (const b of require('./memory_map').describe(v.memoryMap).block) L.push(b); } catch {} }
   if (v.needs) {
     const n = v.needs;
     const r = n.newestRepair;

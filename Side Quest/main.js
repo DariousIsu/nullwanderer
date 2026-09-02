@@ -5776,6 +5776,19 @@ try {
     } catch {}
   }, 60 * 1000);
   if (_svTick.unref) _svTick.unref();
+  // ONE MEMORY (unification stage 3, 09-02): the memory map — every store/table's tier on both
+  // sides, the promotion bridges and their measured backlog, tier warnings — refreshed every 15 min
+  // (first read ~3 min after boot) and stored for the status vector. Read-only on every store; the
+  // Echo half is `nx-echo memory-map --json` (seconds; capped counts). Fail-soft: a missing half is
+  // NAMED in the map, never assumed.
+  const _mmTick = () => {
+    const mmLib = require('./lib/memory_map');
+    mmLib.refresh({ deps: { python: echoVenv && echoVenv.python, cwd: echoVenv && echoVenv.cwd } })
+      .then((m) => { const d = mmLib.describe(m); if (d.line) console.log(`[memory-map] ${d.line}`); for (const w of (m.warnings || []).slice(0, 5)) console.error(`[memory-map] ${w}`); })
+      .catch((e) => console.error('[memory-map] refresh failed:', e && e.message));
+  };
+  setTimeout(_mmTick, 3 * 60 * 1000).unref?.();
+  setInterval(_mmTick, 15 * 60 * 1000).unref?.();
   const _dbhTick = setInterval(() => {
     try {
       const dh = require('./lib/db_health');

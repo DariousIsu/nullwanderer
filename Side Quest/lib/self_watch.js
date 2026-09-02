@@ -72,6 +72,7 @@ const SIGNAL_LANES = {
   'orchestrator': 'engine',
   'pass-worker': 'engine',
   'huey-consumer': 'engine',
+  'memory-map': 'memory',   // stage 3: the one-memory map's 15-min read (tiers, backlog, warnings)
 };
 const ANOMALY_RES = [/Traceback \(most recent/i, /\bUncaught\b/, /\bFAILED\b/, /\bUnhandled(?:PromiseRejection)?\b/i];
 // Diagnostic prefixes that denote a REAL failure even at warn level, so a RECURRENCE surfaces on the

@@ -697,6 +697,10 @@ const smokes = [
   // fail-soft keeps the prior state. Enforced at _speech.enqueue + stt:transcribe.
   'smoke_voice_guard.js',
   'smoke_status_vector.js',
+  // ── ONE MEMORY, TWO TIERS (unification stage 3, 09-02): the memory map — every store/table's
+  // tier on both sides, the promotion bridges' measured backlog, drift warnings — merged from
+  // Echo's `nx-echo memory-map` and lib/memory_tiers, stored for the status vector.
+  'smoke_memory_map.js',
   'smoke_self_audit.js',
   'smoke_delivery_router.js',
   'smoke_screen_ambient.js',
