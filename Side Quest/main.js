@@ -3522,7 +3522,10 @@ async function _applyPenProposal(id) {
       return;
     }
     const tmp = require('path').join(require('os').tmpdir(), `pen_${id}.diff`);
-    require('fs').writeFileSync(tmp, p.diff.endsWith('\n') ? p.diff : p.diff + '\n', 'utf8');
+    // normalize at apply time too: rows filed before the propose-door recount (or hand-filed)
+    // carry model-counted @@ headers, and git refuses lying arithmetic as "corrupt patch"
+    const diffText = pen.normalizeDiff ? pen.normalizeDiff(p.diff) : p.diff;
+    require('fs').writeFileSync(tmp, diffText.endsWith('\n') ? diffText : diffText + '\n', 'utf8');
     const check = await run('git', ['apply', '--check', '--whitespace=nowarn', tmp]);
     if (check.code !== 0) {
       pen.setStatus(id, 'apply-failed', { gateNote: `git apply --check failed: ${(check.stderr || check.stdout).slice(0, 400)}` });

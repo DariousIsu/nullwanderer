@@ -21,6 +21,7 @@
  * (git, the gate) live in main.js. Deterministic; every mutator is loud.
  */
 'use strict';
+const fs = require('fs');
 const path = require('path');
 const db = require('./db');
 
@@ -90,6 +91,84 @@ function touchedFiles(diff) {
   return [...out];
 }
 
+/**
+ * Recount every @@ hunk header from the body it actually carries. Pure.
+ *
+ * Proposals #1 and #2 both died at git apply --check with "corrupt patch": the model writes
+ * plausible hunk BODIES but cannot count lines, so the @@ -a,b +c,d arithmetic lies and git runs
+ * out of patch mid-hunk. The body IS the claim; the counts are derived — so derive them here
+ * instead of asking the model to count (the cheat authorization: capability in code where she
+ * has none). Also repairs the two adjacent emissions git refuses: an interior empty line meant
+ * as blank context (→ ' ') and a missing final newline.
+ *
+ * RE-ANCHORING (#2's second layer): she reads bounded slices, so she cannot know LINE NUMBERS
+ * either — #2 claimed @@ -1 for content living at line 99, and git apply's offset search does
+ * not bridge that. When the touched file is readable, find each hunk's pre-image (the ' '/'-'
+ * lines, verbatim — the one thing she CAN control) in the real file and rewrite the start
+ * lines. Zero matches leaves the claim as-is: a truly stale read still fails honestly at the
+ * apply-check with the real why.
+ */
+function normalizeDiff(diff) {
+  const src = String(diff || '').replace(/\r\n/g, '\n');
+  const lines = src.split('\n');
+  if (lines.length && lines[lines.length - 1] === '') lines.pop(); // the final newline, not a blank line
+  const out = [];
+  let fileLines = null; // the current +++ target's real content, when readable
+  let delta = 0;        // new-side drift from prior hunks in this file section
+  let searchFrom = 0;   // hunks land in order; search after the previous match
+  let i = 0;
+  while (i < lines.length) {
+    const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(lines[i]);
+    if (!m) {
+      const fh = /^(?:---|\+\+\+)\s+(?:[ab]\/)?([^\s\n]+)/.exec(lines[i]);
+      if (fh) {
+        fileLines = null; delta = 0; searchFrom = 0;
+        // the JAIL applies to the re-anchor read too — a diff naming .env or data/ must not
+        // pull those bytes into memory here (propose refuses it later; sq.db would OOM first)
+        if (fh[1] !== '/dev/null' && pathAllowed(fh[1]).ok) {
+          try {
+            const fp = path.join(REPO_ROOT, _rel(fh[1]));
+            if (fs.statSync(fp).size <= 2 * 1024 * 1024) {
+              fileLines = fs.readFileSync(fp, 'utf8').replace(/\r\n/g, '\n').split('\n');
+            }
+          } catch {}
+        }
+      }
+      out.push(lines[i]); i++; continue;
+    }
+    const body = [];
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      if (/^(@@ -|--- |\+\+\+ |diff --git )/.test(lines[j])) break;
+      body.push(lines[j] === '' ? ' ' : lines[j]);
+    }
+    let oldN = 0, newN = 0;
+    const pre = [];
+    for (const b of body) {
+      if (b[0] === ' ') { oldN++; newN++; pre.push(b.slice(1)); }
+      else if (b[0] === '-') { oldN++; pre.push(b.slice(1)); }
+      else if (b[0] === '+') newN++;
+      // '\ No newline at end of file' counts on neither side
+    }
+    let oldStart = Number(m[1]), newStart = Number(m[2]);
+    if (fileLines && pre.length) {
+      // re-anchor ONLY on an unambiguous match: two twins = leave the claim (an honest
+      // apply-check failure beats silently landing the change at the wrong twin)
+      const hits = [];
+      for (let k = searchFrom; k <= fileLines.length - pre.length && hits.length < 2; k++) {
+        if (pre.every((p, n) => fileLines[k + n] === p)) hits.push(k);
+      }
+      if (hits.length === 1) {
+        oldStart = hits[0] + 1; newStart = oldStart + delta; searchFrom = hits[0] + pre.length;
+      }
+    }
+    delta += newN - oldN;
+    out.push(`@@ -${oldStart},${oldN} +${newStart},${newN} @@${m[3] || ''}`, ...body);
+    i = j;
+  }
+  return out.join('\n') + '\n';
+}
+
 // ── the proposal store ────────────────────────────────────────────────────────────────────────
 function _ensure() {
   db.getDb().prepare(`CREATE TABLE IF NOT EXISTS code_proposals (
@@ -105,9 +184,10 @@ function _ensure() {
 function propose({ title, rationale = '', diff, bornFrom = '', nowMs = Date.now() } = {}) {
   _ensure();
   const t = String(title || '').trim();
-  const d = String(diff || '').trim();
+  const d0 = String(diff || '').trim();
   if (!t) return { ok: false, why: 'a proposal needs a title' };
-  if (!d) return { ok: false, why: 'a proposal needs a unified diff — the diff IS the claim' };
+  if (!d0) return { ok: false, why: 'a proposal needs a unified diff — the diff IS the claim' };
+  const d = normalizeDiff(d0); // recounted headers: the body is the claim, the arithmetic is derived
   if (Buffer.byteLength(d, 'utf8') > MAX_DIFF_BYTES) return { ok: false, why: `diff too large (> ${MAX_DIFF_BYTES} bytes) — split the change` };
   const files = touchedFiles(d);
   if (!files.length) return { ok: false, why: 'no file headers found — send a real unified diff (--- a/x / +++ b/x)' };
@@ -229,7 +309,7 @@ next program cycle, not instantly.`;
 
 module.exports = {
   REPO_ROOT, MAX_READ_BYTES, MAX_DIFF_BYTES, MAX_OPEN_PROPOSALS, DENY_RE, PEN_QUEUE_KEY,
-  pathAllowed, readSource, listSource, touchedFiles,
+  pathAllowed, readSource, listSource, touchedFiles, normalizeDiff,
   propose, get, setStatus, decide, pending,
   seedPenWork, workQueue, dropFromQueue, penState, setPenState, isEditIntent,
   parseTags, stripTags, dispatch, buildPromptBlock,

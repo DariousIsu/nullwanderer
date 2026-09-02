@@ -54,6 +54,30 @@ ok(JSON.stringify(pen.touchedFiles(GOOD_DIFF)) === JSON.stringify(['lib/schedule
 ok(pen.touchedFiles('--- a/x.js\n+++ b/y.js\n').length === 2, 'a rename/multi-file diff lists every touched file');
 ok(pen.touchedFiles('no diff here').length === 0, 'prose is not a diff');
 
+// ── ⭐ normalizeDiff: the body is the claim, the arithmetic is DERIVED (proposals #1+#2 both
+// died "corrupt patch" on model-counted @@ headers; #2's re-anchor layer: @@ -1 claimed for
+// content at line 99, beyond git apply's offset search) ──
+{
+  const LYING = `--- a/lib/no_such_pen_fixture.js\n+++ b/lib/no_such_pen_fixture.js\n@@ -1,6 +1,24 @@\n ctx1\n+add1\n+add2\n ctx2`;
+  const n = pen.normalizeDiff(LYING);
+  ok(/@@ -1,2 \+1,4 @@/.test(n), '⭐ lying hunk counts are recounted from the body (6/24 → 2/4)');
+  ok(n.endsWith('\n'), 'a missing final newline is repaired (git calls it corrupt otherwise)');
+  const blank = pen.normalizeDiff(`--- a/x.js\n+++ b/x.js\n@@ -1,1 +1,1 @@\n ctx\n\n ctx2\n`);
+  ok(/\n \n/.test(blank) && /@@ -1,3 \+1,3 @@/.test(blank), 'an interior empty line becomes blank CONTEXT and counts on both sides');
+  ok(pen.normalizeDiff(LYING).includes('lib/no_such_pen_fixture.js') && /@@ -1,2 \+1,4 @@/.test(n), 'an unreadable target keeps its claimed start — a stale read still fails honestly at apply-check');
+  // re-anchor against the REAL tree: context from main.js, start line claimed as 1
+  const mainLines = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n').split('\n');
+  const i1 = mainLines.findIndex((l) => l.includes('async function _applyPenProposal'));
+  const i2 = mainLines.findIndex((l) => l.includes('pen.normalizeDiff ? pen.normalizeDiff'));
+  ok(i1 > 0 && i2 > i1 + 3, 'fixture anchors exist in main.js (wiring pin doubles as anchor)');
+  const fx = ['--- a/main.js', '+++ b/main.js',
+    '@@ -1,999 +1,999 @@', ` ${mainLines[i1]}`, '+INSERTED', ` ${mainLines[i1 + 1]}`, ` ${mainLines[i1 + 2]}`,
+    '@@ -5,99 +5,99 @@', ` ${mainLines[i2]}`, ` ${mainLines[i2 + 1]}`, ` ${mainLines[i2 + 2]}`].join('\n');
+  const rn = pen.normalizeDiff(fx);
+  ok(rn.includes(`@@ -${i1 + 1},3 +${i1 + 1},4 @@`), `⭐ hunk 1 re-anchored to its true line (${i1 + 1}) — she cannot know line numbers from bounded reads`);
+  ok(rn.includes(`@@ -${i2 + 1},3 +${i2 + 2},3 @@`), 'hunk 2 re-anchored WITH the new-side drift from hunk 1 (+1)');
+}
+
 // ── proposal validation: the diff IS the claim ──
 ok(pen.propose({ title: 't', diff: 'not a diff' }).ok === false, 'a diff without file headers is refused');
 ok(pen.propose({ title: '', diff: GOOD_DIFF }).ok === false, 'a proposal needs a title');
@@ -64,6 +88,7 @@ ok(pen.propose({ title: 'big', diff: `--- a/lib/x.js\n+++ b/lib/x.js\n` + '+'.re
 // ── the state machine: only Lucas's card moves a proposal ──
 const p1 = pen.propose({ title: 'clock-parse tweak', rationale: 'why', diff: GOOD_DIFF, bornFrom: 'smoke' });
 ok(p1.ok === true && p1.files[0] === 'lib/scheduler.js', 'a valid proposal files with its touched set');
+ok(/@@ -1,2 \+1,3 @@/.test(pen.get(p1.id).diff), '⭐ propose() stores the NORMALIZED diff — future rows carry honest arithmetic');
 ok(pen.get(p1.id).status === 'proposed', 'born proposed — never auto-approved');
 ok(pen.pending().some((x) => x.id === `pen-${p1.id}` && x.kind === 'pen'), '⭐ it rides the approval-cards bar as kind "pen"');
 ok(pen.decide(p1.id, 'maybe').ok === false, 'only yes/no decide');
@@ -125,6 +150,8 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
   ok(/MAX_PEN_PASSES/.test(main) && /'gate-failed' \|\| p\.status === 'apply-failed'\) && !st\.redrove/.test(main), 'v1.1 wiring: pass cap = honest stall; ONE re-drive on a gate OR apply failure (a stale diff is the most re-drivable miss), never a grind');
   ok(/codeModel\(\), require\('\.\/lib\/config'\)\.subconsciousModel\(\)/.test(main),
     '⭐ the SPECIALIST leads the pen chain (his 08-06 order: all programming calls through the code model; kimi 3 = one .env line)');
+  ok(/pen\.normalizeDiff \? pen\.normalizeDiff\(p\.diff\)/.test(main),
+    '⭐ the apply seam normalizes too — rows filed BEFORE the propose-door recount (like #2) land without a live-DB rewrite');
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
