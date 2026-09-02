@@ -122,7 +122,7 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
   ok(/isEditIntent\(_pv\)/.test(main) && /seedPenWork\(/.test(main), '⭐ v1.1 wiring: the order backstop routes edit intents to pen work BEFORE the road');
   ok(/kind === 'pen'\) return runPenWorkPass/.test(main), 'v1.1 wiring: the dispatcher routes pen threads to the pen pass');
   ok(/code_pen'\)\.workQueue\(\)\) backgroundWorkerPass/.test(main), 'v1.1 wiring: the worker loop drives the pen queue even during his directed work');
-  ok(/MAX_PEN_PASSES/.test(main) && /gate-failed' && !st\.redrove/.test(main), 'v1.1 wiring: pass cap = honest stall; one re-drive on a gate failure, never a grind');
+  ok(/MAX_PEN_PASSES/.test(main) && /'gate-failed' \|\| p\.status === 'apply-failed'\) && !st\.redrove/.test(main), 'v1.1 wiring: pass cap = honest stall; ONE re-drive on a gate OR apply failure (a stale diff is the most re-drivable miss), never a grind');
   ok(/codeModel\(\), require\('\.\/lib\/config'\)\.subconsciousModel\(\)/.test(main),
     '⭐ the SPECIALIST leads the pen chain (his 08-06 order: all programming calls through the code model; kimi 3 = one .env line)');
 }
