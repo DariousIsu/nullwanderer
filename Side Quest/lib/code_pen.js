@@ -219,11 +219,39 @@ function decide(id, decision) {
   return { ok: true, id: p.id, status };
 }
 
-/** Card-bar rows: proposed pens waiting on Lucas. */
+// The full-view payload a card carries (Lucas 09-01 QOL: "no way to click on the request and
+// fully view it" — he was approving diffs he could not read). Bounded by MAX_DIFF_BYTES.
+function _detail(r) {
+  let files = []; try { files = JSON.parse(r.files || '[]'); } catch {}
+  return { rationale: r.rationale || '', files, diff: r.diff || '', gateNote: r.gate_note || '', bornFrom: r.born_from || '' };
+}
+
+/** Card-bar rows: proposed pens waiting on Lucas — now with the full proposal riding as detail. */
 function pending() {
   _ensure();
-  return db.getDb().prepare("SELECT id, title, files, gate_note FROM code_proposals WHERE status = 'proposed' ORDER BY id DESC LIMIT 4").all()
-    .map((r) => ({ id: `pen-${r.id}`, kind: 'pen', text: `${r.title} (${(JSON.parse(r.files || '[]')).join(', ').slice(0, 80)})`, verdict: null }));
+  return db.getDb().prepare("SELECT id, title, rationale, diff, files, gate_note, born_from FROM code_proposals WHERE status = 'proposed' ORDER BY id DESC LIMIT 4").all()
+    .map((r) => ({ id: `pen-${r.id}`, kind: 'pen', text: `${r.title} (${(JSON.parse(r.files || '[]')).join(', ').slice(0, 80)})`, verdict: null, detail: _detail(r) }));
+}
+
+/** Update ONLY the stage note on a row (status unchanged) — the live-progress card reads it. */
+function stage(id, note, nowMs = Date.now()) {
+  _ensure();
+  db.getDb().prepare('UPDATE code_proposals SET gate_note = ?, updated_ts = ? WHERE id = ?')
+    .run(String(note || '').slice(0, 1500), nowMs, Number(id) || 0);
+  return get(id);
+}
+
+/** Live-pipeline cards (Lucas 09-01: "turn an accepted card into a window that shows what's going
+ *  on") — a ✓'d proposal stays on the bar as a buttonless progress card through the enforce
+ *  pipeline, and its terminal verdict lingers ${RUN_WINDOW_MS/60000} minutes so the outcome is
+ *  seen, not inferred from a vanished card. His ✗ (rejected) is his own act — never re-shown. */
+const RUN_WINDOW_MS = 15 * 60 * 1000;
+function pipelineItems(nowMs = Date.now()) {
+  _ensure();
+  return db.getDb().prepare(`SELECT id, title, rationale, diff, files, status, gate_note, born_from, updated_ts FROM code_proposals
+    WHERE status IN ('approved','applying') OR (status IN ('applied','gate-failed','apply-failed') AND updated_ts > ?)
+    ORDER BY id DESC LIMIT 4`).all(nowMs - RUN_WINDOW_MS)
+    .map((r) => ({ id: `pen-${r.id}`, kind: 'pen-run', text: r.title, status: r.status, verdict: null, detail: _detail(r) }));
 }
 
 // ── THE PEN-WORK LANE (v1.1, the first-hour finding: an edit-intent order had NO lane — his
@@ -310,7 +338,7 @@ next program cycle, not instantly.`;
 module.exports = {
   REPO_ROOT, MAX_READ_BYTES, MAX_DIFF_BYTES, MAX_OPEN_PROPOSALS, DENY_RE, PEN_QUEUE_KEY,
   pathAllowed, readSource, listSource, touchedFiles, normalizeDiff,
-  propose, get, setStatus, decide, pending,
+  propose, get, setStatus, decide, pending, pipelineItems, stage, RUN_WINDOW_MS,
   seedPenWork, workQueue, dropFromQueue, penState, setPenState, isEditIntent,
   parseTags, stripTags, dispatch, buildPromptBlock,
 };

@@ -116,6 +116,26 @@ ok(pen.get(p2.id).status === 'applied' && /green/.test(pen.get(p2.id).gate_note)
   ok(/approval card/.test(pen.buildPromptBlock()) && /REVERTS on red/.test(pen.buildPromptBlock()) && /never land code yourself/i.test(pen.buildPromptBlock()), 'the prompt block teaches the constitution: propose, his card, the gate');
 }
 
+// ── ⭐ v1.2 QOL (Lucas 09-01: "no way to fully view the request" / "no acknowledgement" /
+// "turn an accepted card into a window that shows what's going on") ──
+{
+  const p3 = pen.propose({ title: 'expand me', rationale: 'why text', diff: GOOD_DIFF });
+  const item = pen.pending().find((x) => x.id === `pen-${p3.id}`);
+  ok(!!item && item.detail && /@@ -1,2 \+1,3 @@/.test(item.detail.diff) && item.detail.rationale === 'why text' && item.detail.files[0] === 'lib/scheduler.js',
+    '⭐ a card carries the FULL proposal (rationale + files + normalized diff) — he approves what he can read');
+  pen.decide(p3.id, 'yes');
+  const run1 = pen.pipelineItems().find((x) => x.id === `pen-${p3.id}`);
+  ok(!!run1 && run1.kind === 'pen-run' && run1.status === 'approved' && !!run1.detail.diff,
+    "⭐ a ✓'d proposal stays on the bar as a live buttonless pen-run progress card");
+  pen.stage(p3.id, 'stage: test note');
+  ok(pen.get(p3.id).status === 'approved' && /test note/.test(pen.get(p3.id).gate_note), 'stage() updates the note without touching the status');
+  pen.setStatus(p3.id, 'gate-failed', { gateNote: 'gate RED — fixture' });
+  ok(pen.pipelineItems().some((x) => x.id === `pen-${p3.id}`), 'a terminal verdict LINGERS on the bar — seen, never inferred from a vanished card');
+  pen.stage(p3.id, 'gate RED — fixture', Date.now() - pen.RUN_WINDOW_MS - 1000);
+  ok(!pen.pipelineItems().some((x) => x.id === `pen-${p3.id}`), 'an old verdict leaves the bar after the linger window');
+  ok(!pen.pipelineItems().some((x) => x.status === 'rejected'), "his ✗ is his own act — never re-shown as a run card");
+}
+
 // ── ⭐ v1.1 THE PEN-WORK LANE (the first-hour finding: his "make the voice mute" edit order had
 // NO lane — clarify noise on the AZ research run while the pen sat dark) ──
 ok(pen.isEditIntent({ intent: 'edit:voice mute', confidence: 0.92 }) === true, '⭐ a confident edit verdict routes to pen work');
@@ -152,6 +172,18 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
     '⭐ the SPECIALIST leads the pen chain (his 08-06 order: all programming calls through the code model; kimi 3 = one .env line)');
   ok(/pen\.normalizeDiff \? pen\.normalizeDiff\(p\.diff\)/.test(main),
     '⭐ the apply seam normalizes too — rows filed BEFORE the propose-door recount (like #2) land without a live-DB rewrite');
+  ok(/_penSay\(`Approval received/.test(main),
+    '⭐ v1.2 wiring: his ✓ is acknowledged IMMEDIATELY in her voice (deterministic pipeline line, never model-authored)');
+  ok((main.match(/_penGateQuiet\(\)/g) || []).length >= 7 && /pen\.gate_until/.test(main),
+    '⭐ v1.2 wiring: the QUIET WINDOW — background lanes hold while a pen gate runs (the #2 false-red cure: contention faked a red on a good change)');
+  ok(/pen\.stage\(id, 'stage: diff applied/.test(main) && /_pushApprovalsBar\(\)/.test(main) && /pipelineItems\(\)/.test(main),
+    'v1.2 wiring: stage notes ride the row, the bar refreshes live, and pen-run cards join the payload');
+  ok(/`Proposal #\$\{id\} landed — gate green/.test(main) && /_penSay\(`Proposal #\$\{id\} went RED/.test(main),
+    'v1.2 wiring: both gate verdicts are VOICED, not just logged');
+  ok(/ac-can-expand/.test(chat) && /ac-diff/.test(chat) && /pen-run/.test(chat),
+    'v1.2 wiring: the renderer expands cards to the full diff and renders the live run card');
+  const mono = fs.readFileSync(path.join(__dirname, '..', 'lib', 'monologue.js'), 'utf8');
+  ok(/pen\.gate_until/.test(mono), 'v1.2 wiring: the monologue tick honors the quiet window too');
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);

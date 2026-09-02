@@ -590,7 +590,20 @@ html, body {
 #approvals-bar { border-bottom: 1px solid #3a3a44; padding: 8px 12px; background: #1c1c22; max-height: 32vh; overflow-y: auto; }
 #approvals-bar.hidden { display: none; }
 .approvals-title { color: #c9a86a; font-size: 12px; letter-spacing: 0.04em; margin-bottom: 6px; }
-.approval-card { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border: 1px solid #33333c; border-radius: 6px; margin-bottom: 5px; background: #22222a; }
+.approval-card { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border: 1px solid #33333c; border-radius: 6px; margin-bottom: 5px; background: #22222a; flex-wrap: wrap; }
+/* full-view expand (09-01 QOL): click the card body → rationale + files + stage + the diff itself */
+.ac-can-expand { cursor: pointer; }
+.ac-chev { color: #6a6a74; font-size: 10px; transition: transform 0.12s; }
+.ac-expanded > .ac-chev { transform: rotate(90deg); }
+.ac-detail { flex-basis: 100%; display: flex; flex-direction: column; gap: 5px; padding: 6px 4px 2px 18px; cursor: auto; }
+.ac-note { font-size: 11px; color: #c9a86a; white-space: pre-wrap; }
+.ac-rationale { font-size: 11px; color: #a8a8b2; white-space: pre-wrap; }
+.ac-files { font-size: 10px; color: #8ab4d8; }
+.ac-diff { font-family: Consolas, monospace; font-size: 11px; color: #c8c8d0; background: #17171c; border: 1px solid #2c2c34; border-radius: 5px; padding: 8px; max-height: 38vh; overflow: auto; white-space: pre; margin: 0; }
+/* live pipeline card tints: running = gold edge, landed = green, red = red */
+.ac-run.ac-run-approved, .ac-run.ac-run-applying { border-color: #6a5a34; }
+.ac-run.ac-run-applied { border-color: #3a5a3a; }
+.ac-run.ac-run-gate-failed, .ac-run.ac-run-apply-failed { border-color: #5a3434; }
 .approval-kind { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
 .approval-kind.proposed { background: #2a3a4a; color: #8ab4d8; }
 .approval-kind.blocked { background: #4a3a2a; color: #d8b48a; }

@@ -879,6 +879,9 @@ function bumpReflectionAccum(n) {
 // lane would have left synthesis, the Puller lanes and the pipeline still untagged. Wrap the ROOT,
 // not the branches — a branch you forget is invisible, and reads as "that lane isn't autonomous".
 async function runOneTick() {
+  // quiet window: a pen gate (full npm test inside the live app) is running — the tick holds,
+  // so contention can't fake a red on a good proposal (the 09-01 #2 false-red lesson)
+  try { if (Number(db.getMeta('pen.gate_until') || 0) > Date.now()) return; } catch {}
   return require('./lane').run({ autonomous: true }, () => _runOneTick());
 }
 

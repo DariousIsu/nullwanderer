@@ -2556,6 +2556,7 @@ app.whenReady().then(() => {
     let _sweepInFlight = false;
     const runDecomposeSweep = async () => {
       if (_sweepInFlight) return;
+      if (_penGateQuiet()) return;                                                    // a pen gate is running — the sweep holds
       if (_bootGraceActive()) { _logBootDefer('decomp-sweep'); return; }              // cold-boot stutter: heaviest LOCAL-sync lane — hold while the app warms
       if (_conversationActive()) { _logLoadDeferral('decomp-sweep'); return; }        // heavy synchronous doc decomposition — yield the main thread while he types
       _sweepInFlight = true; markActivity('decompose-sweep');   // stall-attrib (diagnostic)
@@ -3197,6 +3198,7 @@ app.whenReady().then(() => {
     // ~22R/13D). Approximate until exact Echo Senate composition is wired; override via env.
     const SENATE_HOLDOVERS = { A: parseInt(process.env.SENATE_HOLDOVER_A || '', 10) || 34, B: parseInt(process.env.SENATE_HOLDOVER_B || '', 10) || 31 };
     const runForecastLoop = async () => {
+      if (_penGateQuiet()) return;   // a pen gate is running — the recompute holds one interval
       markActivity('forecast');   // stall-attrib (diagnostic — Monte-Carlo sim runs in-process)
       try {
         // one bulk poll fetch per race poll-type → index by subject (avoids an HTTP call per race)
@@ -3472,9 +3474,11 @@ function _pendingNeedItems() {
       .map((r) => ({ id: r.id, kind: 'blocked', text: _txt(r.need), verdict: null }));
     const proposed = db.getDb().prepare("SELECT id, need FROM capability_needs WHERE status = 'proposed' ORDER BY updated_ts DESC LIMIT 6").all()
       .map((r) => { const v = (() => { try { return capn.getVerdict(r.id); } catch { return null; } })(); return { id: r.id, kind: 'proposed', text: _txt(r.need), verdict: v ? v.v : null }; });
-    // THE GATED PEN (09-01): code proposals ride the same bar, id-space 'pen-N'.
+    // THE GATED PEN (09-01): code proposals ride the same bar, id-space 'pen-N'. A ✓'d proposal
+    // stays visible as a live pen-run progress card through the pipeline (Lucas 09-01 QOL).
     let pens = []; try { pens = require('./lib/code_pen').pending(); } catch {}
-    return [...pens, ...blocked, ...proposed];
+    let penRuns = []; try { penRuns = require('./lib/code_pen').pipelineItems(); } catch {}
+    return [...pens, ...penRuns, ...blocked, ...proposed];
   } catch (e) { console.error('[needs] pending items failed:', e.message); return []; }
 }
 ipcMain.handle('needs:pending', () => ({ ok: true, items: _pendingNeedItems() }));
@@ -3489,7 +3493,12 @@ ipcMain.handle('needs:decide', (_e, { id, decision } = {}) => {
       const r = pen.decide(Number(_pm[1]), decision);
       if (r.ok) {
         try { require('./lib/obs_bus').emit({ lane: 'pen', kind: 'decision', level: 'info', text: `code proposal #${r.id} decided ${String(decision).toLowerCase()} by Lucas → ${r.status}`, ref: `pen:${r.id}` }); } catch {}
-        if (r.status === 'approved') _applyPenProposal(r.id).catch((e) => console.error('[pen] apply pipeline crashed:', e.message));
+        if (r.status === 'approved') {
+          // Lucas 09-01 QOL: his ✓ used to vanish the card into a silent pipeline — acknowledge
+          // IMMEDIATELY, in her voice, before the work starts (deterministic line, never model-authored).
+          _penSay(`Approval received — applying code proposal #${r.id} now and running the full gate. The card on the bar shows live progress; I'll say the verdict here.`);
+          _applyPenProposal(r.id).catch((e) => console.error('[pen] apply pipeline crashed:', e.message));
+        }
       }
       return { ...r, items: _pendingNeedItems() };
     }
@@ -3498,6 +3507,25 @@ ipcMain.handle('needs:decide', (_e, { id, decision } = {}) => {
     return { ...r, items: _pendingNeedItems() };
   } catch (e) { return { ok: false, why: e.message, items: _pendingNeedItems() }; }
 });
+// Pen voice + progress plumbing (Lucas 09-01 QOL: "no acknowledgement from zoe" / "a window that
+// shows what's going on"). _penSay = the parlor-doorbell pattern: a deterministic unprompted line
+// in her voice (templated by the pipeline — a work-state claim the model cannot mis-author).
+function _penSay(line) {
+  try {
+    const row = db.insertTurn({ sessionId: currentSessionId, speaker: 'ai_said', content: `🖊 ${line}`, model: 'pen', unprompted: 1 });
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: `🖊 ${line}` });
+  } catch {}
+}
+function _pushApprovalsBar() {
+  try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('needs:approvals', { items: _pendingNeedItems() }); } catch {}
+}
+// THE QUIET WINDOW (the #2 false-red lesson): the full gate ran INSIDE the live app while workers,
+// forecasts, and monologue churned — smoke_operator failed 3/3 under that contention and passes
+// solo, so a GOOD change was reverted and its thread closed. While a pen gate runs, background
+// lanes hold (timestamp expiry = crash-safe; interactive chat is untouched).
+function _penGateQuiet() {
+  try { return Number(db.getMeta('pen.gate_until') || 0) > Date.now(); } catch { return false; }
+}
 // THE ENFORCE PIPELINE (the acceptance gate made mechanical): clean tree on the touched files →
 // git apply --check → apply → FULL npm test with the exit code READ (never piped away) → commit
 // the named files on green; REVERT the files and attach the gate tail on red. Every outcome is
@@ -3512,13 +3540,15 @@ async function _applyPenProposal(id) {
   const p = pen.get(id);
   if (!p || p.status !== 'approved') return;
   const files = JSON.parse(p.files || '[]');
-  pen.setStatus(id, 'applying');
+  pen.setStatus(id, 'applying', { gateNote: 'stage: checking the tree is clean on the touched files…' });
   console.log(`[pen] APPLY #${id} "${p.title}" — ${files.length} file(s): ${files.join(', ')}`);
+  _pushApprovalsBar();
   try {
     const dirty = await run('git', ['status', '--porcelain', '--', ...files]);
     if (dirty.stdout.trim()) {
       pen.setStatus(id, 'proposed', { gateNote: `blocked: uncommitted local changes on ${dirty.stdout.trim().split('\n').length} touched file(s) — retry after the tree is clean` });
       console.warn(`[pen] #${id} BLOCKED — touched files carry uncommitted work; never clobbered. Card returns.`);
+      _penSay(`Proposal #${id} is blocked — the touched file(s) carry uncommitted work I won't clobber. The card returns to the bar; retry when the tree is clean.`);
       return;
     }
     const tmp = require('path').join(require('os').tmpdir(), `pen_${id}.diff`);
@@ -3530,16 +3560,24 @@ async function _applyPenProposal(id) {
     if (check.code !== 0) {
       pen.setStatus(id, 'apply-failed', { gateNote: `git apply --check failed: ${(check.stderr || check.stdout).slice(0, 400)}` });
       console.warn(`[pen] #${id} APPLY-CHECK FAILED — the diff does not fit the tree (stale read?). She gets the why.`);
+      _penSay(`Proposal #${id} was refused at the apply-check — the diff no longer fits the tree. Nothing changed; the why is on the card.`);
       return;
     }
     await run('git', ['apply', '--whitespace=nowarn', tmp]);
     console.log(`[pen] #${id} applied — running the FULL gate…`);
+    // quiet window: hold background lanes for the gate's duration so contention can't fake a red
+    try { db.setMeta('pen.gate_until', String(Date.now() + 20 * 60 * 1000)); } catch {}
+    pen.stage(id, 'stage: diff applied — FULL gate running (≈595 suites, several minutes; background lanes hold)…');
+    _pushApprovalsBar();
     const gate = await run('npm', ['test'], { timeoutMs: 900000, shell: process.platform === 'win32' });
     if (gate.code === 0) {
       await run('git', ['add', '--', ...files]);
       const cm = await run('git', ['commit', '-m', `PEN #${id}: ${p.title}\n\nProposed by Zoe through the gated pen; approved by Lucas at the card; full gate green.\n\n${String(p.rationale || '').slice(0, 600)}\n\nCo-Authored-By: Zoe (gated pen) <noreply@local>`]);
       pen.setStatus(id, cm.code === 0 ? 'applied' : 'apply-failed', { gateNote: cm.code === 0 ? 'gate GREEN — committed; goes live at the next program cycle' : `gate green but commit failed: ${cm.stderr.slice(0, 300)}` });
       console.log(`[pen] #${id} ${cm.code === 0 ? 'LANDED — gate green, committed. Live at the next cycle.' : 'gate green but COMMIT FAILED: ' + cm.stderr.slice(0, 200)}`);
+      _penSay(cm.code === 0
+        ? `Proposal #${id} landed — gate green, committed. It goes live at the next program cycle.`
+        : `Proposal #${id} passed the gate but the commit failed — nothing is live; the why is on the card.`);
       try { require('./lib/obs_bus').emit({ lane: 'pen', kind: 'win', text: `code proposal #${id} landed through the gate: ${p.title}`, ref: `pen:${id}` }); } catch {}
       try { db.insertMonologue({ content: `My code proposal #${id} ("${p.title}") passed the full gate and is committed. It goes live at the next program cycle.`, model: 'pen', type: 'reading' }); } catch {}
     } else {
@@ -3547,14 +3585,17 @@ async function _applyPenProposal(id) {
       const tail = (gate.stdout + '\n' + gate.stderr).split('\n').filter((l) => /FAIL|✗|failed|Error/.test(l)).slice(-6).join('\n').slice(0, 800);
       pen.setStatus(id, 'gate-failed', { gateNote: `gate RED — reverted. Tail:\n${tail || '(no matching failure lines — read the gate log)'}` });
       console.warn(`[pen] #${id} GATE RED — files reverted, nothing landed. The tail rides the row back to her.`);
+      _penSay(`Proposal #${id} went RED at the gate — everything reverted, nothing landed. The failure tail is on the card.`);
       try { db.insertMonologue({ content: `My code proposal #${id} ("${p.title}") FAILED the gate and was reverted — nothing landed. Gate tail:\n${tail}`, model: 'pen', type: 'reading' }); } catch {}
     }
   } catch (e) {
     try { await run('git', ['checkout', '--', ...files]); } catch {}
     pen.setStatus(id, 'apply-failed', { gateNote: `pipeline error: ${e.message}` });
     console.error(`[pen] #${id} pipeline error (files restored):`, e.message);
+    _penSay(`Proposal #${id} hit a pipeline error — the files are restored, nothing landed. The why is on the card.`);
   } finally {
-    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('needs:approvals', { items: _pendingNeedItems() }); } catch {}
+    try { db.setMeta('pen.gate_until', ''); } catch {}   // release the quiet window whatever happened
+    _pushApprovalsBar();
   }
 }
 // Desktop companion: hide (keep the process/state, just tuck her away) + toggle (create/show or hide).
@@ -16523,7 +16564,7 @@ function startAutonomyDriver() {
   if (!_autonomyEnabled()) { console.log('[autonomy] disabled (ZOE_AUTONOMY / autonomy.enabled) — driver not started'); return; }
   // The tick runs under an ambient 'research' spend tier (2026-08-12 review H2): its direct cloud
   // calls (rehearse genFn etc.) inherit an honest gated tier instead of the ungated legacy default.
-  autonomyTimer = setInterval(() => { require('./lib/lane').run({ autonomous: true, spendTier: 'research' }, () => autonomyTick()).catch((e) => console.error('[autonomy] tick failed:', e.message)); }, AUTONOMY_TICK_MS);
+  autonomyTimer = setInterval(() => { if (_penGateQuiet()) return; require('./lib/lane').run({ autonomous: true, spendTier: 'research' }, () => autonomyTick()).catch((e) => console.error('[autonomy] tick failed:', e.message)); }, AUTONOMY_TICK_MS);
   console.log(`[autonomy] driver started — decides every ~${Math.round(_autonomyCadenceMs() / 60000)}min when idle`);
 }
 
@@ -17065,6 +17106,7 @@ async function autonomicSchedulerTick() {
 
 async function _autonomicSchedulerTick() {
   if (String(process.env.ZOE_AUTONOMIC || '1').trim() === '0') return;              // kill switch
+  if (_penGateQuiet()) return;   // a pen gate is running — the beat machinery holds
   try { if ((db.getMeta('operator.mode') || 'full').trim() === 'off') return; } catch {}
   const focusLib = require('./lib/focus');
   const sched = require('./lib/beat_scheduler');
@@ -17558,6 +17600,7 @@ function startBackgroundWorkers() {
   if (_bgSlots() < 1) return;
   _bgTimer = setInterval(() => {
     try {
+      if (_penGateQuiet()) return;   // a pen gate is running — background lanes hold (the #2 false-red lesson)
       const st = _loadSchedState();
       // Directed preemption: skip normal workers IMMEDIATELY (this loop runs faster than the
       // autonomic tick that empties the slots) — a swarm is Lucas-commanded, so it keeps driving.
@@ -18197,6 +18240,7 @@ try { global.__autonomicTick = () => autonomicSchedulerTick(); } catch {}       
 // One driver tick: advance the active directed focus by a single research slice, record the outcome.
 // Top-level UNATTENDED tick — see autonomicSchedulerTick above for why the wrap lives at the tick.
 async function directedFocusTick() {
+  if (_penGateQuiet()) return;   // a pen gate is running — directed research holds one tick
   return require('./lib/lane').run({ autonomous: true }, () => _directedFocusTick());
 }
 

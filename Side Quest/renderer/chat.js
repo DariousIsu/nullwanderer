@@ -1257,27 +1257,66 @@ document.addEventListener('keydown', (e) => {
 // the bar re-renders from the returned set. Restored on every load via needs:pending, refreshed by
 // the needs:approvals push. Fail-soft: any error hides the bar rather than wedging the chat.
 const approvalsBar = document.getElementById('approvals-bar');
+// Lucas 09-01 QOL: cards expand to the FULL proposal (click the card body — rationale, files,
+// stage note, the diff itself), and a ✓'d pen proposal stays on the bar as a live buttonless
+// progress card (kind 'pen-run') through the enforce pipeline. Expanded ids survive the bar's
+// wholesale innerHTML rebuilds via this Set; running pen cards start expanded so the stage shows.
+const _expandedCards = new Set();
+const _collapsedCards = new Set();   // a running pen card auto-opens; this remembers his explicit collapse
+let _lastApprovalItems = null;
+const PEN_RUN_CHIP = { approved: '⚙ queued', applying: '⚙ applying + gating', applied: '✅ landed', 'gate-failed': '⛔ gate red — reverted', 'apply-failed': '⛔ apply failed' };
 function renderApprovals(items) {
   if (!approvalsBar) return;
   try {
+    _lastApprovalItems = items;
     if (!Array.isArray(items) || !items.length) { approvalsBar.classList.add('hidden'); approvalsBar.innerHTML = ''; return; }
     approvalsBar.classList.remove('hidden');
-    approvalsBar.innerHTML = `<div class="approvals-title">⏳ waiting on your word (${items.length})</div>` + items.map((it) => `
-      <div class="approval-card" data-id="${escapeHtml(String(it.id))}">
-        <span class="approval-kind ${it.kind === 'blocked' ? 'blocked' : 'proposed'}">${it.kind === 'blocked' ? 'blocked on you' : it.kind === 'pen' ? '🖊 code change' : 'proposed'}</span>
+    const decidable = items.filter((i) => i.kind !== 'pen-run').length;
+    const title = decidable ? `⏳ waiting on your word (${decidable})` : '🖊 pen pipeline — live';
+    approvalsBar.innerHTML = `<div class="approvals-title">${title}</div>` + items.map((it) => {
+      const isRun = it.kind === 'pen-run';
+      const d = it.detail || null;
+      const canExpand = !!(d && (d.diff || d.rationale || d.gateNote));
+      const autoOpen = isRun && ['approved', 'applying'].includes(it.status);
+      const open = canExpand && !_collapsedCards.has(String(it.id)) && (autoOpen || _expandedCards.has(String(it.id)));
+      const chip = isRun ? (PEN_RUN_CHIP[it.status] || it.status) : (it.kind === 'blocked' ? 'blocked on you' : it.kind === 'pen' ? '🖊 code change' : 'proposed');
+      const detail = canExpand ? `
+        <div class="ac-detail">
+          ${d.gateNote ? `<div class="ac-note">${escapeHtml(d.gateNote)}</div>` : ''}
+          ${d.rationale ? `<div class="ac-rationale">${escapeHtml(d.rationale)}</div>` : ''}
+          ${d.files && d.files.length ? `<div class="ac-files">${escapeHtml(d.files.join(' · '))}</div>` : ''}
+          ${d.diff ? `<pre class="ac-diff">${escapeHtml(d.diff)}</pre>` : ''}
+        </div>` : '';
+      return `
+      <div class="approval-card ${canExpand ? 'ac-can-expand' : ''} ${open ? 'ac-expanded' : ''} ${isRun ? `ac-run ac-run-${escapeHtml(String(it.status))}` : ''}" data-id="${escapeHtml(String(it.id))}">
+        ${canExpand ? '<span class="ac-chev">▸</span>' : ''}
+        <span class="approval-kind ${it.kind === 'blocked' ? 'blocked' : 'proposed'}">${chip}</span>
         ${it.verdict ? `<span class="approval-verdict ${it.verdict}">${it.verdict === 'verified' ? '✓ verified' : '✗ rejected'}</span>` : ''}
         <span class="approval-text">#${escapeHtml(String(it.id))} — ${escapeHtml(it.text)}</span>
-        <span class="approval-actions">
+        ${isRun ? '' : `<span class="approval-actions">
           <button type="button" class="approval-yes" title="${it.kind === 'blocked' ? 'Done / unblocked — she re-checks it' : it.kind === 'pen' ? 'Yes — apply it: clean tree, full gate, commit on green, revert on red' : 'Yes — build it (back into the open queue with your blessing)'}">✓ yes</button>
           <button type="button" class="approval-no" title="No — retire it">✗ no</button>
-        </span>
-      </div>`).join('');
+        </span>`}
+        ${detail}
+      </div>`;
+    }).join('');
   } catch { approvalsBar.classList.add('hidden'); }
 }
 if (approvalsBar) {
   approvalsBar.addEventListener('click', async (e) => {
     const btn = e.target.closest('button');
-    if (!btn) return;
+    if (!btn) {
+      // card-body click toggles the full view; clicks inside the detail (selecting diff text) don't collapse it
+      if (e.target.closest('.ac-detail')) return;
+      const xc = e.target.closest('.approval-card.ac-can-expand');
+      if (xc) {
+        const xid = String(xc.dataset.id);
+        if (xc.classList.contains('ac-expanded')) { _expandedCards.delete(xid); _collapsedCards.add(xid); }
+        else { _expandedCards.add(xid); _collapsedCards.delete(xid); }
+        renderApprovals(_lastApprovalItems);
+      }
+      return;
+    }
     const card = btn.closest('.approval-card');
     if (!card) return;
     const id = /^pen-/.test(card.dataset.id) ? card.dataset.id : Number(card.dataset.id);   // pen cards carry string ids
