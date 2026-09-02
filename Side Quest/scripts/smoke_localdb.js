@@ -78,5 +78,16 @@ console.log('\nMANIFEST TABLE SELECTION');
   ok(live.length > 0 && live.every((t) => typeof t.table === 'string' && t.rows > 0), 'runs against the real inventory without throwing');
 }
 
+// ⭐ live-observed perf guard: a leading-wildcard body LIKE on documents is refused with the FTS steer
+{
+  const bad = ldb.query("SELECT id, title FROM documents WHERE body LIKE '%methodology%' ORDER BY created_ts DESC LIMIT 20");
+  ok(bad.ok === false && /documents_fts MATCH/.test(bad.error), '⭐ a `body LIKE %term%` full-scan on documents is refused with the FTS query (measured 13-22s main-thread block)');
+  const bad2 = ldb.query("select * from documents where body like '%timeline%' or body like '%resource plan%'");
+  ok(bad2.ok === false && /full-text/.test(bad2.error), 'the OR-of-LIKEs variant (the exact live query) is refused too');
+  // a normal query is untouched (the guard is surgical — only documents + leading-wildcard body LIKE)
+  const okq = ldb.query("SELECT name FROM sqlite_master WHERE type='table' LIMIT 3");
+  ok(okq.ok === true, 'an ordinary read is unaffected by the guard');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -91,6 +91,13 @@ function query(sql, params = []) {
   const s = String(sql || '').trim().replace(/;\s*$/, '');
   if (!s) return { ok: false, error: 'empty query' };
   if (WRITE_KW_RE.test(s)) return { ok: false, error: 'only read-only SELECT queries are allowed' };
+  // live-observed perf guard: a LEADING-wildcard `body LIKE '%term%'` on the documents table is
+  // unindexable and full-scans the growing table on the synchronous MAIN thread (measured 13-22s
+  // blocks). documents_fts exists for exactly this. Refuse the scan and hand back the fast query —
+  // only the anti-pattern is blocked (a trailing-wildcard `LIKE 'prefix%'` still runs).
+  if (/\bfrom\s+documents\b/i.test(s) && /\bbody\s+like\s+'%/i.test(s)) {
+    return { ok: false, error: "slow full-scan refused: `body LIKE '%term%'` on documents is unindexable (leading wildcard blocks any index) and blocks the main thread. Use full-text search: SELECT d.* FROM documents_fts f JOIN documents d ON d.id = f.rowid WHERE documents_fts MATCH 'term' ORDER BY bm25(documents_fts) LIMIT 20" };
+  }
   const conn = _readerConn() || dbLib.getDb();
   let stmt;
   try { stmt = conn.prepare(s); }

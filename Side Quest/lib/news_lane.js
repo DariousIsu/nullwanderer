@@ -206,6 +206,10 @@ function ensureSchema() {
       created_at   INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_news_stories_status ON news_stories(status, last_ts);
+    -- audit S6: storiesActiveInWindow filters on last_ts alone, which the status-led composite above
+    -- can't serve — it full-scanned the unbounded table on the MAIN thread (measured 2.8s+). A
+    -- last_ts index makes the window range a seek, so only recent rows are scanned + sorted.
+    CREATE INDEX IF NOT EXISTS idx_news_stories_lastts ON news_stories(last_ts);
     CREATE TABLE IF NOT EXISTS news_story_updates (
       id        INTEGER PRIMARY KEY,
       story_id  INTEGER NOT NULL,
