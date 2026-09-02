@@ -86,6 +86,15 @@ ok('crash handler installed: uncaughtException', process.listeners('uncaughtExce
   ok('a handler is INVOKABLE through the harness (meta:get round-trips on the temp DB)', threw === null && (invoked === null || invoked === undefined));
   if (threw) console.log(`      invoke error: ${threw}`);
 
+  // ── audit S12/S25: the antifab spine covers the off-main say paths ──
+  {
+    const mainSrc = require('fs').readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+    ok('S12: the tool-followup say runs the FULL _antifabCorrect slice (world-fact gates, not just artifact)',
+      /audit S12/.test(mainSrc) && /sayOut = _antifabCorrect\(sayOut, _fuAnchor, String\(resultText/.test(mainSrc));
+    ok('S25: the off-turn delivery announce gates its cloud say through _antifabCorrect',
+      /audit S25[\s\S]{0,120}msg = _antifabCorrect\(msg/.test(mainSrc) || /msg = _antifabCorrect\(msg, 0, ''\)/.test(mainSrc));
+  }
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { require('fs').unlinkSync(process.env.SQ_DB_PATH); } catch {}
   process.exit(fail === 0 ? 0 : 1);

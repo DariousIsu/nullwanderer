@@ -14745,22 +14745,13 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     try {
       const _mc = require('./lib/metacognition');
       const _fuAnchor = lastUserTurnStartTs || 0;
-      const _av = _mc.verifyArtifactClaims(sayOut, {
-        // Resolve a claimed relative path against BOTH the app's file workspace (files.resolvePath →
-      // data/zoe_workspace) AND the repo root — reports/notes save to the WORKSPACE, so a __dirname-only check
-      // false-CORRECTED real deliveries ("[Correction — the file I named isn't actually there]" on a file that
-      // WAS saved; 2026-08-18, the Cassidy report). Any hit = exists; fail OPEN so an error never false-scolds.
-      fileExists: (p) => { try { const _p = require('path'), fs = require('fs'); if (_p.isAbsolute(p)) return fs.existsSync(p); const cands = []; try { cands.push(require('./lib/files').resolvePath(p)); } catch {} cands.push(_p.join(__dirname, p)); return cands.some((c) => { try { return fs.existsSync(c); } catch { return false; } }); } catch { return true; } },
-        canvasWroteThisTurn: () => { if (!_fuAnchor) return true; try { return require('./lib/canvas_docs').lastWriteTs() >= _fuAnchor; } catch { return true; } },
-        canvasTabExists: (n) => { try { return require('./lib/canvas_docs').tabExists(n); } catch { return false; } },   // named-tab homecoming: existing durable docs ground past-tense claims
-        canvasLandedText: () => { if (!_fuAnchor) return ''; try { return require('./lib/canvas_docs').lastWriteText(_fuAnchor); } catch { return ''; } },   // content-aware: RIGHT doc? (unions this-turn docs)
-        imageGenThisTurn: () => !_fuAnchor || (lastImageGenTs || 0) >= _fuAnchor,
-        dbWroteThisTurn: () => { if (!_fuAnchor) return true; try { return require('./lib/echo_suit').lastContactWriteTs() >= _fuAnchor; } catch { return true; } },
-      });
-      if (!_av.ok) {
-        const _corr = _mc.artifactCorrection(_av.violations);
-        if (_corr) { console.warn(`[antifab] followup claimed an artifact that didn't land → corrected: ${_av.violations.map((v) => v.kind + ':' + v.claim).join(', ').slice(0, 160)}`); sayOut += _corr; }
-      }
+      // FULL antifab slice on the followup (audit S12): a followup say is a full model generation
+      // with generative freedom, not a verbatim echo of the tool result — so it needs the SAME
+      // world-fact gates the main reply path runs (email grounding, absence, fact-confab,
+      // prediction), not just the artifact check it had. _antifabCorrect is that shared slice; its
+      // artifact resolvers already match this path's, anchored on the user turn, evidence = the
+      // tool result that prompted this followup. (Work-state stays below — antifab doesn't cover it.)
+      sayOut = _antifabCorrect(sayOut, _fuAnchor, String(resultText || ''));
       // WORK-STATE CLAIMS on the followup path (run-2, 2026-08-19): the F2 false-verification
       // ("Records indicate … still pending … by tomorrow morning") was a FOLLOWUP say — this is
       // exactly the site that fabricated. Evidence = the tool result that prompted this followup.
@@ -20391,6 +20382,7 @@ async function _announceOffTurn(sid, voicePrompt, fallback, model = 'delivery') 
       if (cleaned.length > 20) msg = cleaned;
     } catch (e) { console.error('[delivery] announce voice gen failed:', e.message); }
     if (!msg) return false;
+    try { msg = _antifabCorrect(msg, 0, ''); } catch {}   // audit S25: a cloud-generated delivery announce is a user-facing say — gate it (email grounding + prediction always apply) like announceResearchComplete does
     const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model, unprompted: 1 });
     try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
     try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}

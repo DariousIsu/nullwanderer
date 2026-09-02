@@ -235,7 +235,12 @@ const _ART_DB_DONE_RE = /\b(?<!\b(?:entity|entities|record|records|row|rows|node
 // not a this-turn completion — the canvas gate corrected a TRUE "saved to your canvas" that landed 10
 // minutes before, because its probe only accepts this-turn writes. A past-referenced sentence skips every
 // THIS-TURN probe (canvas/db/image); the file-existence check still applies (existence is timeless).
-const _ART_PAST_REF_RE = /\b(?:earlier|already|previously|yesterday|last\s+(?:night|week|turn|time|session)|this\s+morning|the\s+other\s+day|(?:a|an|\d+|few|couple(?:\s+of)?|several|some|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|fifty|half\s+an?)\s+(?:minutes?|mins?|moments?|hours?|hrs?|days?|turns?)\s+(?:ago|back|earlier))\b/i;
+// TIGHTENED (audit S11): bare 'already' / 'earlier' / 'previously' are temporally AMBIGUOUS and
+// appear in genuinely THIS-TURN claims ("I've already added X to the database"), so exempting on
+// them disabled the canvas/db/image probes on exactly the sentences most likely to fabricate. A
+// past-ref exemption now needs an UNAMBIGUOUS distance marker: a named past day/session, an
+// N-units-ago phrase, or 'earlier/previously' QUALIFIED by a time/conversation anchor.
+const _ART_PAST_REF_RE = /\b(?:yesterday|last\s+(?:night|week|turn|time|session)|this\s+morning|the\s+other\s+day|(?:earlier|previously)\s+(?:today|tonight|this\s+(?:morning|afternoon|evening|week)|in\s+(?:our|the|this)\s+(?:chat|conversation|session|thread))|(?:a|an|\d+|few|couple(?:\s+of)?|several|some|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|fifty|half\s+an?)\s+(?:minutes?|mins?|moments?|hours?|hrs?|days?|turns?)\s+(?:ago|back|earlier))\b/i;
 
 // ── SPINE 2: BIDIRECTIONAL VERIFICATION (2026-08-10, docs/BIDIRECTIONAL_VERIFICATION_GATE.md) ──────────────
 // The artifact gate above checks claims that leave a trace in Zoe's OWN runtime. Spine 2 checks claims about

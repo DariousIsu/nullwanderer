@@ -204,6 +204,11 @@ ok(m.verifyArtifactClaims('It\'s already on your canvas from last session.', { c
   'F24: "already … last session" → past reference, no violation');
 ok(m.verifyArtifactClaims('I put the table on your canvas just now.', { canvasWroteThisTurn: CW_NO }).violations.some(v => v.kind === 'canvas'),
   'F24 guard: a THIS-turn claim ("just now") with no write still violates — the exemption is not a hole');
+// ⭐ audit S11: bare 'already' is temporally AMBIGUOUS — a this-turn claim worded with it is NOT exempt
+ok(m.verifyArtifactClaims("I've already added Tom Arceneaux to the contacts database.", { dbWroteThisTurn: () => false }).violations.some(v => v.kind === 'db'),
+  '⭐ S11: "I\'ve already added … to the database" with no write THIS turn now VIOLATES (bare "already" no longer exempts)');
+ok(m.verifyArtifactClaims('I saved it to your canvas earlier tonight.', { canvasWroteThisTurn: CW_NO }).ok,
+  'S11: a QUALIFIED past-ref ("earlier tonight") still exempts — the tightening did not over-restrict');
 
 // --- F18 (run-2): a bare DB EXISTENCE reference is NOT a write claim — the write probe must not judge it ---
 const DBW_NO = () => false, DBW_YES = () => true;
