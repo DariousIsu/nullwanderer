@@ -7,7 +7,9 @@
 'use strict';
 const parlor = require('./parlor');
 
-const MODEL = () => process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+// gemini-2.5-flash retired for new keys (probed 09-01: Google's 404 body names the successor);
+// 3.6-flash is a THINKING model — first token can take 20s+ and thoughts bill against the output cap
+const MODEL = () => process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 const KEY = () => process.env.GEMINI_API_KEY || '';
 let _noKeyLogged = false;
 
@@ -39,11 +41,14 @@ async function maybeReply({ room = parlor.DEFAULT_ROOM, deps = {} } = {}) {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: PREAMBLE }] },
         contents: [{ role: 'user', parts: [{ text: `The room so far:\n${parlor.transcriptBlock(turns)}\n\nYour turn.` }] }],
-        generationConfig: { maxOutputTokens: 300, temperature: 0.7 },
+        generationConfig: { maxOutputTokens: 1024, temperature: 0.7 },
       }),
-      signal: AbortSignal.timeout(deps.timeoutMs || 30000),
+      signal: AbortSignal.timeout(deps.timeoutMs || 90000),
     });
-    if (!res.ok) return { ok: false, why: `gemini HTTP ${res.status}` };
+    if (!res.ok) {
+      let hint = ''; try { hint = (await res.text()).replace(/\s+/g, ' ').slice(0, 160); } catch {}
+      return { ok: false, why: `gemini HTTP ${res.status}${hint ? ` — ${hint}` : ''}` };
+    }
     const j = await res.json();
     const text = String(((((j.candidates || [])[0] || {}).content || {}).parts || []).map((p) => p.text || '').join(' ')).trim();
     if (!text || text === 'PASS') return { ok: true, posted: false };
