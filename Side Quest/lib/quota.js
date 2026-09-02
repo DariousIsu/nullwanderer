@@ -187,7 +187,10 @@ function state({ limit = 0, markPct = 0, markAt = 0, spentSince = 0, resetAt = 0
 // her research (measured: 40k+ all-lane compute in one build hour closed the research lane at 19%
 // of a barely-touched weekly pool). Floors and burst logic are untouched — the reserve still
 // protects his chat, and a hot BACKGROUND hour still throttles background.
-function check({ lane = 'idle', st = null, spentLastHour = 0, spentLastHourBg = null, estimate = 0 } = {}) {
+// `reopening` (09-01 flap fix: seven 1-minute open/close cycles as the hour drained): a lane that
+// is currently CLOSED reopens only when comfortably under pace (85% of its share) — hysteresis, so
+// the threshold crossing doesn't strobe the log and the closure ledger every minute.
+function check({ lane = 'idle', st = null, spentLastHour = 0, spentLastHourBg = null, estimate = 0, reopening = false } = {}) {
   const tier = TIER[lane] != null ? lane : 'idle';
   if (tier === 'interactive') return { allow: true, reason: 'interactive — never throttled' };
   if (!st || !st.known) return { allow: true, reason: 'no quota configured' };
@@ -244,7 +247,7 @@ function check({ lane = 'idle', st = null, spentLastHour = 0, spentLastHourBg = 
   const base = tier === 'research' ? 0.60 : 0.40;
   const ramp = st.hoursLeft < ENDGAME_H ? (1 - st.hoursLeft / ENDGAME_H) : 0;   // 0 → 1 across the final window
   const share = base + (0.95 - base) * ramp;
-  const allowedThisHour = st.pacePerHour * share;
+  const allowedThisHour = st.pacePerHour * share * (reopening ? 0.85 : 1);
   // #115: background paces against background spend when the caller can split the hour.
   const paceSpend = spentLastHourBg != null ? num(spentLastHourBg) : num(spentLastHour);
   if (paceSpend + num(estimate) > allowedThisHour) {

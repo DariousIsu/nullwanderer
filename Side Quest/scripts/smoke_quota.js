@@ -173,6 +173,11 @@ ok(q.check({ lane: 'nonsense', st: live, spentLastHour: 60_000 }).allow === fals
   ok(r3.allow === false, 'without the split (old callers) the all-lane hour still governs — backward compatible');
   const st86 = q.state({ limit: 1000000, markPct: 0.86, markAt: Date.now() - 1000, spentSince: 0, resetAt: Date.now() + 84 * 3600e3 });
   ok(q.check({ lane: 'idle', st: st86, spentLastHour: 0, spentLastHourBg: 0 }).allow === false, 'the FLOOR still stops idle at 85% regardless of the split — the chat reserve is untouched');
+  // hysteresis (the 09-01 flap): just-under pace passes an OPEN lane but not a REOPENING one
+  const nearShare = st.pacePerHour * 0.60 * 0.95;
+  ok(q.check({ lane: 'research', st, spentLastHour: nearShare, spentLastHourBg: nearShare }).allow === true, 'an open lane at 95% of share stays open');
+  ok(q.check({ lane: 'research', st, spentLastHour: nearShare, spentLastHourBg: nearShare, reopening: true }).allow === false, '⭐ a CLOSED lane at 95% of share stays closed — reopen needs 85% headroom (no 1-minute strobing)');
+  ok(q.check({ lane: 'research', st, spentLastHour: nearShare * 0.5, spentLastHourBg: nearShare * 0.5, reopening: true }).allow === true, 'comfortably under → the closed lane reopens');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

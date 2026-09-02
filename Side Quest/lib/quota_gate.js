@@ -101,7 +101,7 @@ function spentLastHourBackground(now = Date.now()) {
 function allow(lane, { estimate = 0, now = Date.now(), quiet = false } = {}) {
   try {
     const st = state(now);
-    const r = quota.check({ lane, st, spentLastHour: spentLastHour(now), spentLastHourBg: spentLastHourBackground(now), estimate });
+    const r = quota.check({ lane, st, spentLastHour: spentLastHour(now), spentLastHourBg: spentLastHourBackground(now), estimate, reopening: !!closedSince(lane) });
     if (!r.allow && !quiet && now - _lastLog > 5 * 60 * 1000) {
       _lastLog = now;
       console.log(`[quota] ${lane} DEFERRED — ${r.reason}`);
