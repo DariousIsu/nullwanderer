@@ -3582,8 +3582,13 @@ async function _applyPenProposal(id) {
       try { db.insertMonologue({ content: `My code proposal #${id} ("${p.title}") passed the full gate and is committed. It goes live at the next program cycle.`, model: 'pen', type: 'reading' }); } catch {}
     } else {
       await run('git', ['checkout', '--', ...files]);
-      const tail = (gate.stdout + '\n' + gate.stderr).split('\n').filter((l) => /FAIL|✗|failed|Error/.test(l)).slice(-6).join('\n').slice(0, 800);
-      pen.setStatus(id, 'gate-failed', { gateNote: `gate RED — reverted. Tail:\n${tail || '(no matching failure lines — read the gate log)'}` });
+      const full = gate.stdout + '\n' + gate.stderr;
+      // forensics (the #2/#3 false-red hunt): the 800-char suite-level tail lost the PIN line both
+      // times — keep the whole gate log on disk (repo root, *.log is ignored) and lead with the ✗s
+      try { require('fs').writeFileSync(require('path').join(__dirname, `pen_gate_${id}.log`), full, 'utf8'); } catch {}
+      const pins = full.split('\n').filter((l) => /✗/.test(l)).slice(0, 6).join('\n').slice(0, 600);
+      const tail = full.split('\n').filter((l) => /FAIL|✗|failed|Error/.test(l)).slice(-6).join('\n').slice(0, 800);
+      pen.setStatus(id, 'gate-failed', { gateNote: `gate RED — reverted. Failing pins:\n${pins || '(no ✗ lines — suite died before reporting?)'}\nTail:\n${tail || '(no matching failure lines)'}\nFull log: pen_gate_${id}.log` });
       console.warn(`[pen] #${id} GATE RED — files reverted, nothing landed. The tail rides the row back to her.`);
       _penSay(`Proposal #${id} went RED at the gate — everything reverted, nothing landed. The failure tail is on the card.`);
       try { db.insertMonologue({ content: `My code proposal #${id} ("${p.title}") FAILED the gate and was reverted — nothing landed. Gate tail:\n${tail}`, model: 'pen', type: 'reading' }); } catch {}

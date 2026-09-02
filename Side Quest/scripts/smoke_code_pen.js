@@ -184,6 +184,8 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
     'v1.2 wiring: the renderer expands cards to the full diff and renders the live run card');
   const mono = fs.readFileSync(path.join(__dirname, '..', 'lib', 'monologue.js'), 'utf8');
   ok(/pen\.gate_until/.test(mono), 'v1.2 wiring: the monologue tick honors the quiet window too');
+  ok(/pen_gate_\$\{id\}\.log/.test(main) && /Failing pins:/.test(main),
+    'v1.2 wiring: a gate red keeps the FULL log on disk and leads with the ✗ pin lines (the tail lost them twice)');
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
