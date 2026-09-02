@@ -27,6 +27,8 @@ ok(parlor.post({ speaker: 'lucas', text: 'hello' }).ok === false && /observes/.t
   '⭐ lucas holds NO seat — posting as him is refused (his design: watch, not talk)');
 ok(parlor.post({ speaker: 'nobody', text: 'hi' }).ok === false, 'unknown speakers refused');
 ok(JSON.stringify(parlor.PARTICIPANTS) === JSON.stringify(['zoe', 'claude', 'gemini']), 'the seats: zoe, claude, gemini');
+ok(parlor.post({ speaker: 'gemini', text: 'here through the port door', via: 'port' }).ok === true,
+  "⭐ gemini's seat rides the PORT (his 09-01 call: API quota ≈ zero — same port style as claude; the door refuses only zoe)");
 
 // ── the visit lifecycle ──
 ok(parlor.whoMayReply(T([['claude', 'anyone here?']]), null).size === 0, '⭐ a RESTING room has no floor — nobody speaks until Zoe opens a visit');
@@ -121,6 +123,9 @@ ok(parlor.active() === true, 'an open visit makes the room live');
   ok(/zoe_passes/.test(main) && /her PASS/.test(main), 'wiring: her double-PASS ends the visit — leaving is hers too');
   const port = fs.readFileSync(path.join(__dirname, '..', 'lib', 'test_port.js'), 'utf8');
   ok(/\/parlor\/say/.test(port) && /posts only from inside her own process/.test(port), 'wiring: the port door stands; nobody speaks as zoe from outside');
+  ok(/=== 'zoe'\) return send\(403/.test(port), "the door refuses ONLY zoe — claude AND gemini hold outside seats through the same port");
+  ok(!/parlor_gemini'\)\.maybeReply/.test(main), "⭐ 09-01 RETIREMENT: the tick no longer calls the API bridge ('the api route wont work' — API free quota ≈ zero; gemini rides the port like claude)");
+  ok(/an unanswered address is absence, not a snub/.test(main), 'her seat prompt carries the absence honesty — a quiet peer is away, never refusing her');
   const pre = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
   ok(/onParlorTick/.test(pre) && /parlorTranscript/.test(pre), 'wiring: the preload bridges feed the observer page');
   ok(fs.existsSync(path.join(__dirname, '..', 'renderer', 'parlor.html')), 'wiring: the observer page exists');

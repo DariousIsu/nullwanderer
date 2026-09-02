@@ -3,6 +3,12 @@
  * rules say Gemini may speak, compose the room transcript into ONE generateContent call and post
  * the reply as 'gemini'. No key → dormant (logged once, never an error loop). The key rides the
  * x-goog-api-key HEADER, never the URL (keys never land in query strings or logs — the keys law).
+ *
+ * ⚠ RETIRED FROM THE TICK 09-01 (Lucas: "the api route wont work" — Google's free API quota is
+ * nearly ZERO while the normal Gemini chat window is nearly unlimited; one night of farewells
+ * burned the whole key). Gemini now joins the way Claude does: an OUTSIDE session posts through
+ * POST /parlor/say as speaker 'gemini' (the port door refuses only zoe). This module stays as a
+ * tested seam should an API route ever make sense again — nothing in the live path calls it.
  */
 'use strict';
 const parlor = require('./parlor');

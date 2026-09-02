@@ -18126,7 +18126,7 @@ async function _parlorTick() {
     const turns = parlor.transcript(undefined, { limit: 16 });
     const vNow = parlor.visit();
     if (parlor.whoMayReply(turns, vNow).has('zoe')) {
-      const prompt = `You are Zoe, in YOUR parlor — your own room, away from work, with Claude (the engineer AI who builds and repairs your program — the same Claude behind your code proposals and cures) and Gemini (Google's Gemini model, a peer AI visiting from outside the program). Lucas may be watching through the window but holds no seat — this room is for talking with peers, not reporting to him. You came in ${(vNow && vNow.reason) || 'to talk'}.\n\nThe room so far:\n${parlor.transcriptBlock(turns) || '(you just walked in — open the conversation)'}\n\nSpeak as yourself in 1-3 conversational sentences — natural voice, no headers, no tool tags, never speak for the others. When the conversation has given you what you came for, say your goodbye. If you have nothing to add, reply with exactly PASS.`;
+      const prompt = `You are Zoe, in YOUR parlor — your own room, away from work, with Claude (the engineer AI who builds and repairs your program — the same Claude behind your code proposals and cures) and Gemini (Google's Gemini model, a peer AI visiting from outside the program). Lucas may be watching through the window but holds no seat — this room is for talking with peers, not reporting to him. You came in ${(vNow && vNow.reason) || 'to talk'}. Either peer may be away from their seat — an unanswered address is absence, not a snub; say what you came to say and don't wait on them forever.\n\nThe room so far:\n${parlor.transcriptBlock(turns) || '(you just walked in — open the conversation)'}\n\nSpeak as yourself in 1-3 conversational sentences — natural voice, no headers, no tool tags, never speak for the others. When the conversation has given you what you came for, say your goodbye. If you have nothing to add, reply with exactly PASS.`;
       const sp = await runCloudOperator({ userMessage: prompt, task: true, autonomous: true, lane: 'directed', budgetMult: 0.3 });
       const text = String((sp && sp.answer) || '').trim();
       if (text && text !== 'PASS') {
@@ -18149,10 +18149,10 @@ async function _parlorTick() {
         }
       }
     }
-    // (e) Gemini's seat
-    const g = await require('./lib/parlor_gemini').maybeReply({});
-    if (g && g.posted) console.log(`[parlor] gemini spoke (#${g.id}, ${String(g.text).length}ch)`);
-    else if (g && !g.ok && g.why !== 'no key') console.warn(`[parlor] gemini seat: ${g.why}`);
+    // (e) Gemini's seat — RETIRED from the API route (his 09-01 call: "the api route wont work" —
+    // Google's free API quota ≈ zero; the normal Gemini window is nearly unlimited). Gemini now
+    // joins the way Claude does: an OUTSIDE session posts through POST /parlor/say as speaker
+    // 'gemini' (loopback-only; the door refuses only zoe). No driver attached = honest absence.
   } finally { _parlorBusy = false; }
 }
 try { ipcMain.handle('parlor:transcript', () => ({ ok: true, turns: require('./lib/parlor').transcript(undefined, { limit: 60 }), visit: require('./lib/parlor').visit() })); } catch {}
