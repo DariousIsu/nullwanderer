@@ -332,12 +332,27 @@ function seedPenWork({ ask, bornFrom = 'edit-intent', deps = {} } = {}) {
   const d = deps.db || db;
   const text = String(ask || '').trim();
   if (!text) return { ok: false, why: 'empty ask' };
-  // churn guard: an identical open pen thread is the same ask re-said, not a second job
+  // churn guard, re-cut (audit F34): only an identical open **pen** thread is the same ask
+  // re-said — a same-text NON-pen thread is a coincidence that used to hijack the seed (the
+  // reused id carried no pen kind, so the edit order was never pen-driven). And a STALLED pen
+  // twin is his word RE-OPENING it (the stall log promised exactly that) — fresh budget,
+  // back on the queue — never a silent no-op.
   try {
     const open = d.getActiveOpenThreads(200) || [];
     const norm = text.replace(/\s+/g, ' ').toLowerCase();
-    const same = open.find((t) => String(t.content || '').replace(/\s+/g, ' ').toLowerCase() === norm);
-    if (same) return { ok: true, id: same.id, reused: true };
+    const same = open.find((t) => String(t.content || '').replace(/\s+/g, ' ').toLowerCase() === norm
+      && (() => { try { return d.getMeta(`focus.${t.id}.kind`) === 'pen'; } catch { return false; } })());
+    if (same) {
+      const q0 = workQueue({ deps });
+      if (String(same.status || '') === 'stalled') {
+        try { d.markOpenThreadStatus(same.id, 'pending', { reason: 'his word re-opened it (seedPenWork)' }); } catch {}
+        try { d.setMeta(`focus.${same.id}.pen`, JSON.stringify({ passes: 0, proposalId: null, bornFrom: `${bornFrom}:reopen` })); } catch {}
+        if (!q0.includes(same.id)) { q0.push(same.id); try { d.setMeta(PEN_QUEUE_KEY, JSON.stringify(q0.slice(-6))); } catch {} }
+        return { ok: true, id: same.id, reused: true, reopened: true };
+      }
+      if (!q0.includes(same.id)) { q0.push(same.id); try { d.setMeta(PEN_QUEUE_KEY, JSON.stringify(q0.slice(-6))); } catch {} }   // an open twin dropped from the queue gets re-booked
+      return { ok: true, id: same.id, reused: true };
+    }
   } catch {}
   const row = d.insertOpenThread({ content: text });
   try { d.setMeta(`focus.${row.id}.background`, '1'); } catch {}

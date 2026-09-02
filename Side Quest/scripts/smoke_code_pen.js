@@ -182,6 +182,23 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
   ok(!pen.workQueue().includes(s1.id), 'dropFromQueue releases the slot');
 }
 
+// ── the churn guard, re-cut (audit F34) ──
+{
+  const dbm = require('../lib/db');
+  const a = pen.seedPenWork({ ask: 'fix the froznak toggle' });
+  const b = pen.seedPenWork({ ask: 'fix the froznak toggle' });
+  ok(a.ok && b.ok && b.reused === true && b.id === a.id, 'an identical OPEN pen ask is reused, not doubled');
+  dbm.markOpenThreadStatus(a.id, 'stalled', { reason: 'test stall' });
+  pen.dropFromQueue(a.id);
+  pen.setPenState(a.id, { passes: 6, proposalId: 9 });
+  const c = pen.seedPenWork({ ask: 'fix the froznak toggle' });
+  ok(c.reused === true && c.reopened === true && pen.workQueue().includes(a.id) && pen.penState(a.id).passes === 0,
+    '⭐ his word RE-OPENS a stalled twin — fresh budget, back on the queue (audit F34: repeating the ask after a stall was a silent no-op)');
+  const rowN = dbm.insertOpenThread({ content: 'fix the wobniar lever' });
+  const d2 = pen.seedPenWork({ ask: 'fix the wobniar lever' });
+  ok(d2.reused !== true && d2.id !== rowN.id, 'a same-text NON-pen thread never hijacks the seed — the edit order still gets a real pen thread');
+}
+
 // ── wiring pins (grep-scope only — presence of the seams in main.js/renderer) ──
 {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
@@ -246,6 +263,18 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
     ok(/printed pass but exited nonzero/.test(rs) && (rs.match(/childOk/g) || []).length >= 6,
       '⭐ GATE BY EXIT CODE in every dialect (audit F22) — a suite that prints its pass line then crashes scores RED');
   }
+  // ── the DOCKET-CLEAR pins (audit F30/F35/F36/F37/F39, cured on his "clear the docket") ──
+  ok(/a FRESH budget \(audit F35\)/.test(main),
+    'the redrive resets the pass budget (audit F35: a last-pass proposal got zero re-drive passes and stalled with a false reason)');
+  ok(main.indexOf("if (kind === 'pen') return runPenWorkPass(focus);") !== -1
+    && main.indexOf("if (kind === 'pen') return runPenWorkPass(focus);") < main.indexOf("isListCompletionGoal(String(focus.content"),
+    '⭐ the pen kind gate sits ABOVE the list heuristic (audit F36: a table-phrased edit order was hijacked into research forever)');
+  ok(!/if \(_bgSlots\(\) < 1\) return;/.test(main) && /pen queue drives regardless/.test(main),
+    '⭐ the pen-queue driver is UNCONDITIONAL (audit F37: worker count 1 — the documented default — meant NO timer, and an acked edit order was dead forever)');
+  ok(/_armApproval/.test(chat) && /the bar shifted under the cursor/.test(chat) && /mousedown/.test(chat),
+    '⭐ the AIM GUARD (audit F30): a bar that re-renders between mousedown and click swallows the click — his ✓ can never land on a card he did not read');
+  ok(/_lastApprovalSig/.test(chat), 'unchanged pushes skip the bar rebuild — fewer chances to shift under his aim (audit F30)');
+  ok(/escapeHtml\(err\.message\)/.test(chat), 'the dashboard error sink escapes (audit F39: the one unescaped innerHTML in chat.js)');
   // ⭐ THE OUTSIDE HAND (his 09-01 confirm: full reboot control = "spawn an outside boot cycle python")
   ok(fs.existsSync(path.join(__dirname, '..', 'scripts', 'boot_cycle.py')),
     '⭐ the outside boot-cycler exists — her reboot no longer depends on the dying process staying healthy');

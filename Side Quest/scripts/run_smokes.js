@@ -718,6 +718,10 @@ const smokes = [
   // (pen runs/queue, parlor visit, quiet window, cycler lock) → deterministic escaped SVG; the
   // model-never-draws-a-bar law; auto-open-quiet on run start; verb door; preload bridges.
   'smoke_work_board.js',
+  // ── BOOT-PARSE GATE (audit F31): npm test never boots Electron — a syntax error or a missing
+  // lib module in the boot path passed the gate and died at boot (the class a self-reboot brings
+  // live unattended). vm.Script-parses every boot-path file + resolves every main.js lib require.
+  'smoke_boot_parse.js',
   // ── the AFFECT TISSUES (B2/B3, 2026-08-31 — docs/AFFECT_SUBSTRATE_RESEARCH_2026-08-31.md): the
   // deterministic python passes (appraisal-with-reasons + per-subject impressions) + the paced
   // idle-gated driver. Hermetic fixtures; proves replay determinism, decay, the RO rail, and

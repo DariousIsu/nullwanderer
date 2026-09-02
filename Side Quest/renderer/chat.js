@@ -1166,7 +1166,7 @@ async function openDashboard() {
     const m = await window.sq.getDashboardMetrics();
     renderDashboard(m);
   } catch (err) {
-    dashboardBody.innerHTML = `<div class="dash-empty">Error: ${err.message}</div>`;
+    dashboardBody.innerHTML = `<div class="dash-empty">Error: ${escapeHtml(err.message)}</div>`;   // audit F39: the one unescaped sink — error text can quote stored strings
   }
 }
 
@@ -1265,10 +1265,16 @@ const _expandedCards = new Set();
 const _collapsedCards = new Set();   // a running pen card auto-opens; this remembers his explicit collapse
 let _lastApprovalItems = null;
 const PEN_RUN_CHIP = { approved: '⚙ queued', applying: '⚙ applying + gating', applied: '✅ landed', 'gate-failed': '⛔ gate red — reverted', 'apply-failed': '⛔ apply failed' };
+let _lastApprovalSig = '';
 function renderApprovals(items) {
   if (!approvalsBar) return;
   try {
     _lastApprovalItems = items;
+    // skip the wholesale rebuild when NOTHING changed (audit F30): every needless innerHTML
+    // swap is a chance for the bar to shift under his cursor mid-aim
+    const sig = JSON.stringify([items || [], [..._expandedCards], [..._collapsedCards]]);
+    if (sig === _lastApprovalSig && approvalsBar.innerHTML) return;
+    _lastApprovalSig = sig;
     if (!Array.isArray(items) || !items.length) { approvalsBar.classList.add('hidden'); approvalsBar.innerHTML = ''; return; }
     approvalsBar.classList.remove('hidden');
     const decidable = items.filter((i) => i.kind !== 'pen-run').length;
@@ -1304,7 +1310,13 @@ function renderApprovals(items) {
     }).join('');
   } catch { approvalsBar.classList.add('hidden'); }
 }
+let _armApproval = null;   // the card he AIMED at, captured at mousedown (audit F30)
 if (approvalsBar) {
+  approvalsBar.addEventListener('mousedown', (e) => {
+    const b = e.target.closest('button');
+    const c = b && b.closest('.approval-card');
+    _armApproval = c ? { id: String(c.dataset.id), ts: Date.now() } : null;
+  });
   approvalsBar.addEventListener('click', async (e) => {
     const btn = e.target.closest('button');
     if (!btn) {
@@ -1321,6 +1333,14 @@ if (approvalsBar) {
     }
     const card = btn.closest('.approval-card');
     if (!card) return;
+    // THE AIM GUARD (audit F30): if a background push re-rendered the bar between his mousedown
+    // and this click, the card under the cursor can be a DIFFERENT proposal (a fresh filing
+    // sorts in above his target). A mismatched aim is swallowed — a ✓ must never land on a
+    // card he did not read.
+    if (_armApproval && Date.now() - _armApproval.ts < 1500 && _armApproval.id !== String(card.dataset.id)) {
+      console.warn('[approvals] click swallowed — the bar shifted under the cursor'); _armApproval = null; return;
+    }
+    _armApproval = null;
     const id = /^pen-/.test(card.dataset.id) ? card.dataset.id : Number(card.dataset.id);   // pen cards carry string ids
     const decision = btn.classList.contains('approval-seen') ? 'seen' : btn.classList.contains('approval-yes') ? 'yes' : 'no';
     btn.disabled = true;

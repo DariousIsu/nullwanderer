@@ -111,8 +111,17 @@ ok(parlor.active() === true, 'an open visit makes the room live');
     "⭐ his window AUTO-OPENS when a visit starts — quiet (showInactive, no focus steal): 'purely autonomous usage, I just want to watch'");
   ok(/the same Claude behind your code proposals/.test(main) && /Google's Gemini model, a peer AI/.test(main),
     'she knows WHO sits with her — claude = her engineer, gemini = the outside peer');
-  ok(/_parlorFeed\(\{ id: `bell-/.test(main) && !/model: 'parlor', unprompted: 1/.test(main),
-    "⭐ v1.3 ISOLATION (his catch: 'all landing in the unprompted channel'): doorbells feed ONLY the window + mirror — no chat turn, no unprompted say, no voice");
+  {
+    // ISOLATION pinned on the FUNCTION BODIES, comment-stripped (audit F33: the old pin was one
+    // dead byte-shape — any respelling of the regression would have sailed past it)
+    const strip = (s) => String(s || '').replace(/\/\/[^\n]*/g, '');
+    const bell = strip((main.match(/function _parlorDoorbell[\s\S]*?\n\}/) || [''])[0]);
+    const feed = strip((main.match(/function _parlorFeed[\s\S]*?\n\}/) || [''])[0]);
+    ok(bell.includes('_parlorFeed(') && /console\.log/.test(bell) && !/insertTurn|unprompted|speak(?!er)|voice|chat:complete/i.test(bell),
+      "⭐ v1.3 ISOLATION (his catch: 'all landing in the unprompted channel'), pinned on the doorbell BODY — window+mirror+console only, in ANY spelling");
+    ok(feed.includes('parlor:tick') && feed.includes('canvasUpsertBlock') && !/insertTurn|unprompted|speak(?!er)|voiceQueue|chat:complete/i.test(feed),
+      'the feed body too: the window channel + the canvas mirror, nothing else (audit F33)');
+  }
   ok(/COALESCE\(p\.parlor_seen, 0\) = 0/.test(main) && /q\.status = 'applied' AND q\.title = p\.title/.test(main) && /SET parlor_seen = 1 WHERE id = \?'\)\.run\(gf\.id\)/.test(main),
     '⭐ a failure earns ONE visit — consumed at open via the parlor\'s OWN column (audit F17/F24: consuming `seen` made his failed-run cards vanish), and a landed same-title successor ends the story');
   ok(/r\.commit\(\)/.test(main) && /the reason is NOT consumed/.test(main),
@@ -134,6 +143,8 @@ ok(parlor.active() === true, 'an open visit makes the room live');
   const port = fs.readFileSync(path.join(__dirname, '..', 'lib', 'test_port.js'), 'utf8');
   ok(/\/parlor\/say/.test(port) && /posts only from inside her own process/.test(port), 'wiring: the port door stands; nobody speaks as zoe from outside');
   ok(/=== 'zoe'\) return send\(403/.test(port), "the door refuses ONLY zoe — claude AND gemini hold outside seats through the same port");
+  ok(/write refused from observer window/.test(main) && /READ-ONLY \(audit F40\)/.test(main),
+    '⭐ observer windows are READ-ONLY at the meta door (audit F40): an XSS in a page that renders remote-model text can never reach the control plane');
   ok(!/parlor_gemini'\)\.maybeReply/.test(main), "⭐ 09-01 RETIREMENT: the tick no longer calls the API bridge ('the api route wont work' — API free quota ≈ zero; gemini rides the port like claude)");
   ok(/an unanswered address is absence, not a snub/.test(main), 'her seat prompt carries the absence honesty — a quiet peer is away, never refusing her');
   const pre = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');

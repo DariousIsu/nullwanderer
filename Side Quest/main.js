@@ -7800,7 +7800,14 @@ ipcMain.handle('reader:bytes', async (_e, { docId } = {}) => {
 
 ipcMain.handle('meta:get', (_e, key) => db.getMeta(key));
 
-ipcMain.handle('meta:set', (_e, key, value) => {
+ipcMain.handle('meta:set', (e, key, value) => {
+  // observer surfaces are READ-ONLY (audit F40): the parlor and work-board windows render
+  // remote-model and DB-borne text, and meta keys are the control plane (pen.self_reboot,
+  // pen.gate_until, parlor.invite) — an XSS there must never reach a write door.
+  try {
+    const u = String((e && e.sender && e.sender.getURL()) || '');
+    if (/parlor\.html|work_board\.html/i.test(u)) { console.warn(`[meta] write refused from observer window (${key})`); return false; }
+  } catch {}
   db.setMeta(key, value);
   return true;
 });
@@ -17724,24 +17731,29 @@ async function backgroundWorkerPass(focusId) {
 }
 function startBackgroundWorkers() {
   if (_bgTimer) return;
-  if (_bgSlots() < 1) return;
+  // v1.4 (audit F37): worker count 1 — the documented default — used to mean NO timer at all,
+  // and this timer is the pen queue's ONLY driver: an edit order was acked ("the workers drive
+  // it") and then dead forever. The timer now ALWAYS runs; the research fleet inside it stays
+  // parked unless _bgSlots() grants slots, but the Lucas-commanded pen queue drives regardless.
   _bgTimer = setInterval(() => {
     try {
       if (_penGateQuiet()) return;   // a pen gate is running — background lanes hold (the #2 false-red lesson)
       const st = _loadSchedState();
-      // Directed preemption: skip normal workers IMMEDIATELY (this loop runs faster than the
-      // autonomic tick that empties the slots) — a swarm is Lucas-commanded, so it keeps driving.
-      if (!_userDirectedActive()) {
-        for (const w of Object.values(st.workers || {})) { const bid = w && w.beatId; const th = bid && st.beats[bid] && st.beats[bid].thread; if (th) backgroundWorkerPass(th).catch(() => {}); }
-        if (st.wonder && st.wonder.thread) backgroundWorkerPass(st.wonder.thread).catch(() => {});   // the WONDERING lane — driven IN PARALLEL with research; yields to his directed work like the fleet
+      if (_bgSlots() >= 1) {
+        // Directed preemption: skip normal workers IMMEDIATELY (this loop runs faster than the
+        // autonomic tick that empties the slots) — a swarm is Lucas-commanded, so it keeps driving.
+        if (!_userDirectedActive()) {
+          for (const w of Object.values(st.workers || {})) { const bid = w && w.beatId; const th = bid && st.beats[bid] && st.beats[bid].thread; if (th) backgroundWorkerPass(th).catch(() => {}); }
+          if (st.wonder && st.wonder.thread) backgroundWorkerPass(st.wonder.thread).catch(() => {});   // the WONDERING lane — driven IN PARALLEL with research; yields to his directed work like the fleet
+        }
+        if (st.swarm && st.swarm.parts) for (const p of Object.values(st.swarm.parts)) { if (p && p.thread && !p.done) backgroundWorkerPass(p.thread).catch(() => {}); }   // drive the swarm partitions too
       }
-      if (st.swarm && st.swarm.parts) for (const p of Object.values(st.swarm.parts)) { if (p && p.thread && !p.done) backgroundWorkerPass(p.thread).catch(() => {}); }   // drive the swarm partitions too
       // v1.1: the PEN-WORK queue is Lucas-commanded like a swarm — it drives even during his directed work.
       try { for (const pid of require('./lib/code_pen').workQueue()) backgroundWorkerPass(pid).catch(() => {}); } catch {}
     } catch {}
-    _fillWonderLane().catch(() => {});   // keep the wondering lane populated (self-contained load/save; async, fire-and-forget)
+    if (_bgSlots() >= 1) _fillWonderLane().catch(() => {});   // keep the wondering lane populated (self-contained load/save; async, fire-and-forget)
   }, DIRECTED_CADENCE_MS);
-  console.log(`[worker] ${_bgSlots()} background research worker(s) started`);
+  console.log(`[worker] ${_bgSlots()} background research worker(s) started (+ the pen-queue driver, unconditional)`);
 }
 function kickBackgroundWorkers() { startBackgroundWorkers(); }
 
@@ -18023,6 +18035,7 @@ async function runPenWorkPass(focus) {
       // apply-failed = the diff didn't fit the tree (first live ✓: she diffed against a 6000-char
       // truncated read of a 7075b file) — the MOST re-drivable failure: re-read fresh, re-diff.
       st.redrove = true; st.proposalId = null;
+      st.passes = 0;   // a FRESH budget (audit F35): a proposal filed on the last pass got zero re-drive passes and stalled with a false 'no proposal produced' — the pursuit reset passes, the redrive forgot to
       st.gateNote = `${p.status}: ${p.gate_note || ''}${p.status === 'apply-failed' ? ' — RE-READ the file fresh with <source-read> and diff against the EXACT lines you receive; your last diff did not match the tree.' : ''}`;
       st.notes = [];   // stale reads caused this — start the re-drive clean
       pen.setPenState(focus.id, st);
@@ -21241,6 +21254,13 @@ async function runDirectedResearchPass(focus) {
   // sent a parish roster off researching a Romanian university). Explicit meta wins; else a deterministic
   // goal heuristic (a named fillable column + a complete/fill/missing verb + a list/table noun). Precedence
   // ABOVE the kind gate so a list ask can never fall through to the org walk.
+  // THE PEN OUTRANKS EVERY HEURISTIC (audit F36): an edit order phrased about tables/columns
+  // ("fix the contacts table so the missing email column gets filled") text-matches the list
+  // heuristic below and was hijacked into a research walk that could never satisfy it — no pen
+  // pass, no stall, the thread parked forever. A pen-kind thread is a CODE-CHANGE order: route
+  // it FIRST, before any goal-text guessing.
+  const kind = (() => { try { return (db.getMeta(`focus.${focus.id}.kind`) || 'entity').trim(); } catch { return 'entity'; } })();
+  if (kind === 'pen') return runPenWorkPass(focus);   // v1.1: the pen-work lane — source → diff → card
   {
     const _lc = require('./lib/list_complete');
     if (mode === 'list' || _lc.isListCompletionGoal(String(focus.content || ''))) return runListCompletionPass(focus);
@@ -21248,12 +21268,10 @@ async function runDirectedResearchPass(focus) {
   // KIND GATE (research A3b): a topical brief or a forecast is NOT an org-and-contacts walk — research the
   // SUBJECT across its aspects. (forecast rides this same subject-research path for now; Part B adds the
   // actual forecast engine.) entity kind falls through to the discovery/deepen org walk below, unchanged.
-  const kind = (() => { try { return (db.getMeta(`focus.${focus.id}.kind`) || 'entity').trim(); } catch { return 'entity'; } })();
   // 'argument' rides the facet-by-facet pass too, and that is not a compromise — for an argument run
   // the plan's facets ARE the vulnerabilities, so covering them one at a time IS "one dossier per
   // weak point in the case". Falling through to the org walk below would be the wrong shape entirely:
   // it would go profile organizations for a question about whether a claim survives.
-  if (kind === 'pen') return runPenWorkPass(focus);   // v1.1: the pen-work lane — source → diff → card
   if (kind === 'topical' || kind === 'forecast' || kind === 'argument') return runTopicalResearchPass(focus);
 
   const focusLib = require('./lib/focus');

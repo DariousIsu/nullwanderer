@@ -47,6 +47,18 @@ def log(msg):
         pass
 
 
+def tee(msg):
+    # the organ watch tails boot_self.log (audit F31): a fatal cycle outcome must land where
+    # the watch LOOKS — the app is dead, so nothing else can raise the alarm. The line carries
+    # 'SELF-REBOOT' because that word is in the watch's grep pattern.
+    log(msg)
+    try:
+        with open(os.path.join(REPO, 'boot_self.log'), 'a', encoding='utf-8') as f:
+            f.write(f'[{time.strftime("%Y-%m-%d %H:%M:%S")}] [boot-cycle] {msg}\n')
+    except OSError:
+        pass
+
+
 def pid_alive(pid):
     k32 = ctypes.windll.kernel32
     h = k32.OpenProcess(SYNCHRONIZE, False, int(pid))
@@ -185,9 +197,9 @@ def main():
                 return 0
             log(f'attempt {attempt}: p{gen} (pid {pid}) never answered within 120s')
             if pid_alive(pid):
-                log('it is alive but silent -- leaving it standing (an operator should look), not killing blind')
+                tee(f'SELF-REBOOT WEDGED -- generation p{gen} is alive but silent; left standing for an operator, never killed blind')
                 return 1
-        log('FATAL: two launch attempts, no answer -- SHE IS DOWN and needs an operator')
+        tee('SELF-REBOOT FAILED -- SHE IS DOWN (two launch attempts, no answer; an operator must look)')
         return 1
     finally:
         try:
