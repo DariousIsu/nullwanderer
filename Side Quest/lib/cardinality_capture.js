@@ -132,6 +132,11 @@ function parseCapture(answer, { visited = [] } = {}) {
     if (!hostMatches(cited, seen)) {
       return { ok: false, reason: `cited host "${cited}" was never visited by this run — refusing a source we cannot confirm was read`, fabricated: true };
     }
+  } else if (Array.isArray(visited) && visited.length) {
+    // audit S29: a run DID visit pages but none yielded a confirmable host — we cannot verify the
+    // cited source was read, so refuse it rather than banking a model-supplied URL as grounded. A
+    // genuinely context-free capture (visited === []) still passes: there is no host claim to judge.
+    return { ok: false, reason: 'run produced no confirmable visited hosts — refusing an unverifiable source', fabricated: true };
   }
 
   return { ok: true, seats, sourceKind, sourceRef: sourceRef.slice(0, 300) };

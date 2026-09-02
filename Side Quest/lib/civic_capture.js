@@ -96,6 +96,12 @@ function parseCapture(answer, { visited = [] } = {}) {
   if (lines.length > MAX_MEMBERS) return { ok: false, reason: `${lines.length} "members" — a directory page, not a board roster` };
 
   const seen = cap.visitedHosts(visited);
+  // audit S29: a run that visited pages but yielded no confirmable host cannot verify ANY cited
+  // source — refuse the whole capture rather than banking model-supplied URLs as grounded. A
+  // context-free capture (visited === []) still passes the per-line check below.
+  if (seen.size === 0 && Array.isArray(visited) && visited.length) {
+    return { ok: false, reason: 'run produced no confirmable visited hosts — refusing unverifiable civic sources', members: [], rejected: [{ why: 'no confirmable visited hosts' }] };
+  }
   const members = []; const rejected = [];
   for (const raw of lines) {
     const parts = String(raw).split('|').map((p) => p.trim());

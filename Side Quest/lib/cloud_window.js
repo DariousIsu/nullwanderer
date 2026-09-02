@@ -62,9 +62,12 @@ async function resolve({ model, base = null, token = null, deps = {} } = {}) {
       const v = await modelContext(model, base, token);
       if (Number.isFinite(v) && v > 0) discovered = v;
     } catch { /* fail safe → floor */ }
-    _cache.set(model, discovered);
-    if (discovered) console.log(`[cloud_window] ${model} context ${discovered.toLocaleString()} → using ${Math.max(FLOOR, Math.min(discovered, maxCtx())).toLocaleString()}`);
-    else console.warn(`[cloud_window] ${model}: context length unknown → holding the ${FLOOR} floor`);
+    // cache only a SUCCESS (audit S31): a transient /api/show failure used to write null and,
+    // because .has() then returned true, pinned the 8192 FLOOR for the whole process lifetime —
+    // re-introducing the frontier-at-1.6%-of-window starvation this module exists to remove. On
+    // failure, leave it uncached so the next call retries (modelContext has its own 10-min TTL).
+    if (discovered) { _cache.set(model, discovered); console.log(`[cloud_window] ${model} context ${discovered.toLocaleString()} → using ${Math.max(FLOOR, Math.min(discovered, maxCtx())).toLocaleString()}`); }
+    else console.warn(`[cloud_window] ${model}: context length unknown → holding the ${FLOOR} floor (will retry next call)`);
   }
 
   if (!discovered) return { num_ctx: FLOOR, num_predict, discovered: null, source: 'floor' };

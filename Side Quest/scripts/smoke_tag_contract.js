@@ -38,9 +38,11 @@ const chat = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'chat.js'), 
   ok(/let cloudComplete = false;/.test(main), 'the turn tracks whether the cloud stream finished');
   ok(/cloudComplete = !r\.partial;/.test(main),
     'completeness comes from streamCloud partial flag — the real signal, not tag closure');
-  ok(/if \(cloudComplete && say && say\.trim\(\) && truncated\) \{/.test(main),
-    'a complete cloud reply with unclosed tags is cleared of the truncation flag');
-  const at = main.indexOf('if (cloudComplete && say && say.trim() && truncated)');
+  ok(/if \(cloudComplete && cloudDoneReason !== 'length' && say && say\.trim\(\) && truncated\) \{/.test(main),
+    'a complete cloud reply with unclosed tags is cleared — UNLESS done_reason=length (audit S19: a real output-cap truncation keeps its flag)');
+  ok(/else if \(cloudDoneReason === 'length' && truncated\)/.test(main),
+    '⭐ S19: a length-capped cloud reply is kept truncated, not false-completed');
+  const at = main.indexOf("if (cloudComplete && cloudDoneReason !== 'length' && say && say.trim() && truncated)");
   const fin = main.indexOf('let { thought, say, post, truncated } = parser.finalize()');
   const recov = main.indexOf('const _sayCutOff =');
   ok(fin > 0 && at > fin, 'the correction runs AFTER finalize');

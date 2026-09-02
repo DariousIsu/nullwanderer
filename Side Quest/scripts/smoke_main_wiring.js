@@ -93,6 +93,8 @@ ok('crash handler installed: uncaughtException', process.listeners('uncaughtExce
       /audit S12/.test(mainSrc) && /sayOut = _antifabCorrect\(sayOut, _fuAnchor, String\(resultText/.test(mainSrc));
     ok('S25: the off-turn delivery announce gates its cloud say through _antifabCorrect',
       /audit S25[\s\S]{0,120}msg = _antifabCorrect\(msg/.test(mainSrc) || /msg = _antifabCorrect\(msg, 0, ''\)/.test(mainSrc));
+    ok('S19: a length-capped cloud reply (done_reason=length) keeps its real truncated flag',
+      /cloudDoneReason !== 'length'/.test(mainSrc) && /cloudDoneReason = r\.doneReason/.test(mainSrc));
   }
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);

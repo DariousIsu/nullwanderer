@@ -178,7 +178,7 @@ function logEncounters(row, { docId, state }) {
     const doc = db().getDocument(Number(docId)) || {};
     // An official record substitutes for roughly one ordinary source (§6.3) — but only where we actually
     // KNOW the origin. Most of the legacy corpus has none, and guessing would invent authority.
-    const gov = doc.origin_host && /(^|\.)(gov|mil)$|\.us$/i.test(doc.origin_host);
+    const gov = doc.origin_host && /(^|\.)(gov|mil)$|(^|\.)[a-z]{2}\.us$/i.test(doc.origin_host);   // audit S15: only STATE-gov xx.us, not any .us (open-registration TLD)
     const base = {
       object_type: 'person',
       object_label: row.name,

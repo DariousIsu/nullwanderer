@@ -162,7 +162,7 @@ function toEncounter(obs, doc = {}) {
     // authority. `stated` creates the object and carries zero evidentiary weight, exactly as Lucas
     // specified for conversation; the same reasoning applies wherever the source is a person talking.
     authority: isSpeech(doc.source) ? 'stated'
-      : (doc.origin_host && /(^|\.)(gov|mil)$|\.us$/i.test(doc.origin_host) ? 'official' : 'unknown'),
+      : (doc.origin_host && /(^|\.)(gov|mil)$|(^|\.)[a-z]{2}\.us$/i.test(doc.origin_host) ? 'official' : 'unknown'),   // audit S15: only STATE-gov xx.us, not any open-registration .us
     observed_at: Number.isFinite(doc.observed_at) ? doc.observed_at : null,
   };
 }
@@ -197,7 +197,7 @@ function toTypeClaim(obs, doc = {}) {
     originHost: doc.origin_host || null,
     contentHash: doc.content_hash || null,
     authority: isSpeech(doc.source) ? 'stated'
-      : (doc.origin_host && /(^|\.)(gov|mil)$|\.us$/i.test(doc.origin_host) ? 'official' : 'unknown'),
+      : (doc.origin_host && /(^|\.)(gov|mil)$|(^|\.)[a-z]{2}\.us$/i.test(doc.origin_host) ? 'official' : 'unknown'),   // audit S15: only STATE-gov xx.us, not any open-registration .us
     observedAt: Number.isFinite(doc.observed_at) ? doc.observed_at : null,
   };
 }

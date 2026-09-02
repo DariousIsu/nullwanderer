@@ -91,5 +91,23 @@ ok(cc.classifySource('https://en.wikipedia.org/wiki/X') === 'secondary',
   ok(/Do NOT estimate|Do NOT count a roster/i.test(p), 'prompt forbids deriving the number instead of citing it');
 }
 
+// ⭐ audit S29: a run that visited pages but yielded NO confirmable host refuses the source
+ok(cc.parseCapture('SEATS: 5\nSOURCE: https://example.gov/board', { visited: ['not a url', 'junk'] }).fabricated === true,
+  '⭐ S29: run visited pages but no confirmable host → refuse the unverifiable source');
+ok(cc.parseCapture('SEATS: 5\nSOURCE: https://example.gov/board', { visited: [] }).ok === true,
+  'S29: a genuinely context-free capture (visited === []) still passes — no host claim to judge');
+ok(cc.parseCapture('SEATS: 5\nSOURCE: https://example.gov/board', { visited: ['https://example.gov/board'] }).ok === true,
+  'S29: a matching visited host still grounds the source');
+// ⭐ audit S15: only STATE-gov xx.us is 'official', not any open-registration .us
+{
+  const RE = /(^|\.)(gov|mil)$|(^|\.)[a-z]{2}\.us$/i;
+  ok(RE.test('sos.ca.us') && RE.test('legislature.idaho.gov'), 'S15: xx.us + .gov ARE official');
+  ok(!RE.test('joecampaign.us') && !RE.test('acmewidgets.us'), '⭐ S15: an open-registration .us (campaign/commercial) is NOT graded official (the over-broad \\.us$ is gone)');
+  // the same strict pattern is now used at all three grading sites
+  const de = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'decomp_encounters.js'), 'utf8');
+  const dc = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'doc_contacts.js'), 'utf8');
+  ok(!/\|\\\.us\$/.test(de) && !/\|\\\.us\$/.test(dc), 'S15: the bare \\.us$ branch is gone from decomp_encounters + doc_contacts');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

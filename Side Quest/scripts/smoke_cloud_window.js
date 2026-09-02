@@ -164,6 +164,18 @@ const ctxOf = (n) => ({ modelContext: async () => n });
     ok(/cognitionWindow\(\)/.test(hbCode), "the heartbeat resolves the serving model's window before fitting + sending");
   }
 
+  // ⭐ audit S31: a transient discovery failure must NOT pin the floor forever — retry next call
+  {
+    win._resetCache();
+    let calls = 0;
+    const flaky = async () => { calls++; if (calls === 1) throw new Error('transient'); return 131072; };
+    const r1 = await win.resolve({ model: 'audit-s31', deps: { modelContext: flaky } });
+    const r2 = await win.resolve({ model: 'audit-s31', deps: { modelContext: flaky } });
+    ok(r1.num_ctx === 8192 && r2.num_ctx === 131072 && calls === 2,
+      '⭐ S31: a failed window discovery holds the floor for ONE call, then retries (not pinned for the process lifetime)');
+    win._resetCache();
+  }
+
   console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

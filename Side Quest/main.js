@@ -12289,6 +12289,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let replyWriter = MODEL;            // who actually wrote what Lucas reads — stored on the turn so the
                                       // truncation rate is measurable per writer against the 18% baseline
   let cloudComplete = false;          // the cloud stream ended normally (not stalled) — see below
+  let cloudDoneReason = null;         // the cloud's REAL stop signal (audit S19): 'length' = cut at the output cap, NOT a complete reply
   let cloudThinking = '';             // the reasoning channel — scanned for tool tags, kept as interior, never spoken
   // ── THE MERGE (2026-07-26) — ONE agent loop, driven by the coordinate manifest ───────────────────
   // KEYSTONE S2b briefly ran conversation through a SEPARATE local mini-loop (lib/conversation_agent)
@@ -12720,7 +12721,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // Did the GENERATION finish? That is what `truncated` is meant to mean, and for the cloud we
         // know it directly: the stream ended normally unless streamCloud flagged it partial.
         cloudComplete = !r.partial;
-        console.log(`[main] CLOUD wrote the reply — ${r.model}, ${r.tokens} tok in ${r.elapsedMs}ms${r.partial ? ' (PARTIAL — stream stalled)' : ''}${cloudThinking ? ` (+${cloudThinking.length}ch reasoning)` : ''}`);
+        cloudDoneReason = r.doneReason || null;
+        console.log(`[main] CLOUD wrote the reply — ${r.model}, ${r.tokens} tok in ${r.elapsedMs}ms${r.partial ? ' (PARTIAL — stream stalled)' : ''}${cloudDoneReason === 'length' ? ' (LENGTH-CAPPED — genuinely truncated)' : ''}${cloudThinking ? ` (+${cloudThinking.length}ch reasoning)` : ''}`);
       } else {
         console.warn('[main] cloud reply unavailable — falling back to the local voice');
       }
@@ -12858,9 +12860,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   //
   // So when the cloud wrote the reply and its stream ended normally, the generation IS complete.
   // A stalled stream (streamCloud's partial flag) still reports truncated — that one is real.
-  if (cloudComplete && say && say.trim() && truncated) {
+  // ...UNLESS the cloud told us it hit the output cap (audit S19): done_reason='length' means the
+  // reply was genuinely cut mid-generation — keep truncated=1 so the cut-off marker shows and the
+  // recovery below can fire, and so the truncated text is NOT cached as a canonical fast-serve.
+  if (cloudComplete && cloudDoneReason !== 'length' && say && say.trim() && truncated) {
     console.log('[main] cloud reply complete but tags unclosed — not a truncation');
     truncated = 0;
+  } else if (cloudDoneReason === 'length' && truncated) {
+    console.warn('[main] cloud reply hit the output cap (done_reason=length) — kept truncated, not a false-complete');
   }
 
   // EMPTY-SAY RECOVERY (the "…" bug): every blank reply traces to the generation being
