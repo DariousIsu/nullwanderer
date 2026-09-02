@@ -181,6 +181,8 @@ const ok = (c, m) => { if (c) { pass++; console.log('  \u2713', m); } else { fai
       'main.js: kg-apply has the zero-yield breaker (a halted or 0-applied pass stands the drain down — no more bought-and-parked verdicts)');
     ok(/rep\.halted \|\| \(rep\.considered >= 50 && !\(rep\.applied > 0\)\)/.test(main),
       'main.js: the breaker trips on halt OR zero yield at real batch size');
+    ok(/BREAKER TRIPPED[^\n]*why: \$\{why\}/.test(main) && /rep\.park_reasons/.test(main) && /sample_parked\.reduce/.test(main),
+      'main.js: the breaker line carries WHY it parked (Echo park_reasons histogram; the 8-row sample as fallback) — a 0/500 never stands 24h undiagnosed again');
     ok(/run skipped pre-prep/.test(main) && /if \(autonomous && lane\)/.test(main),
       'main.js: autonomous operator runs probe the lane BEFORE brief assembly (interactive turns never probe)');
     ok(/mis-suited run "\$\{run\.slug\}" discarded/.test(main),

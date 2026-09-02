@@ -1582,8 +1582,14 @@ app.whenReady().then(() => {
         if (rep.halted) console.error(`[kg-apply] adjudication HALTED(${rep.halted}) after ${rep.applied || 0}/${rep.considered}`);
         console.log(`[kg-apply] adjudicated ${rep.considered}: applied ${rep.applied || 0}, parked ${rep.parked || 0}${rep.halted ? ` HALTED(${rep.halted})` : ''}`);
         if (rep.halted || (rep.considered >= 50 && !(rep.applied > 0))) {
-          try { db.setMeta('kg.apply.breaker', JSON.stringify({ ts: Date.now(), reason: rep.halted ? `HALTED(${rep.halted})` : `zero yield: 0/${rep.considered} applied, ${rep.parked || 0} parked` })); } catch {}
-          console.error(`[kg-apply] BREAKER TRIPPED (${rep.halted ? `halt: ${rep.halted}` : 'zero yield'}) — the drain stands down ${Math.round(KGAPPLY_BREAKER_MS / 3600e3)}h instead of buying verdicts it can only park`);
+          // WHY did it park? (09-02): the breaker line named the yield, never the reason — a 0/500 stood
+          // for 24h with no diagnosis anywhere in the tee. Echo returns a per-reason histogram
+          // (park_reasons); an older engine only the 8-row sample, so fall back to counting that.
+          const reasons = (rep.park_reasons && typeof rep.park_reasons === 'object') ? rep.park_reasons
+            : (Array.isArray(rep.sample_parked) ? rep.sample_parked.reduce((h, p) => { const k = (p && p.reason) || '?'; h[k] = (h[k] || 0) + 1; return h; }, {}) : {});
+          const why = Object.entries(reasons).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}×${n}`).join(' ') || 'no reasons reported';
+          try { db.setMeta('kg.apply.breaker', JSON.stringify({ ts: Date.now(), reason: rep.halted ? `HALTED(${rep.halted})` : `zero yield: 0/${rep.considered} applied, ${rep.parked || 0} parked`, why })); } catch {}
+          console.error(`[kg-apply] BREAKER TRIPPED (${rep.halted ? `halt: ${rep.halted}` : 'zero yield'}) — the drain stands down ${Math.round(KGAPPLY_BREAKER_MS / 3600e3)}h instead of buying verdicts it can only park · why: ${why}${rep.park_reasons ? '' : ' (sample of 8)'}`);
         }
         if (rep.applied > 0) {
           const text = `[Memory upkeep] I reviewed and reversibly merged ${rep.applied} confirmed duplicate${rep.applied === 1 ? '' : 's'} — each LLM-verified + structurally anchored, all undoable.`;
