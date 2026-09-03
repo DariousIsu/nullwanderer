@@ -300,22 +300,31 @@ function adjudicateGraphProposals({ apply = false, staleDays = 7, now = Date.now
 // (mark promoted_up so we never re-send), a 'rejected' (endpoint still young) leaves promoted_up=0 to retry a
 // later night. Self-healing, idempotent (Echo dedups), bounded per pass. proposeFn is injected (echoSuit in
 // main.js) so this stays cloud-free + offline-provable; no proposeFn / dry run → a pure no-op report.
-async function promoteLocalEdgesUp({ apply = false, proposeFn = null, maxEdges = 50 } = {}) {
-  const candidates = db.graphListPromotableUp(maxEdges);
-  const out = { apply, candidates: candidates.length, promoted: 0, skipped: 0, results: [] };
+// CONTINUITY CURE #1 (2026-09-02): the bridge had crossed 20 edges EVER against a 20,714 backlog — the scan
+// ordered by confidence, recorded nothing, and the same ~43 uncrossable head edges ate all 50 nightly tries
+// while ~45% of the backlog (both endpoints already in Echo) never got a turn. Now every attempt that does
+// not cross is NOTED on the row (attempt count, time, hold reason) so the scan rotates with a backoff, a
+// time budget bounds a pass, and the report carries the hold histogram (what the gate is actually saying).
+async function promoteLocalEdgesUp({ apply = false, proposeFn = null, maxEdges = 50, timeBudgetMs = 0, now = Date.now() } = {}) {
+  const candidates = db.graphListPromotableUp(maxEdges, { now });
+  const out = { apply, candidates: candidates.length, promoted: 0, skipped: 0, held: {}, budgetHit: false, results: [] };
   if (!apply || typeof proposeFn !== 'function') {
     out.results = candidates.map(c => ({ id: c.id, source: c.source_name, target: c.target_name, type: c.relation_type, action: 'would-attempt' }));
     return out;
   }
+  const started = Date.now();
   for (const c of candidates) {
+    if (timeBudgetMs > 0 && Date.now() - started > timeBudgetMs) { out.budgetHit = true; break; }   // the rest keep their turn (untouched)
     let action = 'error';
     try {
       const meta = c.cite_url ? { source_set: [c.cite_url], url: c.cite_url } : undefined;
       const r = await proposeFn({ source: c.source_name, target: c.target_name, relation_type: c.relation_type, confidence: c.confidence, metadata: meta });
       action = (r && r.action) || (r && r.ok ? 'proposed' : 'skipped');
-      if (r && r.ok) { db.graphMarkPromotedUp(c.id); out.promoted++; }
-      else out.skipped++;   // e.g. 'rejected' — endpoint still young; leave promoted_up=0 to retry
-    } catch (e) { action = 'threw'; out.skipped++; }
+      // stamps ride the pass's own clock (`now`) — one clock for the scan and the ledger (a pass takes minutes; the backoff counts days)
+      if (r && r.ok) { db.graphMarkPromotedUp(c.id, { now }); out.promoted++; }
+      else { db.graphNotePromoteAttempt(c.id, { hold: action, now }); out.skipped++; }   // e.g. held:target-mint — noted, backs off, retried later
+    } catch (e) { action = 'threw'; try { db.graphNotePromoteAttempt(c.id, { hold: 'threw', now }); } catch {} out.skipped++; }
+    if (action !== 'proposed') out.held[action] = (out.held[action] || 0) + 1;
     out.results.push({ id: c.id, source: c.source_name, target: c.target_name, type: c.relation_type, action });
   }
   return out;

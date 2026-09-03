@@ -59,8 +59,16 @@ Stalled (pending rows, gate quiet past 14 days, or never fired):
 - sq.graph_relations → civic_graph: 20,714 pending; only 20 rows were ever `promoted_up`, all
   created 07-11 → 07-21. `cloud_curator.promoteLocalEdgesUp` has effectively been dead since
   07-21 (the map measures this by proxy — `promoted_up` is a flag with no timestamp).
-- sq.absence: 1,598 open since 07-20, **0 ever answered** (`evidence_kind` never set). The pursuit
-  half of the absence doctrine has not closed a single absence in six weeks.
+- sq.absence: 1,598 open since 07-20. **Correction (the cure pass, same night):** the audit read
+  `evidence_kind`, which marks the rare evidence-gated promotion to `novalue`; a gap actually closes
+  by *deletion* when the metabolism's verification pass returns RESOLVED. The recheck ledger holds
+  1,625 RESOLVED absence outcomes, and only 2 of those rows still exist — the pursuit answers at
+  16–138 gaps/day while the research lane is open. What is wrong: open gaps still grow (1,468 →
+  1,584 over 08-30 → 09-03) because producers mint faster than closes, and since 09-01 the research
+  lane has been closed by burn-down pacing, so every pass was skipped — and each skip was counted
+  as a failed attempt with an exponential backoff (items at attempts 10–15 that were never
+  researched that often). Cure: a quota skip is a *hold* (re-armed 20 min out, attempts untouched),
+  and the map's bridge now measures the real exit.
 
 Dead ends (a gate that was designed and never built):
 

@@ -903,6 +903,55 @@ app.whenReady().then(() => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
     } catch (e) { console.error('[curation] beat failed:', e.message); }
   };
+  // PROMOTE-UP wiring (Slice 3) + NODE-RESOLUTION GATE (design §7, live wiring 5b/6): cross matured local
+  // short-term edges UP to Echo, but FIRST resolve BOTH endpoints to their canonical EXISTING Echo entity
+  // via the gate (block → match → collective). So an edge crosses to the real node instead of rejecting on
+  // a surface-form mismatch ("City of Sacramento" → "CITY OF SACRAMENTO"), and it PRECISION-SAFELY HOLDS
+  // when an endpoint is new/ambiguous — no minting from the bridge, so no dup/noise into the canonical
+  // graph. ONE gate, two cadences (continuity cure #1): the nightly pass and the 20-min beat below.
+  const _makeProposeEchoRelationFn = () => (echoSuit && echoSuit.connected)
+    ? async (edge) => {
+        try {
+          const deps = require('./lib/resolution_live').makeLiveDeps((t) => echoSuit.dispatch(t));
+          const rr = await require('./lib/resolution_gate').resolveEdgeEndpoints(
+            { source: edge.source, target: edge.target, relation_type: edge.relation_type }, deps);
+          if (!rr.ok) return { ok: false, action: 'held:' + rr.reason };   // endpoint didn't resolve → hold (noted on the row, retried after its backoff)
+          return require('./lib/graph_walk').proposeRelation({
+            dispatch: (t) => echoSuit.dispatch(t), source: rr.sourceName, target: rr.targetName,
+            relation_type: edge.relation_type, confidence: edge.confidence, metadata: edge.metadata, allowOpen: true });
+        } catch (e) { return { ok: false, action: 'gate-error' }; }
+      }
+    : null;
+  // THE PROMOTE-UP BEAT (continuity cure #1, 2026-09-02 — the audit found 20 edges crossed EVER against a
+  // 20,714 backlog, the last on 07-21): the bridge no longer waits for the once-a-day pass. Every 20 min,
+  // while she is idle (never over his turn, never mid-gate, never while the nightly pass runs) and Echo is
+  // attached, it tries a bounded batch through the SAME gate, with a time budget; the arm's rotating scan +
+  // per-row backoff (lib/db graphListPromotableUp) means each tick reaches edges the last one did not. The
+  // gate is Echo reads + a propose (no cloud model) — quota-free by construction. One tee line per tick.
+  const PROMOTE_UP_CHECK_MS = (parseFloat(process.env.ZOE_PROMOTE_UP_CHECK_MIN) || 20) * 60 * 1000;
+  const PROMOTE_UP_IDLE_MS = (parseFloat(process.env.ZOE_PROMOTE_UP_IDLE_MIN) || 10) * 60 * 1000;
+  const PROMOTE_UP_EDGES = parseInt(process.env.ZOE_PROMOTE_UP_EDGES, 10) || 40;
+  let _promoteUpBusy = false;
+  async function _promoteUpTick() {
+    if (_promoteUpBusy || curationRunning) return;
+    if (!(echoSuit && echoSuit.connected)) return;
+    if (_bootGraceActive()) return;
+    if (_conversationActive() || Date.now() - lastUserTurnTs < PROMOTE_UP_IDLE_MS) return;   // yields to him, like curation
+    if (_penGateQuiet()) return;
+    _promoteUpBusy = true;
+    try {
+      markActivity('promote-up');
+      const r = await cloudCurator.promoteLocalEdgesUp({ apply: true, proposeFn: _makeProposeEchoRelationFn(), maxEdges: PROMOTE_UP_EDGES, timeBudgetMs: 120 * 1000 });
+      if (r.candidates) {
+        const bl = db.graphPromoteUpBacklog();
+        const holds = Object.entries(r.held || {}).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, n]) => `${k} ${n}`).join(', ');
+        console.log(`[promote-up] ${r.promoted} crossed to Echo · ${r.skipped} held${holds ? ` (${holds})` : ''}${r.budgetHit ? ' · budget hit' : ''} · backlog ${bl.pending} (${bl.eligible} eligible, ${bl.backingOff} backing off)`);
+      }
+    } catch (e) { console.error('[promote-up] tick failed:', e.message); }
+    finally { _promoteUpBusy = false; }
+  }
+  setInterval(() => { _promoteUpTick().catch(() => {}); }, PROMOTE_UP_CHECK_MS).unref?.();
+
   const maybeRunCuration = async () => {
     if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_CURATION_ENABLED || '').trim())) return;
     if (_bootGraceActive()) { _logBootDefer('curation'); return; }   // cold-boot stutter: let the app warm first
@@ -943,20 +992,7 @@ app.whenReady().then(() => {
       // a surface-form mismatch ("City of Sacramento" → "CITY OF SACRAMENTO"), and it PRECISION-SAFELY HOLDS
       // when an endpoint is new/ambiguous — no minting from the bridge, so no dup/noise into the canonical
       // graph. This is the backlog sweep + go-forward prevention in one (order-independent, Swoosh ICAR).
-      const proposeEchoRelationFn = (echoSuit && echoSuit.connected)
-        ? async (edge) => {
-            try {
-              const deps = require('./lib/resolution_live').makeLiveDeps((t) => echoSuit.dispatch(t));
-              const rr = await require('./lib/resolution_gate').resolveEdgeEndpoints(
-                { source: edge.source, target: edge.target, relation_type: edge.relation_type }, deps);
-              if (!rr.ok) return { ok: false, action: 'held:' + rr.reason };   // endpoint didn't resolve → hold (retried a later night / review)
-              return require('./lib/graph_walk').proposeRelation({
-                dispatch: (t) => echoSuit.dispatch(t), source: rr.sourceName, target: rr.targetName,
-                relation_type: edge.relation_type, confidence: edge.confidence, metadata: edge.metadata, allowOpen: true });
-            } catch (e) { return { ok: false, action: 'gate-error' }; }
-          }
-        : null;
-      const r = await cloudCurator.runDailyPass({ apply: true, proposeEchoRelationFn, onLog: (m) => console.log('[curation]', m) });
+      const r = await cloudCurator.runDailyPass({ apply: true, proposeEchoRelationFn: _makeProposeEchoRelationFn(), onLog: (m) => console.log('[curation]', m) });
       console.log('[curation] pass complete:', JSON.stringify(r.stages));
       curationBeat(r.stages);
       // NEWS daily pass (Data-Stream lane): worthy rolling stories → Echo `event` objects + edges, plus an
@@ -3097,7 +3133,18 @@ app.whenReady().then(() => {
         // Silence is ambiguous (the first live watch couldn't tell "no work" from "not running") —
         // announce the plate BEFORE the slow passes begin, and each pass as it starts.
         console.log(`[metabolism] draining ${nGaps} of ${rq.stats().dueNow} due in ${passes.length} pass(es) (hour ${used}/${capPerHour})`);
+        // THE QUOTA HOLD (continuity cure #2): a pass the operator skipped because the research lane was
+        // closed is NOT an attempt — re-arm the plate a short way out with the attempt count untouched
+        // (defer() would have compounded a closed hour into a week-long backoff), spend nothing against
+        // the cap, and stop this tick (the lane is closed for every pass on the plate).
+        const _quotaHold = (p) => {
+          const items = p.batch || [p.item];
+          for (const it of items) { try { rq.hold(it.id, { ms: rq.QUOTA_HOLD_MS }); } catch {} }
+          console.log(`[metabolism] research lane closed — ${items.length} gap(s) held ${Math.round(rq.QUOTA_HOLD_MS / 60000)}min, no attempt counted (nothing spent)`);
+        };
+        let _laneClosed = false;
         for (const p of passes.slice(0, passBudget)) {
+          if (_laneClosed) { _quotaHold(p); continue; }
           markActivity('metabolism');
           try {
             if (p.batch) {
@@ -3107,6 +3154,7 @@ app.whenReady().then(() => {
               // metabolism floor means protected ABOVE idle (research stops at 90% vs idle's 85%),
               // never exempt from the reserve.)
               const res = await runCloudOperator({ userMessage: rq.buildBatchPrompt(p.batch), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'research', budgetMult: 0.75 });
+              if (res && res.deferred) { _laneClosed = true; _quotaHold(p); continue; }   // quota skip ≠ attempt
               const verdicts = rq.parseBatchVerdicts(res && res.answer ? String(res.answer) : '', p.batch.length);
               p.batch.forEach((item, i) => {
                 const v = verdicts[i];
@@ -3118,6 +3166,7 @@ app.whenReady().then(() => {
             } else {
               const item = p.item;
               const res = await runCloudOperator({ userMessage: rq.buildPrompt(item), context: '', task: true, autonomous: true, model: 'gemma4:31b-cloud', lane: 'research', budgetMult: 0.75 });
+              if (res && res.deferred) { _laneClosed = true; _quotaHold(p); continue; }   // quota skip ≠ attempt
               const out = rq.applyOutcome(item, res && res.answer ? String(res.answer) : '');
               console.log(`[metabolism] ${item.kind} "${String(item.subject).slice(0, 60)}" → ${out.action}${out.line ? ` — ${out.line.slice(0, 100)}` : ''}`);
             }

@@ -102,17 +102,22 @@ const BRIDGES = [
   { from: ['sq', 'documents'], to: 'echo.tenant.documents (the vault)', gate: 'promoteDocumentsPass (main.js) / lib/promote.js — nightly',
     pendingSql: 'SELECT COUNT(*) FROM documents WHERE COALESCE(promoted, 0) = 0',
     lastSql: 'SELECT MAX(updated_ts) FROM documents WHERE promoted = 1' },
-  { from: ['sq', 'graph_relations'], to: 'echo.civic_graph.relations', gate: 'cloud_curator.promoteLocalEdgesUp → propose_relation (last = PROXY: the newest promoted row\'s created_at — promoted_up is a flag with no timestamp)',
+  { from: ['sq', 'graph_relations'], to: 'echo.civic_graph.relations', gate: 'cloud_curator.promoteLocalEdgesUp → the resolution gate → propose_relation (the 20-min promote-up beat + the nightly pass)',
     pendingSql: 'SELECT COUNT(*) FROM graph_relations WHERE COALESCE(promoted_up, 0) = 0 AND COALESCE(deleted, 0) = 0',
-    lastSql: 'SELECT MAX(created_at) FROM graph_relations WHERE promoted_up = 1' },
+    // promote_last_ts is stamped on every crossing (continuity cure #1); rows crossed before the ledger
+    // existed carry their created_at as the honest floor
+    lastSql: 'SELECT MAX(COALESCE(promote_last_ts, created_at)) FROM graph_relations WHERE promoted_up = 1' },
   { from: ['sq', 'graph_entity_proposals'], to: 'sq.graph_entities', gate: 'graph_memory.promoteEntityProposal',
     pendingSql: "SELECT COUNT(*) FROM graph_entity_proposals WHERE status = 'pending'", lastSql: null },
   { from: ['sq', 'graph_relation_proposals'], to: 'sq.graph_relations', gate: 'db.graphSetRelationProposalStatus',
     pendingSql: "SELECT COUNT(*) FROM graph_relation_proposals WHERE status = 'pending'", lastSql: null },
   // in-place gates: the row leaves the backlog by a status flip, never by crossing a file
-  { from: ['sq', 'absence'], to: 'sq.absence (answered: evidence_kind set)', gate: 'absence.resolve — the pursuit lands evidence',
-    pendingSql: 'SELECT COUNT(*) FROM absence WHERE evidence_kind IS NULL',
-    lastSql: 'SELECT MAX(last_attempt_ts) FROM absence WHERE evidence_kind IS NOT NULL' },
+  // a gap CLOSES by deletion (absence.recordFound, on a RESOLVED verdict from the metabolism's verification
+  // pass) — the recheck ledger keeps the RESOLVED line; evidence_kind marks the rarer, evidence-gated
+  // promotion to `novalue` and is NOT the exit (the 09-02 audit first measured that column and read "0 answered")
+  { from: ['sq', 'absence'], to: 'closed (row deleted) — the RESOLVED line lives in sq.recheck_queue', gate: 'the metabolism tick → runCloudOperator (research lane) → recheck_queue.applyOutcome → absence.recordFound',
+    pendingSql: "SELECT COUNT(*) FROM absence WHERE kind = 'somevalue'",
+    lastSql: "SELECT MAX(last_attempt_ts) FROM recheck_queue WHERE kind = 'absence' AND status = 'done' AND outcome LIKE 'RESOLVED%'" },
   { from: ['sq', 'capability_needs'], to: 'sq.capability_needs (retired)', gate: 'capability_need.setStatus (open→rehearsing→retired; parked = deferred, not pending)',
     pendingSql: "SELECT COUNT(*) FROM capability_needs WHERE status = 'open'",
     lastSql: "SELECT MAX(updated_ts) FROM capability_needs WHERE status = 'retired'" },

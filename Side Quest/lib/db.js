@@ -1100,6 +1100,17 @@ const MIGRATIONS = [
   // the partial index the promote-up candidate scan reads.
   `ALTER TABLE graph_relations ADD COLUMN promoted_up INTEGER DEFAULT 0`,
   `CREATE INDEX IF NOT EXISTS idx_graph_relations_promote ON graph_relations(promoted_up, epistemic) WHERE deleted = 0 AND valid_to IS NULL`,
+  // THE PROMOTE-UP LEDGER (continuity cure #1, 2026-09-02): the bridge had crossed 20 edges EVER (all
+  // 07-11→07-21) against a 20,714-row backlog because the candidate scan ordered by confidence and
+  // recorded nothing — the same ~43 uncrossable head edges were retried every night and the ~45% of
+  // the backlog that COULD cross never got a turn. Every attempt now leaves its attempt count, its
+  // time, and the hold reason on the row; the scan rotates (fewest attempts first) with a backoff
+  // that grows per attempt; a crossing stamps promote_last_ts so the memory map's "last crossed"
+  // reads a real clock instead of a proxy.
+  `ALTER TABLE graph_relations ADD COLUMN promote_attempts INTEGER DEFAULT 0`,
+  `ALTER TABLE graph_relations ADD COLUMN promote_last_ts INTEGER`,
+  `ALTER TABLE graph_relations ADD COLUMN promote_hold TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_graph_relations_promote_turn ON graph_relations(promoted_up, promote_attempts, promote_last_ts) WHERE deleted = 0 AND valid_to IS NULL`,
   // SUBSTANTIATION SUBSTRATE (docs/SUBSTANTIATION_IMPL_PLAN.md Slice 1, 2026-07-15). Two orthogonal axes
   // every node/observation carries: substantiation_state ∈ {source-vouched,identity-confirmed,unsubstantiated}
   // (decides WHERE it lives — long-term vs short-term prove-or-fade; grade rides as explore-priority) and
@@ -2713,9 +2724,14 @@ function graphSupersedeRelation(id, { confirmed = null, validTo = null } = {}) {
 // CROSS-DB promote-up candidates (Slice 3): live, GROUNDED, not-yet-crossed local edges, with endpoint NAMES
 // resolved and one backing citation url (if any) so the promote-up arm can carry provenance to Echo. Highest
 // confidence first. Speculated edges never appear here — they live in the proposal queue, not the graph.
-function graphListPromotableUp(limit = 200) {
+// The promote-up candidate scan — ROTATING (continuity cure #1): fewest attempts first, then confidence,
+// and a held edge waits out a backoff that doubles per attempt (1d, 2d, 4d, 8d, 16d, then 30d) before it
+// takes another turn. So the ~43 uncrossable head edges that used to eat every nightly slot now step aside
+// and the rest of the backlog gets its turn; nothing is ever dropped — a held edge simply comes back later.
+const PROMOTE_BACKOFF_DAY_MS = 24 * 60 * 60 * 1000;
+function graphListPromotableUp(limit = 200, { now = Date.now() } = {}) {
   return getDb().prepare(
-    `SELECT r.id, r.relation_type, r.confidence, r.epistemic,
+    `SELECT r.id, r.relation_type, r.confidence, r.epistemic, r.promote_attempts, r.promote_hold,
             se.name AS source_name, te.name AS target_name,
             (SELECT s.ref FROM graph_citations c JOIN graph_sources s ON s.id = c.source_id
               WHERE c.fact_kind = 'relation' AND c.fact_id = r.id AND s.ref IS NOT NULL LIMIT 1) AS cite_url
@@ -2724,12 +2740,29 @@ function graphListPromotableUp(limit = 200) {
        JOIN graph_entities te ON te.id = r.target_id
       WHERE r.deleted = 0 AND r.valid_to IS NULL AND r.promoted_up = 0
         AND r.epistemic IN ('witnessed','told','read','anticipated')
-      ORDER BY r.confidence DESC, r.id
-      LIMIT ?`
-  ).all(limit);
+        AND (r.promote_last_ts IS NULL
+             OR r.promote_last_ts + MIN(@day * (1 << MIN(MAX(COALESCE(r.promote_attempts, 1), 1) - 1, 5)), @day * 30) <= @now)
+      ORDER BY COALESCE(r.promote_attempts, 0) ASC, r.confidence DESC, r.id
+      LIMIT @limit`
+  ).all({ day: PROMOTE_BACKOFF_DAY_MS, now, limit });
 }
-function graphMarkPromotedUp(id) {
-  getDb().prepare('UPDATE graph_relations SET promoted_up = 1 WHERE id = ?').run(id);
+// One attempt that did NOT cross: count it, stamp it, keep the reason (held:<gate reason> / rejected /
+// gate-error / threw) — the memory map and the tee read the histogram, and the backoff reads the count.
+function graphNotePromoteAttempt(id, { hold = null, now = Date.now() } = {}) {
+  getDb().prepare('UPDATE graph_relations SET promote_attempts = COALESCE(promote_attempts, 0) + 1, promote_last_ts = ?, promote_hold = ? WHERE id = ?')
+    .run(now, hold == null ? null : String(hold).slice(0, 80), id);
+}
+function graphMarkPromotedUp(id, { now = Date.now() } = {}) {
+  getDb().prepare('UPDATE graph_relations SET promoted_up = 1, promote_last_ts = ?, promote_hold = NULL WHERE id = ?').run(now, id);
+}
+// The backlog's shape for the tee/status: how many wait, how many are inside a backoff, the hold reasons.
+function graphPromoteUpBacklog({ now = Date.now() } = {}) {
+  const d = getDb();
+  const base = `FROM graph_relations r WHERE r.deleted = 0 AND r.valid_to IS NULL AND r.promoted_up = 0 AND r.epistemic IN ('witnessed','told','read','anticipated')`;
+  const pending = d.prepare(`SELECT COUNT(*) n ${base}`).get().n;
+  const eligible = d.prepare(`SELECT COUNT(*) n ${base} AND (r.promote_last_ts IS NULL OR r.promote_last_ts + MIN(@day * (1 << MIN(MAX(COALESCE(r.promote_attempts, 1), 1) - 1, 5)), @day * 30) <= @now)`).get({ day: PROMOTE_BACKOFF_DAY_MS, now }).n;
+  const holds = d.prepare(`SELECT COALESCE(promote_hold, '(untried)') hold, COUNT(*) n ${base} GROUP BY 1 ORDER BY 2 DESC LIMIT 6`).all();
+  return { pending, eligible, backingOff: pending - eligible, holds };
 }
 function graphSetEntityConfirmed(id, confirmed) {
   getDb().prepare('UPDATE graph_entities SET confirmed = ?, updated_at = ? WHERE id = ?').run(confirmed, Date.now(), id);
@@ -3138,6 +3171,8 @@ module.exports = {
   graphRelationsAmong,
   graphListPromotableUp,
   graphMarkPromotedUp,
+  graphNotePromoteAttempt,
+  graphPromoteUpBacklog,
   graphSupersedeRelation,
   graphSetEntityConfirmed,
   graphSetRelationConfirmed,

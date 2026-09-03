@@ -112,6 +112,20 @@ function defer(id, { now = Date.now() } = {}) {
   } catch { return false; }
 }
 
+// THE QUOTA HOLD (continuity cure #2, 2026-09-02). A pass the operator SKIPPED because the research
+// lane was closed is not an attempt — nothing was looked up, nothing failed. It used to route through
+// defer(): attempts+1 and an exponential backoff, so a quota-closed hour pushed a gap out 6h, then
+// 12h, … up to a WEEK per tick, and the open plate showed items at attempts 10–15 that had never
+// been researched that many times. A hold re-arms the item a short way out and leaves the attempt
+// count (and the backoff it drives) untouched — the gap comes back the moment the lane reopens.
+const QUOTA_HOLD_MS = 20 * 60 * 1000;
+function hold(id, { now = Date.now(), ms = QUOTA_HOLD_MS } = {}) {
+  try {
+    db().getDb().prepare(`UPDATE recheck_queue SET due_ts = ? WHERE id = ? AND status = 'open'`).run(now + Math.max(60 * 1000, ms | 0), id);
+    return true;
+  } catch { return false; }
+}
+
 function stats() {
   try {
     const d = db().getDb();
@@ -391,4 +405,4 @@ function applyOutcome(item, ans, { now = Date.now() } = {}) {
   return { action: 'deferred' };
 }
 
-module.exports = { enqueue, due, openByKind, complete, defer, stats, sweepAbsences, buildPrompt, heldContext, parseVerdict, parseRoster, parseLocalRoster, applyOutcome, backoffMs, isBatchable, buildBatchPrompt, parseBatchVerdicts, BATCH_MAX, researchable };
+module.exports = { enqueue, due, openByKind, complete, defer, hold, stats, sweepAbsences, buildPrompt, heldContext, parseVerdict, parseRoster, parseLocalRoster, applyOutcome, backoffMs, isBatchable, buildBatchPrompt, parseBatchVerdicts, BATCH_MAX, QUOTA_HOLD_MS, researchable };

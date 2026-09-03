@@ -137,6 +137,26 @@ ok('a surfaced promise is completed (leaves openByKind)', !rq.openByKind({ kind:
   ok('local-roster records the members', mems.length === 2 && mems.some((m) => /Turner/.test(m.person_name) && /president@/.test(m.email || '')));
 }
 
+// ── ⭐ THE QUOTA HOLD (continuity cure #2, 2026-09-02): a pass skipped for a closed lane is NOT an attempt ──
+{
+  const T = NOW + 5 * 3600 * 1000;
+  const h1 = rq.enqueue({ kind: 'absence', subject: 'Quota Held Body', detail: { predicate: 'Email' }, priority: 5, dueTs: T, now: T });
+  const before = db.getDb().prepare('SELECT attempts, due_ts FROM recheck_queue WHERE id = ?').get(h1.id);
+  ok('hold: re-arms the item a short way out…', rq.hold(h1.id, { now: T }) === true && !rq.due({ limit: 50, now: T + 60 * 1000 }).some((r) => r.id === h1.id));
+  const after = db.getDb().prepare('SELECT attempts, due_ts FROM recheck_queue WHERE id = ?').get(h1.id);
+  ok('…with the attempt count UNTOUCHED (a closed lane is not a failed lookup)', after.attempts === before.attempts && after.due_ts === T + rq.QUOTA_HOLD_MS);
+  ok('…and it is back on the plate once the hold lapses (20 min, not a day)', rq.due({ limit: 50, now: T + rq.QUOTA_HOLD_MS + 1000 }).some((r) => r.id === h1.id));
+  rq.defer(h1.id, { now: T + rq.QUOTA_HOLD_MS + 1000 });
+  const afterDefer = db.getDb().prepare('SELECT attempts FROM recheck_queue WHERE id = ?').get(h1.id);
+  ok('contrast: a real miss still defers with attempts+1 and the exponential backoff', afterDefer.attempts === before.attempts + 1 && !rq.due({ limit: 50, now: T + rq.QUOTA_HOLD_MS + 2 * 3600 * 1000 }).some((r) => r.id === h1.id));
+  rq.complete(h1.id, { outcome: 'done', now: T });
+  ok('hold on a completed item is a no-op (status guard)', rq.hold(h1.id, { now: T }) === true && db.getDb().prepare('SELECT status FROM recheck_queue WHERE id = ?').get(h1.id).status === 'done');
+  const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok('⭐ WIRING: the metabolism drain routes an operator quota-skip (res.deferred) to the HOLD, never to defer()',
+    /if \(res && res\.deferred\) \{ _laneClosed = true; _quotaHold\(p\); continue; \}/.test(mainSrc) && /rq\.hold\(it\.id, \{ ms: rq\.QUOTA_HOLD_MS \}\)/.test(mainSrc));
+  ok('wiring: once the lane is seen closed, the rest of the plate is held too (no further passes this tick)', /if \(_laneClosed\) \{ _quotaHold\(p\); continue; \}/.test(mainSrc));
+}
+
 const st = rq.stats();
 ok('stats report open + kinds', st.open >= 1 && Array.isArray(st.byKind));
 
