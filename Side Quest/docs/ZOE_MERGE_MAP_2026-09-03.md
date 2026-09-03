@@ -4,6 +4,20 @@ Date: 2026-09-03. Lucas's law, verbatim: "All aspects of both sides need to be m
 
 Inventory the map is drawn from: Side Quest has 458 library modules, about 29 native operator tools, and 603 gated smokes. Echo has 36 packages, 19 agent manifests, about 600 MCP tools, 68 registered passes with 9 de-registered, and a 3.69 million-row trajectory log.
 
+## The principles (Lucas, 2026-09-03)
+
+The name first. ZOE stands for Zero Operator Engaged: a self-driving assistant, always grounded in researched, sourced, cited, curated and verified fact, that leverages every tool it is given and its own ability to self-analyze, research and self-build, so that no task goes unfinished unless the information is truly unknowable. The program has white-hat tools, full computer access, and a deliberately liberal whitelist on self-development. NX is an experimental tag. NX-ALPHA, NX-BETA, NX DELTA and NX ECHO were iterations; the merged form is ZOE and is never named NX.
+
+The merge principles that govern every row below:
+
+1. **Merge for increased functionality**, never for coherence alone. A row that merges two things into one without the result doing more is not finished.
+2. **Agents and swarms merge into one thing.** A swarm is a swarm of predefined role agents: coding, collecting, analyzing, writing, database navigation, verifying, and so on. The reason is the billing model. Ollama bills by usage, not by call, so splitting one large call into many agent calls costs the same compute and buys more fresh context per project and smaller, cleaner calls per agent. The swarm is a context-window strategy before it is a parallelism strategy.
+3. **Hunt the better half.** Parts of Echo are better than their Side Quest counterparts and are never accessed, and some merges complete a build that was never connected. Every row asks which side is better, not which side is current.
+4. **Compress duplicates, keep the best of each.** Where both sides hold the same process, the merged process takes the strongest piece of every duplicate rather than the newer one whole.
+5. **Archaeology is part of the merge.** Earlier iterations hold improvement code and design that the current program never absorbed. Section "Archaeology" lists what was found and where.
+
+One contradiction must clear before principle 2 can run. Her autonomous loop is told by the Echo tier gate that it may read from Echo but never write to it or spawn an agent, and to surface the need to Lucas instead. That is the opposite of Zero Operator. Under the liberal whitelist, the allowance opens under the auto-mode tiers of the harness plan: data-tier writes and agent spawns self-clear against the usage law and the run ledger; code-tier changes keep the pen.
+
 ## The map
 
 | # | Aspect | Side Quest holds | Echo holds | The one contract | Stage | Status |
@@ -51,6 +65,30 @@ The contract, in five parts.
 
 Order inside the stage: the trigger-to-tier law first, since it is one table and unblocks the delegates immediately; then the registry; then the run ledger; then partitions-as-executors; then the fold.
 
+### The swarm of predefined agents, from four lineages
+
+Four swarm designs exist across the iterations, and the merged primitive takes the strongest piece of each, per principle 4.
+
+| Lineage | What it contributes | Where |
+|---|---|---|
+| NX-BETA (Bravo) | Three patterns, fan-out, mixture-of-experts, map-reduce; a complexity score that decides when a swarm is worth it; LLM decomposition of a goal into sub-agent tasks each with its own tool allowlist; parallel dispatch; a synthesis fold into one answer. Workspace templates, the predefined-role idea in its first form: a role prompt, a tool allowlist, a memory table, an artifact type per role | `NX-BETA/src-tauri/src/agent/swarm.rs`, `tools/run_swarm.rs`, `workspace-templates/*.toml` |
+| NX DELTA | The same swarm under an orchestrator with a priority picker over autonomous work, and the axiom that the chat is the lobby, not the office: heavy work runs as background artifacts and the chat lane never waits on a swarm; a chat-priority dispatcher in front of every model caller | `NX DELTA/src-tauri/src/agent/{swarm,orchestrator}.rs`, `docs/ARCHITECTURE.md`, `docs/build/BUILD-06-PROACTIVE-AUTONOMY.md` |
+| NX-ALPHA | A planner that selects from a registry of pre-built agent templates and tools rather than building from scratch; a dynamic registry; satellite and watcher agents | Desktop repo at HEAD, `NX-ALPHA/backend/app/agents/` (deleted from the tree, present in git) |
+| Echo | Role agents as TOML manifests with model slots, tools, cite floors and triggers; a run ledger with parent ids; the three-way concurrent step runner; the governor classes | `data/agents/*.toml`, `echo/agents/`, `echo/llm/swarm.py` |
+| Side Quest | Partition of a live roster across workers with covered-target bookkeeping; the operator agent loop; the fold into the dossier and the conversation | `main.js` swarm functions, `lib/swarm.js`, `lib/operator.js` |
+
+The merged primitive: a **role registry** of predefined agents in the manifest shape, each with a prompt, a tool allowlist, a model slot and weight class, a memory scope and an artifact type. A **swarm plan** in Bravo's shape, pattern plus tasks, produced by decomposition of a goal or by partition of a roster, where every task names a role from the registry. **Dispatch** to executors on either runtime under the usage law's tiers, with fresh context per agent by design. A **synthesis fold** that lands in one place: the dossier, the covered targets, the conversation. And Delta's axiom as a gate: the chat lane never waits on a swarm.
+
+### Archaeology
+
+Sources found this day, to be mined row by row as each stage starts:
+
+- NX-BETA on disk: the swarm module and the four workspace templates, research, programming hub, data modeler, security.
+- NX DELTA on disk: the orchestrator, the swarm port, the dream and consciousness modules, `docs/ARCHITECTURE.md` and the build series including proactive autonomy.
+- NX-ALPHA in the Desktop repo's history: the planner, the dynamic registry, the satellite and watcher agents, the template library.
+- Echo's design papers under `docs/` and `docs/research/`: the agent fleet proposal and review, the framework graft survey, the open-source stack audit, the Ollama cloud swarm plan, the Skuld orchestration and separation papers.
+- Side Quest's 134 design documents under `docs/`, including the autonomic architecture, adaptive research, the front cortex, the contract agent spec, and the document road.
+
 ## The order of the whole
 
 0. The freeze tail: cut 18 and its siblings.
@@ -65,4 +103,4 @@ Order inside the stage: the trigger-to-tier law first, since it is one table and
 
 ## How to know a row is merged
 
-A row is merged when both runtimes read and write the same contract and a smoke on the gate pins it from both sides: a Side Quest smoke reads what Echo wrote, an Echo test reads what Side Quest wrote. Until both pins exist the row stays partial, whatever the code says.
+A row is merged when it does more than either side did alone, when both runtimes read and write the same contract, and when a smoke on the gate pins it from both sides: a Side Quest smoke reads what Echo wrote, an Echo test reads what Side Quest wrote. Until both pins exist the row stays partial, whatever the code says.
