@@ -94,6 +94,9 @@ function _frameLabel(cf) {
 function _isRepoFrame(cf) {
   const u = String((cf && cf.url) || '');
   if (!u) return false;
+  // only a real file path can be a repo frame — `node:internal/…` relative-looking URLs resolved
+  // against the cwd and passed as "repo" on p262 (the first live `via` named a Node internal)
+  if (!/^(file:|[a-zA-Z]:[\\/]|\/)/.test(u)) return false;
   const f = u.replace(/^file:\/\/\/?/, '');
   try { const rel = path.relative(ROOT, f); return !!rel && !rel.startsWith('..') && !/node_modules/.test(rel); } catch { return false; }
 }

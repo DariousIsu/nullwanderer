@@ -51,17 +51,26 @@ function itemText(it) { return [it && it.title, it && it.summary, asArr(it && it
  * Each event: { id, title, summary, entities, matched, corroboration, tier, outlet_count, report_count,
  *               category, last_ts, event_ref }
  */
+// NORMALIZE ONCE (freeze cut 10 — the stall profiler's first live answer, boot_p262): 64% of the hourly
+// forecast block was norm() — mentions() normalized the story text once PER ENTITY and, in momentumFrom,
+// each item's text once per entity per item (~235k passes over the same 500 texts), then toneOf()
+// normalized the item again per match. Each text and each entity is normalized once here; the test is the
+// same substring on the same strings, so the results are identical.
+function _normEntities(entities) {
+  return (entities || []).map((e) => ({ raw: e, n: norm(e) })).filter((x) => x.n);
+}
 function eventsFrom(stories, opts = {}) {
   const { entities = null, minCorroboration = 2 } = opts;
   const out = [];
+  const ents = entities && entities.length ? _normEntities(entities) : null;
   for (const s of (Array.isArray(stories) ? stories : [])) {
     if (!s) continue;
     const corr = storyCorroboration(s);
     if (corr < minCorroboration) continue;
     let matched = null;
     if (entities && entities.length) {
-      const txt = storyText(s);
-      matched = entities.filter((e) => mentions(txt, e));
+      const txt = norm(storyText(s));
+      matched = ents.filter((e) => txt.includes(e.n)).map((e) => e.raw);
       if (!matched.length) continue;
     }
     out.push({
@@ -114,18 +123,23 @@ function toneOf(text) {
 function momentumFrom(items, opts = {}) {
   const list = Array.isArray(items) ? items : [];
   const entities = (opts.entities || []);
+  // each item's text normalized ONCE, its tone computed once on first match (see NORMALIZE ONCE above)
+  const prepared = list.filter(Boolean).map((it) => ({ it, n: norm(itemText(it)), tone: null }));
   return entities.map((entity) => {
     const acc = { entity, mentions: 0, by_source_kind: {}, video_mentions: 0, first_ts: null, last_ts: null, sentiment: null, sentiment_n: 0 };
+    const e = norm(entity);
     let pos = 0, neg = 0;
-    for (const it of list) {
-      if (!it || !mentions(itemText(it), entity)) continue;
+    for (const p of prepared) {
+      if (!e || !p.n.includes(e)) continue;
+      const it = p.it;
       acc.mentions++;
       const k = it.source_kind || 'rss';
       acc.by_source_kind[k] = (acc.by_source_kind[k] || 0) + 1;
       if (k === 'video') acc.video_mentions++;
       const ts = Number(it.ts) || 0;
       if (ts) { acc.first_ts = acc.first_ts == null ? ts : Math.min(acc.first_ts, ts); acc.last_ts = acc.last_ts == null ? ts : Math.max(acc.last_ts, ts); }
-      const t = toneOf(itemText(it)); pos += t.pos; neg += t.neg;
+      if (!p.tone) p.tone = toneOf(itemText(it));
+      pos += p.tone.pos; neg += p.tone.neg;
     }
     const denom = pos + neg;
     acc.sentiment_n = denom;
