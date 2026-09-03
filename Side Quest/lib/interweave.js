@@ -52,7 +52,10 @@ function conceptSets({ db = null, deps = {} } = {}) {
 
   grab('focuses', () => {
     const tp = require('./touchpoint');
-    for (const r of d.prepare("SELECT key, value FROM meta WHERE key LIKE 'focus.%.covered'").all()) {
+    // a KEY RANGE, not LIKE (freeze cut 7): the case-insensitive LIKE scanned all 10.7k meta rows with
+    // their values (137ms, inside the manifest's 0.8s interweave section); the range rides the key index
+    // and the regex below keeps the exact `.covered` selection.
+    for (const r of d.prepare("SELECT key, value FROM meta WHERE key >= 'focus.' AND key < 'focus/'").all()) {
       const id = (String(r.key).match(/^focus\.(\d+)\.covered$/) || [])[1];
       if (!id) continue;
       let covered = []; try { covered = JSON.parse(r.value) || []; } catch {}

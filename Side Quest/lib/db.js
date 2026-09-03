@@ -266,6 +266,9 @@ const MIGRATIONS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_open_threads_status_ts ON open_threads(status, last_touched_ts)`,
   `CREATE INDEX IF NOT EXISTS idx_open_threads_parent ON open_threads(parent_id)`,
+  // Freeze cut 7: the user-assigned-threads reads walk newest-first and stop at their LIMIT (was a full
+  // scan + a temp B-tree, 2.3s cold on every directed brief).
+  `CREATE INDEX IF NOT EXISTS idx_open_threads_touched ON open_threads(last_touched_ts DESC)`,
   // open_questions — questions ZOE asked Lucas that await an answer (the QUD/grounding
   // stack). Distinct from open_threads (her goals) and commitments (her beliefs): this is
   // live CONVERSATIONAL state — "I asked, he hasn't answered." Surfaced on his next turn so
@@ -1568,11 +1571,13 @@ function recentThreadGoals(limit = 15) {
 // (vs. self-generated goals). The deterministic ground truth for the YOURS/OURS lanes:
 // these define "his work." Newest-touched first. (Self-generated threads have no
 // user source_turn_id and are excluded → they stay HERS.)
+// Freeze cut 7 (boot_p260, 2.3s cold): the JOIN scanned all 4,193 threads, seeking turns for each, then
+// sorted them in a temp B-tree — for the newest 60. Walking idx_open_threads_touched newest-first with
+// an EXISTS probe stops at the LIMIT; same rows, same order (verified read-only).
 function getUserAssignedThreads(limit = 60) {
   return getDb()
-    .prepare(`SELECT ot.* FROM open_threads ot
-      JOIN turns t ON t.id = ot.source_turn_id
-      WHERE t.speaker = 'user'
+    .prepare(`SELECT ot.* FROM open_threads ot INDEXED BY idx_open_threads_touched
+      WHERE EXISTS (SELECT 1 FROM turns t WHERE t.id = ot.source_turn_id AND t.speaker = 'user')
       ORDER BY ot.last_touched_ts DESC LIMIT ?`)
     .all(limit);
 }
@@ -1584,9 +1589,9 @@ function getUserAssignedThreads(limit = 60) {
 function pendingUserAssignedThread(maxAgeMs = 45 * 60 * 1000) {
   const cutoff = Date.now() - Math.max(0, Number(maxAgeMs) || 0);
   return getDb()
-    .prepare(`SELECT ot.* FROM open_threads ot
-      JOIN turns t ON t.id = ot.source_turn_id
-      WHERE t.speaker = 'user' AND ot.status = 'pending' AND ot.last_touched_ts >= ?
+    .prepare(`SELECT ot.* FROM open_threads ot INDEXED BY idx_open_threads_touched
+      WHERE ot.last_touched_ts >= ? AND ot.status = 'pending'
+        AND EXISTS (SELECT 1 FROM turns t WHERE t.id = ot.source_turn_id AND t.speaker = 'user')
       ORDER BY ot.last_touched_ts DESC LIMIT 1`)
     .get(cutoff) || null;
 }

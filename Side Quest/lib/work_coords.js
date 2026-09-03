@@ -50,6 +50,37 @@ function _sigWords(candidate) {
   return str(candidate).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !GENERIC.has(w));
 }
 
+// The newest 2 held documents whose TITLE carries every word. THE INDEX, NOT THE SCAN (freeze cut 7):
+// `title LIKE ? AND title LIKE ? AND title LIKE ?` walked all 51k titles + a temp B-tree on every directed
+// brief — 1.0–1.4s cold on p258–p260, the last named statement standing. documents_fts answers the same
+// ask in ~3ms as prefix terms on its title column. The index is external-content, synced by a background
+// beat behind a watermark (documents_fts.max_id), so a document landed since the last sync is NOT in it:
+// the rows ABOVE the watermark still get the LIKE — bounded to those few — so recall stays exact (the
+// fresh landing a run is about is often the newest row). No FTS yet → the plain LIKE, as before.
+const _docStats = { fts: 0, tail: 0, like: 0 };   // per-process counters, for the smoke
+function _docsTitled(words) {
+  const D = db();
+  const d = D.getDb();
+  const ws = (words || []).filter(Boolean);
+  if (!ws.length) return [];
+  const likeSql = (extra) => `SELECT id, title, source, created_ts FROM documents WHERE ${ws.map(() => 'title LIKE ?').join(' AND ')}${extra} ORDER BY created_ts DESC LIMIT 2`;
+  const likeArgs = ws.map((w) => `%${w}%`);
+  let ready = false; try { ready = typeof D.documentsFtsReady === 'function' && D.documentsFtsReady(); } catch { ready = false; }
+  if (!ready) { _docStats.like++; return d.prepare(likeSql('')).all(...likeArgs); }
+  let wm = 0; try { wm = parseInt(D.getMeta('documents_fts.max_id') || '0', 10) || 0; } catch { wm = 0; }
+  let rows = [];
+  try {
+    const match = ws.map((w) => `title:${String(w).replace(/[^a-z0-9]/gi, '')}*`).filter((t) => t.length > 7).join(' AND ');
+    if (match) {
+      rows = d.prepare(`SELECT d.id, d.title, d.source, d.created_ts FROM documents_fts f JOIN documents d ON d.id = f.rowid
+                         WHERE documents_fts MATCH ? AND d.id <= ? ORDER BY d.created_ts DESC LIMIT 2`).all(match, wm);
+      _docStats.fts++;
+    }
+  } catch { rows = []; }
+  try { rows = rows.concat(d.prepare(likeSql(' AND id > ?')).all(...likeArgs, wm)); _docStats.tail++; } catch {}
+  return rows.sort((a, b) => (b.created_ts || 0) - (a.created_ts || 0)).slice(0, 2);
+}
+
 /** coordBlock(text, {deps}) → a "DATABASE COORDINATES" block string for hits, or '' when nothing
  * resolves. Bounded (~12 lines). Fail-soft per source — a store error never blocks a run. */
 function coordBlock(text, { now = Date.now() } = {}) {
@@ -75,17 +106,14 @@ function coordBlock(text, { now = Date.now() } = {}) {
     } catch {}
     // held documents, newest first
     try {
-      const like = words.slice(0, 3).map(() => `title LIKE ?`).join(' AND ');
-      const params = words.slice(0, 3).map((w) => `%${w}%`);
-      const docs = db().getDb().prepare(`SELECT id, title, source, created_ts FROM documents WHERE ${like} ORDER BY created_ts DESC LIMIT 2`).all(...params);
-      for (const d of docs) {
+      for (const d of _docsTitled(words.slice(0, 3))) {
         lines.push(`- doc#${d.id} "${str(d.title).slice(0, 80)}" [${d.source || 'held'}, ${Math.max(0, Math.round((now - d.created_ts) / 86400000))}d old]`);
         if (lines.length >= 12) return _render(lines);
       }
     } catch {}
-    // graph entity address
+    // graph entity address (the column is entity_type — `type` never existed, so this line never emitted)
     try {
-      const g = db().getDb().prepare(`SELECT id, name, type FROM graph_entities WHERE name LIKE ? LIMIT 1`).get(`%${c}%`);
+      const g = db().getDb().prepare(`SELECT id, name, entity_type AS type FROM graph_entities WHERE name LIKE ? LIMIT 1`).get(`%${c}%`);
       if (g) lines.push(`- graph: ${g.type || 'entity'}#${g.id} "${str(g.name).slice(0, 60)}"`);
     } catch {}
     // known open gaps — a coordinate for what we DON'T hold. Direct table read: absence.openGaps
@@ -141,4 +169,4 @@ function heldDataBlock(text, { budget = 2400 } = {}) {
   } catch { return ''; }
 }
 
-module.exports = { candidatesFrom, coordBlock, heldDataBlock };
+module.exports = { candidatesFrom, coordBlock, heldDataBlock, _docsTitled, _docStats };

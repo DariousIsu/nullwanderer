@@ -41,6 +41,17 @@ ok('known-gap coordinate rides along', /known-gap: email of "tangipahoa parish c
 ok('unresolvable prompt emits NOTHING', wc.coordBlock('research "Zzyzx Quux Fictional Body" thoroughly') === '');
 ok('no-candidate prompt emits nothing', wc.coordBlock('summarize the notes') === '');
 
+// ── THE INDEX, NOT THE SCAN (freeze cut 7): the title lookup rides documents_fts once it is built, with
+// the rows above the sync watermark still covered by a bounded LIKE — recall stays exact for a landing
+// seconds old. Before the index exists: the plain LIKE, as before.
+ok('no FTS yet → the plain LIKE served the doc line (recall unchanged on a bare store)', wc._docStats.like >= 1 && wc._docStats.fts === 0);
+db.syncDocumentsFts();                                            // builds the index over what has landed (watermark = the notes doc)
+db.insertDocument({ title: 'Tangipahoa Parish budget hearing', body: 'fresh landing', source: 'research' });   // ABOVE the watermark
+const docs2 = wc._docsTitled(['tangipahoa', 'parish']);
+ok('FTS finds the indexed doc AND the tail LIKE finds the fresh landing — both ride, newest first',
+  docs2.length === 2 && /budget hearing/.test(docs2[0].title) && /government notes/.test(docs2[1].title) && wc._docStats.fts >= 1 && wc._docStats.tail >= 1);
+ok('a word no title carries → nothing from either side', wc._docsTitled(['tangipahoa', 'zzyzxnowhere']).length === 0);
+
 // ── heldDataBlock: the ACTUAL rows ride (deterministic-loops #1), budget-capped ─────────────────
 const held = wc.heldDataBlock('Research the current Tangipahoa Parish Council roster and verify officeholders.');
 ok('held block emits for a held body', /HELD DATA/.test(held));
