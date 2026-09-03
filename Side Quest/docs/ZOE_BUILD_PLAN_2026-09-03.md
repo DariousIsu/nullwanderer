@@ -133,7 +133,18 @@ The read on boot_p270 (root 40624, engine up 13:19), first 10.8 minutes, 3,265 t
 | security_audit mirror failed | 9 | 0 |
 | clone warnings (`thread-conn:`) | n/a | 0 |
 
-Engine RSS at the read: 4.2 GB (no p269 sample to compare; watch). A leftover Kokoro tuner sidecar from p267 (pid 32980, 727 MB, started 10:39) survived p267's death and is still running; his call.
+The 57-minute read (13:19 to 14:16, 12,151 tool calls) holds every tally at zero. The writer proof is the promote-docs beat itself, which ingests a batch of documents every fifteen minutes through `ingest_file`:
+
+| Promote-docs beats | Promoted | Failed |
+|---|---|---|
+| p269, seven beats | 118 | 50 (database is locked, another row available) |
+| p270, three beats | 73 | 0 |
+
+Engine memory was 4.2 GB during the boot burst and 955 MB an hour later; the clone pool is not a memory cost. A leftover Kokoro tuner sidecar from p267 (pid 32980, started 10:39) survived p267's death and is still running; his call.
+
+**Unmasked by the cut, pre-existing (first logged 07:02 today, hidden on p269 because the ingest failed before reaching it):** every document the beat now ingests logs `failed to schedule decompose_document: 'function' object has no attribute 'schedule'`. The job table `KNOWN_JOB_KINDS` holds the bare function in the engine process until `_bind_huey_tasks()` runs, and the server binds only inside the run-pass path; the media tool already binds idempotently before its own schedule call. Fix shape: the same two lines before the schedule call in `echo/mcp/external/writes.py`. Until then the documents land but do not decompose into entities and relations by this door. Proposed as cut 18-E2; his word.
+
+Cut 18's ledger gained four named siblings from p270's blocks: a 3.6 s file read under the web profile's `ensure`, a 2.9 s `getRecentMonologueByType`, a 1.6 s `socialCandidates` walk in the puller store, and a 6.3 s fragment read in `paper_finalize`.
 
 ## 4. The build order, revised
 
