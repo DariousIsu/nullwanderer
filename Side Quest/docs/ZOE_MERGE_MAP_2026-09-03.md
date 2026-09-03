@@ -79,6 +79,27 @@ Four swarm designs exist across the iterations, and the merged primitive takes t
 
 The merged primitive: a **role registry** of predefined agents in the manifest shape, each with a prompt, a tool allowlist, a model slot and weight class, a memory scope and an artifact type. A **swarm plan** in Bravo's shape, pattern plus tasks, produced by decomposition of a goal or by partition of a roster, where every task names a role from the registry. **Dispatch** to executors on either runtime under the usage law's tiers, with fresh context per agent by design. A **synthesis fold** that lands in one place: the dossier, the covered targets, the conversation. And Delta's axiom as a gate: the chat lane never waits on a swarm.
 
+### The adversarial step, from Alpha
+
+Lucas: Alpha had the first attempt at an adversarial step, and the research contract concept has its origin in that work. Both are in the Desktop repo's history under `NX-ALPHA/backend/app/`, and both come back into stage 4.5.
+
+Alpha's research graph is the contract's origin. A project manager decomposes a request into an execution plan of area briefs, schema-constrained so the plan is always valid JSON, with a cheap clarification check before planning. Area agents run sprints and return an agent result of about 500 to 800 tokens plus memory markers: pointers to what they stored in the lower memory layers, never the raw data. That marker discipline is the usage principle in code, fresh context per agent and small calls, because no agent ever carries another's raw findings. An assembler folds the areas, and two adversarial gates sit in the graph:
+
+- **The citation gate**, between the area agents and the assembler. Three attempts per area. A failed check returns corrections to the area agent for a full re-run. A third failure passes with caveats rather than blocking. Source content is read from the sprint's own research first, the web second.
+- **The validator**, a proposer-and-challenger review of the assembled output. The challenger is a different model family from the workhorse that produced the output, which is what makes the review adversarial rather than a self-check. Verdict, score and correction notes on a schema; up to three iterations; auto-approve only when no challenger is available.
+
+Beside the graph, an adversarial trainer paired a questioner-and-judge model against a respondent and banked approved and corrected pairs as training candidates, and a self-improvement service proposed, branched, applied, validated, tested, merged and reverted code changes in tiers. The first is the ancestor of the metric-gated prompt leg's evaluation sets; the second is the pen's ancestor.
+
+What comes back, and where:
+
+1. **The challenger role** joins the role registry: a critic agent on a different model family from the producer, with the verdict-score-corrections schema and the three-iteration cap. Every swarm plan that produces a deliverable ends in it.
+2. **The citation gate** becomes a swarm step between collector agents and the writer, with the three-attempt re-run and the pass-with-caveats exit, reading held sources first.
+3. **Markers** become the sub-agent result contract: compact content plus pointers into the memory map, so the assembler and the challenger read by address.
+4. **The contract shape** merges Alpha's execution plan, area brief, agent result and validation result with Bravo's swarm plan and task: one plan, typed steps, typed results, one verdict.
+5. **The questioner-judge pairs** seed leg C's evaluation sets; the self-improvement tiers are already the pen's shape and need nothing back.
+
+Side Quest today has the anti-fabrication gate and the substantiation gate on what she says, and a cite-or-leave-blank rule in the list lane. It has no challenger on a different model, no per-area re-run gate, and no marker discipline; the operator carries raw findings forward and the context grows until it truncates. That is a large part of why a research paper stalls.
+
 ### Archaeology
 
 Sources found this day, to be mined row by row as each stage starts:
