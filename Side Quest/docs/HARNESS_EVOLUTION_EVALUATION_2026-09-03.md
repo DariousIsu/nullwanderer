@@ -67,6 +67,30 @@ Stages 4.3 and 6 stay where they are. The fleet table is small and closes the mo
 - Tokens per user turn and cloud calls per turn.
 - Stall line unchanged: zero blocks at or above three seconds per generation.
 
+## 6. Code-tier decisions under the auto-mode stipulations
+
+Lucas's question after reading the plan: can the pen's human decisions on code use the same stipulations that Claude Code's auto mode uses? Yes. Auto mode is not judgment, it is a policy with five parts, and the pen already holds most of the parts.
+
+The stipulations, as they apply to a code proposal:
+
+1. **Classify the action.** Reversible and in-scope proceeds. Irreversible, destructive, outward-facing, or a scope change asks. For code: a repair that answers a named failure is in scope; a feature is a scope change.
+2. **Allow and deny by pattern.** The pen jail is already the allowlist. Add a deny list of constitutional files that no proposal may touch without a decision: the gate runner, the pen itself, the cycler, the jail, the quota law, security, the credential bridges.
+3. **Verify before claiming done.** The gate by exit code, with the proposal's own new pins present in the diff. A change that adds no test does not self-land.
+4. **Confirm only what the policy cannot clear.** Everything the classifier does not clear goes to the needs door exactly as today.
+5. **Report every action and keep the undo.** Git is the undo. The parlor and the tee already carry the announcement.
+
+The tiers that fall out:
+
+| Tier | Conditions | What happens |
+|---|---|---|
+| Auto-land | Answers a named failure (a need, a diagnosis brief, a profiler row); touches only jailed paths and no constitutional file; under a size cap (files and lines); adds or extends pins; the full gate is green by exit code; no new dependency, network call, child process, env read, schema change, or data write; under the daily rate cap and cooldown | Lands, announces, self-reboots under the live guard |
+| Decide | Anything outside the auto-land conditions: feature-shaped, larger, a deletion, a migration, a prompt that changes her voice, a spend rule, a constitutional file | Waits on Lucas at the needs door, as today |
+| Never | The standing laws: pushing Echo, adding everything, secrets, disabling a gate, overriding the pacing law | Refused with the reason |
+
+Two additions make auto-land safe rather than fast. A **post-land watch**: the next generation must boot, answer on the status port, and show no new crash, gate failure, or stall regression inside its first read; on any of those the pen reverts the commit and cycles again, and the revert is announced. A **kill switch**: a meta flag turns auto-land off, the same pattern as the self-reboot switch.
+
+What is missing to build it: a pure policy module that classifies a proposal (paths, size, origin, pins added, constitutional touch, forbidden shapes) into a tier, the auto tier wired into the pen's decide path so a cleared proposal does not wait at the needs door, the post-land watch with the revert, and the rate cap. Everything else, the jail, the rehearsal sandbox, the gate's exit code, the self-reboot with its live guard, git as the undo, and the announcement channel, is already live. The honest trade: a green-but-wrong change can go live for one generation. The mitigations are the gate, the deny list, the size cap, the watch with revert, the rate cap, and the switch.
+
 ## Sources
 
 - https://github.com/raphaelchristi/harness-evolver
