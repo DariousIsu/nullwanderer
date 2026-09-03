@@ -119,8 +119,10 @@ const {
   resume: resumeMonologue,
   interrupt: interruptMonologue,
   isBusy: monologueBusy,
-  markUserActivity: markMonologueActivity
+  markUserActivity: markMonologueActivity,
+  setActivityMarker: setMonologueActivityMarker
 } = require('./lib/monologue');
+setMonologueActivityMarker((label) => markActivity(label));   // the pipeline snapshot names itself to the stall attributor (freeze cut 5)
 const { detectHardPull } = require('./lib/snapback');
 const {
   startHeartbeatScheduler,
@@ -2734,7 +2736,8 @@ app.whenReady().then(() => {
         }
         sweepLib.spendBudget(db, batch.estChunks);
         const b = sweepLib.budgetState(db);
-        console.log(`[decomp-sweep] read ${done.length} backlog doc(s) — budget ${b.spent}/${b.limit} chunks today`);
+        const pl = batch.pool ? ` · pool ${batch.pool.mode} (${batch.pool.size} candidates${batch.pool.fresh ? `, +${batch.pool.fresh} new` : ''}${batch.pool.stale ? `, ${batch.pool.stale} stale evicted` : ''})` : '';
+        console.log(`[decomp-sweep] read ${done.length} backlog doc(s) — budget ${b.spent}/${b.limit} chunks today${pl}`);
       } catch (e) { console.error('[decomp-sweep]', e.message); }
       finally { markActivity('idle'); _sweepInFlight = false; }
     };
@@ -6045,20 +6048,14 @@ try {
 // currently-running heavy lane; a self-timing 1s probe (its OWN clock — it must NOT touch _loopLag, which
 // _lagNote resets per-window) writes the active lane to a durable log the moment the loop is blocked, so
 // the NEXT stall names its own cause without a reboot to catch it in the act.
+// Every mark retains the lane that JUST ended: a synchronous lane's finally (or its next mark) runs in
+// the SAME macrotask as its block, so the 1s probe always wakes to the label that came AFTER the block.
+// lib/stall_attrib decides what a mark records and what a stall gets named (freeze cut 5: any
+// transition, not only →idle — the sweep's walk was blamed on the 3ms-old "decompose doc#N").
+const _stallAttrib = require('./lib/stall_attrib');
 let _mainThreadActivity = { label: 'idle', at: Date.now() };
 function markActivity(label) {
-  const a = _mainThreadActivity;
-  const next = { label: label || 'idle', at: Date.now() };
-  // Retain the lane that JUST went idle: a synchronous lane's finally runs in the SAME macrotask as
-  // its block, so the 1s probe always wakes to "idle" and the lane is never named — the histogram's
-  // dominant active="idle" blind spot. Stamping who went idle (and when) lets the probe attribute a
-  // stall to the lane that was running during the blocked window. Consecutive idle marks carry the
-  // stamp forward instead of wiping it.
-  if (next.label === 'idle') {
-    if (a.label !== 'idle') { next.prevLabel = a.label; next.prevStartAt = a.at; next.prevEndAt = next.at; }
-    else { next.prevLabel = a.prevLabel; next.prevStartAt = a.prevStartAt; next.prevEndAt = a.prevEndAt; }
-  }
-  _mainThreadActivity = next;
+  _mainThreadActivity = _stallAttrib.next(_mainThreadActivity, label, Date.now());
 }
 function _activeNote() {
   const a = _mainThreadActivity;
@@ -6082,13 +6079,9 @@ try {
     _lastTick = now;
     if (drift >= 1500 && now - _attribLast > 2000) {  // loop was blocked ~1.5s+ beyond schedule
       _attribLast = now;
-      const a = _mainThreadActivity;
-      let label = a.label, ranMs = now - a.at;
-      // "idle" but a lane went idle DURING/at the end of the blocked window → that lane's sync block
-      // is what wedged the loop; its finally just beat the probe to the slot. Name it.
-      if (a.label === 'idle' && a.prevLabel && a.prevEndAt >= now - drift - 2000) {
-        label = `idle (just-ended: ${a.prevLabel})`; ranMs = a.prevEndAt - a.prevStartAt;
-      }
+      // A lane that ended DURING/at the end of the blocked window is what wedged the loop; its finally
+      // (or the next lane's mark) just beat the probe to the slot. Name it — see lib/stall_attrib.
+      const { label, ranMs } = _stallAttrib.attribute(_mainThreadActivity, now, drift);
       const line = `${new Date(now).toISOString()}\tblocked~${drift}ms\tactive="${label}"\tran=${ranMs}ms\n`;
       try { require('fs').appendFile(_attribPath, line, () => {}); } catch {}
       try { console.warn(`[stall-attrib] main thread blocked ~${drift}ms — active: "${label}" (${ranMs}ms)`); } catch {}

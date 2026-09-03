@@ -224,6 +224,21 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   const forDaily = lane.storiesForDaily({ now: NOW });
   ok(forDaily.length === 1 && /Kyiv/.test(forDaily[0].title), 'storiesForDaily gate: only the corroborated story is worthy (single-source antitrust stays in the raw pool)');
   ok(lane.storiesForDaily({ now: NOW, minCorroboration: 1 }).length === 2, 'lowering the corroboration bar widens the net (antitrust included)');
+  // Freeze cut 5 (boot_p256): storiesForDaily read every closed story (104k) for the 3.3k in the grace
+  // window; the forecast's storiesActiveInWindow(0) sorted all 104k for the 8k corroborated. Pin the PLANS.
+  {
+    const plan = (sql, args) => newsdb.get().prepare('EXPLAIN QUERY PLAN ' + sql).all(...args).map((r) => r.detail).join(' | ');
+    const pd = plan(lane.DAILY_SQL, [0, 2, 10]);
+    ok(/idx_news_stories_closed/.test(pd) && !/SCAN news_stories\b(?! USING)/.test(pd), 'storiesForDaily: the closed arm is a closed_at range on its partial index (was every closed story)');
+    const pw = plan(lane.WINDOW_WORTHY_SQL, [0, 10]);
+    ok(/idx_news_stories_worthy/.test(pw), 'storiesActiveInWindow(worthyOnly): served by the corroborated partial index — the same literal term implies it');
+    const worthy = lane.storiesActiveInWindow(0, { worthyOnly: true });
+    ok(worthy.length === 1 && /Kyiv/.test(worthy[0].title) && lane.storiesActiveInWindow(0).length === 2,
+      'worthyOnly keeps exactly the corroborated stories; the plain window still returns all');
+    const feed = require('../lib/news_feed');
+    ok(feed.events({ startMs: 0, minCorroboration: 2 }).length === 1 && feed.events({ startMs: 0, minCorroboration: 1 }).length === 2,
+      'news_feed.events: a floor ≥ the worthy floor pushes into the read (the forecast’s shape), a lower one does not');
+  }
 
   // TOPIC RECALL (the silo-fix producer) — chat answering + research can pull the tracked stories for a topic
   // NOW, not just the next-day Echo promotion. Token LIKE over title/summary/entity_set + a note shaper.

@@ -162,5 +162,40 @@ ok(Array.isArray(sweep.findUndecomposed(db, { limit: 0 })), 'garbage bounds → 
   ok(only.includes(inq) && !only.includes(auto), 'an explicit sources filter still narrows to one lane');
 }
 
+// ── THE CANDIDATE POOL (freeze cut 5, 2026-09-03) ────────────────────────────────────────────────
+// boot_p256: findUndecomposed ran 47× for 258s of main-thread block — 235 unattempted candidates
+// carrying 88M chars, re-read every 5 minutes for lengths already known, to pick two documents. The
+// pool walks once, refreshes incrementally above its high-water id, evicts on attempt, is persisted,
+// and re-verifies each pick against encounters.
+{
+  const T0 = Date.now();
+  const b1 = sweep.nextBatch(db, { limit: 50, dailyChunks: 99999, now: T0 });
+  ok(b1.pool && ['full', 'incremental'].includes(b1.pool.mode) && b1.pool.size > 0, 'nextBatch reports the pool it drew from');
+  const late = land('Late arrival', 'l'.repeat(2000), 'browser_download');
+  const b2 = sweep.nextBatch(db, { limit: 50, dailyChunks: 99999, now: T0 + 1000 });
+  ok(b2.pool.mode === 'incremental' && b2.pool.fresh >= 1 && b2.picks.some((p) => p.id === late),
+    'CRITICAL: a document landed after the walk is offered on the next tick — an incremental refresh above the high-water id, not a full walk');
+  sweep.markAttempted(db, [late]);
+  const b3 = sweep.nextBatch(db, { limit: 50, dailyChunks: 99999, now: T0 + 2000 });
+  ok(b3.pool.mode === 'incremental' && !b3.picks.some((p) => p.id === late), 'an attempted document leaves the pool the same moment');
+  const other = land('Read elsewhere', 'o'.repeat(2000), 'browser_download');
+  const b4 = sweep.nextBatch(db, { limit: 50, dailyChunks: 99999, now: T0 + 3000 });
+  ok(b4.picks.some((p) => p.id === other), 'a pooled document is offered while it is unread');
+  enc.record({ object_type: 'gov', object_label: 'Elsewhere Board', claim_class: 'existence',
+    source_kind: 'document', source_ref: `doc:${other}`, origin_host: 'x.test', content_hash: 'h2' });
+  const b5 = sweep.nextBatch(db, { limit: 50, dailyChunks: 99999, now: T0 + 4000 });
+  ok(!b5.picks.some((p) => p.id === other) && b5.pool.stale >= 1,
+    'CRITICAL: a pooled document decomposed by ANOTHER path since the walk is caught at pick time — one probe, never a cloud read');
+  ok(sweep.candidatePool(db, { now: T0 + 5000 }).rows.every((r) => r.id !== other), '…and it is evicted from the pool');
+  ok(!!db.getMeta(sweep.POOL_KEY), 'the pool lives in meta next to the attempted set');
+  delete require.cache[require.resolve('../lib/decompose_sweep')];
+  const sweep2 = require('../lib/decompose_sweep');
+  const b6 = sweep2.nextBatch(db, { limit: 50, dailyChunks: 99999, now: T0 + 6000 });
+  ok(b6.pool.mode === 'incremental', 'CRITICAL: the pool is PERSISTED — a fresh process (a reboot) does not pay the full walk again');
+  const b7 = sweep2.nextBatch(db, { limit: 50, dailyChunks: 99999, now: T0 + sweep.POOL_FULL_TTL_MS + 7000 });
+  ok(b7.pool.mode === 'full', 'past the TTL the pool is rebuilt from the store');
+  ok(sweep2.nextBatch(db, { limit: 50, dailyChunks: 99999, now: T0 + 1000, poolTtlMs: 0 }).pool.mode === 'full', 'poolTtlMs: 0 forces a full walk (a deliberate run)');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

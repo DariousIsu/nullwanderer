@@ -2434,10 +2434,18 @@ async function runEnrichStage(enrichQueue) {
 // work forward by target lifecycle stage; BACKPRESSURE holds DISCOVER when the contact backlog is deep so
 // the operator can't outrun the puller. Reuses the existing stage workers (runPullerMove contact/discover
 // modes + runSocialEnrichMove); lib/pipeline is the pure brain (partition + shouldDiscover). Fail-soft.
+// The stall attributor's hook (main.js markActivity): the candidate snapshot is synchronous DB work on the
+// main thread, and unnamed it logged as "idle" — 46 of boot_p256's 119 stalls, most of them the two target
+// draws inside it (freeze cut 5). Naming the sync stretch lets a stall be attributed to it.
+let _markActivity = () => {};
+function setActivityMarker(fn) { _markActivity = typeof fn === 'function' ? fn : () => {}; }
+
 async function runPipelineTick(recentTurns) {
   const cfg = require('./config');
   const pipeline = require('./pipeline');
-  const snapshot = _pullerCandidateSnapshot();
+  let snapshot;
+  try { _markActivity('pipeline-snapshot'); snapshot = _pullerCandidateSnapshot(); }
+  finally { try { _markActivity('idle'); } catch {} }
   const activeKeys = new Set((activeSetNames() || []).map((n) => pullerWalk.norm(n)));
   const { contact, enrich } = pipeline.partition(snapshot, { activeKeys, norm: pullerWalk.norm });
   const cap = cfg.pipelineContactBacklogCap();
@@ -3156,6 +3164,7 @@ module.exports = {
   interrupt,
   isBusy,
   markUserActivity,
+  setActivityMarker,       // the stall attributor's hook (main.js markActivity)
   isRepeatOfRecentSearch,  // exported for smoke test
   _fetchOrgPage,           // exported for smoke test (H1: every exit settles — truncation/close)
   _withFetchDeadline,      // exported for smoke test (H1: whole-chain deadline never wedges the tick)

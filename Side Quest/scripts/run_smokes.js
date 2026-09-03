@@ -590,6 +590,10 @@ const smokes = [
   // Stall-disease naming instrument: the sync DB layer self-times; any statement ≥1s logs its own
   // SQL + caller stack into the stall timeline (the attributor's "active=idle" blind spot closed).
   'smoke_slow_sync_probe.js',
+  // Freeze cut 5 (09-03): the attributor names the lane that ENDED inside the blocked window — a sync
+  // block that ends by marking another lane in the same macrotask was never named (47 sweep stalls
+  // read "decompose doc#N (3ms)").
+  'smoke_stall_attrib.js',
   // Run-4 collision guard: the test port tells the REAL user from its own injected turns; a recent
   // or unanswered real turn owns the pipeline (10min / 30min-capped) and the harness yields.
   'smoke_test_port_guard.js',

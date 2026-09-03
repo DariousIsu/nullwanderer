@@ -101,6 +101,9 @@ const REGISTRY = {
 const BRIDGES = [
   { from: ['sq', 'documents'], to: 'echo.tenant.documents (the vault)', gate: 'promoteDocumentsPass (main.js) / lib/promote.js — nightly',
     pendingSql: 'SELECT COUNT(*) FROM documents WHERE COALESCE(promoted, 0) = 0',
+    // served by idx_documents_promoted_updated (db.js) — freeze cut 5: through idx_documents_promoted this read
+    // all 13k promoted rows every 15 min; the covering composite is chosen unpinned (EQP-verified), so a
+    // store without the index (a hand-built smoke store) still measures instead of throwing
     lastSql: 'SELECT MAX(updated_ts) FROM documents WHERE promoted = 1' },
   { from: ['sq', 'graph_relations'], to: 'echo.civic_graph.relations', gate: 'cloud_curator.promoteLocalEdgesUp → the resolution gate → propose_relation (the 20-min promote-up beat + the nightly pass)',
     pendingSql: 'SELECT COUNT(*) FROM graph_relations WHERE COALESCE(promoted_up, 0) = 0 AND COALESCE(deleted, 0) = 0',

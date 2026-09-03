@@ -129,6 +129,11 @@ CREATE INDEX IF NOT EXISTS idx_retest_status ON retest_queue(status);
 -- the main thread (0.6–2.3s, several times a minute from the monologue's profiling). This partial index
 -- serves ORDER BY last_accessed_at DESC for the live (un-merged) rows: LIMIT stops after a few pages.
 CREATE INDEX IF NOT EXISTS idx_tgt_recent ON targets(last_accessed_at DESC) WHERE merged_into IS NULL;
+-- Freeze cut 5 (boot_p256, 36× 2–3.8s): the value tier's draw walked idx_tgt_recent across all 676k live
+-- rows to find the ~900 CRM-linked/promoted persons. A partial index holding exactly those rows, in
+-- recency order, makes that draw a read of its first page.
+CREATE INDEX IF NOT EXISTS idx_tgt_value ON targets(last_accessed_at DESC)
+  WHERE merged_into IS NULL AND kind = 'person' AND (crm_id IS NOT NULL OR status = 'promoted');
 
 -- F4 correction loop: an append-only, REVERSIBLE log of operator (or auto-sweep) identity corrections.
 -- Every merge/reassign/split records exactly what moved (moved_obs = json obs ids) so it can be undone.
@@ -294,25 +299,37 @@ function bulkCompanies({ min = BULK_COMPANY_MIN } = {}) {
   _bulkCache = { at: now, set: new Set(rows.map((r) => r.company)) };
   return _bulkCache.set;
 }
+// Both draws are PINNED to their index (freeze cut 5, 2026-09-03). Without ANALYZE stats the planner took
+// idx_tgt_status for the tail — status='adhoc' is 675k of 676k rows, then a temp B-tree sort of all of
+// them (575ms idle / 1–1.4s under load, every pipeline tick) — when the recency index fills 200 rows
+// after walking 201. The value tier gets its own partial index (see SCHEMA).
+const VALUE_DRAW_SQL =
+  `SELECT * FROM targets INDEXED BY idx_tgt_value
+    WHERE merged_into IS NULL AND kind = 'person' AND (crm_id IS NOT NULL OR status = 'promoted')
+    ORDER BY last_accessed_at DESC LIMIT ?`;
+const tailDrawSql = (nBulk) =>
+  `SELECT * FROM targets INDEXED BY idx_tgt_recent
+    WHERE merged_into IS NULL AND kind = 'person' AND crm_id IS NULL AND status = 'adhoc'
+    ${nBulk ? `AND (company IS NULL OR company NOT IN (${Array.from({ length: nBulk }, () => '?').join(',')}))` : ''}
+    ORDER BY last_accessed_at DESC LIMIT ?`;
 function listValueScopedTargets({ limit = 500, crmShare = 300, bulkMin = BULK_COMPANY_MIN } = {}) {
   // Tier A — CRM-linked / promoted. Disjoint from the tail query below by construction (the tail
   // requires crm_id IS NULL AND status='adhoc'), so no dedup pass is needed.
-  const a = _db().prepare(
-    `SELECT * FROM targets WHERE merged_into IS NULL AND kind = 'person' AND (crm_id IS NOT NULL OR status = 'promoted')
-     ORDER BY last_accessed_at DESC LIMIT ?`
-  ).all(Math.max(0, Math.min(crmShare, limit)));
+  const a = _db().prepare(VALUE_DRAW_SQL).all(Math.max(0, Math.min(crmShare, limit)));
   const rest = Math.max(0, limit - a.length);
   if (rest === 0) return a;
   // Tier C — the recency tail, with the bulk companies excluded IN SQL: a scan-then-filter bound can
   // be exhausted entirely by a bulk-dominated recency head (exactly the state a bulk walk leaves
   // behind), starving the tail. ~82 bulk companies → a parameterized NOT IN stays cheap.
   const bulk = [...bulkCompanies({ min: bulkMin })];
-  const notBulk = bulk.length ? `AND (company IS NULL OR company NOT IN (${bulk.map(() => '?').join(',')}))` : '';
-  const c = _db().prepare(
-    `SELECT * FROM targets WHERE merged_into IS NULL AND kind = 'person' AND crm_id IS NULL AND status = 'adhoc' ${notBulk}
-     ORDER BY last_accessed_at DESC LIMIT ?`
-  ).all(...bulk, rest);
+  const c = _db().prepare(tailDrawSql(bulk.length)).all(...bulk, rest);
   return a.concat(c);
+}
+// The two draws' query plans — the smoke pins the cure (an index walk, no temp B-tree), not just "runs".
+function drawPlans() {
+  const d = _db();
+  const plan = (sql, args) => d.prepare('EXPLAIN QUERY PLAN ' + sql).all(...args).map((r) => r.detail).join(' | ');
+  return { value: plan(VALUE_DRAW_SQL, [10]), tail: plan(tailDrawSql(2), ['a', 'b', 10]) };
 }
 
 // The ORG worklist (docs/ORG_RESEARCH_LANE.md) — the mirror of listValueScopedTargets for kind='org'.
@@ -687,7 +704,7 @@ function splitTarget(fromId, { obsIds = [], name, company = null, domain = null,
 
 module.exports = {
   init, close,
-  createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, listOrgTargets, bulkCompanies, eachTargetKey, promoteTarget, normalizeCrmId, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName, backfillOrgKinds,
+  createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, drawPlans, listOrgTargets, bulkCompanies, eachTargetKey, promoteTarget, normalizeCrmId, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName, backfillOrgKinds,
   addObservation, listObservations, observationCounts, failedAddresses,
   upsertBelief, getBelief, beliefValuesByType, listBeliefs, markSendState, listBeliefsBySendState,
   getPatternState, savePatternState,

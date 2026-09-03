@@ -33,8 +33,11 @@ function titleSignals(title) {
 function scanNews({ db, sinceMs, now = Date.now() } = {}) {
   const hits = [];
   try {
+    // superseded_by IS NULL — a superseded row is an older copy of a headline its successor carries; the
+    // predicate also lets idx_documents_source_created serve the scan (freeze cut 5: without it the
+    // planner scanned every document + a temp B-tree, 807ms idle / 2.9s under load).
     const rows = db.getDb().prepare(
-      `SELECT id, title, created_ts FROM documents WHERE source = 'news' AND created_ts > ? ORDER BY created_ts DESC LIMIT 500`
+      `SELECT id, title, created_ts FROM documents WHERE source = 'news' AND superseded_by IS NULL AND created_ts > ? ORDER BY created_ts DESC LIMIT 500`
     ).all(sinceMs != null ? sinceMs : now - 26 * 3600 * 1000);
     for (const r of rows) if (titleSignals(r.title)) hits.push({ docId: r.id, title: str(r.title).replace(/^News —\s*/i, '').slice(0, 160), ts: r.created_ts });
   } catch { /* fail-soft: no news read, no hits */ }

@@ -656,6 +656,9 @@ const MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_documents_source_created ON documents(source, created_ts DESC) WHERE superseded_by IS NULL`,
   `CREATE INDEX IF NOT EXISTS idx_kg_obs_feed_url ON kg_observations(feed, url, id)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_superseded ON documents(superseded_by)`,
+  // Freeze cut 5: the memory map's documents bridge (MAX(updated_ts) WHERE promoted = 1) read all 13k
+  // promoted rows through idx_documents_promoted every 15 minutes (357ms idle / 1–1.7s under load).
+  `CREATE INDEX IF NOT EXISTS idx_documents_promoted_updated ON documents(promoted, updated_ts)`,
 
   // KNOWN-INCORRECT (§7) — the inoculation record. A claim that has been DISPROVEN is kept, forever,
   // marked. Two reasons, and the second is the one that pays:

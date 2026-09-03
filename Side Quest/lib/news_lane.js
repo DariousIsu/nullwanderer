@@ -179,6 +179,13 @@ function corroborationTier(outletCount) {
   return n >= 5 ? 'widely reported' : (n >= 2 ? 'corroborated' : 'single-source');
 }
 
+// THE WORTHY FLOOR — min(outlets, reports) ≥ 2 = "corroborated" (a multi-outlet wire, or a cross-modal
+// broadcast+wire pair); single-source noise stays in the raw pool. The same literal is baked into
+// idx_news_stories_worthy's WHERE (a bound parameter would not imply a partial index), so every reader
+// that wants only worthy stories spells the term through WORTHY_TERM.
+const WORTHY_FLOOR = 2;
+const WORTHY_TERM = `MIN(outlet_count, report_count) >= ${WORTHY_FLOOR}`;
+
 let _schemaReady = false;
 function ensureSchema() {
   if (_schemaReady) return;
@@ -210,6 +217,13 @@ function ensureSchema() {
     -- can't serve — it full-scanned the unbounded table on the MAIN thread (measured 2.8s+). A
     -- last_ts index makes the window range a seek, so only recent rows are scanned + sorted.
     CREATE INDEX IF NOT EXISTS idx_news_stories_lastts ON news_stories(last_ts);
+    -- Freeze cut 5 (boot_p256): storiesForDaily's OR read EVERY closed story (104k of 104.6k rows) to
+    -- keep the 3.3k inside the grace window — 2–4s on the main thread, hourly. The closed arm gets its
+    -- own range. And the forecast's whole-table read (startMs 0) sorted all 104k rows for the 8k
+    -- corroborated ones: the worthy index carries exactly those, in last_ts order. The literal in its
+    -- WHERE is WORTHY_TERM — a query must carry the identical term to be served by it.
+    CREATE INDEX IF NOT EXISTS idx_news_stories_closed ON news_stories(closed_at) WHERE status = 'closed';
+    CREATE INDEX IF NOT EXISTS idx_news_stories_worthy ON news_stories(last_ts) WHERE ${WORTHY_TERM};
     CREATE TABLE IF NOT EXISTS news_story_updates (
       id        INTEGER PRIMARY KEY,
       story_id  INTEGER NOT NULL,
@@ -540,11 +554,17 @@ function dayMarker(dayStart) { ensureSchema(); return _hydrateDay(newsdb.get().p
 
 // Stories updated within the window (last_ts >= startMs), most-corroborated first — the read side of
 // the snapshot + the hourly briefing.
-function storiesActiveInWindow(startMs, { limit = 200 } = {}) {
+// rank by INDEPENDENT corroboration first = min(outlets, reports) (defeats syndication + single-outlet
+// inflation), then reach, then recency
+const WINDOW_ORDER = 'ORDER BY MIN(outlet_count, report_count) DESC, outlet_count DESC, source_count DESC, last_ts DESC LIMIT ?';
+const WINDOW_SQL = `SELECT * FROM news_stories WHERE last_ts >= ? ${WINDOW_ORDER}`;
+// worthyOnly (freeze cut 5): the forecast reads the WHOLE table (startMs 0) and keeps only corroborated
+// events — 104k rows sorted in a temp B-tree on the main thread (2.7s live) for the 8k that qualify. With
+// the worthy term in the WHERE, the partial index bounds the scan to exactly those rows.
+const WINDOW_WORTHY_SQL = `SELECT * FROM news_stories INDEXED BY idx_news_stories_worthy WHERE ${WORTHY_TERM} AND last_ts >= ? ${WINDOW_ORDER}`;
+function storiesActiveInWindow(startMs, { limit = 200, worthyOnly = false } = {}) {
   ensureSchema();
-  // rank by INDEPENDENT corroboration first = min(outlets, reports) (defeats syndication + single-outlet
-  // inflation), then reach, then recency
-  return newsdb.get().prepare('SELECT * FROM news_stories WHERE last_ts >= ? ORDER BY MIN(outlet_count, report_count) DESC, outlet_count DESC, source_count DESC, last_ts DESC LIMIT ?').all(startMs, limit).map(hydrateStory);
+  return newsdb.get().prepare(worthyOnly ? WINDOW_WORTHY_SQL : WINDOW_SQL).all(startMs, limit).map(hydrateStory);
 }
 
 // Query-shape words that are never topical (STOP is syntactic; these are the interrogatives a question
@@ -860,13 +880,18 @@ async function captureTranscriptsPass({ dispatch, search, now = Date.now(), minC
 // ANTI-GLOB worthiness gate: only stories past an independent-corroboration bar (min(outlets, reports) >=
 // minCorroboration) are worthy of the PUBLIC graph — single-source noise stays in the raw pool. Default 2
 // = "corroborated" (multi-outlet wire OR a cross-modal broadcast+wire pair). Tunable down for a wider net.
-function storiesForDaily({ now = Date.now(), closedGraceMs = 36 * 3600 * 1000, minCorroboration = 2, limit = 100 } = {}) {
+// Two arms, each on its own index (freeze cut 5): the OR form read every CLOSED story — 104k of 104.6k
+// rows — to keep the 3.3k inside the grace window (2–4s on the main thread, every hourly compression).
+const DAILY_SQL =
+  `SELECT * FROM (
+     SELECT * FROM news_stories INDEXED BY idx_news_stories_status WHERE status = 'open'
+     UNION ALL
+     SELECT * FROM news_stories INDEXED BY idx_news_stories_closed WHERE status = 'closed' AND closed_at >= ?
+   ) WHERE MIN(outlet_count, report_count) >= ?
+   ORDER BY MIN(outlet_count, report_count) DESC, source_count DESC, last_ts DESC LIMIT ?`;
+function storiesForDaily({ now = Date.now(), closedGraceMs = 36 * 3600 * 1000, minCorroboration = WORTHY_FLOOR, limit = 100 } = {}) {
   ensureSchema();
-  return newsdb.get().prepare(
-    `SELECT * FROM news_stories
-     WHERE MIN(outlet_count, report_count) >= ? AND (status = 'open' OR (status = 'closed' AND closed_at >= ?))
-     ORDER BY MIN(outlet_count, report_count) DESC, source_count DESC, last_ts DESC LIMIT ?`
-  ).all(minCorroboration, now - closedGraceMs, limit).map(hydrateStory);
+  return newsdb.get().prepare(DAILY_SQL).all(now - closedGraceMs, minCorroboration, limit).map(hydrateStory);
 }
 
 // Propose the story as an Echo `event` entity and CAPTURE its id. Echo's external write surface lands
@@ -1128,6 +1153,7 @@ module.exports = {
   // stories/layers store
   ensureSchema, openStories, createStory, attachItem, closeStaleStories, allStories,
   buildBriefing, balanceStories, createLayer, recentLayers, storiesActiveInWindow, startOfDayMs,
+  WORTHY_FLOOR, DAILY_SQL, WINDOW_WORTHY_SQL,   // the worthy floor + the two pinned shapes (smoke pins their PLANS)
   // daily (24h) memory markers
   recordDayMarker, recentDays, dayMarker,
   // developing-story deltas

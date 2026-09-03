@@ -179,6 +179,11 @@ if (DB) {
     ok('value-scope: bulkCompanies names the mega-company', DB.bulkCompanies({ min: 50 }).has('Mega Payroll Dept'));
     ok('value-scope: a below-threshold company is NOT bulk', !DB.bulkCompanies({ min: 50 }).has('Small Shop'));
     ok('value-scope: limit honored', DB.listValueScopedTargets({ limit: 1, crmShare: 1, bulkMin: 50 }).length === 1);
+    // Freeze cut 5 (boot_p256): the two draws were 36× 2–3.8s + 23× 1–1.4s on the main thread. Pin the
+    // PLANS — an index walk each, no temp B-tree — not merely that the pinned statements run.
+    const plans = DB.drawPlans();
+    ok('value-scope: tier A is served by idx_tgt_value (was a walk of all 676k live rows through idx_tgt_recent)', /idx_tgt_value/.test(plans.value) && !/TEMP B-TREE/.test(plans.value));
+    ok('value-scope: tier C walks idx_tgt_recent with no temp B-tree (was idx_tgt_status + a sort of 675k rows)', /idx_tgt_recent/.test(plans.tail) && !/TEMP B-TREE/.test(plans.tail));
     DB.close();
   } catch (e) { console.error('  ✗ value-scope threw: ' + e.message); fail++; }
 }

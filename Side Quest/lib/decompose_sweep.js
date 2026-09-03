@@ -72,6 +72,7 @@ function markAttempted(db, ids = []) {
   // genuine question worth asking again.
   const arr = [...set].sort((a, b) => a - b).slice(-20000);
   try { db.setMeta(META_KEY, JSON.stringify(arr)); } catch { /* operational marker — never fatal */ }
+  _evictFromPool(db, ids);   // an attempted doc leaves the candidate pool the same moment
   return arr.length;
 }
 
@@ -105,6 +106,11 @@ function findUndecomposed(db, { limit = 50, sinceId = 0, sources = null } = {}) 
       where.push(`(d.source IS NULL OR d.source NOT IN (${SELF_KEYED_LANES.map(() => '?').join(',')}))`);
       args.push(...SELF_KEYED_LANES);
     }
+    // THE ATTEMPTED SET IS FILTERED IN SQL (freeze cut 5, 2026-09-03): it used to be applied in JS
+    // AFTER the query, so the LIMIT window (4× the batch) filled with already-attempted rows — 972 of
+    // 1,207 on boot_p256 — and every one of them paid the LENGTH(body) read before being thrown away.
+    // json_each turns the marker into an ephemeral index the planner probes BEFORE the body is touched.
+    if (attempted.size) { where.push('d.id NOT IN (SELECT value FROM json_each(?))'); args.push(JSON.stringify([...attempted])); }
     rows = db.getDb().prepare(
       `SELECT d.id, d.title, d.source, d.origin_host, LENGTH(d.body) AS chars
          FROM documents d
@@ -112,9 +118,93 @@ function findUndecomposed(db, { limit = 50, sinceId = 0, sources = null } = {}) 
           AND NOT EXISTS (SELECT 1 FROM encounters e WHERE e.source_ref = 'doc:' || d.id)
           AND d.body IS NOT NULL AND LENGTH(d.body) > 0
         ORDER BY d.id DESC
-        LIMIT ?`).all(...args, Math.max(1, (Number(limit) || 50) * 4));
+        LIMIT ?`).all(...args, Math.max(1, Number(limit) || 50));
   } catch { return []; }
   return rows.filter((r) => !attempted.has(Number(r.id))).slice(0, Math.max(1, Number(limit) || 50));
+}
+
+/**
+ * ── THE CANDIDATE POOL (freeze cut 5, 2026-09-03) ────────────────────────────────────────────────
+ *
+ * Measured on boot_p256 (4h20m): findUndecomposed ran 47 times for 258s of main-thread block — 2.3 to
+ * 10.4s each, every 5-minute tick, the single largest carrier of the freeze. The walk itself (51k
+ * documents, the encounters anti-join) is ~0.8s; the rest is LENGTH(body) over the survivors. The
+ * backlog is down to 235 unattempted documents that carry 88 MILLION characters between them — the
+ * giants, read last by design — and every tick re-read all of it to learn lengths it already knew,
+ * in order to pick two documents.
+ *
+ * So the candidates are POOLED, in meta next to the attempted set (a small operational marker, not
+ * knowledge): a FULL walk when no pool exists or once per POOL_FULL_TTL_MS; an INCREMENTAL walk every
+ * tick over documents above the pool's high-water id (a few rows — milliseconds); eviction the
+ * moment a document is attempted. Persisted, so a reboot does not pay the full walk again.
+ *
+ * A pooled row can go stale one way only: another path decomposed the document meanwhile. Every
+ * pick is therefore re-verified against encounters (one index seek) before it is offered — a stale
+ * row costs a probe, never a cloud read.
+ */
+const POOL_KEY = 'decompose_sweep:pool';
+const POOL_FULL_TTL_MS = 6 * 3600 * 1000;
+const POOL_LIMIT = 400;
+let _pool = null;   // { at, maxId, full, rows: [{ id, title, source, origin_host, chars }] } — mirrors meta
+
+function _readPool(db) {
+  if (_pool) return _pool;
+  try {
+    const raw = db.getMeta(POOL_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    if (!p || !Array.isArray(p.rows) || !Number.isFinite(Number(p.at))) return null;
+    _pool = { at: Number(p.at), maxId: Number(p.maxId) || 0, full: !!p.full,
+              rows: p.rows.filter((r) => r && Number.isFinite(Number(r.id))) };
+    return _pool;
+  } catch { return null; }
+}
+function _savePool(db, pool) {
+  _pool = pool;
+  try { db.setMeta(POOL_KEY, JSON.stringify(pool)); } catch { /* operational marker — never fatal */ }
+}
+function _evictFromPool(db, ids = []) {
+  const pool = _readPool(db);
+  if (!pool || !pool.rows.length) return;
+  const gone = new Set(ids.map(Number).filter(Number.isFinite));
+  if (!gone.size) return;
+  const rows = pool.rows.filter((r) => !gone.has(Number(r.id)));
+  if (rows.length !== pool.rows.length) _savePool(db, { ...pool, rows });
+}
+function _maxDocId(db) {
+  try { return Number(db.getDb().prepare('SELECT MAX(id) m FROM documents').get().m) || 0; } catch { return 0; }
+}
+function _stillUnread(db, id) {
+  try { return !db.getDb().prepare('SELECT 1 FROM encounters WHERE source_ref = ? LIMIT 1').get('doc:' + Number(id)); }
+  catch { return true; }
+}
+
+/**
+ * The pooled candidates, refreshed for this tick. Returns { rows, mode: 'full'|'incremental', fresh }.
+ * `fullTtlMs: 0` forces a full walk (a deliberate run that wants the store's current truth).
+ */
+function candidatePool(db, { now = Date.now(), fullTtlMs = POOL_FULL_TTL_MS, limit = POOL_LIMIT } = {}) {
+  let pool = _readPool(db);
+  const maxId = _maxDocId(db);
+  // A pool that emptied while the last full walk was CAPPED (older candidates were left outside the
+  // window) refills early — the drain must reach them, not wait out the TTL on an empty pool.
+  const drained = pool && !pool.rows.length && pool.full;
+  if (!pool || drained || !(fullTtlMs > 0) || now - pool.at >= fullTtlMs) {
+    const rows = findUndecomposed(db, { limit });
+    pool = { at: now, maxId, full: rows.length >= limit, rows };
+    _savePool(db, pool);
+    return { rows: pool.rows, mode: 'full', fresh: rows.length };
+  }
+  let fresh = 0;
+  if (maxId > pool.maxId) {
+    const add = findUndecomposed(db, { limit, sinceId: pool.maxId });
+    const have = new Set(pool.rows.map((r) => Number(r.id)));
+    const rows = pool.rows.slice();
+    for (const r of add) if (!have.has(Number(r.id))) { rows.push(r); fresh++; }
+    pool = { ...pool, maxId, rows };
+    _savePool(db, pool);
+  }
+  return { rows: pool.rows, mode: 'incremental', fresh };
 }
 
 /**
@@ -183,20 +273,28 @@ function spendBudget(db, chunks, { now = Date.now(), dailyChunks = DEFAULT_DAILY
 // LAST, and the daily budget already bounds what a day can spend, so a ceiling on top was an artificial
 // cap that excluded documents forever rather than deferring them. Pass maxChars explicitly to bound a
 // deliberate run. The FLOOR stays: image-only PDFs proved cheap is only good when there's something to read.
-function nextBatch(db, { limit = 3, dailyChunks = DEFAULT_DAILY_CHUNKS, maxChars = Infinity, minChars = 400, now = Date.now() } = {}) {
+function nextBatch(db, { limit = 3, dailyChunks = DEFAULT_DAILY_CHUNKS, maxChars = Infinity, minChars = 400, now = Date.now(), poolTtlMs = POOL_FULL_TTL_MS } = {}) {
   const budget = budgetState(db, { now, dailyChunks });
-  if (budget.remaining <= 0) return { picks: [], estChunks: 0, budget };
+  if (budget.remaining <= 0) return { picks: [], estChunks: 0, budget, pool: null };
 
-  // Pull a generous candidate window, then order by cost. findUndecomposed orders by id DESC (newest
-  // first), which is the wrong axis for a backlog — the newest document is often the largest.
+  // The pooled candidate window (see THE CANDIDATE POOL above), then order by cost. The pool keeps
+  // findUndecomposed's id-DESC order (newest first), which is the wrong axis for a backlog — the newest
+  // document is often the largest. The attempted set is re-applied here as a guard: eviction is the
+  // normal path, the marker is the truth.
   //
   // A FLOOR AS WELL AS A CEILING. Ordering purely by cost picks the emptiest documents first, and the
   // first live run proved it: 43, 56 and 105 characters — image-only PDFs whose text extraction found
   // nothing. Each would spend a call to learn nothing and then be marked attempted, so the budget goes
   // on documents that cannot teach us anything. Cheap is only good when there is something to read.
-  const pool = findUndecomposed(db, { limit: 400 })
-    .filter((r) => r.chars >= minChars && r.chars <= maxChars)
+  const pooled = candidatePool(db, { now, fullTtlMs: poolTtlMs });
+  const attempted = attemptedSet(db);
+  const pool = pooled.rows
+    .filter((r) => !attempted.has(Number(r.id)) && r.chars >= minChars && r.chars <= maxChars)
     .sort((a, b) => a.chars - b.chars);
+  // PICK-TIME VERIFICATION: a pooled row whose document was decomposed by another path since the walk
+  // is stale — one encounters seek says so, and it leaves the pool instead of costing a cloud read.
+  const stale = [];
+  const unread = (r) => { if (_stillUnread(db, r.id)) return true; stale.push(r.id); return false; };
 
   // INQUIRY PULL (2026-07-23, doc #8443): cheapest-first starves exactly the document an open inquiry
   // is WAITING on — the 1.47M-char LA elected-officials roster sat at cost-position 359/380 while
@@ -223,19 +321,22 @@ function nextBatch(db, { limit = 3, dailyChunks = DEFAULT_DAILY_CHUNKS, maxChars
   let cost = 0;
   if (pulled) {
     const c = estChunks(pulled.chars);
-    if (c <= budget.remaining) { picks.push(pulled); cost += c; }
+    if (c <= budget.remaining && unread(pulled)) { picks.push(pulled); cost += c; }
   }
   for (const r of pool) {
     if (picks.length >= Math.max(1, limit)) break;
     if (pulled && r.id === pulled.id) continue;
     const c = estChunks(r.chars);
     if (cost + c > budget.remaining) continue;      // skip, do not stop — a smaller one may still fit
+    if (!unread(r)) continue;                        // stale — evicted below, never offered
     picks.push(r); cost += c;
   }
-  return { picks, estChunks: cost, budget };
+  if (stale.length) _evictFromPool(db, stale);
+  return { picks, estChunks: cost, budget, pool: { mode: pooled.mode, fresh: pooled.fresh, size: pooled.rows.length - stale.length, stale: stale.length } };
 }
 
 module.exports = {
   findUndecomposed, attemptedSet, markAttempted, META_KEY, DECOMPOSE_LANES,
+  candidatePool, POOL_KEY, POOL_FULL_TTL_MS,
   nextBatch, budgetState, spendBudget, estChunks, BUDGET_KEY, DEFAULT_DAILY_CHUNKS,
 };

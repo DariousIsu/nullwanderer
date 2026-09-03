@@ -138,7 +138,10 @@ function momentumFrom(items, opts = {}) {
 function events({ startMs = 0, entities = null, minCorroboration = 2, limit = 200, lane = null } = {}) {
   try {
     const L = lane || require('./news_lane');
-    return eventsFrom(L.storiesActiveInWindow(startMs, { limit }), { entities, minCorroboration });
+    // A floor at or above the lane's worthy floor is exact to push into the read (eventsFrom drops the
+    // rest anyway) — and it is what lets the forecast's whole-table read (startMs 0) use the worthy index.
+    const worthyOnly = Number(minCorroboration) >= (Number(L.WORTHY_FLOOR) || 2);
+    return eventsFrom(L.storiesActiveInWindow(startMs, { limit, worthyOnly }), { entities, minCorroboration });
   } catch { return []; }
 }
 function momentum({ sinceMs = 0, entities = [], limit = 500, store = null } = {}) {
