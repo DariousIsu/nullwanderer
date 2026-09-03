@@ -160,6 +160,22 @@ The read on boot_p272 (root 42340, 16:04 to 16:24, 3,967 tool calls), after the 
 
 Those are the first decompose jobs this door has ever fed. They also expose the next disease, measured and not built: **write contention**. Seven of the 22 jobs failed their mention-linking layer and seven their facts layer with "database is locked", while the engine's audit log failed 13 times the same way inside exactly that window. The job still reports success with those layers marked as errors, so those documents land without mention links or facts. Mechanism: the worker runs four threads, which since cut 18-E hold four real connections instead of silently joining one another's transactions, and each runs multi-second batch writes against civic_graph.db under a ten-second busy timeout, beside the engine's own writers. Cure shapes for cut 18-E3: per-layer short transactions taken under the store's write lock so one process's threads never spin against each other, the audit log through the single-writer queue already planned, a longer busy timeout for the worker, or a single decompose worker. His word.
 
+**Cut 18-E3 landed** (his word "clear for the next build step", Echo local commit `9053bf8`, live on boot_p273, root 4276, 16:56). Each decompose layer now writes inside one transaction under the store's write lock, so a process's threads queue instead of spinning, and a locked file is retried three times with backoff before the layer gives up. The facts layer's schema helper stays outside the phase and is a no-op inside any open transaction. The worker's connections wait up to a minute for the file; the engine keeps its ten seconds. Six pins plus the 29 existing decompose and facts tests; gate over 136 importing files, 2,091 passed, 8 failed, all pre-existing.
+
+The read on boot_p273 (16:56 to 17:16, 3,544 tool calls):
+
+| Tally | p272 | p273 |
+|---|---|---|
+| Promote-docs beat, promoted / failed | 25 / 0 | 25 / 0 |
+| Decompose jobs executed | 22 | 24 |
+| Layer failures A / B / C / D | 0 / 7 / 0 / 7 | 0 / 0 / 0 / 0 |
+| Write-phase retries on a locked file | n/a | 16, every layer completed |
+| Engine audit-log failures in the window | 13 | 11 |
+| CRM schema check failures | 9 | 3 |
+| Hybrid fallbacks / tool errors / clone warnings | 0 / 0 / 0 | 0 / 0 / 0 |
+
+No document lost a layer. The serialization has a cost: the first four jobs queued on one another's write phases and took 134 to 141 seconds; the rest took 8 to 26. Still open in this family: the engine's audit-log failures, which the single-writer audit queue answers, and two remaining locked-file lines in the worker outside the phases.
+
 Cut 18's ledger gained four named siblings from p270's blocks: a 3.6 s file read under the web profile's `ensure`, a 2.9 s `getRecentMonologueByType`, a 1.6 s `socialCandidates` walk in the puller store, and a 6.3 s fragment read in `paper_finalize`.
 
 ## 4. The build order, revised
@@ -172,7 +188,7 @@ Cut 18's ledger gained four named siblings from p270's blocks: a 3.6 s file read
 6. **The Cowork import** (P1, P2, P3, P9, P17 title tier): spaces → projects with laws; the two prompt templates → the writer's prompts; the 122 files and 14 attachments → documents with origin; the decoder ring's hot tier. Runs after step 1 because it is 136 `ingest_file` calls into a server that currently fails one in three.
 7. **The shelf import** (P6, P8, P10): 27 + 63 skill bodies as guides and shapes; the weekly brief as a scheduled deliverable; the pptx gap named.
 8. **The acceptance suite** (section 5), run: first the research paper, then the cited op-ed, then the certification.
-9. **Stage 5 and the harness legs** A, D, B, C; P4's parity check and P16's mount ride with the document-road rows.
+9. **Stage 5 and the harness legs** A, D, B, C; P4's parity check and P16's mount ride with the document-road rows. The self-building layer's own slices, in the order of [ZOE_SELF_BUILD_DESIGN_2026-09-03.md](ZOE_SELF_BUILD_DESIGN_2026-09-03.md) section 7 (the fleet table and catalog, the study surface and its daily pass, the comparison ledger, the tier policy and post-land watch, the correction door, routing), are legs D and B made concrete and run here; P18 is that design's section 3.
 10. The search-path and memory hot-path legs; the remaining rows.
 
 A step counts as done when a smoke pins its contract from both runtimes and the acceptance suite's score moves.
