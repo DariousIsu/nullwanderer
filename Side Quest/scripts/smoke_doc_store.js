@@ -118,6 +118,22 @@ ok(db.getDocument(unp1[0].id).promoted === 1 && db.getDocument(unp1[0].id).promo
   const convOrder = db.listUnpromotedDocuments(100).filter(d => d.source === 'conversation').map(d => d.id);
   ok(convOrder[0] === ids['conversation'] && convOrder[1] === c2.id, 'within a lane, FIFO (oldest of that lane first)');
 
+  // ⭐ THE PROMOTE LEDGER (continuity cure #3, 2026-09-02): a failed doc steps aside, it is never retried the same day
+  {
+    const DAY = 24 * 3600 * 1000, T0 = Date.now();
+    ok(db.notePromoteFailure(ids['conversation'], "ingest: Error calling tool 'ingest_file': database is locked", { now: T0 }) === true, 'notePromoteFailure stamps the row');
+    const row = db.getDocument(ids['conversation']);
+    ok(row.promote_attempts === 1 && row.promote_last_ts === T0 && /database is locked/.test(row.promote_error), `the ledger on the row: attempts 1, time, error — ${row.promote_error}`);
+    const after = db.listUnpromotedDocuments(100, { now: T0 + 60 * 1000 }).filter(d => d.source === 'conversation').map(d => d.id);
+    ok(after[0] === c2.id && !after.includes(ids['conversation']), '⭐ inside its 1-day backoff the failed doc steps aside — the lane\'s next doc leads (rotation, not a stall)');
+    ok(db.listUnpromotedDocuments(100, { now: T0 + DAY + 1000 }).some(d => d.id === ids['conversation']), 'after the backoff it is back (never dropped)');
+    db.notePromoteFailure(ids['conversation'], 'ingest: another row available', { now: T0 + DAY + 1000 });
+    ok(!db.listUnpromotedDocuments(100, { now: T0 + 2 * DAY + 2000 }).some(d => d.id === ids['conversation']) && db.listUnpromotedDocuments(100, { now: T0 + 3 * DAY + 3000 }).some(d => d.id === ids['conversation']), 'two failures → a 2-day backoff (doubling)');
+    const bl = db.promoteDocsBacklog({ now: T0 + 60 * 1000 });
+    ok(bl.pending >= 12 && bl.backingOff === 1 && bl.eligible === bl.pending - 1 && bl.errors.some(e => /another row available/.test(e.error)), `the backlog shape for the tee: ${JSON.stringify(bl)}`);
+    ok(db.listUnpromotedDocuments(100, { now: T0 + 60 * 1000 }).filter(d => d.source === 'conversation').length === 1, 'the untried doc of the same lane still promotes while the failed one backs off');
+  }
+
   // reset for the fail-safe block below
   for (const d of db.listUnpromotedDocuments(200)) db.getDb().prepare('DELETE FROM documents WHERE id=?').run(d.id);
   store.land({ title: 'Rainey Weekly Huddle', body: '# Notes\nLucas Overby — deliver publishing materials to Sydney.', source: 'canvas_drop', ref: 'drop-rainey-abc' });

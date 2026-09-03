@@ -952,6 +952,35 @@ app.whenReady().then(() => {
   }
   setInterval(() => { _promoteUpTick().catch(() => {}); }, PROMOTE_UP_CHECK_MS).unref?.();
 
+  // THE PROMOTE-DOCS BEAT (continuity cure #3, 2026-09-02 — the audit measured the documents bridge alive
+  // but +130/day behind: 150 per nightly pass against ~230 landing a day, 46 of the 150 wasted on
+  // transient Echo failures retried every night). Every 15 min, idle (never over his turn, never mid-gate,
+  // never while the nightly pass runs) and Echo attached: a small batch through the SAME pass with a time
+  // budget — smaller, spread-out batches also contend less with Echo's own passes than one 150-doc burst.
+  // Ingest + GLiNER extraction are Echo-local work (no cloud model) — quota-free by construction.
+  const PROMOTE_DOCS_CHECK_MS = (parseFloat(process.env.ZOE_PROMOTE_DOCS_CHECK_MIN) || 15) * 60 * 1000;
+  const PROMOTE_DOCS_BATCH = parseInt(process.env.ZOE_PROMOTE_DOCS_BATCH, 10) || 25;
+  let _promoteDocsBusy = false;
+  async function _promoteDocsTick() {
+    if (_promoteDocsBusy || curationRunning) return;
+    if (!(echoSuit && echoSuit.connected)) return;
+    if (_bootGraceActive()) return;
+    if (_conversationActive() || Date.now() - lastUserTurnTs < PROMOTE_UP_IDLE_MS) return;
+    if (_penGateQuiet()) return;
+    _promoteDocsBusy = true;
+    try {
+      markActivity('promote-docs');
+      const r = await promoteDocumentsPass({ limit: PROMOTE_DOCS_BATCH, timeBudgetMs: 90 * 1000 });
+      if (r && !r.skipped && (r.promoted || r.failed || r.skippedJunk)) {
+        const bl = db.promoteDocsBacklog();
+        const top = (bl.errors || []).slice(0, 2).map((e) => `${e.error} ×${e.n}`).join(', ');
+        console.log(`[promote-docs] ${r.promoted} promoted · ${r.failed} failed${top ? ` (${top})` : ''}${r.skippedJunk ? ` · ${r.skippedJunk} junk` : ''}${r.budgetHit ? ' · budget hit' : ''} · backlog ${bl.pending} (${bl.eligible} eligible, ${bl.backingOff} backing off)`);
+      }
+    } catch (e) { console.error('[promote-docs] tick failed:', e.message); }
+    finally { _promoteDocsBusy = false; markActivity('idle'); }
+  }
+  setInterval(() => { _promoteDocsTick().catch(() => {}); }, PROMOTE_DOCS_CHECK_MS).unref?.();
+
   const maybeRunCuration = async () => {
     if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_CURATION_ENABLED || '').trim())) return;
     if (_bootGraceActive()) { _logBootDefer('curation'); return; }   // cold-boot stutter: let the app warm first
@@ -19393,16 +19422,25 @@ async function gatherHeldContacts(state = null) {
 // vault (ingest_file → a doc_id) + its entities extracted into the KG (extract_entities_from_doc), then
 // marked promoted with the Echo ref. Runs on the daily curation cadence (maybeRunCuration). Fully fail-safe:
 // Echo down → skip; a single doc's failure doesn't block the rest. Returns { promoted, failed, skipped }.
-async function promoteDocumentsPass({ limit = 20 } = {}) {
+// Continuity cure #3 (2026-09-02): the pass also runs as a 15-minute BEAT (_promoteDocsTick) — the nightly
+// cap of 150 against ~230 documents landing a day could only fall behind (+130/day; 37,168 of 38,724 unpromoted
+// older than a week). A failed attempt is NOTED on the row (db.notePromoteFailure) so the scan rotates past it
+// with a backoff instead of retrying the same "database is locked" doc every night; junk (error pages) is
+// marked skipped:junk, never filed; a time budget bounds each run, leaving the rest their turn.
+async function promoteDocumentsPass({ limit = 20, timeBudgetMs = 0 } = {}) {
   if (!echoSuit || !echoSuit.connected) { console.log('[promote] Echo not connected — skipping promotion'); return { promoted: 0, failed: 0, skipped: true }; }
   let _boardId = null;
   try { _boardId = require('./lib/board').start({ lane: 'memory', kind: 'promote-pass', target: 'short-term documents → Echo long-term' }).id; } catch {}
   const promote = require('./lib/promote');
   const fs = require('fs'); const os = require('os'); const path = require('path');
-  let promoted = 0, failed = 0;
+  let promoted = 0, failed = 0, skippedJunk = 0, budgetHit = false;
+  const started = Date.now();
+  const _fail = (id, why) => { failed++; try { db.notePromoteFailure(id, why); } catch {} };
   let docs = []; try { docs = db.listUnpromotedDocuments(limit); } catch (e) { console.error('[promote] list failed:', e.message); try { require('./lib/board').finish(_boardId, { status: 'failed', note: 'list failed' }); } catch {} return { promoted, failed }; }
   for (const doc of docs) {
-    if (!promote.shouldPromote(doc)) { try { db.markDocumentPromoted(doc.id, 'skipped:thin'); } catch {} continue; }
+    if (timeBudgetMs > 0 && Date.now() - started > timeBudgetMs) { budgetHit = true; break; }   // the rest keep their turn
+    const why = promote.skipReason(doc);
+    if (why) { try { db.markDocumentPromoted(doc.id, `skipped:${why}`); } catch {} if (why === 'junk') skippedJunk++; continue; }
     const recipe = promote.recipeFor(doc);
     // CONVERSATION OBJECTS ride Echo's purpose-built save_conversation (transcript inline, files under
     // Vault/Archive/conversations/) instead of the temp-file ingest path. One asymmetric rule: ok-but-no-
@@ -19442,8 +19480,8 @@ async function promoteDocumentsPass({ limit = 20 } = {}) {
               console.log(`[harvest] conversation #${doc.id} → ${h.leads.length} lead(s), ${h.seeds.length} seed(s), ${h.decisions.length} decision(s), ${h.claims.length} claim(s)`);
             }
           } catch (e) { console.error('[harvest] failed (non-fatal):', e.message); }
-        } else { failed++; console.error(`[promote] conversation #${doc.id} save_conversation failed:`, String((res && (res.text || res.error)) || '').slice(0, 160)); }
-      } catch (e) { failed++; console.error(`[promote] conversation #${doc.id} failed:`, e.message); }
+        } else { _fail(doc.id, `save_conversation: ${String((res && (res.text || res.error)) || '').slice(0, 100)}`); console.error(`[promote] conversation #${doc.id} save_conversation failed:`, String((res && (res.text || res.error)) || '').slice(0, 160)); }
+      } catch (e) { _fail(doc.id, `threw: ${e.message}`); console.error(`[promote] conversation #${doc.id} failed:`, e.message); }
       continue;
     }
     const tmp = path.join(os.tmpdir(), `zoe-promote-${doc.id}-${promote.tempFileName(doc)}`);
@@ -19462,13 +19500,13 @@ async function promoteDocumentsPass({ limit = 20 } = {}) {
         // locks in. anchor = the doc that graduated. Fail-safe (never blocks the promotion loop).
         try { emitKgActivity({ db: 'sidequest', kind: 'promote', anchor: String(doc.title || ('doc #' + doc.id)), count: 1 }); } catch (e) {}
         console.log(`[promote] doc #${doc.id} "${String(doc.title || '').slice(0, 40)}" → Echo doc ${echoDocId}${recipe.extractEntities ? ' (+entities)' : ''}`);
-      } else { failed++; console.error(`[promote] doc #${doc.id} ingest returned no doc_id:`, String((res && res.text) || (res && res.error) || '').slice(0, 160)); }
-    } catch (e) { failed++; console.error(`[promote] doc #${doc.id} failed:`, e.message); }
+      } else { _fail(doc.id, `ingest: ${String((res && res.text) || (res && res.error) || '').slice(0, 100)}`); console.error(`[promote] doc #${doc.id} ingest returned no doc_id:`, String((res && res.text) || (res && res.error) || '').slice(0, 160)); }
+    } catch (e) { _fail(doc.id, `threw: ${e.message}`); console.error(`[promote] doc #${doc.id} failed:`, e.message); }
     finally { try { fs.unlinkSync(tmp); } catch {} }
   }
-  if (promoted || failed) console.log(`[promote] pass done — ${promoted} promoted, ${failed} failed`);
+  if (promoted || failed || skippedJunk) console.log(`[promote] pass done — ${promoted} promoted, ${failed} failed${skippedJunk ? `, ${skippedJunk} junk skipped` : ''}${budgetHit ? ' (budget hit)' : ''}`);
   try { require('./lib/board').finish(_boardId, { status: 'done', note: `promoted ${promoted}, failed ${failed}` }); } catch {}
-  return { promoted, failed };
+  return { promoted, failed, skippedJunk, budgetHit };
 }
 
 // RETENTION (Slice 3) — tidy the short-term `documents` store after promotion so it stays a fast working

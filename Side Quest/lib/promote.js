@@ -15,9 +15,30 @@ const str = (v) => (v == null ? '' : String(v));
 
 const PROMOTABLE_MIN_CHARS = 40;   // below this a "document" is too thin to be worth a vault record
 
-// Worthiness gate — promote a real, un-promoted document; thin/empty ones are skipped (marked, not retried).
+// THE JUNK NET (continuity cure #3, 2026-09-02): the last nightly pass filed "IIS 8.5 Detailed Error -
+// 404.0 - Not Found" into long-term memory as a document. A captured error/challenge page is not memory —
+// it is the SHAPE of a failed fetch. Deterministic, conservative: an error-page title, or a short body that
+// opens with an error/challenge marker. Anything longer than a real page of text is never junk by this net.
+const JUNK_TITLE_RE = /^\s*(?:IIS \d|HTTP Error \d{3}|Error \d{3}\b|\d{3} - |4\d\d\b|Access Denied|Page Not Found|Not Found|Just a moment|Attention Required|Forbidden|Service Unavailable|Bad Gateway|Request Rejected)/i;
+const JUNK_BODY_RE = /^\s*(?:#[^\n]*\n\s*)?(?:HTTP Error \d{3}|\d{3}\.\d+ - |Not Found|Access Denied|Forbidden|Just a moment\.\.\.|Checking your browser|Enable JavaScript and cookies|The requested URL was not found|Service Unavailable|Bad Gateway|Request Rejected)/i;
+const JUNK_MAX_CHARS = 2000;
+function looksLikeJunk(doc) {
+  const body = str(doc && doc.body);
+  if (body.trim().length > JUNK_MAX_CHARS) return false;
+  return JUNK_TITLE_RE.test(str(doc && doc.title)) || JUNK_BODY_RE.test(body);
+}
+
+// Why a doc is NOT worth a vault record: 'thin' (too short), 'junk' (an error/challenge page), or null.
+function skipReason(doc) {
+  if (!doc) return 'thin';
+  if (str(doc.body).trim().length < PROMOTABLE_MIN_CHARS) return 'thin';
+  if (looksLikeJunk(doc)) return 'junk';
+  return null;
+}
+
+// Worthiness gate — promote a real, un-promoted document; thin/junk ones are skipped (marked, not retried).
 function shouldPromote(doc) {
-  return !!doc && !doc.promoted && str(doc.body).trim().length >= PROMOTABLE_MIN_CHARS;
+  return !!doc && !doc.promoted && skipReason(doc) === null;
 }
 
 // Per-type recipe → how this document lands in Echo long-term. Locked recipe (all current material): a
@@ -57,5 +78,5 @@ function promotionBeat({ promoted = 0, failed = 0 } = {}) {
 }
 
 module.exports = {
-  PROMOTABLE_MIN_CHARS, shouldPromote, recipeFor, slugForDoc, tempFileName, parseEchoDocId, promotionBeat,
+  PROMOTABLE_MIN_CHARS, JUNK_MAX_CHARS, shouldPromote, skipReason, looksLikeJunk, recipeFor, slugForDoc, tempFileName, parseEchoDocId, promotionBeat,
 };

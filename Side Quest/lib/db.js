@@ -636,6 +636,15 @@ const MIGRATIONS = [
   // call; the browser_download flood scores low by shape). 1..10; consumed by promotion triage (C2) + the
   // reflection trigger (C3). Nullable — rows landed before this migration carry no score (treated as default).
   `ALTER TABLE documents ADD COLUMN importance INTEGER`,
+  // THE PROMOTE LEDGER for documents (continuity cure #3, 2026-09-02): a doc whose ingest failed
+  // (Echo's "database is locked" / "another row available" — transient) was retried the very next
+  // night forever, eating slots (46 of 150 on the last pass) while it stayed unmarked. Every failed
+  // attempt now leaves its count, its time and its error on the row; the scan skips a doc inside its
+  // backoff (doubling from a day) so the queue rotates instead of stalling on the same failures.
+  `ALTER TABLE documents ADD COLUMN promote_attempts INTEGER DEFAULT 0`,
+  `ALTER TABLE documents ADD COLUMN promote_last_ts INTEGER`,
+  `ALTER TABLE documents ADD COLUMN promote_error TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_documents_promote_turn ON documents(promoted, promote_attempts, promote_last_ts) WHERE promoted = 0`,
   `CREATE INDEX IF NOT EXISTS idx_documents_superseded ON documents(superseded_by)`,
 
   // KNOWN-INCORRECT (§7) — the inoculation record. A claim that has been DISPROVEN is kept, forever,
@@ -2114,13 +2123,35 @@ function getReflectionWorthyDocuments({ sinceId = 0, minImportance = 6, limit = 
 // out; its own backlog is a separate throughput/triage question, not a starvation of the rest.
 const _MEMORY_EVENT_FIRST = "CASE source WHEN 'conversation' THEN 0 WHEN 'meeting' THEN 0 "
   + "WHEN 'meeting_transcript' THEN 0 ELSE 1 END";
-function listUnpromotedDocuments(limit = 100) {
+// The promote scan — round-robin across sources (each lane's oldest first, memory-event classes lead the
+// round), and since continuity cure #3 a doc that failed steps aside for a backoff that doubles per
+// attempt (1d, 2d, 4d … 30d) while untried docs of its lane go first. Nothing is dropped: a failed doc
+// simply comes back after its backoff.
+const DOC_PROMOTE_BACKOFF_DAY_MS = 24 * 60 * 60 * 1000;
+const _DOC_PROMOTE_ELIGIBLE = `(promote_last_ts IS NULL OR promote_last_ts + MIN(@day * (1 << MIN(MAX(COALESCE(promote_attempts, 1), 1) - 1, 5)), @day * 30) <= @now)`;
+function listUnpromotedDocuments(limit = 100, { now = Date.now() } = {}) {
   return getDb().prepare(
     `SELECT * FROM (
-       SELECT *, ROW_NUMBER() OVER (PARTITION BY source ORDER BY id ASC) AS _rr
-       FROM documents WHERE promoted = 0 AND ${LIVE}
-     ) ORDER BY _rr ASC, ${_MEMORY_EVENT_FIRST}, id ASC LIMIT ?`
-  ).all(Math.max(1, limit | 0));
+       SELECT *, ROW_NUMBER() OVER (PARTITION BY source ORDER BY COALESCE(promote_attempts, 0) ASC, id ASC) AS _rr
+       FROM documents WHERE promoted = 0 AND ${LIVE} AND ${_DOC_PROMOTE_ELIGIBLE}
+     ) ORDER BY _rr ASC, ${_MEMORY_EVENT_FIRST}, id ASC LIMIT @limit`
+  ).all({ day: DOC_PROMOTE_BACKOFF_DAY_MS, now, limit: Math.max(1, limit | 0) });
+}
+// One promotion attempt that failed: count it, stamp it, keep the error (sliced) — the backoff reads the
+// count, the tee and the memory map read the error histogram.
+function notePromoteFailure(id, error, { now = Date.now() } = {}) {
+  if (!id) return false;
+  getDb().prepare('UPDATE documents SET promote_attempts = COALESCE(promote_attempts, 0) + 1, promote_last_ts = ?, promote_error = ? WHERE id = ?')
+    .run(now, error == null ? null : String(error).slice(0, 120), id);
+  return true;
+}
+// The documents backlog's shape for the tee: how many wait, how many are eligible now, the top errors.
+function promoteDocsBacklog({ now = Date.now() } = {}) {
+  const d = getDb();
+  const pending = d.prepare(`SELECT COUNT(*) n FROM documents WHERE promoted = 0 AND ${LIVE}`).get().n;
+  const eligible = d.prepare(`SELECT COUNT(*) n FROM documents WHERE promoted = 0 AND ${LIVE} AND ${_DOC_PROMOTE_ELIGIBLE}`).get({ day: DOC_PROMOTE_BACKOFF_DAY_MS, now }).n;
+  const errors = d.prepare(`SELECT substr(promote_error, 1, 60) error, COUNT(*) n FROM documents WHERE promoted = 0 AND ${LIVE} AND promote_error IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 4`).all();
+  return { pending, eligible, backingOff: pending - eligible, errors };
 }
 
 // Keyword search over title+body. Newest first.
@@ -3104,6 +3135,8 @@ module.exports = {
   listUnpromotedDocuments,
   searchDocuments,
   markDocumentPromoted,
+  notePromoteFailure,
+  promoteDocsBacklog,
   listPromotedDocuments,
   trimDocumentBody,
   deleteDocument,
