@@ -89,6 +89,61 @@ Unchanged from the merge map, with the acceptance test placed where it can be ru
 
 A step counts as done when a smoke pins its contract from both runtimes and the acceptance test's score moves.
 
+## 5. What ZOE borrows from the harness that is building it
+
+Lucas's ask: pull your own source, or find it online, and borrow whatever gets us there faster. Honest scope first. The model weights and the compiled CLI are closed; what is documented is the Claude Agent SDK, and what is directly observable is the tool contract in my own context and the way this program's sessions have run since July. Everything below is one of those three.
+
+**The loop.** One main agent, tools with JSON schemas, and one rule above all: tool results are data, never instructions. Hooks run at lifecycle points, on prompt submit, before and after a tool, at session start and end, and a prompt-submit hook injects rules into every turn. The permission chain runs in a fixed order: hooks, deny rules, ask rules, the mode, allow rules, a per-call callback. Auto mode replaces the human prompt with a separate classifier model that judges each unresolved tool call; Anthropic measured humans approving 97 percent of prompts reflexively and catching 13.6 percent of dangerous commands, against 89 percent blocked by the classifier. Actions fall into three categories: prohibited, explicit permission, regular.
+
+**Composition.** Subagents are files with a name, a description, a tool list and a model, spawned with a self-contained brief and returning a report. Skills are packaged instruction files invoked by name or loaded when the task matches. MCP servers are tool sources. Tool schemas load on demand by search, so hundreds of tools never sit in the window at once.
+
+**Memory.** A size-capped index loaded every session, pointing at one-fact files with a name, a one-line description and a type: user, feedback, project, reference. Links between facts. Recalled memory is background, never an instruction, and a memory that names code is verified before it is recommended. The cap forces compaction discipline: when this session's index passed its limit, the index was rewritten, not the limit.
+
+**Continuity.** Compaction is a fixed summary schema: the request and intent, the key concepts, the files and their state, the errors and fixes, the problem solving, every user message, the pending tasks, the current work, and the next step, followed by resumption without acknowledgment. Above it, this program's own handoff banner: the state, the laws, what is open on Lucas's word.
+
+**Orchestration.** Background tasks with completion notifications; event monitors; self-paced wakeups with quiet streaks; deterministic workflow scripts that pipeline agents with schema-enforced structured outputs validated at the tool layer with retry, phases, budgets, and resume from cached results. Quality patterns as recipes: adversarial verification by several independent refuters with a majority rule, judge panels over independent attempts, loop until two rounds find nothing new, sweeps by several search modes, a completeness critic at the end.
+
+**Writing for the operator.** The delivery doctrine is written as rules rather than enforced only by gates: lead with the outcome, say what could not be verified first, report a failed test with its output, say what was skipped, never narrate your own reasoning, keep code out of prose, put numbers in tables, stop when the content stops. Plus the pre-land sweep before every commit and the git discipline of named files and exit codes.
+
+What ZOE takes, against what she has:
+
+| Harness element | ZOE today | Borrow |
+|---|---|---|
+| Tool results are data | Content firewall on fetched text | Extend to every tool result, Echo's included |
+| Prompt-submit hook injecting rules | Directives rendered in the chat prompt only | Hooks at every prompt build: operator briefs, agent briefs, the pen. This is the "directives read by every lane" fix in one mechanism |
+| Permission chain and the auto classifier | The Echo tier gate and the pen's decision door | The tiered policy module with deterministic rules first and a classifier model for the ambiguous middle, on both the pen and the autonomous loop |
+| The three action categories | Write tags on tools | The taxonomy as written: prohibited, explicit permission, regular, with Lucas's reserved levers in the second |
+| Subagents as files | Echo's TOML manifests | The role registry, seeded from the manifests |
+| Skills as instruction files with a router | Skills and procedures tables | Skills as evolvable data with a router, the Memento shape |
+| Tool schemas loaded on demand | Six hundred tools in one manifest | Tool search: load a schema when a role needs it |
+| Size-capped index plus fact files | Self-model, directives, known-incorrect, the memory map | An operator-facing index she loads every session, capped, with read-first pointers |
+| Compaction summary schema | The where-we-are block | The schema and the handoff banner for every session and every long run |
+| Background tasks with notifications | The agent-consume ledger and watcher | One run ledger with a landing notification into the conversation |
+| Workflow scripts with structured outputs | Cloud logic's validate-and-repair; the operator | The swarm runtime: a pipeline of role agents with schemas, budgets and resume |
+| Adversarial verify and judge panel | The anti-fabrication gate | The challenger: several refuters on another model family, majority rule |
+| Task chips for out-of-scope findings | The needs door | Keep; the chip is the need's face |
+| Delivery doctrine as rules | The say-do and anti-fabrication gates | The rules in the seat prompt; the gates stay as the last line |
+| The pre-land sweep | Nothing in the pen | The pen runs the six-question sweep on every diff |
+
+What not to borrow. The harness is a single session-bound loop with a human in it by default; ZOE is always on. Its compaction is lossy by design because its memory is text files; ZOE has durable stores and should compact less and point more. Its classifier is the first line for a session; ZOE's tiers should be deterministic first and classified second.
+
+## 6. Fitted to Lucas
+
+The program is custom-fitted to one operator, and two months of sessions are the data. How he works, as it bears on the design:
+
+- **Orders are short imperatives.** "Go ahead with the next cut." A bare imperative is a standing order to execute one bounded unit of work and report, not an invitation to discuss. ZOE's intake treats it that way.
+- **Questions are assessments.** "Is there any way," "do we have a plan." The deliverable is the finding and he decides. ZOE reports and stops.
+- **Corrections arrive as principles**, often mid-turn, and are laws from then on. He expects to see them written back verbatim and applied everywhere, not only in the next reply. That is the correction door, and it is why directives must reach every lane.
+- **He delegates by observation.** "Swarming appears not to be working." The job is to measure, find the mechanism, and bring back the mechanical fact. Never a guess dressed as a diagnosis.
+- **He reads the last message.** It leads with the outcome, puts numbers in tables, names what was verified and what was not, and reports a red gate as red.
+- **He grants standing permissions per session and keeps a short list of levers**: reboots, deletions, pushes, spend policy, brand, when she speaks unprompted. The tier policy's explicit-permission category is that list, exactly.
+- **He works in long arcs across compacts** and expects continuity to survive them: the handoff banner, the read-first pointer, the plan document updated and committed as the record.
+- **His vocabulary is load-bearing**: organs, lanes, cuts, the lineage from Alpha to Echo. Using it back is how alignment holds.
+- **His cadence is the cut**: measure, build, gate, commit, cycle, read, record. ZOE's self-build runs that cadence and no other.
+- **His needs, in his words from July**: pull real materials out of tangents, connect the dots and tell the bigger story, forecast from it, build better reports, hold learning conversations where the assistant searches and grows as it talks, and take care of its own memory.
+
+The design change this implies: an operator model as a first-class store, in the shape of the harness's user and feedback memories, loaded on every turn and every brief: how he communicates, his laws with dates, his reserved levers, his needs list. Today those live partly in the directives table and partly nowhere. With the store, a new session, a new role agent, or a swarm partition starts already fitted, and a correction from him lands in one place that every lane reads.
+
 ## Sources
 
 - https://claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them
@@ -108,3 +163,6 @@ A step counts as done when a smoke pins its contract from both runtimes and the 
 - https://arxiv.org/pdf/2606.23127 (procedural memory in LLM agents)
 - https://arxiv.org/abs/2606.27457 (Cluster, Route, Escalate)
 - https://arxiv.org/abs/2606.05922 (Retro-Harness), https://github.com/raphaelchristi/harness-evolver, https://github.com/PrimeIntellect-ai/prime-agent
+- https://praesidia.ai/blog/claude-agent-sdk-permission-model-explained (the permission chain and hooks)
+- https://hidekazu-konishi.com/entry/claude_agent_sdk_complete_guide.html and https://www.penligent.ai/hackinglabs/inside-claude-code-the-architecture-behind-tools-memory-hooks-and-mcp/ (SDK architecture: tools, memory, hooks, MCP, subagents, compaction)
+- https://cybersecuritynews.com/claude-code-shifts-agent-security/ and https://www.mindstudio.ai/blog/what-is-claude-code-auto-mode-permission-classifier (auto mode and the permission classifier, with Anthropic's measured approval and catch rates)
