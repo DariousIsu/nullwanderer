@@ -154,9 +154,22 @@ on the status line and behind the state door):
 
 ## G. Open decisions
 
-1. tenant.inbox — build the resolver organ for the pass13 findings, or reclassify the inbox as a
-   findings log (its rows point at contacts, not documents).
-2. `_pending_data_stream_tags` — build the designed drain into `entity_streams`, or drop the table.
+1. ~~tenant.inbox~~ — **built on his word (09-03 00:16)**: `pass82_inbox_resolver` (maintain,
+   daily) closes what the current state answers — projected 5,875 · duplicate 2,026 ·
+   contact-gone 824 = 8,725 of 11,064 on its first run, each stamped with a JSON `resolution`;
+   the residue is named: 2,264 null-chamber contacts and 72 quad-ambiguous (still true — an
+   investigation lane), 3 intake rows.
+2. ~~`_pending_data_stream_tags`~~ — **built on his word (09-03 00:16)**: `pass83_data_stream_drain`
+   (maintain, daily) created `civic_graph.entity_streams` + `entities.data_stream` and drained
+   all 23,504 tags (24,764 stream rows once merged entities' canonicals carry it too); drained
+   rows keep their provenance (`drained_at` + `drain_note`), nothing deleted.
+   **Found on the way — the fleet's dry-run disease**: every autonomous pass dispatch carried no
+   argv, so every pass with the `--commit` convention (13a, 13b, 13c, 13e, 13f, 30a) had been
+   running its default dry run for months and being recorded as a success; the manual door
+   rendered `--commit True`, which no script accepts. Cured: PASS_META `autonomous_args` (appended
+   for cadence / dependency / reflection / team dispatches, never manual / owner), dry runs recorded
+   as `dry-run`, the manual door renders bare flags. Enabled on pass13a, pass13b and the two
+   organs; **13c, 13e, 13f, 30a still wait on his word** (each has its own blast radius).
 3. `clean_review` — 174 operator decisions; route them to his card.
 4. kg_anchor — 63 anchors to pruned entities: re-point through the canonical map or drop them
    (a live-DB write).
