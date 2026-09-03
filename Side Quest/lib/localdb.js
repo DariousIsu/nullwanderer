@@ -112,7 +112,19 @@ function query(sql, params = []) {
 // The map of her local store: every table + its row count, across sq.db AND the attached databases.
 // Attached tables are reported qualified (`puller.targets`) — which is exactly how they must be
 // queried, so the map doubles as the syntax hint.
-function inventory() {
+// THE FREEZE (2026-09-03 01:24): this walked EVERY table in every attached schema with a synchronous
+// COUNT(*) on each call — including the FTS5 vtable and its shadow tables (documents_fts 775ms idle /
+// 1–1.6s under load, documents_fts_data 269ms) and the million-row exhausts — on the Electron main
+// thread, every time the localdb_map tool or the manifest asked. Two cures: the FTS/vector shadows are
+// not stores (their counts are index internals — the vtable's rowcount IS documents' rowcount), so they
+// are skipped; and the map is CACHED for 5 minutes (a table's row count to the second is not what a
+// manifest is for) — `inventory({ maxAgeMs: 0 })` forces a fresh walk.
+const INVENTORY_TTL_MS = 5 * 60 * 1000;
+const INDEX_SHADOW_RE = /(_fts|_fts_(?:config|data|docsize|idx|content)|_search|_search_(?:config|data|docsize|idx|content)|_vec|_vec_(?:chunks|info|rowids)|_vec_(?:metadata(?:chunks|text)|vector_chunks)\d*)$/i;
+let _invCache = null;   // { at, key, out }
+function inventory({ maxAgeMs = INVENTORY_TTL_MS } = {}) {
+  const key = ['main'].concat(_attached).join('|');
+  if (_invCache && _invCache.key === key && (Date.now() - _invCache.at) < maxAgeMs) return _invCache.out.map((r) => ({ ...r }));
   const out = [];
   const conn = _readerConn() || dbLib.getDb();
   const schemas = ['main'].concat(_attached);
@@ -123,12 +135,14 @@ function inventory() {
         .all().map(r => r.name);
     } catch { continue; }
     for (const t of tables) {
+      if (INDEX_SHADOW_RE.test(t)) continue;   // an index internal, never a store
       const qualified = sch === 'main' ? t : `${sch}.${t}`;
       let rows = 0;
       try { rows = conn.prepare(`SELECT COUNT(*) AS c FROM ${sch}."${t}"`).get().c; } catch {}
       out.push({ table: qualified, rows, db: sch });
     }
   }
+  _invCache = { at: Date.now(), key, out: out.map((r) => ({ ...r })) };
   return out;
 }
 

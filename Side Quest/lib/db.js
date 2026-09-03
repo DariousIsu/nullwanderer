@@ -649,6 +649,12 @@ const MIGRATIONS = [
   // in a temp B-tree — 4.7s on the main thread, every 15-min beat. This partial index lets each lane's
   // head be read in order (source, attempts, id) — a range scan, milliseconds.
   `CREATE INDEX IF NOT EXISTS idx_documents_promote_source ON documents(source, promote_attempts, id) WHERE promoted = 0 AND superseded_by IS NULL`,
+  // Two more of the freeze's named main-thread sorts (boot_p254's first 10 minutes): listOperatorDropEntities'
+  // "documents WHERE source IN (…) AND superseded_by IS NULL ORDER BY created_ts DESC" (temp B-tree, 707ms
+  // idle / 1–2.4s under load) and its kg_observations "feed = 'doc-decomp' AND url IN (…) ORDER BY id DESC"
+  // (temp B-tree over every doc-decomp row of 1.49M, 375ms idle / 2–2.3s under load).
+  `CREATE INDEX IF NOT EXISTS idx_documents_source_created ON documents(source, created_ts DESC) WHERE superseded_by IS NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_kg_obs_feed_url ON kg_observations(feed, url, id)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_superseded ON documents(superseded_by)`,
 
   // KNOWN-INCORRECT (§7) — the inoculation record. A claim that has been DISPROVEN is kept, forever,
