@@ -91,6 +91,43 @@ Two additions make auto-land safe rather than fast. A **post-land watch**: the n
 
 What is missing to build it: a pure policy module that classifies a proposal (paths, size, origin, pins added, constitutional touch, forbidden shapes) into a tier, the auto tier wired into the pen's decide path so a cleared proposal does not wait at the needs door, the post-land watch with the revert, and the rate cap. Everything else, the jail, the rehearsal sandbox, the gate's exit code, the self-reboot with its live guard, git as the undo, and the announcement channel, is already live. The honest trade: a green-but-wrong change can go live for one generation. The mitigations are the gate, the deny list, the size cap, the watch with revert, the rate cap, and the switch.
 
+## 7. Two things established before cut 18
+
+### 7a. Why swarming stopped
+
+Lucas asked why swarming appears not to work any more and whether the merge's agent changes caused it. Read-only on both sides, the answer is the same on both: swarming is not broken code, it is starved and lane-misclassified, and the proximate cause is the merge's one pacing law, stage 4.2.
+
+**The Side Quest partition swarm.** One swarm runs machine-wide. Every swarm since 09-01 released only by the six-hour stall expiry; none converged. Today's swarm on focus 3766, the Missouri officials validation, auto-started at 07:00 with three partition threads that were touched at 07:00 and never again, covering zero of their seven targets. Their passes run as autonomous work, which resolves to the research lane, and the research lane has been closed all day for background compute over the burn-down pace. The quota door confirms it: research and idle refused, directed and interactive open and never pace-throttled. Meanwhile every other focus's auto-swarm is refused as "swarm-live" without a log line, so from the outside swarming simply never happens.
+
+**Echo's delegated agents.** Through 09-01 the delegated agents show zero governor refusals. On 09-02, the evening stage 4 landed, 16 of 79 runs were refused with `governor_refused:app_quota`. Today 9 of 16, including the last three legislative-analyst runs, all triggered from chat. The mechanism: a chat-triggered delegate agent is classed Build by its model slot, the governor maps Build, Maintain and Vet to the research lane and asks the app about that lane, and the app says research is closed. The governor's own log line claims chat is unaffected; the chat class is, but a chat-triggered agent is not chat-classed. Five more failures this week are "database is locked", the audit-log item, and the team supervisor has failed its only run since June.
+
+**Fix shapes, on his word.**
+
+1. Echo: the governor takes the trigger kind. A chat-triggered run asks the directed lane, which is open and floor-gated only. A local commit, never pushed.
+2. Side Quest: partition children of a directed parent inherit the parent's lane instead of resolving to research.
+3. Side Quest: log the "swarm-live" refusal once per focus, and let a directed request preempt a swarm whose every partition is quota-paused rather than waiting six hours.
+4. The allocation lever stays the root cure: the operators' 17 million tokens a day are what close the research lane.
+
+### 7b. Leg D: the correction door
+
+The stated end goal: guide her by correcting her in chat, then have her develop the correction in the existing self-learning lanes. What exists today are three narrow nets. A mid-run correction reshapes the active directed run's facet, orgs and depth. A "no, not that" after a pull-up re-drives the pull-up with the corrected referent. A standing instruction, detected by a conservative regex that needs a persistence marker, a behavioral verb and a pronoun aimed at her, is recorded in the directives table and rendered in full in every chat prompt.
+
+The gaps against the goal:
+
+- A correction phrased without "always" or "never" or "from now on" is lost.
+- Directives are read by the chat prompt and by nothing else. The research operator, the self-audit, reflection, the learning lane and the pen never see them, so a correction never becomes a procedure, a skill, a test, or a code need.
+- No record of whether a correction held. Nothing re-tests the kind of situation that produced it.
+- No versions, no rollback, only retire.
+
+Leg D, as a shape:
+
+1. **Classify the correction** at the chat door into scope, referent, rule, fact, or capability. The first two keep their nets. A rule lands in directives. A fact lands in known-incorrect. A capability lands as a need for the pen.
+2. **Ledger every landing** in the harness-edits ledger from leg A, with the turn that caused it, so the correction has provenance and an outcome field.
+3. **Feed the lanes.** The operator's brief carries the directives block the chat prompt already carries. The self-audit and reflection read the ledger and promote a directive that recurs into a procedure or a skill. A directive that prompt alone cannot honor mints a need, and the pen takes it under the auto-mode tiers of section 6.
+4. **Retest the kind.** Every correction spawns a kind-test in the hard-test suite, so the next situation of that shape is a self-test and the ledger's outcome field fills itself.
+
+Leg D slots between legs A and B in the order of section 4: it needs A's ledger and it feeds B's mining organ with labeled failures, which is exactly the signal RHO lacks.
+
 ## Sources
 
 - https://github.com/raphaelchristi/harness-evolver
