@@ -1222,6 +1222,21 @@ function getDb() {
   if (!db) throw new Error('db not initialized');
   return db;
 }
+// ── PREPARED ONCE (freeze cut 17) ─────────────────────────────────────────────────────────────
+// The stall profiler (boot_p268, under runChatTurn): `19% Statement via getMeta (lib/db.js:2509)` —
+// the reply path reads meta hundreds of times a turn and every call COMPILED its statement
+// (better-sqlite3 caches nothing). One compiled statement per SQL text per connection; the memo empties
+// when the handle changes (init / close — the smokes re-open temp stores).
+let _stmtDb = null;
+const _stmts = new Map();
+function _P(sql) {
+  const d = getDb();
+  if (_stmtDb !== d) { _stmts.clear(); _stmtDb = d; }
+  let s = _stmts.get(sql);
+  if (!s) { s = d.prepare(sql); _stmts.set(sql, s); }
+  return s;
+}
+function _preparedCount() { return _stmtDb === db ? _stmts.size : 0; }
 
 function startSession() {
   const info = getDb().prepare('INSERT INTO sessions (started_at) VALUES (?)').run(Date.now());
@@ -2507,13 +2522,12 @@ function getAgentEventsSinceLastUser(n = 40) {
 }
 
 function getMeta(key) {
-  const row = getDb().prepare('SELECT value FROM meta WHERE key = ?').get(key);
+  const row = _P('SELECT value FROM meta WHERE key = ?').get(key);
   return row ? row.value : null;
 }
 
 function setMeta(key, value) {
-  getDb()
-    .prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+  _P('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
     .run(key, String(value));
 }
 
@@ -3239,6 +3253,7 @@ module.exports = {
   getAgentEventsSinceLastUser,
   getMeta,
   setMeta,
+  _preparedCount,
   getOwnerIdentity,
   isOwnerName,
   isSelfName,

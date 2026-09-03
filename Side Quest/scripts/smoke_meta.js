@@ -64,6 +64,13 @@ const ask = async (a) => {
     const r = await meta.runMetaPass({ apply: true, deps: { ask, embedFn } });
     ok(r.interests === 1 && r.perInterest[0] && !r.perInterest[0].error, 'runMetaPass processed the top interest without error');
     ok(r.perInterest[0].facts === 5 && r.perInterest[0].mastery > 0, 'per-interest report carries facts + mastery');
+
+    // freeze cut 17: getMeta/setMeta compile their statement ONCE per connection (the reply path reads
+    // meta hundreds of times a turn; every call used to compile `SELECT value FROM meta WHERE key = ?`)
+    db.setMeta('smoke.p', '1'); db.getMeta('smoke.p');
+    const n1 = db._preparedCount();
+    for (let i = 0; i < 50; i++) { db.getMeta('smoke.p'); db.setMeta('smoke.p', String(i)); }
+    ok(n1 >= 2 && db._preparedCount() === n1 && db.getMeta('smoke.p') === '49', `getMeta/setMeta prepared once — the memo holds ${n1} statement(s) and 100 more calls add none`);
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   } finally {

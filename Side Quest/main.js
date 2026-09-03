@@ -976,6 +976,10 @@ app.whenReady().then(() => {
     }, 2000);
     _keysWarmTick.unref?.();
   }
+  // THE TOKEN WARM-UP (freeze cut 17): the Google access token is minted in a worker after boot grace,
+  // so the first chat turn finds it cached — getToken never shells on the caller's thread any more
+  // (stale-while-revalidate; lib/gcal). Nothing to log: the calendar lanes report their own state.
+  setTimeout(() => { try { gcal.warm(gcalOpts()); } catch {} }, (BOOT_GRACE_MS || 90000) + 5000).unref?.();
 
   // THE PROMOTE-DOCS BEAT (continuity cure #3, 2026-09-02 — the audit measured the documents bridge alive
   // but +130/day behind: 150 per nightly pass against ~230 landing a day, 46 of the 150 wasted on

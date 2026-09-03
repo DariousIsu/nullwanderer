@@ -65,16 +65,59 @@ function fetchToken({ python, cwd, timeoutMs = 20000 } = {}) {
   }
 }
 
-// Cached token getter — re-shells only when missing or within 2 min of expiry (or force).
+// ── OFF THE MAIN THREAD (freeze cut 17) ──────────────────────────────────────────────────────────
+// The stall profiler (boot_p268, under runChatTurn 86%): `26% spawn via fetchToken (lib/gcal.js:33)` —
+// the reply path asked isConnected(), the cached token was near expiry, and getToken SHELLED to Echo's
+// Python synchronously (process creation + google-auth refresh, ~0.6–1.3s) on the main thread, on his
+// turn. Now: the refresh runs in a worker_thread that re-runs this module with workerData set and calls
+// fetchToken there; the token crosses back in-process (never a file, never a log). getToken is
+// STALE-WHILE-REVALIDATE: it never waits — it answers with the token it holds while that token is still
+// valid, kicks ONE refresh when the token is missing/near expiry/forced, and returns null only when it
+// holds nothing valid (callers already treat null as "not connected" and retry on their own cadence;
+// main.js warms the token after boot so the first turn finds it cached). `opts.fetchFn` (async →
+// { token, expMs } | null) is the test seam.
+let _refresh = null;   // the one in-flight refresh — N callers kick ONE
+
+function fetchTokenInWorker({ python, cwd, timeoutMs = 20000 } = {}) {
+  return new Promise((resolve) => {
+    if (!python || !cwd) return resolve(null);
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    let w = null;
+    try { const { Worker } = require('worker_threads'); w = new Worker(__filename, { workerData: { __gcalToken: true, python, cwd, timeoutMs } }); }
+    catch { return done(null); }
+    const t = setTimeout(() => { try { w.terminate(); } catch {} done(null); }, timeoutMs + 5000);
+    if (t.unref) t.unref();
+    w.once('message', (m) => { clearTimeout(t); try { w.terminate(); } catch {} done(m && m.token ? { token: m.token, expMs: m.expMs } : null); });
+    w.once('error', () => { clearTimeout(t); done(null); });
+    w.once('exit', () => { clearTimeout(t); done(null); });
+  });
+}
+function refresh(opts = {}) {
+  if (_refresh) return _refresh;
+  let run;
+  try { run = typeof opts.fetchFn === 'function' ? opts.fetchFn(opts) : fetchTokenInWorker(opts); } catch { run = null; }
+  _refresh = Promise.resolve(run)
+    .then((t) => { if (t && t.token) _tok = { token: t.token, expMs: Number(t.expMs) || (Date.now() + 50 * 60 * 1000) }; return _tok; })
+    .catch(() => _tok)
+    .finally(() => { _refresh = null; });
+  return _refresh;
+}
+// Cached token getter — never blocks: the held token while valid, a background refresh when it is
+// missing / within 2 min of expiry / forced; null when nothing valid is held.
 function getToken(opts = {}) {
   const { force = false } = opts;
-  if (!force && _tok && _tok.token && _tok.expMs - Date.now() > 120000) return _tok.token;
-  const t = fetchToken(opts);
-  _tok = t;
-  return t ? t.token : null;
+  const now = typeof opts.now === 'number' ? opts.now : Date.now();
+  const have = _tok && _tok.token ? _tok : null;
+  if (!force && have && have.expMs - now > 120000) return have.token;
+  refresh(opts);
+  return (!force && have && have.expMs > now) ? have.token : null;
 }
+/** Mint the token in the background (a post-boot beat). Resolves to the cached token record or null. */
+function warm(opts = {}) { return refresh(opts); }
+function _resetForTest() { _tok = null; _refresh = null; }
 
-// Is the operator's Google connected? (token resolvable) — cheap, used for the surface's status pill.
+// Is the operator's Google connected? (a valid token held) — cheap, used for the surface's status pill.
 function isConnected(opts = {}) {
   return !!getToken(opts);
 }
@@ -153,7 +196,20 @@ function deleteEvent(calendarId, eventId, opts = {}) {
 }
 
 module.exports = {
-  API_BASE, fetchToken, getToken, isConnected, apiGet, apiSend,
+  API_BASE, fetchToken, fetchTokenInWorker, refresh, warm, getToken, isConnected, apiGet, apiSend,
   listCalendars, listEvents, colors,
   createEvent, updateEvent, deleteEvent,
+  _resetForTest,
 };
+
+// Worker entry — fetchTokenInWorker() re-runs THIS module in a worker_thread with workerData set: the
+// synchronous shell to Echo's interpreter runs here, off the main thread; one message posts the token.
+try {
+  const wt = require('worker_threads');
+  if (!wt.isMainThread && wt.workerData && wt.workerData.__gcalToken) {
+    const { python, cwd, timeoutMs } = wt.workerData;
+    let t = null;
+    try { t = fetchToken({ python, cwd, timeoutMs }); } catch { t = null; }
+    wt.parentPort.postMessage(t && t.token ? { token: t.token, expMs: t.expMs } : { token: null });
+  }
+} catch { /* not a worker context */ }

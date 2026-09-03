@@ -59,6 +59,14 @@ function stormOfGetsForTheSmoke(ms) {
   const natives = g ? g.top.filter((r) => !/\((?:scripts|lib|studio|main\.js)/.test(r.label) && !/garbage collector|\(program\)/.test(r.label)) : [];
   ok(natives.every((r) => !!r.via), `every native/library leaf row carries a via (${natives.length ? natives.map((r) => `${r.label} via ${r.via}`).join(' · ') : 'no native leaf rows — better-sqlite3’s time folds into its JS caller in this build'})`);
   ok(g && /— paid by: \d+% stormOfGetsForTheSmoke \(scripts\/smoke_stall_profile\.js:\d+\)/.test(g.line) && / — under: \d+% /.test(g.line), 'the log line ends with who paid and under which lane');
+  // cut 17: the instruments are never "who paid" — the slow-sync probe's wrapper sits above every
+  // native Statement leaf and would otherwise be named where the app's caller was meant
+  {
+    const root = require('path').resolve(__dirname, '..').replace(/\\/g, '/');
+    const url = (rel) => 'file:///' + encodeURI(root + '/' + rel);
+    ok(!P._isRepoFrame({ url: url('lib/slow_sync_probe.js') }) && !P._isRepoFrame({ url: url('lib/stall_profile.js') }) && P._isRepoFrame({ url: url('lib/db.js') }) && P._isRepoFrame({ url: url('main.js') }),
+      'an instrument frame (the slow-sync probe wrapper, the profiler itself) is never a repo frame; app frames are — percent-encoded URLs included');
+  }
 
   // a quiet window attributes to nothing (no false culprit)
   await new Promise((res) => setTimeout(res, 120));

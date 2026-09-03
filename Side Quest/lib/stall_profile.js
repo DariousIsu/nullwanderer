@@ -107,8 +107,16 @@ function _isRepoFrame(cf) {
   // against the cwd and passed as "repo" on p262 (the first live `via` named a Node internal)
   if (!/^(file:|[a-zA-Z]:[\\/]|\/)/.test(u)) return false;
   const f = _filePath(u);
-  try { const rel = path.relative(ROOT, f); return !!rel && !rel.startsWith('..') && !/node_modules/.test(rel); } catch { return false; }
+  try {
+    const rel = path.relative(ROOT, f);
+    if (!rel || rel.startsWith('..') || /node_modules/.test(rel)) return false;
+    // The instruments are never "who paid": the slow-sync probe wraps every Statement.get/all/run, so
+    // its wrapper would otherwise be the nearest repo frame above every native leaf (p268's first
+    // named block read `36% wrapped (lib/slow_sync_probe.js:48)` where it meant getMeta's callers).
+    return !INSTRUMENT_RE.test(rel.replace(/\\/g, '/'));
+  } catch { return false; }
 }
+const INSTRUMENT_RE = /^lib\/(slow_sync_probe|stall_profile|stall_attrib)\.js$/;
 
 /**
  * Attribute the blocked window [endMs - driftMs - slackMs, endMs] to the frames that held the thread.
@@ -183,4 +191,4 @@ async function attribute({ endMs, driftMs, slackMs = 1000, top = TOP } = {}) {
   return { totalMs: driftMs, sampledMs: Math.round(sampledMs), top: rows, paidBy, under, line };
 }
 
-module.exports = { arm, disarm, armed, attribute, _rotate, _windows: () => _profiles, WINDOW_MS, SAMPLE_US, KEEP };
+module.exports = { arm, disarm, armed, attribute, _rotate, _windows: () => _profiles, _isRepoFrame, WINDOW_MS, SAMPLE_US, KEEP };

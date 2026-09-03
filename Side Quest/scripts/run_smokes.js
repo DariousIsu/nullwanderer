@@ -255,6 +255,7 @@ const smokes = [
   'smoke_research_enrich.js',
   'smoke_known.js',
   'smoke_calendar.js',
+  'smoke_gcal_token.js',
   'smoke_self_dev.js',
   'smoke_self_state.js',
   'smoke_awareness_standing.js',
