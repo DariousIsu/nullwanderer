@@ -65,9 +65,35 @@ const IN_SANDBOX = fs.existsSync(path.join(require('../lib/self_source').ROOT, '
   ok(fs.readFileSync(path.join(ss.ROOT, 'lib', 'recall.js'), 'utf8') === liveRecall, '⭐the LIVE source is byte-identical after the sandbox edit');
 
   // --- the diff report ---
+  const t0 = Date.now();
   const d1 = R.diff({ slug: 'test-idea' });
+  const diffMs = Date.now() - t0;
   if (IN_SANDBOX) console.log('  ⏭ diff names the changed file and shows the change — skipped (nested sandbox-of-a-sandbox is not a supported configuration; the LIVE gate checks this)');
   else ok(/1 file\(s\) changed/.test(d1) && /lib\/recall\.js/.test(d1) && /d-BROKEN/.test(d1), 'diff names the changed file and shows the change');
+  // THE WALK IS THE TOUCHED SET (freeze cut 6b): the whole-tree diff read every source file twice —
+  // 10.8s on the main thread with zero changes — on every rehearsal iterate: the autonomy tick's 10–14s
+  // block. The marker records what edit()/writeFile() touched; diff() walks that, not the tree.
+  {
+    const mk = JSON.parse(fs.readFileSync(path.join(R.REHEARSAL_ROOT, 'test-idea', '.rehearsal.json'), 'utf8'));
+    ok(Array.isArray(mk.touched) && mk.touched.length === 1 && mk.touched[0] === 'lib/recall.js', 'the marker records exactly the file the successful edit touched (refused edits never join it)');
+    ok(diffMs < 1500, `CRITICAL: the diff walks the touched set, not the tree (${diffMs}ms; the whole-tree walk measured 10.8s with zero changes)`);
+    ok(!/legacy sandbox/.test(d1), 'a marker-tracked sandbox is never walked as legacy');
+    const dp = R.diff({ slug: 'test-idea', paths: ['scripts/smoke_recall.js'] });
+    ok(/1 file\(s\) changed/.test(dp) && /lib\/recall\.js/.test(dp) && !/smoke_recall/.test(dp), 'caller-known paths UNION the touched set — an unchanged extra path adds nothing');
+    const w1 = R.writeFile({ slug: 'test-idea', path: 'tools/zz_probe_tool.py', content: 'print("probe")\n' });
+    ok(/^wrote /.test(w1), 'a new tool file writes into the sandbox');
+    const d2 = R.diff({ slug: 'test-idea' });
+    ok(/2 file\(s\) changed/.test(d2) && /tools\/zz_probe_tool\.py \(new file/.test(d2) && /\+ print\("probe"\)/.test(d2), 'a CREATED file is reported as new, with its lines — the live tree has no such file to diff against');
+    // a sandbox from before the marker carried `touched`: the caller's paths make it exact without a tree walk
+    const mk2 = { ...mk }; delete mk2.touched;
+    fs.writeFileSync(path.join(R.REHEARSAL_ROOT, 'test-idea', '.rehearsal.json'), JSON.stringify(mk2));
+    const dl = R.diff({ slug: 'test-idea', paths: ['lib/recall.js'] });
+    ok(/1 file\(s\) changed/.test(dl) && /d-BROKEN/.test(dl) && !/legacy sandbox/.test(dl), 'a pre-marker sandbox with the driver’s edit list is exact and cheap — no legacy walk');
+    const t1 = Date.now();
+    const d0 = R.diff({ slug: 'test-idea', paths: [] });
+    ok(/no changes/.test(d0) && Date.now() - t1 < 1500, 'an EMPTY explicit list on a pre-marker sandbox is "no changes" without a tree walk (the live run before its first successful edit)');
+    fs.writeFileSync(path.join(R.REHEARSAL_ROOT, 'test-idea', '.rehearsal.json'), JSON.stringify(mk));
+  }
 
   // --- ⭐THE ISOLATION PROOF: her gate FAILS in the sandbox, PASSES live ---
   const sbRun = await R.test({ slug: 'test-idea', suite: 'smoke_recall.js' });

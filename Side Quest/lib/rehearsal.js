@@ -34,7 +34,19 @@ function _dirOf(slug) {
 }
 function _marker(dir) { return path.join(dir, '.rehearsal.json'); }
 function _readMarker(dir) { try { return JSON.parse(fs.readFileSync(_marker(dir), 'utf8')); } catch { return null; } }
-function _touch(dir) { const m = _readMarker(dir) || {}; m.touchedTs = Date.now(); try { fs.writeFileSync(_marker(dir), JSON.stringify(m)); } catch {} }
+// `rel` (a repo-relative path the sandbox just changed) joins the marker's `touched` set — the set diff()
+// walks. Only a SUCCESSFUL edit/write passes it; a refusal touches the clock, never the set.
+function _touch(dir, rel = null) {
+  const m = _readMarker(dir) || {};
+  m.touchedTs = Date.now();
+  if (rel) {
+    const t = Array.isArray(m.touched) ? m.touched : [];
+    const r = String(rel).trim().replace(/\\/g, '/');
+    if (r && !t.includes(r)) t.push(r);
+    m.touched = t;
+  }
+  try { fs.writeFileSync(_marker(dir), JSON.stringify(m)); } catch {}
+}
 
 // R2 — the Echo venv interpreter, resolved EXACTLY as main.js does for the gcal bridge (env override
 // wins, else the venv under ECHO_CWD). A python tool in the sandbox is judged by a JS harness smoke
@@ -80,7 +92,7 @@ function create({ slug } = {}) {
     }
     // node_modules rides as a JUNCTION (never a copy): the gate needs the deps, the sandbox never owns them.
     try { fs.symlinkSync(path.join(APP_ROOT, 'node_modules'), path.join(d.dir, 'node_modules'), 'junction'); } catch (e) { return `sandbox created but node_modules junction failed (${e.message}) — tests will not run; discard and retry`; }
-    fs.writeFileSync(_marker(d.dir), JSON.stringify({ slug: d.slug, createdTs: Date.now(), touchedTs: Date.now() }));
+    fs.writeFileSync(_marker(d.dir), JSON.stringify({ slug: d.slug, createdTs: Date.now(), touchedTs: Date.now(), touched: [] }));
     return `sandbox "${d.slug}" created — ${copied} source files copied to a working COPY (the live program is untouched). Edit with rehearsal_edit, judge with rehearsal_test.`;
   } catch (e) { return `create failed: ${e.message}`; }
 }
@@ -169,7 +181,7 @@ function edit({ slug, path: rel, find, replace } = {}) {
   if (n > 1) return `cannot edit: the find-text appears ${n} times in ${rel}. Copy ONE of these spans verbatim — the surrounding lines are what make it unique:${_occurrenceContexts(text, findS)}`;
   try {
     fs.writeFileSync(f.abs, text.replace(findS, String(replace == null ? '' : replace)));
-    _touch(f.dir);
+    _touch(f.dir, rel);
     return `edited ${rel} in sandbox "${f.slug}" (one exact match replaced). Judge it with rehearsal_test.`;
   } catch (e) { return `edit failed: ${e.message}`; }
 }
@@ -193,7 +205,7 @@ function writeFile({ slug, path: rel, content } = {}) {
   try {
     fs.mkdirSync(path.dirname(f.abs), { recursive: true });
     fs.writeFileSync(f.abs, body);
-    _touch(f.dir);
+    _touch(f.dir, r);
     const isPy = /\.py$/i.test(r);
     return `wrote ${r} (${body.length} chars) in sandbox "${f.slug}". ${isPy ? 'Write a harness (scripts/smoke_<name>.js) that shells it via process.env.ZOE_PY, then judge with rehearsal_test.' : 'This harness shells your python tool through process.env.ZOE_PY when rehearsal_test runs it.'}`;
   } catch (e) { return `write failed: ${e.message}`; }
@@ -230,23 +242,46 @@ function test({ slug, suite = null, timeoutMs = null } = {}) {
   });
 }
 
-// The honest change report: which files differ from live, with compact -/+ lines.
-function diff({ slug, maxChars = 8000 } = {}) {
+// The honest change report: which files the rehearsal changed, with compact -/+ lines.
+//
+// THE WALK IS THE TOUCHED SET (freeze cut 6b, 2026-09-03). This used to read EVERY live source file and
+// its sandbox copy — 2,914 synchronous reads of 46MB, measured 10.8s on the main thread with ZERO changes
+// — on every rehearsal iterate, twice after an edit: the autonomy tick's 10–14s block on p256, p257 and
+// p259 (his window "not responding" while a rehearsal advanced). A sandbox changes only through edit()
+// and writeFile(), and both record the path in the marker's `touched`; the report walks that set, plus
+// any `paths` the caller knows (the driver passes its run's successful edits, so a sandbox made before the
+// marker carried `touched` is exact too). A legacy sandbox with neither walks the tree once more, named
+// in the header. It is also the more truthful report: 107 of need-95's "changed" files were the LIVE
+// tree moving on under it, not the rehearsal's work.
+function diff({ slug, maxChars = 8000, paths = null } = {}) {
   const d = _dirOf(slug);
   if (!d.dir || !fs.existsSync(_marker(d.dir))) return `no sandbox "${String(slug)}"`;
   const ss = require('./self_source');
+  const m = _readMarker(d.dir) || {};
+  const norm = (p) => String(p == null ? '' : p).trim().replace(/\\/g, '/');
+  const set = new Set([...(Array.isArray(m.touched) ? m.touched : []), ...(Array.isArray(paths) ? paths : [])].map(norm).filter(Boolean));
+  // An explicit `paths` array — even an EMPTY one — is the caller saying it knows the set (the driver's run
+  // has applied no edits yet); only a null `paths` on a pre-marker sandbox is an unknown worth a tree walk.
+  const legacy = !Array.isArray(m.touched) && !Array.isArray(paths);
+  const pairs = legacy
+    ? ss.allSourceFiles().map((liveAbs) => { const rel = path.relative(ss.ROOT, liveAbs); return { rel: norm(rel), liveAbs, sbAbs: path.join(d.dir, rel) }; })
+    : [...set].sort().map((rel) => ({ rel, liveAbs: path.join(ss.ROOT, rel), sbAbs: path.join(d.dir, rel) }));
   const parts = [];
   let changed = 0;
-  for (const liveAbs of ss.allSourceFiles()) {
-    const rel = path.relative(ss.ROOT, liveAbs);
-    const sbAbs = path.join(d.dir, rel);
-    let a = '', b = '';
-    try { a = fs.readFileSync(liveAbs, 'utf8'); } catch { continue; }
-    try { b = fs.readFileSync(sbAbs, 'utf8'); } catch { continue; }
+  for (const { rel, liveAbs, sbAbs } of pairs) {
+    let a = null, b = null;
+    try { a = fs.readFileSync(liveAbs, 'utf8'); } catch {}
+    try { b = fs.readFileSync(sbAbs, 'utf8'); } catch {}
+    if (b == null) continue;                                   // nothing in the sandbox at that path
+    if (a == null) {                                           // a file the rehearsal CREATED (writeFile)
+      changed++;
+      parts.push(`=== ${rel} (new file, ${b.length} chars)\n` + b.split('\n').slice(0, 40).map((l) => `+ ${String(l).slice(0, 160)}`).join('\n'));
+      continue;
+    }
     if (a === b) continue;
     changed++;
     const al = a.split('\n'), bl = b.split('\n');
-    const lines = [`=== ${rel.replace(/\\/g, '/')}`];
+    const lines = [`=== ${rel}`];
     // Compact walk: emit the differing line runs (rehearsal edits are localized; this is a report, not a patch).
     let i = 0, j = 0;
     while ((i < al.length || j < bl.length) && lines.length < 60) {
@@ -258,7 +293,7 @@ function diff({ slug, maxChars = 8000 } = {}) {
     parts.push(lines.join('\n'));
   }
   if (!changed) return `sandbox "${d.slug}" has no changes vs the live source`;
-  const text = `sandbox "${d.slug}" — ${changed} file(s) changed vs live:\n` + parts.join('\n\n');
+  const text = `sandbox "${d.slug}" — ${changed} file(s) changed vs live${legacy ? ' (legacy sandbox: whole-tree walk)' : ''}:\n` + parts.join('\n\n');
   return text.length > maxChars ? text.slice(0, maxChars) + '\n…(diff truncated)' : text;
 }
 

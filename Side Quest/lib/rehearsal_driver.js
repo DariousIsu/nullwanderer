@@ -147,6 +147,11 @@ function validateEditPick(raw) {
 }
 
 // The current content of the run's watched files, from the SANDBOX (never the live tree).
+// The paths this run has successfully edited or created — what its diff walks (freeze cut 6b: the
+// whole-tree diff was the autonomy tick's 10–14s main-thread block; see lib/rehearsal diff()).
+function _editedPaths(run) {
+  return (run && Array.isArray(run.edits) ? run.edits : []).filter((e) => e && e.ok && e.path).map((e) => String(e.path));
+}
 function _fileBlock(run, deps) {
   const fs = (deps && deps.fs) || require('fs');
   const path = require('path');
@@ -218,7 +223,7 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
         goal: run.goal, suite: run.suite, iteration: run.iteration,
         study: run.study || '(none — attempted from existing knowledge; prefer runs opened with researched study material)',
         files: _fileBlock(run, deps),
-        diff_so_far: (() => { try { return str(R.diff({ slug: run.slug })).slice(0, 2500); } catch { return '(diff unavailable)'; } })(),
+        diff_so_far: (() => { try { return str(R.diff({ slug: run.slug, paths: _editedPaths(run) })).slice(0, 2500); } catch { return '(diff unavailable)'; } })(),
         last_test_output: _squeezeTestOutput(run.lastResult) || '(no test run yet)',
       },
       // CODE MODEL (Lucas 2026-08-06): edit picking is programming work — route it to the code
@@ -318,7 +323,7 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
   run.lastResult = out.slice(-RESULT_CAP);
 
   // stuck detection: the suite still fails AND the diff hasn't changed since the last failure.
-  const sig = (() => { try { return String(str(R.diff({ slug: run.slug })).length); } catch { return null; } })();
+  const sig = (() => { try { return String(str(R.diff({ slug: run.slug, paths: _editedPaths(run) })).length); } catch { return null; } })();
   if (!passed) {
     run.sameFailStreak = (sig != null && sig === run.lastDiffSig) ? run.sameFailStreak + 1 : 0;
     run.lastDiffSig = sig;
@@ -346,7 +351,7 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
   run.status = 'green'; _save(run, deps);
   let docId = null;
   try {
-    const diff = (() => { try { return str(R.diff({ slug: run.slug })); } catch { return '(diff unavailable)'; } })();
+    const diff = (() => { try { return str(R.diff({ slug: run.slug, paths: _editedPaths(run) })); } catch { return '(diff unavailable)'; } })();
     // O6 ADVERSARIAL VERIFY (advisory, NEVER a gate — the smoke gate stays the only code oracle):
     // a separate call whose only job is to BREAK the change. Generation and verification are
     // different postures; a model asked to defend its own diff won't find the input that kills
