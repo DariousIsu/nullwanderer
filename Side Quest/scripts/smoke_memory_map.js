@@ -70,6 +70,56 @@ function ok(name, cond, detail = '') {
   ok('render: a missing REQUIRED store warns, a missing optional one does not', half.warnings.some((w) => /news_bucket: store missing/.test(w)) && !half.warnings.some((w) => /puller/.test(w)), half.warnings.join(' | '));
   void origRender;
 
+  // ── ⭐ CONTINUITY (Lucas 09-02: "all the memory rechecked for continuity across all memory schema") ──
+  ok('every store on this side keeps ONE clock (epoch-ms)', s.clock === 'epoch-ms' && half.clocks.sq === 'epoch-ms' && T.CLOCK === 'epoch-ms');
+  ok('every declared staging table on this side has a bridge (no exit-less staging in the registry)',
+    Object.entries(T.REGISTRY.sq.tables).filter(([, d]) => d.kind === 'staging').every(([t]) => T.BRIDGES.some((b) => b.from[0] === 'sq' && b.from[1] === t)),
+    Object.entries(T.REGISTRY.sq.tables).filter(([t, d]) => d.kind === 'staging' && !T.BRIDGES.some((b) => b.from[1] === t)).map(([t]) => t).join(','));
+  {
+    // a NEW staging table declared without a bridge is drift — probe via a temporary declaration
+    T.REGISTRY.sq.tables.__probe_proposals = { tier: T.SHORT, kind: 'staging', note: 'probe' };
+    mem.exec('CREATE TABLE __probe_proposals (id INTEGER PRIMARY KEY)');
+    const s2 = T.renderStore('sq', { path: 'x/sq.db', registry: 'sq', optional: false, live: true }, { openFn, cap: 10, fs: fakeFs });
+    ok('⭐ staging with no bridge is a WARNING, not a quiet default', s2.warnings.some((w) => /sq\.__probe_proposals: staging with no promotion bridge/.test(w)), s2.warnings.join(' | '));
+    delete T.REGISTRY.sq.tables.__probe_proposals; mem.exec('DROP TABLE __probe_proposals');
+  }
+  {
+    // last-crossed rides the bridge where a timestamp exists; continuityOf names stalls + dead ends
+    mem.exec('ALTER TABLE documents ADD COLUMN updated_ts INTEGER; UPDATE documents SET updated_ts = 5000 WHERE promoted = 1');
+    const s3 = T.renderStore('sq', { path: 'x/sq.db', registry: 'sq', optional: false, live: true }, { openFn, cap: 10, fs: fakeFs });
+    const doc = s3.bridges.find((b) => b.from === 'sq.documents');
+    ok('bridge: documents carries last_crossed = MAX(updated_ts) of promoted rows', doc.last_crossed === 5000 && doc.last_measured === true && doc.built === true, JSON.stringify(doc));
+    const rel = s3.bridges.find((b) => b.from === 'sq.graph_relations');
+    ok('bridge: graph_relations has no timestamp → last_measured false (honest unmeasured)', rel.last_measured === false && rel.last_crossed === null);
+    const day = 86400000;
+    const c1 = T.continuityOf([
+      { from: 'a', to: 'b', gate: 'g', pending: 3, built: true, last_measured: true, last_crossed: 100 * day - 30 * day },
+      { from: 'c', to: 'd', gate: 'g', pending: 3, built: true, last_measured: true, last_crossed: 100 * day - 2 * day },
+      { from: 'e', to: 'f', gate: 'never written', pending: 9, built: false, last_measured: false, last_crossed: null },
+      { from: 'h', to: 'i', gate: 'g', pending: 4, built: true, last_measured: true, last_crossed: null },
+      { from: 'j', to: 'k', gate: 'g', pending: 4, built: true, last_measured: false, last_crossed: null },
+      { from: 'l', to: 'm', gate: 'g', pending: 0, built: true, last_measured: true, last_crossed: null },
+    ], 100 * day);
+    ok(`⭐ continuity: quiet > STALL_DAYS (${T.STALL_DAYS}) = STALLED; quiet 2 days is not`, c1.stalled.some((x) => x.from === 'a' && x.days === 30 && /quiet 30 days/.test(x.why)) && !c1.stalled.some((x) => x.from === 'c'), JSON.stringify(c1.stalled));
+    ok('⭐ continuity: a gate never built = DEAD END (its rows counted)', c1.dead_ends.length === 1 && c1.dead_ends[0].from === 'e' && c1.dead_ends[0].pending === 9 && /never built/.test(c1.dead_ends[0].why));
+    ok('⭐ continuity: pending rows that NEVER crossed (timestamp exists, none set) = stalled "never crossed"', c1.stalled.some((x) => x.from === 'h' && x.why === 'never crossed'));
+    ok('continuity: no timestamp to measure → never called stalled; nothing pending → never stalled', !c1.stalled.some((x) => x.from === 'j' || x.from === 'l'));
+  }
+  {
+    // the sweep for files outside the map (fake fs): unknown non-empty = unmapped (+warning),
+    // dated archives are declared, 0-byte = phantoms, Chromium *_profile dirs are never entered
+    const ent = (name, dir = false) => ({ name, isDirectory: () => dir, isFile: () => !dir });
+    const tree = { 'D:/data': [ent('sq.db'), ent('stray.db'), ent('sq_eloise_archive_20260618_201852.db'), ent('ghost.db'), ent('web_profile', true), ent('sub', true), ent('notes.txt')],
+      'D:/data/web_profile': [ent('first_party_sets.db')], 'D:/data/sub': [ent('deep.sqlite')] };
+    const sizes = { 'stray.db': 2_500_000, 'ghost.db': 0, 'sq_eloise_archive_20260618_201852.db': 6_300_000, 'deep.sqlite': 10, 'first_party_sets.db': 69632, 'sq.db': 5 };
+    const fakeFs2 = { readdirSync: (d) => tree[d.split(path.sep).join('/')] || [], statSync: (p) => ({ size: sizes[path.basename(p)] }) };
+    const sw = T.sweepUnmapped('D:/data', { sq: { path: 'D:/data/sq.db' } }, { fs: fakeFs2 });
+    ok('⭐ sweep: unknown non-empty files are OUTSIDE THE MAP; the known store is not', sw.unmapped.map((u) => u.path).sort().join(',') === 'stray.db,sub/deep.sqlite', JSON.stringify(sw));
+    ok('sweep: a dated archive is declared as archive (never a warning), a 0-byte file is a phantom', sw.archives.length === 1 && /archive_20260618/.test(sw.archives[0].path) && sw.phantoms.length === 1 && sw.phantoms[0].path === 'ghost.db');
+    ok('sweep: Chromium *_profile dirs are browser state, never memory — not entered', !JSON.stringify(sw).includes('first_party_sets'));
+    ok('sweep: a fake fs without readdirSync sweeps nothing (the fixture render above listed no disk)', T.sweepUnmapped('D:/x', {}, { fs: {} }).unmapped.length === 0 && half.unmapped.length === 0 && half.phantoms.length === 0);
+  }
+
   // ── assemble(): the two halves become one map; a missing half is SAID, never assumed ──
   const echoHalf = {
     side: 'echo', tiers: { 'short-term': { tables: 40, stores: ['saga', 'jobs'] }, 'long-term': { tables: 300, stores: ['civic_graph', 'electoral'] } },
@@ -96,6 +146,19 @@ function ok(name, cond, detail = '') {
   const dn = M.describe(noEcho);
   ok('describe: a partial map says which half is missing', /\(Echo half missing\)/.test(dn.line) && /Tier warnings \(1\)/.test(dn.block.find((l) => /Tier warnings/.test(l)) || ''));
   ok('describe: an empty map is null/empty (fail-absent)', M.describe(null).line === null && M.describe(null).block.length === 0);
+  {
+    // ⭐ continuity + outside-the-map ride BOTH halves into the one map, side-tagged, and the line names them
+    const echoC = { ...echoHalf, continuity: { dead_ends: [{ from: 'electoral._pending_data_stream_tags', to: 'x', pending: 23504, gate: 'never built', why: 'gate never built' }], stalled: [{ from: 'tenant_rainey.inbox', to: 'y', pending: 11064, gate: 'g', last_crossed: null, days: null, why: 'never crossed' }] },
+      unmapped: [], phantoms: [{ path: 'sq.db', note: '0 bytes' }], clocks: { civic_graph: 'epoch-s' } };
+    const sqC = { ...cleanHalf, continuity: { dead_ends: [], stalled: [{ from: 'sq.capability_needs', to: 'z', pending: 31, gate: 'g', last_crossed: 1, days: 40, why: 'quiet 40 days' }] }, unmapped: [{ path: 'stray.db', size_mb: 2.5 }], phantoms: [], clocks: { sq: 'epoch-ms' } };
+    const mc = M.assemble({ echo: echoC, sq: sqC, nowMs: 5000 });
+    ok('assemble: dead ends + stalls merge side-tagged', mc.continuity.dead_ends.length === 1 && mc.continuity.dead_ends[0].side === 'echo' && mc.continuity.stalled.map((s) => s.side).join(',') === 'sq,echo');
+    ok('assemble: unmapped + phantoms + clocks merge side-qualified', mc.unmapped[0].side === 'sq' && mc.phantoms[0].side === 'echo' && mc.clocks['echo.civic_graph'] === 'epoch-s' && mc.clocks['sq.sq'] === 'epoch-ms');
+    const dc = M.describe(mc);
+    ok('describe: the one-liner names the discontinuities and the files outside the map', /continuity: 1 dead end\(s\), 2 stalled bridge\(s\) · 1 store\(s\) outside the map/.test(dc.line), dc.line);
+    ok('describe: the block carries the continuity line and the outside-the-map line', dc.block.some((l) => /^Continuity — memory that enters and never leaves: DEAD END electoral\._pending_data_stream_tags \(23,504 rows, gate never built\) · STALLED sq\.capability_needs \(31 pending, quiet 40 days\) · STALLED tenant_rainey\.inbox \(11,064 pending, never crossed\)\./.test(l)) && dc.block.some((l) => /^Outside the map: sq:stray\.db \(2\.5 MB, unmapped\) · echo:sq\.db \(phantom — 0 bytes\)\./.test(l)), dc.block.join('\n'));
+    ok('describe: a clean map says continuity holds', d.block.some((l) => /^Continuity: every bridge has a built gate/.test(l)) && !/continuity:/.test(d.line));
+  }
 
   // ── readEchoMap(): the Echo spawn contract (fake spawn) ──
   const mkSpawn = (stdout, code) => () => { const h = {}; const proc = { on(ev, fn) { h[ev] = fn; }, kill() {}, stdout: { on(ev, fn) { h.out = fn; } }, stderr: { on(ev, fn) { h.err = fn; } } };

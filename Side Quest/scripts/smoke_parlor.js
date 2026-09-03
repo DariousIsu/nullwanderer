@@ -30,7 +30,21 @@ ok(JSON.stringify(parlor.PARTICIPANTS) === JSON.stringify(['zoe', 'claude', 'gem
 ok(parlor.post({ speaker: 'gemini', text: 'here through the port door', via: 'port' }).ok === true,
   "⭐ gemini's seat rides the PORT (his 09-01 call: API quota ≈ zero — same port style as claude; the door refuses only zoe)");
 
-// ── the visit lifecycle ──
+// ── ⭐ THE SWITCH (Lucas 09-02: "make that chat engageable and default off") ──
+ok(parlor.enabled() === false, '⭐ DEFAULT OFF — a fresh store has the parlor switched off');
+{
+  const r = parlor.openVisit({ reason: 'with a research question on her mind' });
+  ok(r.ok === false && /off/.test(r.why), '⭐ off: her OWN reasons open nothing');
+  const inv = parlor.openVisit({ reason: 'because Lucas left an invitation', engaged: true });
+  ok(inv.ok === true && parlor.visit().open === true, '⭐ his invitation is an ENGAGEMENT — it opens one visit while the switch is off');
+  // close it in the past so the cooldown never shadows the lifecycle pins below
+  ok(parlor.closeVisit({ why: 'switched off', nowMs: Date.now() - parlor.VISIT_COOLDOWN_MS - 5000 }).ok === true, 'the engaged visit closes like any other');
+  ok(parlor.setEnabled(true) === true && parlor.enabled() === true, '"parlor on" engages the room (meta parlor.enabled = 1)');
+  ok(parlor.setEnabled(false) === false && parlor.openVisit({ reason: 'again' }).ok === false, '"parlor off" rests it again — her reasons refused once more');
+  parlor.setEnabled(true);
+}
+
+// ── the visit lifecycle (switch ENGAGED from here) ──
 ok(parlor.whoMayReply(T([['claude', 'anyone here?']]), null).size === 0, '⭐ a RESTING room has no floor — nobody speaks until Zoe opens a visit');
 const v1 = parlor.openVisit({ reason: 'with a research question on her mind' });
 ok(v1.ok === true && parlor.visit().open === true, 'she opens a visit with a stated reason');
@@ -106,6 +120,22 @@ ok(parlor.active() === true, 'an open visit makes the room live');
       '⭐ the window door answers natural phrasings, not just the bare word (his 09-01 catch)');
     ok(re && !re.test('what do you think about the parlor') && !re.test('parlor status') && !re.test('the parlor was nice yesterday'),
       'sentences ABOUT the parlor never hijack — the verb stays a full-match door');
+  }
+  {
+    // the switch doors — eval'd from the source so the pins test the LIVE regexes
+    const von = main.match(/const isPOn = (\/.*\/i)\.test\(userMessage\);/), voff = main.match(/const isPOff = (\/.*\/i)\.test\(userMessage\);/);
+    const reOn = von ? eval(von[1]) : null, reOff = voff ? eval(voff[1]) : null;
+    ok(reOn && reOn.test('parlor on') && reOn.test('engage the parlor') && reOn.test('turn on the parlor') && reOn.test('Enable parlor.'),
+      '⭐ "parlor on" / "engage the parlor" are full-match doors');
+    ok(reOff && reOff.test('parlor off') && reOff.test('disable the parlor') && reOff.test('switch off the parlor'),
+      '"parlor off" / "disable the parlor" too');
+    ok(reOn && reOff && !reOn.test('parlor') && !reOn.test('the parlor is on fire') && !reOff.test('parlor status') && !reOff.test('turn off the lights in the parlor'),
+      'sentences ABOUT the parlor never flip the switch');
+    ok(/parlorLib\.setEnabled\(true\)/.test(main) && /parlorLib\.setEnabled\(false\)/.test(main) && /why: 'switched off'/.test(main),
+      '⭐ wiring: the verbs flip meta parlor.enabled, and "off" closes an open visit');
+    ok(/engaged: true, commit:/.test(main) && /openVisit\(\{ reason: r\.reason, engaged: !!r\.engaged \}\)/.test(main),
+      '⭐ wiring: only his invitation carries engaged — her own reasons pass through the switch');
+    ok(/switch \$\{sw\}/.test(main) && /parlorLib\.enabled\(\) \? 'ENGAGED'/.test(main), 'the driver line and "parlor status" both say which way the switch sits');
   }
   ok(/openParlorWindow\(\{ quiet: true \}\)/.test(main) && /showInactive/.test(main),
     "⭐ his window AUTO-OPENS when a visit starts — quiet (showInactive, no focus steal): 'purely autonomous usage, I just want to watch'");

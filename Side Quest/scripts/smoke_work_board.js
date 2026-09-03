@@ -30,7 +30,8 @@ ok(s1.lanes.some((l) => l.id === `pen-${pr.id}` && l.status === 'applying' && l.
   '⭐ a mid-gate pen run lanes at 0.65 — progress DERIVED from the row\'s own stage note, never authored');
 pen.setStatus(pr.id, 'applied', { gateNote: 'gate GREEN — committed' });
 ok(wb.snapshot({}).lanes.some((l) => l.id === `pen-${pr.id}` && l.progress === 1), 'a terminal run settles at the full bar (and ages out with RUN_WINDOW)');
-require('../lib/parlor').openVisit({ reason: 'wb reason' });
+// the parlor is DEFAULT OFF (09-02); an invitation is an engagement — the only way a visit opens on a fresh store
+require('../lib/parlor').openVisit({ reason: 'wb reason', engaged: true });
 ok(wb.snapshot({}).lanes.some((l) => l.kind === 'parlor' && /wb reason/.test(l.note)), 'an open parlor visit lanes with its turn budget');
 db.setMeta('pen.gate_until', String(Date.now() + 5 * 60 * 1000));
 ok(wb.snapshot({}).lanes.some((l) => l.kind === 'quiet'), 'the quiet window lanes while a gate holds');

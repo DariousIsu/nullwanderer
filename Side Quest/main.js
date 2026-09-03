@@ -8516,13 +8516,35 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const isPW = /^\s*(?:(?:open|show(?:\s+me)?|see|view|watch)\s+)?(?:the\s+)?parlor(?:\s+window)?\s*[.!]?\s*$/i.test(userMessage);
     const isPS = /^\s*parlor\s+status\s*\??$/i.test(userMessage);
     const mInv = userMessage.match(/^\s*parlor\s+invite\s*(.*)$/i);
-    if (isPW || isPS || mInv) {
+    // THE SWITCH (Lucas 09-02: "make that chat engageable and default off"): "parlor on" engages
+    // the room (she may step in on her own reasons); "parlor off" (the default) rests it — an
+    // invitation still opens one visit. Full-match doors, same anchoring as the window verb.
+    const isPOn = /^\s*(?:parlor\s+(?:on|engage|enable)|(?:engage|enable|turn\s+on|switch\s+on)\s+(?:the\s+)?parlor)\s*[.!]?\s*$/i.test(userMessage);
+    const isPOff = /^\s*(?:parlor\s+(?:off|disengage|disable)|(?:disengage|disable|turn\s+off|switch\s+off)\s+(?:the\s+)?parlor)\s*[.!]?\s*$/i.test(userMessage);
+    if (isPW || isPS || mInv || isPOn || isPOff) {
       const parlorLib = require('./lib/parlor');
       let say;
-      if (isPS) {
+      if (isPOn) {
+        // the say reports the switch as READ BACK, never the intent (a failed meta write must not say "engaged")
+        say = parlorLib.setEnabled(true)
+          ? 'Parlor engaged — she may step in on her own reasons now (a question on her mind, a failed proposal, your invitation). "parlor off" rests it again.'
+          : 'I couldn\'t flip the switch — the meta write failed; the parlor stays off.';
+        try { startParlorDriver(); } catch {}
+      } else if (isPOff) {
+        const off = parlorLib.setEnabled(false) === false;
+        const v = parlorLib.visit();
+        if (off && v && v.open) {
+          const closed = parlorLib.closeVisit({ why: 'switched off' });
+          if (closed.ok) _parlorDoorbell(`[parlor] visit ended — Lucas switched the parlor off (${closed.turns} turns)`);
+        }
+        say = off
+          ? 'Parlor off — she won\'t step in on her own; "parlor invite <reason>" still opens one visit, "parlor on" engages it again.'
+          : 'I couldn\'t flip the switch — the meta write failed; the parlor stays engaged.';
+      } else if (isPS) {
         const v = parlorLib.visit();
         const t = parlorLib.transcript(undefined, { limit: 8 });
-        say = (v && v.open ? `A visit is OPEN (${v.turns || 0}/${parlorLib.VISIT_TURN_BUDGET} turns) — she came ${v.reason}.\n` : 'The room is resting — she steps in when she has a reason.\n')
+        say = `The parlor is ${parlorLib.enabled() ? 'ENGAGED' : 'OFF (the default — "parlor on" engages it)'}.\n`
+          + (v && v.open ? `A visit is OPEN (${v.turns || 0}/${parlorLib.VISIT_TURN_BUDGET} turns) — she came ${v.reason}.\n` : 'The room is resting — she steps in when she has a reason.\n')
           + (t.length ? t.map((x) => `${x.speaker}: ${String(x.content).slice(0, 140)}`).join('\n') : '(no turns yet)');
       } else if (mInv) {
         try { db.setMeta('parlor.invite', JSON.stringify({ reason: String(mInv[1] || 'Lucas thought you might enjoy some company').slice(0, 200), ts: Date.now() })); } catch {}
@@ -18326,14 +18348,16 @@ function startParlorDriver() {
   if (_parlorTimer) return;
   _parlorTimer = setInterval(() => { _parlorTick().catch((e) => console.error('[parlor] tick failed:', e.message)); }, 30000);
   if (_parlorTimer.unref) _parlorTimer.unref();
-  console.log(`[parlor] driver armed (30s) — HER room; seats: zoe(inside) · claude(port) · gemini(${require('./lib/parlor_gemini').available() ? 'bridge' : 'dormant — no GEMINI_API_KEY'}); lucas observes`);
+  const sw = require('./lib/parlor').enabled() ? 'ENGAGED' : 'OFF (default — "parlor on" engages; an invitation opens one visit)';
+  console.log(`[parlor] driver armed (30s) — switch ${sw}; HER room; seats: zoe(inside) · claude(port) · gemini(${require('./lib/parlor_gemini').available() ? 'bridge' : 'dormant — no GEMINI_API_KEY'}); lucas observes`);
 }
 // Why would she step in? Deterministic reasons, checked in order; his invitation always counts.
 // Returns {reason, commit} — the reason is CONSUMED only via commit(), which the caller runs
 // AFTER openVisit succeeds (audit F14/F29: consuming before a cooldown-refused open silently
 // destroyed invitations and second-opinion stories).
 function _parlorReason() {
-  try { const inv = JSON.parse(db.getMeta('parlor.invite') || 'null'); if (inv && inv.reason) return { reason: `because Lucas left an invitation: ${inv.reason}`, commit: () => { try { db.setMeta('parlor.invite', ''); } catch {} } }; } catch {}
+  // his invitation is an ENGAGEMENT — it opens one visit even while the switch is off (09-02)
+  try { const inv = JSON.parse(db.getMeta('parlor.invite') || 'null'); if (inv && inv.reason) return { reason: `because Lucas left an invitation: ${inv.reason}`, engaged: true, commit: () => { try { db.setMeta('parlor.invite', ''); } catch {} } }; } catch {}
   try {
     // a failure earns ONE visit (09-01: she re-entered for a story settled hours earlier — the
     // net fired forever on old red rows). Consumed at open — via parlor_seen, the parlor's OWN
@@ -18389,8 +18413,8 @@ async function _parlorTick() {
     if (!v || !v.open) {
       const r = _parlorReason();
       if (!r) return;
-      const o = parlor.openVisit({ reason: r.reason });
-      if (!o.ok) return;   // cooldown holds — and the reason is NOT consumed (audit F14)
+      const o = parlor.openVisit({ reason: r.reason, engaged: !!r.engaged });
+      if (!o.ok) return;   // cooldown holds, or the switch is OFF — and the reason is NOT consumed (audit F14)
       try { r.commit(); } catch {}
       console.log(`[parlor] Zoe OPENS a visit — ${r.reason}`);
       _parlorDoorbell(`[parlor] Zoe stepped into the parlor — ${r.reason}`);

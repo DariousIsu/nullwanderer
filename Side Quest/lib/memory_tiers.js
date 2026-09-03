@@ -13,6 +13,14 @@
  * KIND   record (memory proper) · staging (rows awaiting a gate) · log (history the retention
  *        sweeps prune) · index (derived: FTS shadows) · queue · state · cache · reference · display
  *
+ * CONTINUITY (Lucas 09-02: "all the memory rechecked for continuity across all memory schema"):
+ * every declared staging table must name its exit (a BRIDGE) or the map warns; a bridge says
+ * whether its gate was BUILT and, where a timestamp exists, when a row LAST crossed — pending rows
+ * whose gate has not fired for STALL_DAYS are named as STALLED, and a gate never built as a DEAD
+ * END. SQLite files under data/ that no registry names are OUTSIDE THE MAP (a warning), 0-byte
+ * ones are PHANTOMS (a lane once aimed at a path that is not a store), archives are declared.
+ * Every store on this side keeps ONE clock: epoch milliseconds.
+ *
  * Read-only on every store. Counts are capped (LIMIT 20000 → "20000+") so a render stays cheap.
  */
 'use strict';
@@ -21,6 +29,11 @@ const path = require('path');
 const SHORT = 'short-term';
 const LONG = 'long-term';
 const COUNT_CAP = 20000;
+const STALL_DAYS = 14;
+const CLOCK = 'epoch-ms';
+const DB_SUFFIX_RE = /\.(db|sqlite|sqlite3)$/i;
+const ARCHIVE_RE = /_archive_\d{8}/i;
+const PROFILE_DIR_RE = /_profile$/i;   // Chromium profiles for the search/web lanes — browser state, not memory
 
 const INDEX_RE = /(_fts|_fts_(?:config|data|docsize|idx|content))$/;
 const STAGING_SMELL = /(_proposals?$|_candidates?$|_queue$|^inbox$|_pending)/;
@@ -83,13 +96,31 @@ const REGISTRY = {
 // Promotion bridges: rows that leave short-term through a named gate. pendingSql measures the backlog;
 // a bridge whose backlog is not a backlog (the puller's ad-hoc targets are dossier subjects, not queued
 // rows) carries measureSql + a note instead — an honest "not measurable as pending".
+//   lastSql  → the epoch-ms of the last row that crossed (null = no timestamp exists to measure it —
+//              an honest "unmeasured", never assumed live); built:false = a gate never written.
 const BRIDGES = [
   { from: ['sq', 'documents'], to: 'echo.tenant.documents (the vault)', gate: 'promoteDocumentsPass (main.js) / lib/promote.js — nightly',
-    pendingSql: 'SELECT COUNT(*) FROM documents WHERE COALESCE(promoted, 0) = 0' },
-  { from: ['sq', 'graph_relations'], to: 'echo.civic_graph.relations', gate: 'cloud_curator.promoteLocalEdgesUp → propose_relation',
-    pendingSql: 'SELECT COUNT(*) FROM graph_relations WHERE COALESCE(promoted_up, 0) = 0 AND COALESCE(deleted, 0) = 0' },
+    pendingSql: 'SELECT COUNT(*) FROM documents WHERE COALESCE(promoted, 0) = 0',
+    lastSql: 'SELECT MAX(updated_ts) FROM documents WHERE promoted = 1' },
+  { from: ['sq', 'graph_relations'], to: 'echo.civic_graph.relations', gate: 'cloud_curator.promoteLocalEdgesUp → propose_relation (last = PROXY: the newest promoted row\'s created_at — promoted_up is a flag with no timestamp)',
+    pendingSql: 'SELECT COUNT(*) FROM graph_relations WHERE COALESCE(promoted_up, 0) = 0 AND COALESCE(deleted, 0) = 0',
+    lastSql: 'SELECT MAX(created_at) FROM graph_relations WHERE promoted_up = 1' },
   { from: ['sq', 'graph_entity_proposals'], to: 'sq.graph_entities', gate: 'graph_memory.promoteEntityProposal',
-    pendingSql: "SELECT COUNT(*) FROM graph_entity_proposals WHERE status = 'pending'" },
+    pendingSql: "SELECT COUNT(*) FROM graph_entity_proposals WHERE status = 'pending'", lastSql: null },
+  { from: ['sq', 'graph_relation_proposals'], to: 'sq.graph_relations', gate: 'db.graphSetRelationProposalStatus',
+    pendingSql: "SELECT COUNT(*) FROM graph_relation_proposals WHERE status = 'pending'", lastSql: null },
+  // in-place gates: the row leaves the backlog by a status flip, never by crossing a file
+  { from: ['sq', 'absence'], to: 'sq.absence (answered: evidence_kind set)', gate: 'absence.resolve — the pursuit lands evidence',
+    pendingSql: 'SELECT COUNT(*) FROM absence WHERE evidence_kind IS NULL',
+    lastSql: 'SELECT MAX(last_attempt_ts) FROM absence WHERE evidence_kind IS NOT NULL' },
+  { from: ['sq', 'capability_needs'], to: 'sq.capability_needs (retired)', gate: 'capability_need.setStatus (open→rehearsing→retired; parked = deferred, not pending)',
+    pendingSql: "SELECT COUNT(*) FROM capability_needs WHERE status = 'open'",
+    lastSql: "SELECT MAX(updated_ts) FROM capability_needs WHERE status = 'retired'" },
+  { from: ['sq', 'capability_gaps'], to: 'sq.capability_gaps (resolved)', gate: 'db.setCapabilityGapStatus',
+    pendingSql: "SELECT COUNT(*) FROM capability_gaps WHERE status = 'open'", lastSql: 'SELECT MAX(resolved_ts) FROM capability_gaps' },
+  { from: ['sq', 'code_proposals'], to: 'the program (applied)', gate: "the pen: his card → gate → apply (status 'applied')",
+    pendingSql: "SELECT COUNT(*) FROM code_proposals WHERE status NOT IN ('applied', 'rejected', 'dismissed', 'withdrawn')",
+    lastSql: "SELECT MAX(updated_ts) FROM code_proposals WHERE status = 'applied'" },
   { from: ['puller', 'targets'], to: 'echo.electoral.contact', gate: 'crm_upsert / roster_refresh (status adhoc→promoted, crm_id)',
     pendingSql: null, measureSql: "SELECT COUNT(*) FROM targets WHERE status = 'promoted'",
     note: 'ad-hoc targets are dossier subjects, not a backlog; the measure is how many are CRM-linked' },
@@ -141,9 +172,15 @@ function _defaultOpen(spec) {
   return { conn: h, close() { try { h.close(); } catch {} } };
 }
 
+const UNMEASURABLE = Symbol('unmeasurable');   // a lastSql that cannot run — never "never crossed"
+function _scalar(conn, sql) {
+  try { const row = conn.prepare(sql).get(); const v = row ? row[Object.keys(row)[0]] : null; return v == null ? null : (Number.isFinite(Number(v)) ? Number(v) : v); }
+  catch { return UNMEASURABLE; }
+}
+
 function renderStore(alias, spec, { counts = true, cap = COUNT_CAP, openFn = _defaultOpen, fs = require('fs') } = {}) {
   const reg = REGISTRY[spec.registry];
-  const out = { path: spec.path, registry: spec.registry, optional: !!spec.optional, reachable: false, size_mb: null, default: reg.default, tables: {}, bridges: [], warnings: [] };
+  const out = { path: spec.path, registry: spec.registry, optional: !!spec.optional, reachable: false, size_mb: null, default: reg.default, clock: CLOCK, tables: {}, bridges: [], warnings: [] };
   let st = null;
   try { st = fs.statSync(spec.path); } catch {}
   if (!st) { if (!spec.optional) out.warnings.push(`${alias}: store missing at ${spec.path}`); return out; }
@@ -164,22 +201,78 @@ function renderStore(alias, spec, { counts = true, cap = COUNT_CAP, openFn = _de
       out.tables[name] = entry;
     }
     for (const name of Object.keys(reg.tables)) if (!present.has(name)) out.warnings.push(`${alias}.${name}: declared but no longer exists (drift)`);
+    const bridged = new Set();
     for (const b of BRIDGES) {
       if (b.from[0] !== spec.registry || !present.has(b.from[1])) continue;
-      const entry = { from: `${alias}.${b.from[1]}`, to: b.to, gate: b.gate, pending: null };
+      bridged.add(b.from[1]);
+      const entry = { from: `${alias}.${b.from[1]}`, to: b.to, gate: b.gate, pending: null, built: b.built !== false, last_crossed: null, last_measured: !!b.lastSql };
       if (b.note) entry.note = b.note;
       try {
         if (b.pendingSql) entry.pending = h.conn.prepare(b.pendingSql).get()[Object.keys(h.conn.prepare(b.pendingSql).get())[0]];
         else if (b.measureSql) entry.measure = h.conn.prepare(b.measureSql).get()[Object.keys(h.conn.prepare(b.measureSql).get())[0]];
       } catch (e) { out.warnings.push(`${alias}.${b.from[1]}: bridge backlog unmeasurable (${String(e.message || e).slice(0, 60)})`); }
+      if (b.lastSql) {
+        const v = _scalar(h.conn, b.lastSql);
+        if (v === UNMEASURABLE) { entry.last_measured = false; out.warnings.push(`${alias}.${b.from[1]}: last-crossed unmeasurable (${b.lastSql.slice(0, 60)})`); }
+        else entry.last_crossed = v;
+      }
       out.bridges.push(entry);
+    }
+    // a declared staging table with no bridge has no named exit — drift, not a quiet default
+    for (const [name, t] of Object.entries(out.tables)) {
+      if (t.kind === 'staging' && t.declared === 'explicit' && !bridged.has(name)) out.warnings.push(`${alias}.${name}: staging with no promotion bridge — declare its gate (or mark it built:false)`);
     }
   } finally { h.close(); }
   return out;
 }
 
+// The discontinuities, named from the measured bridges: a gate never built is a DEAD END; pending
+// rows whose gate has not fired within STALL_DAYS (or ever, where a timestamp exists) are STALLED.
+function continuityOf(bridges, nowMs) {
+  const dead_ends = [], stalled = [];
+  for (const b of bridges) {
+    if (b.built === false) { dead_ends.push({ from: b.from, to: b.to, pending: b.pending, gate: b.gate, why: 'gate never built' }); continue; }
+    if (!Number.isInteger(b.pending) || b.pending <= 0 || !b.last_measured) continue;
+    const lc = Number.isFinite(b.last_crossed) ? b.last_crossed : null;
+    const days = lc == null ? null : Math.round((nowMs - lc) / 8640000) / 10;
+    if (lc == null || days > STALL_DAYS) {
+      b.stalled = true;
+      stalled.push({ from: b.from, to: b.to, pending: b.pending, gate: b.gate, last_crossed: lc, days, why: lc == null ? 'never crossed' : `quiet ${days} days` });
+    }
+  }
+  return { dead_ends, stalled };
+}
+
+// Every SQLite file under data/ that no spec names: a non-empty unknown is OUTSIDE THE MAP (a
+// warning upstream); a dated archive is declared as such; a 0-byte file is a PHANTOM. Chromium
+// profile dirs (search_profile/, web_profile/) hold browser state, never memory — skipped.
+function sweepUnmapped(dataDir, specs, { fs = require('fs') } = {}) {
+  const unmapped = [], phantoms = [], archives = [];
+  if (!dataDir || typeof fs.readdirSync !== 'function') return { unmapped, phantoms, archives };
+  const known = new Set(Object.values(specs).map((s) => path.resolve(String(s.path)).toLowerCase()));
+  const walk = (dir, depth) => {
+    let ents = [];
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { if (depth < 2 && !PROFILE_DIR_RE.test(e.name) && e.name !== 'node_modules') walk(p, depth + 1); continue; }
+      if (!DB_SUFFIX_RE.test(e.name) || known.has(path.resolve(p).toLowerCase())) continue;
+      let size = null; try { size = fs.statSync(p).size; } catch { continue; }
+      const rel = path.relative(dataDir, p).split(path.sep).join('/');
+      if (size === 0) phantoms.push({ path: rel, note: '0 bytes — a lane once aimed at a path that is not a store' });
+      else if (ARCHIVE_RE.test(e.name)) archives.push({ path: rel, size_mb: Math.round(size / 1e5) / 10 });
+      else unmapped.push({ path: rel, size_mb: Math.round(size / 1e5) / 10 });
+    }
+  };
+  walk(dataDir, 0);
+  return { unmapped, phantoms, archives };
+}
+
 function render({ dataDir = null, counts = true, cap = COUNT_CAP, openFn = _defaultOpen, paths = null, nowMs = Date.now(), fs = require('fs') } = {}) {
-  const specs = paths || storePaths(dataDir || path.join(__dirname, '..', 'data'));
+  // the sweep root: an explicit dataDir, or the real data/ when rendering the real stores (paths
+  // null); injected paths with no dataDir (a fixture) sweep nothing
+  const root = dataDir || (paths ? null : path.join(__dirname, '..', 'data'));
+  const specs = paths || storePaths(root);
   const stores = {};
   for (const [alias, spec] of Object.entries(specs)) stores[alias] = renderStore(alias, spec, { counts, cap, openFn, fs });
   const tiers = { [SHORT]: { tables: 0, kinds: {}, stores: new Set() }, [LONG]: { tables: 0, kinds: {}, stores: new Set() } };
@@ -189,8 +282,12 @@ function render({ dataDir = null, counts = true, cap = COUNT_CAP, openFn = _defa
     for (const t of Object.values(s.tables)) { const tt = tiers[t.tier]; tt.tables++; tt.kinds[t.kind] = (tt.kinds[t.kind] || 0) + 1; tt.stores.add(alias); }
   }
   for (const t of Object.values(tiers)) t.stores = [...t.stores].sort();
+  const continuity = continuityOf(bridges, nowMs);
+  const { unmapped, phantoms, archives } = sweepUnmapped(root, specs, { fs });
+  for (const u of unmapped) warnings.push(`${u.path}: a store outside the map (${u.size_mb} MB) — declare it in the registry`);
   const backlog = bridges.reduce((n, b) => n + (Number.isInteger(b.pending) ? b.pending : 0), 0);
-  return { memory_map_version: 1, side: 'sq', at: nowMs, tiers, stores, bridges, backlog, cross_file_staging: [], warnings };
+  const clocks = Object.fromEntries(Object.entries(stores).filter(([, s]) => s.reachable).map(([a, s]) => [a, s.clock]));
+  return { memory_map_version: 2, side: 'sq', at: nowMs, tiers, stores, bridges, backlog, cross_file_staging: [], continuity, unmapped, phantoms, archives, clocks, warnings };
 }
 
-module.exports = { render, renderStore, classify, storePaths, REGISTRY, BRIDGES, SHORT, LONG, COUNT_CAP };
+module.exports = { render, renderStore, classify, storePaths, continuityOf, sweepUnmapped, REGISTRY, BRIDGES, SHORT, LONG, COUNT_CAP, STALL_DAYS, CLOCK };

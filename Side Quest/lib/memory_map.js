@@ -21,6 +21,8 @@ function _dbm(deps) { return (deps && deps.db) || require('./db'); }
 function assemble({ echo = null, sq = null, nowMs = Date.now() } = {}) {
   const tiers = { [SHORT]: { tables: 0, stores: [] }, [LONG]: { tables: 0, stores: [] } };
   const warnings = [], bridges = [];
+  const continuity = { dead_ends: [], stalled: [] };
+  const unmapped = [], phantoms = [], clocks = {};
   const halves = { echo: !!(echo && echo.tiers), sq: !!(sq && sq.tiers) };
   for (const [side, half] of [['sq', sq], ['echo', echo]]) {
     if (!half || !half.tiers) { warnings.push(`${side} half unavailable${half && half.error ? `: ${half.error}` : ''}`); continue; }
@@ -31,11 +33,18 @@ function assemble({ echo = null, sq = null, nowMs = Date.now() } = {}) {
     }
     for (const b of (half.bridges || [])) bridges.push({ ...b, side });
     for (const w of (half.warnings || [])) warnings.push(`${side}: ${w}`);
+    const c = half.continuity || {};
+    for (const d of (c.dead_ends || [])) continuity.dead_ends.push({ ...d, side });
+    for (const s of (c.stalled || [])) continuity.stalled.push({ ...s, side });
+    for (const u of (half.unmapped || [])) unmapped.push({ ...u, side });
+    for (const p of (half.phantoms || [])) phantoms.push({ ...p, side });
+    for (const [a, clk] of Object.entries(half.clocks || {})) clocks[`${side}.${a}`] = clk;
   }
   const backlog = bridges.reduce((n, b) => n + (Number.isInteger(b.pending) ? b.pending : 0), 0);
   return {
-    memory_map_version: 1, at: nowMs, halves, tiers, bridges, backlog,
+    memory_map_version: 2, at: nowMs, halves, tiers, bridges, backlog,
     cross_file_staging: (echo && echo.cross_file_staging) || [],
+    continuity, unmapped, phantoms, clocks,
     warnings,
   };
 }
@@ -49,12 +58,25 @@ function describe(map) {
   const warn = (map.warnings || []).length;
   const halves = map.halves || {};
   const partial = (!halves.echo || !halves.sq) ? ` (${!halves.echo ? 'Echo half missing' : 'Side Quest half missing'})` : '';
-  const line = `one memory: ${_n(st.tables)} short-term / ${_n(lt.tables)} long-term tables · promotion backlog ${_n(map.backlog)} rows${warn ? ` · ${warn} tier warning(s)` : ''}${partial}`;
+  const cont = map.continuity || { dead_ends: [], stalled: [] };
+  const nDead = (cont.dead_ends || []).length, nStall = (cont.stalled || []).length, nOut = (map.unmapped || []).length;
+  const contBit = (nDead || nStall) ? ` · continuity: ${nDead} dead end(s), ${nStall} stalled bridge(s)` : '';
+  const line = `one memory: ${_n(st.tables)} short-term / ${_n(lt.tables)} long-term tables · promotion backlog ${_n(map.backlog)} rows${contBit}${nOut ? ` · ${nOut} store(s) outside the map` : ''}${warn ? ` · ${warn} tier warning(s)` : ''}${partial}`;
   const block = [];
   block.push(`One memory, two tiers${partial}: short-term ${_n(st.tables)} tables across ${st.stores.length} store(s) · long-term ${_n(lt.tables)} tables across ${lt.stores.length} store(s).`);
   const bs = [...(map.bridges || [])].sort((a, b) => (Number.isInteger(b.pending) ? b.pending : -1) - (Number.isInteger(a.pending) ? a.pending : -1));
   if (bs.length) {
-    block.push(`Promotion bridges (backlog ${_n(map.backlog)} rows waiting on a gate): ${bs.slice(0, 8).map((b) => `${b.from} → ${b.to}: ${b.pending == null ? (b.measure != null ? `${_n(b.measure)} linked` : '?') : `${_n(b.pending)} pending`}`).join(' · ')}.`);
+    block.push(`Promotion bridges (backlog ${_n(map.backlog)} rows waiting on a gate): ${bs.slice(0, 8).map((b) => `${b.from} → ${b.to}: ${b.pending == null ? (b.measure != null ? `${_n(b.measure)} linked` : '?') : `${_n(b.pending)} pending`}${b.stalled ? ' (STALLED)' : ''}${b.built === false ? ' (DEAD END)' : ''}`).join(' · ')}.`);
+  }
+  if (nDead || nStall) {
+    const parts = [];
+    for (const d of cont.dead_ends) parts.push(`DEAD END ${d.from} (${_n(d.pending)} rows, ${d.why})`);
+    for (const s of cont.stalled) parts.push(`STALLED ${s.from} (${_n(s.pending)} pending, ${s.why})`);
+    block.push(`Continuity — memory that enters and never leaves: ${parts.join(' · ')}.`);
+  } else block.push('Continuity: every bridge has a built gate that has fired within the stall window.');
+  if (nOut || (map.phantoms || []).length) {
+    const parts = [...(map.unmapped || []).map((u) => `${u.side}:${u.path} (${u.size_mb} MB, unmapped)`), ...(map.phantoms || []).map((p) => `${p.side}:${p.path} (phantom — ${p.note})`)];
+    block.push(`Outside the map: ${parts.join(' · ')}.`);
   }
   if (map.cross_file_staging && map.cross_file_staging.length) {
     block.push(`Short-term staging living inside a long-term file: ${map.cross_file_staging.map((c) => `${c.store}.${c.table} (${_n(c.rows)})`).join(' · ')}.`);

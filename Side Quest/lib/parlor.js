@@ -22,6 +22,7 @@ const VISIT_COOLDOWN_MS = 30 * 60 * 1000;
 const MAX_TEXT = 4000;
 const DEFAULT_ROOM = 'main';
 const VISIT_KEY = 'parlor.visit';
+const ENABLED_KEY = 'parlor.enabled';
 
 function _ensure() {
   db.getDb().prepare(`CREATE TABLE IF NOT EXISTS parlor_turns (
@@ -38,15 +39,31 @@ function _ensure() {
 // cap on API-billed pleasantries). A farewell-shaped zoe turn closes the visit mechanically.
 const FAREWELL_RE = /\b(goodbye|good ?night|i'?ll head (?:out|back)|heading out|i'?m done here|that'?s all i needed|got what i (?:came for|needed)|see you (?:both|around|next time)|i'?ll (?:leave|let) you (?:two|both)|clos(?:e|ing) (?:us|this|it) out|i'?m all set|all set here|wrap(?:ping)? (?:this|us|it) up)\b/i;
 
+// ── THE SWITCH (Lucas 09-02: "make that chat engageable and default off") ─────────────────────
+// The room is OFF unless he engages it (meta parlor.enabled = '1'; "parlor on" / "parlor off").
+// Off means she never opens a visit on her OWN reasons. His invitation is itself an engagement:
+// it still opens ONE visit while the switch is off. The driver keeps feeding the window either
+// way, so an outside seat's post is never lost — the room just never starts a conversation.
+function enabled({ deps = {} } = {}) {
+  const d = deps.db || db;
+  try { return String(d.getMeta(ENABLED_KEY) || '0') === '1'; } catch { return false; }
+}
+function setEnabled(on, { deps = {} } = {}) {
+  const d = deps.db || db;
+  try { d.setMeta(ENABLED_KEY, on ? '1' : '0'); } catch {}
+  return enabled({ deps });
+}
+
 // ── the visit lifecycle ───────────────────────────────────────────────────────────────────────
 function visit({ deps = {} } = {}) {
   const d = deps.db || db;
   try { return JSON.parse(d.getMeta(VISIT_KEY) || 'null'); } catch { return null; }
 }
-function openVisit({ reason = 'to talk', nowMs = Date.now(), deps = {} } = {}) {
+function openVisit({ reason = 'to talk', engaged = false, nowMs = Date.now(), deps = {} } = {}) {
   const d = deps.db || db;
   const v = visit({ deps });
   if (v && v.open) return { ok: false, why: 'a visit is already open' };
+  if (!engaged && !enabled({ deps })) return { ok: false, why: 'the parlor is off (default) — "parlor on" engages it; an invitation still opens one visit' };
   if (v && v.closedAt && (nowMs - v.closedAt) < VISIT_COOLDOWN_MS) return { ok: false, why: 'cooldown — the last visit just ended' };
   const nv = { open: true, reason: String(reason).slice(0, 200), since: nowMs, turns: 0 };
   try { d.setMeta(VISIT_KEY, JSON.stringify(nv)); } catch {}
@@ -125,7 +142,7 @@ function transcriptBlock(turns) {
 }
 
 module.exports = {
-  PARTICIPANTS, OBSERVER, VISIT_TURN_BUDGET, VISIT_COOLDOWN_MS, DEFAULT_ROOM, VISIT_KEY, FAREWELL_RE,
+  PARTICIPANTS, OBSERVER, VISIT_TURN_BUDGET, VISIT_COOLDOWN_MS, DEFAULT_ROOM, VISIT_KEY, ENABLED_KEY, FAREWELL_RE,
   post, transcript, addressees, whoMayReply, active, transcriptBlock,
-  visit, openVisit, closeVisit,
+  visit, openVisit, closeVisit, enabled, setEnabled,
 };
