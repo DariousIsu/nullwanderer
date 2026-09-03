@@ -25,6 +25,9 @@ function reset() {
   db.getDb().prepare('DELETE FROM agent_events').run();
   db.getDb().prepare('DELETE FROM open_threads').run();
   db.getDb().prepare('DELETE FROM knowledge').run(); // clear tombstones between sections
+  // open_threads ids RESTART after a full delete (INTEGER PRIMARY KEY, no AUTOINCREMENT), so per-id focus
+  // meta (origin / beat / stopped) from an earlier section would leak onto a later section's thread.
+  db.getDb().prepare("DELETE FROM meta WHERE key LIKE 'focus.%'").run();
   db.setMeta('current_focus_id', '');
   db.setMeta('focus_state', '');
 }
@@ -173,18 +176,101 @@ async function run() {
   const dup = await focus.setFromDirective('catalog every right-of-center energy think tank');
   ok('a near-identical follow-up does NOT spawn a duplicate (idempotent)', dup.focus.id === disp.focus.id);
 
-  // --- ORIGIN persistence (autonomic-canvas gate, Slice P): who seeded the focus is remembered per
-  // id, so the canvas gate can suppress an autonomic county BEAT run while a real USER directive still
-  // renders. Both carry directed:true, so `directed` alone can't tell them apart — origin can. ---
-  console.log('\nfocus origin (user vs autonomic beat — the canvas-flood gate):');
+  // --- ORIGIN → TIER (usage law, Lucas 2026-09-03: "she's still firing on validate elected officials
+  // state by state when there is very incomplete work outstanding"). A beat-minted focus is EXPANSION by
+  // construction and never carries the directed flag; directed is his word only; expansion yields to
+  // directed. The canvas gate's origin stamp (Slice P) is still persisted — the tier is what the
+  // driver, the scheduler and the pass gate key on. ---
+  console.log('\nfocus origin → tier (user = DIRECTED, beat = EXPANSION; both DRIVEN):');
   reset();
   const uOrig = await focus.setFromDirective('study every right-of-center think tank');
   ok('a USER directive persists origin=user', focus.originOf(uOrig.focus.id) === 'user');
   ok('originOf accepts a focus object too', focus.originOf(uOrig.focus) === 'user');
-  const bOrig = await focus.setFromDirective('Compile the county-level governing board for Adams County, Wisconsin', null, { origin: 'beat' });
-  ok('a BEAT-seeded focus persists origin=beat (the per-county canvas-flood source)', focus.originOf(bOrig.focus.id) === 'beat');
-  ok('the beat focus is STILL mechanically directed (directed alone cannot gate it)', focus.isDirected(focus.getCurrent()) === true);
+  ok('a user directive is DIRECTED and DRIVEN, never expansion', focus.isDirected(uOrig.focus) && focus.isDriven(uOrig.focus) && !focus.isExpansion(uOrig.focus));
+  ok('⭐ a beat seed YIELDS to his directed focus (null; his focus keeps the slot)',
+    (await focus.setExpansion('Compile the county-level governing board for Adams County, Wisconsin')) === null && focus.getCurrent().id === uOrig.focus.id && focus.isDirected(focus.getCurrent()));
+  reset();
+  const bOrig = await focus.setExpansion('Compile the county-level governing board for Adams County, Wisconsin');
+  ok('a BEAT seed persists origin=beat (the per-county canvas-flood source)', !!bOrig && focus.originOf(bOrig.focus.id) === 'beat');
+  ok('⭐ the beat focus is EXPANSION, never DIRECTED (directed is his word only)', focus.isExpansion(focus.getCurrent()) === true && focus.isDirected(focus.getCurrent()) === false);
+  ok('…but it IS driven (the directed driver still owns the mechanics)', focus.isDriven(focus.getCurrent()) === true);
+  ok('the run state records the split (directed:false, expansion:true)', (() => { const s = JSON.parse(db.getMeta('focus_state')); return s.directed === false && s.expansion === true; })());
+  let eLast; for (let i = 0; i < focus.MAX_TICKS + 4; i++) eLast = focus.recordOutcome(bOrig.focus, { progressed: true });
+  ok(`expansion keeps the DRIVEN caps (continues past MAX_TICKS=${focus.MAX_TICKS} like a directed run)`, eLast.action === 'continue');
+  const legacyBeatFocus = focus.getCurrent();
+  const viaLegacy = await focus.setFromDirective('Compile the county-level governing board for Adams County, Wisconsin', null, { origin: 'beat' });
+  ok('the legacy { origin: "beat" } option on setFromDirective routes to the same expansion door', !!viaLegacy && focus.isExpansion(focus.getCurrent()) && !focus.isDirected(focus.getCurrent()));
+  const disp2 = await focus.setFromDirective('catalog every right-of-center energy think tank');
+  ok('⭐ a user directive DISPLACES an expansion focus (expansion yields to his word)', !!disp2 && focus.isDirected(focus.getCurrent()) === true && focus.getCurrent().id !== legacyBeatFocus.id);
   ok('an unknown/legacy focus id defaults to user (canvas never suppresses a real run)', focus.originOf(999999) === 'user');
+  // THE RESUME-DRIFT CURE. Measured 09-03: 88 beat-tagged threads carried origin=user — the scheduler's
+  // RESUME call, setCurrent(thread, {directed:true}), defaulted the stamp — so a resumed sweep passed the
+  // idle gate as his work and ran at his-order cadence. Origin is now DERIVED from the durable stamps:
+  // a beat-tagged thread not born from his turn is expansion however it is re-pointed, and the stamp heals.
+  reset();
+  const drifted = db.insertOpenThread({ content: 'VALIDATE the elected officials of every county in Kansas' });
+  db.setMeta(`focus.${drifted.id}.beat`, 'county-commissions-ks');
+  db.setMeta(`focus.${drifted.id}.origin`, 'user');                      // the laundered stamp, as found live
+  const re = focus.setCurrent(drifted.id, { directed: true });          // the scheduler's RESUME call, verbatim
+  ok('⭐ RESUMING a beat-tagged thread yields EXPANSION even when {directed:true} is passed', !!re && focus.isExpansion(re) && !focus.isDirected(re) && focus.isDriven(re));
+  ok('⭐ …and REWRITES the laundered origin stamp back to beat (self-healing on resume)', focus.originOf(drifted.id) === 'beat');
+  // ADOPTION stays his: a beat-tagged thread BORN FROM HIS TURN ("compile leadership for all Louisiana
+  // parishes", which the LA beat runs AS his request) is directed — his word, never the sweep's.
+  reset();
+  const sid = db.getDb().prepare('INSERT INTO sessions (started_at) VALUES (?)').run(Date.now()).lastInsertRowid;
+  const hisTurn = db.insertTurn({ sessionId: sid, speaker: 'user', content: 'compile leadership data for all Louisiana parishes' });
+  const adopted = db.insertOpenThread({ content: 'compile leadership data for all Louisiana parishes', sourceTurnId: hisTurn.id });
+  db.setMeta(`focus.${adopted.id}.beat`, 'county-commissions-la');
+  const ad = focus.setCurrent(adopted.id, { directed: true, origin: 'user' });
+  ok('an ADOPTED thread (born from his turn, beat-tagged) stays DIRECTED — his word', !!ad && focus.isDirected(ad) && !focus.isExpansion(ad));
+  const ad2 = focus.setCurrent(adopted.id, { directed: true });        // re-pointed with no origin → derived from his turn
+  ok('…and re-pointing it with no origin still derives user (born from his turn outranks the beat tag)', !!ad2 && focus.isDirected(ad2) && focus.originOf(adopted.id) === 'user');
+  // LEGACY STATE (the boot that carries this change): a focus_state written before the split has no
+  // `expansion` field — a beat-tagged current focus must read as expansion, not as his directed work.
+  reset();
+  const legacy = db.insertOpenThread({ content: 'VALIDATE the elected officials of every county in Iowa' });
+  db.setMeta(`focus.${legacy.id}.beat`, 'county-commissions-ia');
+  db.setMeta('current_focus_id', String(legacy.id));
+  db.setMeta('focus_state', JSON.stringify({ id: legacy.id, ticks: 3, strikes: 0, startedTs: Date.now(), directed: true }));
+  ok('⭐ a pre-split focus_state (no expansion field) on a beat-tagged focus reads EXPANSION, not directed',
+    focus.isExpansion(focus.getCurrent()) && !focus.isDirected(focus.getCurrent()) && focus.isDriven(focus.getCurrent()));
+  reset();
+  const legacyHis = db.insertOpenThread({ content: 'study every right-of-center think tank overnight' });
+  db.setMeta('current_focus_id', String(legacyHis.id));
+  db.setMeta('focus_state', JSON.stringify({ id: legacyHis.id, ticks: 3, strikes: 0, startedTs: Date.now(), directed: true }));
+  ok('a pre-split focus_state on an UNTAGGED focus still reads DIRECTED (his overnight task survives the cycle)',
+    focus.isDirected(focus.getCurrent()) && !focus.isExpansion(focus.getCurrent()));
+
+  // --- THE LIVE WIRING: structural pins over main.js / lib/monologue.js — the sites that must key on the
+  // RIGHT predicate (isDriven = mechanics; isDirected = his word). A regression here is the disease back. ---
+  console.log('\nthe live wiring (main.js / lib/monologue.js sites):');
+  {
+    const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+    const monoSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'monologue.js'), 'utf8');
+    ok('seedBeatRun mints the primary beat focus as EXPANSION (setExpansion), never through setFromDirective',
+      /focusLib\.setExpansion\(beat\.goal\)/.test(mainSrc) && !/setFromDirective\(beat\.goal/.test(mainSrc));
+    ok('the directed driver tick drives DRIVEN foci (directed + expansion)',
+      /if \(!focus \|\| !focusLib\.isDriven\(focus\)\) \{ stopDirectedFocusDriver\(\); return; \}/.test(mainSrc));
+    ok('⭐ the beat pass gate reads the TIER (isExpansion), never the once-laundered origin stamp',
+      /const _focusOrigin = focusLib\.isExpansion\(focus\) \? 'beat' : 'user';/.test(mainSrc));
+    ok('_focusSpendTier and _userDirectedActive key on isDirected alone (one definition of "his word")',
+      /function _focusSpendTier\(focus\) \{\s*try \{ return \(focus && require\('\.\/lib\/focus'\)\.isDirected\(focus\)\) \? 'directed' : 'research'; \}/.test(mainSrc)
+      && /return !!\(f && focusLib\.isDirected\(f\)\);\s*\/\/ usage law/.test(mainSrc));
+    ok('the scheduler never preempts a DIRECTED focus and rotates only DRIVEN beat foci',
+      /if \(focus && focusLib\.isDriven\(focus\)\) \{\s*if \(focusLib\.isDirected\(focus\)\) return;/.test(mainSrc));
+    ok('a user-stop and a user-redirect both stamp focus.<id>.stopped (a thread he set down is never auto-resumed)',
+      (mainSrc.match(/db\.setMeta\(`focus\.\$\{f\.id\}\.stopped`, String\(Date\.now\(\)\)\)/g) || []).length >= 2);
+    ok('⭐ the user-work driver sees his OUTSTANDING started threads (open newest-first pool + the resumable predicate)',
+      /resumableOf: _resumableOf/.test(mainSrc) && /getActiveOpenThreads\(200, \{ includeStalled: false, newestFirst: true \}\)/.test(mainSrc)
+      && /if \(\(db\.getMeta\(`focus\.\$\{id\}\.origin`\) \|\| ''\) !== 'user'\) return false;/.test(mainSrc) && /if \(db\.getMeta\(`focus\.\$\{id\}\.stopped`\)\) return false;/.test(mainSrc));
+    ok('the boot lost-pointer resume skips beat-tagged threads (no laundering at boot)',
+      /originOf\(t\.id\) === 'user' && !\(db\.getMeta\(`focus\.\$\{t\.id\}\.beat`\) \|\| ''\)\.trim\(\)/.test(mainSrc));
+    ok('the adopted-thread seed stamps origin user explicitly (his thread, run by the beat)',
+      /focusLib\.setCurrent\(adopted\.id, \{ directed: true, origin: 'user' \}\)/.test(mainSrc));
+    ok('the monologue leaves DRIVEN foci to the driver; its bandwidth preemption keys on isDirected alone',
+      /if \(activeFocus && focusLib\.isDriven\(activeFocus\)\) activeFocus = null;/.test(monoSrc)
+      && /function _userDirectedActive\(\) \{\s*try \{ const fl = require\('\.\/focus'\); const f = fl\.getCurrent\(\); return !!\(f && fl\.isDirected\(f\)\); \}/.test(monoSrc));
+  }
 
   // --- BACKGROUND research workers (parallelism): must NEVER touch the primary pointer ---
   console.log('\nbackground workers (parallelism) — isolation from the primary focus:');

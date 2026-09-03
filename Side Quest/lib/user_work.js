@@ -177,12 +177,23 @@ function scoreThread(t, { now = 0, newsAt = 0 } = {}) {
 // it has the meta). `laneOf(id)` returns the stamped lane or null; an UNSTAMPED thread falls
 // back to the old research-shape filter, so behavior without the stamping pass is unchanged.
 // Null = nothing qualifies → the sweep may have the slot.
-function pickUserThread(threads, { now = 0, newsAtOf = () => 0, laneOf = () => null } = {}) {
+// `resumableOf(id)` (usage law, 2026-09-03 — "very incomplete work outstanding"): a thread that once held
+// the primary as HIS work and is still open returns to the pool. The CALLER decides resumability (the
+// explicit user-origin stamp, not stopped by him, touched inside the resume window); here a resumable
+// thread only has to not have been routed away from the driver (tool/self/none). Default = never, so a
+// caller that does not pass it keeps the old "pending + never-driven" pool exactly. A STALLED thread is
+// never resumed by anyone — it would just re-stall; his redirect is the door for that.
+function pickUserThread(threads, { now = 0, newsAtOf = () => 0, laneOf = () => null, resumableOf = () => false } = {}) {
   let best = null, bestScore = -1;
   for (const t of (Array.isArray(threads) ? threads : [])) {
-    if (!t || t.status !== 'pending' || (t.action_count | 0) !== 0) continue;
+    if (!t || !['pending', 'active'].includes(t.status)) continue;
     const lane = laneOf(t.id);
-    if (lane ? !['research', 'deliverable'].includes(lane) : !isResearchShaped(t.content)) continue;
+    if (resumableOf(t.id)) {
+      if (lane && !['research', 'deliverable'].includes(lane)) continue;
+    } else {
+      if (t.status !== 'pending' || (t.action_count | 0) !== 0) continue;
+      if (lane ? !['research', 'deliverable'].includes(lane) : !isResearchShaped(t.content)) continue;
+    }
     const s = scoreThread(t, { now, newsAt: newsAtOf(t.id) || 0 });
     if (s > bestScore || (s === bestScore && (t.created_ts || 0) > ((best && best.created_ts) || 0))) { best = t; bestScore = s; }
   }

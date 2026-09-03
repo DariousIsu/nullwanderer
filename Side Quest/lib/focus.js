@@ -42,7 +42,19 @@ const MAX_WALLCLOCK_MS = 10 * 60 * 1000;   // and at most ten minutes of wall-cl
 const MAX_TICKS_DIRECTED = 2000;                    // ceiling; a 45s driver cadence ⇒ ~hundreds/night
 const MAX_STRIKES_DIRECTED = 12;                    // tolerant of a few hard sub-steps, still bounded
 const MAX_WALLCLOCK_MS_DIRECTED = 14 * 60 * 60 * 1000; // ~one night
-const FOCUS_STATE_KEY = 'focus_state';     // meta JSON: { id, ticks, strikes, startedTs, directed }
+// THE TIER SPLIT (usage law, Lucas 2026-09-03 — "she's still firing on validate elected officials state by
+// state when there is very incomplete work outstanding"). Two flags, one meaning each:
+//   directed  = HIS WORD. A focus born from a user directive (or a thread of his a beat adopted). It gets
+//               displacement, the directed spend tier (floor-gated, never paced), his-order cadence.
+//   expansion = the program's own roster/topic sweep (a beat-minted focus). It shares the DRIVEN mechanics
+//               (the overnight caps below, the directed driver) but NEVER the priority: research tier,
+//               idle-gated passes, and it yields whenever directed or user work is outstanding.
+// Before the split a beat-minted focus rode setFromDirective and carried directed:true, so every "is his
+// work running?" test in the program said yes to the sweep. Measured 09-03: 88 beat-tagged threads had
+// also been laundered to origin=user by the scheduler's resume path (setCurrent defaulted the stamp), so
+// a RESUMED sweep even passed the idle gate as his work. Origin is now DERIVED from durable stamps
+// (_resolveOrigin) and the tier from origin — a caller cannot mint a directed focus for the sweep.
+const FOCUS_STATE_KEY = 'focus_state';     // meta JSON: { id, ticks, strikes, startedTs, directed, expansion }
 const CURRENT_KEY = 'current_focus_id';
 const REFRACTORY_MS = 24 * 60 * 60 * 1000; // a just-closed focus can't respawn for 24h
 const SIM_THRESHOLD = 0.82;                // semantic similarity that counts as "the same focus"
@@ -69,39 +81,86 @@ function getCurrent() {
 
 function isActive() { return !!getCurrent(); }
 
-// Promote an existing open_thread to the current focus. opts.directed marks it as a Lucas-assigned
-// task (overnight caps + driven by the directed-focus driver in main.js rather than the monologue).
-function setCurrent(threadId, { directed = false, origin = 'user' } = {}) {
+// Promote an existing open_thread to the current focus. opts.directed asks for the DRIVEN mechanics
+// (overnight caps + the directed-focus driver in main.js rather than the monologue); whether the focus
+// is DIRECTED (his word) or EXPANSION (the sweep) is decided by its ORIGIN, never by the caller's flag.
+function setCurrent(threadId, { directed = false, origin = null } = {}) {
   const t = db.getOpenThread(threadId);
   if (!t) return null;
+  const o = _resolveOrigin(threadId, origin, t);
+  const expansion = o === 'beat';
   db.setMeta(CURRENT_KEY, String(threadId));
-  _saveState({ id: threadId, ticks: 0, strikes: 0, startedTs: Date.now(), directed: !!directed });
+  _saveState({ id: threadId, ticks: 0, strikes: 0, startedTs: Date.now(), directed: !!directed && !expansion, expansion });
   // WHO seeded this focus — 'user' (a real directive), 'beat' (the autonomic scheduler), 'self' (a
-  // musing) — persisted per id so the canvas gate can tell a Lucas-asked run from an autonomic county
-  // beat (both carry directed:true, so `directed` alone can't). Default 'user' = never suppress.
-  try { db.setMeta(`focus.${threadId}.origin`, origin || 'user'); } catch {}
+  // musing) — persisted per id. Rewritten on every re-point from the derived value, so a laundered
+  // stamp heals the next time the scheduler resumes the thread.
+  try { db.setMeta(`focus.${threadId}.origin`, o); } catch {}
   db.touchOpenThread(threadId);  // pending → active
   try { blackboard.append({ source: 'monologue', kind: 'focus_set', focusId: threadId, content: t.content }); } catch {}
   return db.getOpenThread(threadId);
 }
 
+// The origin of a focus, from its DURABLE stamps. An explicit origin from the caller wins (seedBeatRun says
+// 'beat'; the boot resume says 'user'). Otherwise: a beat-tagged thread (focus.<id>.beat, set on every
+// sweep thread at seed time) is 'beat' UNLESS it was born from his own turn — that is a thread the beat
+// ADOPTED ("compile leadership for all Louisiana parishes"), which stays his word. An untagged thread keeps
+// its prior stamp, else 'user'. This is what stops the RESUME path from turning the sweep into his work:
+// setCurrent(thread, {directed:true}) with no origin used to stamp 'user' on a beat thread.
+function _resolveOrigin(threadId, origin, thread) {
+  if (origin) return String(origin);
+  let beatTag = '', prior = '';
+  try { beatTag = (db.getMeta(`focus.${threadId}.beat`) || '').trim(); } catch {}
+  try { prior = db.getMeta(`focus.${threadId}.origin`) || ''; } catch {}
+  if (beatTag) return _bornFromUser(thread || db.getOpenThread(threadId)) ? 'user' : 'beat';
+  return prior || 'user';
+}
+// Was this thread minted from one of HIS turns? (source_turn_id → a 'user' speaker row.) Fail-closed: an
+// unreadable lineage is not his — a beat thread must never be promoted by an error.
+function _bornFromUser(thread) {
+  try {
+    const sid = thread && thread.source_turn_id;
+    if (!sid) return false;
+    const row = db.getDb().prepare('SELECT speaker FROM turns WHERE id = ?').get(sid);
+    return !!(row && row.speaker === 'user');
+  } catch { return false; }
+}
+function _beatTagged(focusId) { try { return !!(db.getMeta(`focus.${focusId}.beat`) || '').trim(); } catch { return false; } }
+
 // WHO seeded a focus — 'user' (a real directive), 'beat' (the autonomic scheduler), or 'self' (a
 // musing). Persisted per focus id by setCurrent. Defaults to 'user' for any unmarked/legacy focus, so
 // a consumer (the canvas gate) only ever treats an EXPLICITLY autonomic 'beat' run specially, never a
-// real request. Takes a focus id (or a focus object).
+// real request. Takes a focus id (or a focus object). NB: this is the STAMP; the tier tests below
+// (isDirected / isExpansion) are what the driver, the scheduler, and the pass gate must key on.
 function originOf(focusOrId) {
   const id = (focusOrId && typeof focusOrId === 'object') ? focusOrId.id : focusOrId;
   if (id == null) return 'user';
   try { return db.getMeta(`focus.${id}.origin`) || 'user'; } catch { return 'user'; }
 }
 
-// Is the currently-served focus a Lucas-assigned (directed) task? Reads the per-run state, so it's
-// true only while that directed focus is the active pointer.
-function isDirected(focus) {
-  if (!focus) return false;
+function _stateFor(focus) {
+  if (!focus) return null;
   const s = _loadState();
-  return !!(s && s.id === focus.id && s.directed);
+  return (s && s.id === focus.id) ? s : null;
 }
+// Is the currently-served focus the program's own sweep (a beat-minted EXPANSION focus)? A state written
+// before the split (no `expansion` field — the boot that carries this change) falls back to the durable
+// stamps: beat-tagged and not born from his turn ⇒ expansion.
+function isExpansion(focus) {
+  const s = _stateFor(focus);
+  if (!s) return false;
+  if (s.expansion != null) return !!s.expansion;
+  return _beatTagged(focus.id) && !_bornFromUser(db.getOpenThread(focus.id));
+}
+// Is the currently-served focus HIS WORD (a Lucas-assigned, directed task)? True only while that focus
+// is the active pointer — and NEVER for an expansion focus, whatever flag it was pointed with.
+function isDirected(focus) {
+  const s = _stateFor(focus);
+  return !!(s && s.directed && !isExpansion(focus));
+}
+// Is the currently-served focus DRIVEN by the directed driver at all (directed OR expansion)? The
+// mechanics sites (the driver tick, the caps, the scheduler's adoption, the domain leash) key on this;
+// every "is his work running?" site keys on isDirected.
+function isDriven(focus) { return isDirected(focus) || isExpansion(focus); }
 
 // DIRECTED-STOP predicate (D-stop + D-bleed, 2026-08-16 drill) — extracted PURE so the fire/no-fire edges
 // are gate-testable. Returns true iff the message is a genuine "stop the standing task" command AND the
@@ -130,9 +189,10 @@ function isDirectedStop(userMessage, { hasBeat = false } = {}) {
 // directed assignment DISPLACES a self-spawned musing focus (user priority > her own wandering), but
 // is idempotent against an already-active directed focus on a near-identical goal (a follow-up like
 // "start now" must not spawn a duplicate). Returns { focus, goal } or null.
-// origin: 'user' for a real directive; the beat scheduler passes 'beat' so the log tells the truth
-// about WHO seeded the focus (the directed MECHANICS — displacement, no refractory — are shared by design).
+// origin: 'user' for a real directive. The legacy { origin: 'beat' } option routes to setExpansion — a
+// beat can no longer mint a directed focus through this door.
 async function setFromDirective(goal, sourceTurnId = null, { origin = 'user' } = {}) {
+  if (origin === 'beat') return setExpansion(goal);
   const g = String(goal || '').trim();
   if (g.length < 6) return null;
   const active = getCurrent();
@@ -145,12 +205,34 @@ async function setFromDirective(goal, sourceTurnId = null, { origin = 'user' } =
       // a genuinely different directed task supersedes the old one (user changed the assignment)
       clear('superseded-by-new-directive');
     } else {
-      clear('displaced-by-directive');  // user task outranks a self-spawned musing
+      // user task outranks the sweep (expansion yields to his word) and a self-spawned musing alike
+      clear(isExpansion(active) ? 'displaced-by-directive (expansion yields)' : 'displaced-by-directive');
     }
   }
   const row = db.insertOpenThread({ content: g, sourceTurnId });
   const focus = setCurrent(row.id, { directed: true, origin });
   console.log(`[focus] DIRECTED set from ${origin} → #${row.id}: ${g.slice(0, 80)}`);
+  return { focus, goal: g };
+}
+
+// Mint the program's OWN sweep focus (a beat's roster walk) as the primary — EXPANSION, never directed.
+// Same driven mechanics as a directive (overnight caps, the directed driver), none of the priority:
+//   • it YIELDS to a directed focus outright (returns null — his work keeps the slot; the beat retries
+//     on a later scheduler tick), instead of superseding it the way a new directive does;
+//   • it displaces only another expansion focus or a musing;
+//   • it never honors sourceTurnId — a beat has no turn of his to claim.
+// Returns { focus, goal } or null.
+async function setExpansion(goal) {
+  const g = String(goal || '').trim();
+  if (g.length < 6) return null;
+  const active = getCurrent();
+  if (active) {
+    if (isDirected(active)) { console.log(`[focus] expansion NOT set — his directed focus #${active.id} holds the slot`); return null; }
+    clear(isExpansion(active) ? 'displaced-by-beat-seed' : 'displaced-by-beat-seed (musing)');
+  }
+  const row = db.insertOpenThread({ content: g });
+  const focus = setCurrent(row.id, { directed: true, origin: 'beat' });   // directed:true = the DRIVEN mechanics; origin decides the tier
+  console.log(`[focus] EXPANSION set from beat → #${row.id}: ${g.slice(0, 80)}`);
   return { focus, goal: g };
 }
 
@@ -308,10 +390,12 @@ function recordOutcome(focus, { progressed = false, control = null } = {}) {
   const st = stuck.check({ focusId: focus.id });
   if (st.stuck) return _close(focus, 'stalled', `stuck:${st.scenario}`);
 
-  // hard caps — overnight-scale for a Lucas-assigned (directed) task, tight for a self-spawned musing
-  const maxWall = state.directed ? MAX_WALLCLOCK_MS_DIRECTED : MAX_WALLCLOCK_MS;
-  const maxTicks = state.directed ? MAX_TICKS_DIRECTED : MAX_TICKS;
-  const maxStrikes = state.directed ? MAX_STRIKES_DIRECTED : MAX_STRIKES;
+  // hard caps — overnight-scale for a DRIVEN focus (his directed task or the sweep's expansion focus —
+  // both are bounded roster walks that need hours), tight for a self-spawned musing
+  const driven = !!(state.directed || state.expansion);
+  const maxWall = driven ? MAX_WALLCLOCK_MS_DIRECTED : MAX_WALLCLOCK_MS;
+  const maxTicks = driven ? MAX_TICKS_DIRECTED : MAX_TICKS;
+  const maxStrikes = driven ? MAX_STRIKES_DIRECTED : MAX_STRIKES;
   if (Date.now() - state.startedTs > maxWall) return _close(focus, 'stalled', 'wall-clock cap');
   if (state.ticks >= maxTicks) return _close(focus, 'stalled', 'tick cap');
   if (state.strikes >= maxStrikes) return _close(focus, 'stalled', 'no-progress strikes');
@@ -442,7 +526,7 @@ function domainLeashTokens() {
     // union in the first place, and the naive stem fixes it without needing the union.
     let blob = '';
     const f = getCurrent();
-    if (f && isDirected(f)) {
+    if (f && isDriven(f)) {   // the DRIVEN focus defines the domain — his task or the sweep's current state alike
       blob = String(f.content || '');
       try { blob += ' ' + (db.getMeta(`focus.${f.id}.enrich_facet`) || ''); } catch {}
       try { const cov = JSON.parse(db.getMeta(`focus.${f.id}.covered`) || '[]'); if (Array.isArray(cov)) blob += ' ' + cov.join(' '); } catch {}
@@ -494,7 +578,7 @@ function inquiryVocabTokens() {
 }
 
 module.exports = {
-  getCurrent, isActive, setCurrent, isDirected, isDirectedStop, originOf, setFromDirective, clear,
+  getCurrent, isActive, setCurrent, isDirected, isExpansion, isDriven, isDirectedStop, originOf, setFromDirective, setExpansion, clear,
   setFromText, recentlyTombstoned, stripControlTags, parseControlTags,
   isNovel, recordOutcome, domainLeashTokens, inquiryVocabTokens,
   setBackground, recordOutcomeBackground,

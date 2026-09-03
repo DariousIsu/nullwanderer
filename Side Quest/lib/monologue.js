@@ -935,7 +935,7 @@ async function _runOneTick() {
   // OWNERSHIP: a DIRECTED (Lucas-assigned) focus is driven by the dedicated overnight driver in
   // main.js — the cloud OPERATOR runs each research slice there, not the local think-loop. Skip it
   // here so the two don't double-drive the same focus (and so this tick is free to think/watch).
-  if (activeFocus && focusLib.isDirected(activeFocus)) activeFocus = null;
+  if (activeFocus && focusLib.isDriven(activeFocus)) activeFocus = null;   // DRIVEN = his directed task OR the sweep's expansion focus — both belong to the driver
 
   // GOOGLE MEET — when she's in/joining a meeting, that's live and time-sensitive: it
   // takes precedence over every other work mode. Advance ONE stage per tick (join →
@@ -1876,15 +1876,16 @@ function activeSetNames() {
 // directly because the idle tick nulls its OWN activeFocus for directed foci (~L837), so that local is not
 // the signal. Reverts to full free exploration the moment no directed task is live (honours let-it-in/churn).
 function _directedFocusActive() {
-  try { const fl = require('./focus'); const f = fl.getCurrent(); return !!(f && fl.isDirected(f)); }
+  try { const fl = require('./focus'); const f = fl.getCurrent(); return !!(f && fl.isDriven(f)); }   // any DRIVEN focus (his task or the sweep) leashes discovery
   catch { return false; }
 }
 // DIRECTED PREEMPTION (Lucas 2026-08-06: "a directed task should take over ALL the bandwidth").
-// HIS runs only — a beat-origin autonomic focus does NOT suppress the puller (that is the puller's
-// normal working time). Distinct from _directedFocusActive above, which any directed focus (beats
-// included) satisfies and which leashes DISCOVERY for domain-purity reasons, not bandwidth.
+// HIS runs only — the sweep's expansion focus does NOT suppress the puller (that is the puller's
+// normal working time). Distinct from _directedFocusActive above, which any driven focus (the sweep
+// included) satisfies and which leashes DISCOVERY for domain-purity reasons, not bandwidth. One
+// definition of "his word" (usage law 09-03): focus.isDirected is never true for an expansion focus.
 function _userDirectedActive() {
-  try { const fl = require('./focus'); const f = fl.getCurrent(); return !!(f && fl.isDirected(f) && fl.originOf(f) !== 'beat'); }
+  try { const fl = require('./focus'); const f = fl.getCurrent(); return !!(f && fl.isDirected(f)); }
   catch { return false; }
 }
 // Domain-leash tokens for the CONTACT stage: the operator's domain (active directed focus, ELSE their

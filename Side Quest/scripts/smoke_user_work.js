@@ -403,5 +403,26 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
     'the topical (her-own) lane still steers by questions — exploration stays hers');
 }
 
+// ── pickUserThread: HIS OUTSTANDING started threads return (usage law, Lucas 2026-09-03 — "very
+// incomplete work outstanding"). Measured live: three of his threads sat active+unpointed for days
+// (superseded by newer directives) while the sweep took the slot — pending+never-driven was the only
+// shape the driver could see. The CALLER decides resumability (explicit user-origin stamp, not stopped,
+// in-window); the picker only keeps the lane discipline and never resumes a STALLED thread. ──
+{
+  const started = { id: 7, status: 'active', action_count: 1, created_ts: NOW - 72 * H, last_touched_ts: NOW - 70 * H, content: 'target twenty Florida state representatives for the Rainey Center Summit' };
+  const stalled = { id: 8, status: 'stalled', action_count: 4, created_ts: NOW - 5 * H, content: 'research the grid interconnection queue in ERCOT' };
+  ok(uw.pickUserThread([started], { now: NOW }) === null, 'without a resumable predicate a started thread is still never re-picked (the default pool is unchanged)');
+  ok(uw.pickUserThread([started], { now: NOW, resumableOf: () => true }).id === 7, '⭐ a started thread the caller marks RESUMABLE (once his focus, open, not stopped) is picked');
+  ok(uw.pickUserThread([stalled], { now: NOW, resumableOf: () => true }) === null, 'a STALLED thread is never resumed by the driver (it would just re-stall; his redirect is the door)');
+  ok(uw.pickUserThread([started], { now: NOW, resumableOf: () => true, laneOf: () => 'none' }) === null, 'a resumable thread routed away from the driver (none/self/tool) never returns');
+  ok(uw.pickUserThread([started], { now: NOW, resumableOf: () => true, laneOf: () => 'deliverable' }).id === 7, 'a resumable deliverable-lane thread returns');
+  const fresh = { id: 9, status: 'pending', action_count: 0, created_ts: NOW - H, content: 'research how the AI program could be used to control a robot' };
+  ok(uw.pickUserThread([started, fresh], { now: NOW, resumableOf: (id) => id === 7 }).id === 9, 'his NEWEST ask still outranks an older outstanding thread (recency)');
+  const due = { ...started, content: 'target twenty Florida state representatives for the Rainey Center Summit — need it asap' };
+  ok(uw.pickUserThread([due, fresh], { now: NOW, resumableOf: (id) => id === 7 }).id === 7, 'a deadline on the outstanding thread outranks recency');
+  const unstartedHis = { id: 10, status: 'pending', action_count: 0, created_ts: NOW - 3 * H, content: 'help me think about my week' };
+  ok(uw.pickUserThread([unstartedHis], { now: NOW, resumableOf: () => true }).id === 10, 'a resumable thread that never got a pass (seeded then displaced) returns too — the stamp, not the count, is the truth');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

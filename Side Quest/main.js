@@ -2372,8 +2372,10 @@ app.whenReady().then(() => {
         // the newest threads — exactly the bug that made this silently no-op (65 open threads, #3685 the
         // freshest sat past a LIMIT 40 of the oldest). Pull them all (the open set is small + bounded) and let
         // the DESC sort below choose the freshest; the accessor's own ordering is irrelevant once we re-sort.
+        // Beat-tagged threads are excluded OUTRIGHT (usage law 09-03): 88 of them carried a laundered
+        // origin=user stamp, and re-pointing one here with origin:'user' would have made the sweep his work.
         const cand = (db.getActiveOpenThreads(1000, { includeStalled: false }) || [])
-          .filter(t => t && (Date.now() - (t.last_touched_ts || 0)) < RESUME_MAX_AGE_MS && focusLib.originOf(t.id) === 'user')
+          .filter(t => t && (Date.now() - (t.last_touched_ts || 0)) < RESUME_MAX_AGE_MS && focusLib.originOf(t.id) === 'user' && !(db.getMeta(`focus.${t.id}.beat`) || '').trim())
           .sort((a, b) => (b.last_touched_ts || 0) - (a.last_touched_ts || 0))[0];
         if (cand) {
           const rf = focusLib.setCurrent(cand.id, { directed: true, origin: 'user' });
@@ -2381,7 +2383,7 @@ app.whenReady().then(() => {
         }
       } catch (e) { console.error('[directed] lost-pointer resume failed:', e.message); }
     }
-    if (f && focusLib.isDirected(f)) { startDirectedFocusDriver(); console.log(`[directed] resumed standing focus #${f.id} after restart`); }
+    if (f && focusLib.isDriven(f)) { startDirectedFocusDriver(); console.log(`[directed] resumed standing ${focusLib.isExpansion(f) ? 'expansion (sweep)' : 'directed'} focus #${f.id} after restart`); }
   } catch (e) { console.error('[main] directed-focus resume failed:', e.message); }
 
   // AUTONOMIC BEAT SCHEDULER (Slice 2c) — the self-driving worklist loop: rotate the focus across beats so
@@ -10410,7 +10412,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const routerOn = (() => { try { return (db.getMeta('turn.router') || 'on').trim() !== 'off'; } catch { return true; } })();
   const _factualR = (() => { try { return require('./lib/metacognition').classifyClaimType(userMessage) === 'factual'; } catch { return false; } })();
   const _liveInfoR = (() => { try { return require('./lib/curiosity').isLiveInfoQuestion(userMessage); } catch { return false; } })();
-  const _hasDirectedFocusR = (() => { try { const fl = require('./lib/focus'); const f = fl.getCurrent(); return !!(f && fl.isDirected(f)); } catch { return false; } })();
+  const _hasDirectedFocusR = (() => { try { const fl = require('./lib/focus'); const f = fl.getCurrent(); return !!(f && fl.isDriven(f)); } catch { return false; } })();   // a status question about the running sweep is answered honestly too (driven, not just directed)
   const _isStatusReqR = _hasDirectedFocusR && (() => { try { return require('./lib/research').isStatusRequest(userMessage); } catch { return false; } })();
   const _isDirectedTaskR = (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
   // CONTACTS INTENT — LLM-PRIMARY (lib/contacts_intent), with the regex (contacts_query.detect) DEMOTED to
@@ -11022,7 +11024,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // A status/list question about a RUNNING directed task gets its own grounded path below (frontier
   // report + the real covered list). Compute it early so the answer-draft and operator paths step
   // aside — otherwise they each inject a competing directive and the 24B confabulates/echoes them.
-  const _directedFocus = (() => { try { const fl = require('./lib/focus'); const f = fl.getCurrent(); return (f && fl.isDirected(f)) ? f : null; } catch { return null; } })();
+  const _directedFocus = (() => { try { const fl = require('./lib/focus'); const f = fl.getCurrent(); return (f && fl.isDriven(f)) ? f : null; } catch { return null; } })();   // status/list questions ground on ANY driven run (his task or the sweep)
   const _isStatusReq = !!_directedFocus && (() => { try { return require('./lib/research').isStatusRequest(userMessage); } catch { return false; } })();
 
   try {
@@ -11114,6 +11116,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         });
         if (_pk) console.log(`[user-work] parked deliverable landed → doc #${_pk.id} (user-stop)`);
       } catch (e) { console.error('[user-work] park-landing failed:', e.message); }
+      // SET DOWN BY HIM: the thread stays open (his commitment, his saved work) but the user-work driver's
+      // outstanding-thread resume (usage law 09-03) must never pick it back up — only his redirect can.
+      try { db.setMeta(`focus.${f.id}.stopped`, String(Date.now())); } catch {}
       focusLib.clear('user-stop');
       try { stopDirectedFocusDriver(); } catch {}
       directedStopHandled = true;
@@ -11267,6 +11272,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             });
             if (_pk) console.log(`[user-work] parked deliverable landed → doc #${_pk.id} (user-redirect)`);
           } catch (e) { console.error('[user-work] redirect park-landing failed:', e.message); }
+          try { db.setMeta(`focus.${f.id}.stopped`, String(Date.now())); } catch {}   // parked by his redirect — never auto-resumed (see user-stop)
           focusLib.clear('user-redirect');
           try { stopDirectedFocusDriver(); } catch {}
           parkedNote = ` The previous focus ("${String(f.content).slice(0, 60)}") is parked with its work saved.`;
@@ -17061,11 +17067,15 @@ async function seedBeatRun(beat, { background = false, targetsOverride = null } 
       fid = row.id;
       try { db.setMeta(`focus.${fid}.background`, '1'); } catch {}
     } else if (adopted) {
-      focusRow = focusLib.setCurrent(adopted.id, { directed: true }) || adopted;
+      // an ADOPTED thread is HIS (born from his turn) — it stays directed even though the beat tags it below
+      focusRow = focusLib.setCurrent(adopted.id, { directed: true, origin: 'user' }) || adopted;
       fid = adopted.id;
     } else {
-      const r = await focusLib.setFromDirective(beat.goal, null, { origin: 'beat' });
-      if (!r || !r.focus) return { ok: false, reason: 'focus not set' };
+      // EXPANSION BY CONSTRUCTION (usage law, 2026-09-03): a beat-minted primary is never a directive. It
+      // used to ride setFromDirective and inherit the directed flag — displacement, no pacing, his-order
+      // rank — while his own threads sat unpointed. setExpansion yields to a directed focus outright.
+      const r = await focusLib.setExpansion(beat.goal);
+      if (!r || !r.focus) return { ok: false, reason: r === null ? 'user-focus-active' : 'focus not set' };
       fid = r.focus.id; focusRow = r.focus;
     }
     // Keep the beat's fuller goal (with its coverage denominator) visible on the adopted thread
@@ -17529,15 +17539,43 @@ async function _autonomicSchedulerTick() {
   // a directed USER focus — full cadence, browser-owning, never idle-tiered. Ordering: deadline
   // urgency > working-topic news heat > recency (his newest ask is usually the live one).
   {
-    const _curBeatId = (focus && focusLib.isDirected(focus)) ? ((() => { try { return (db.getMeta(`focus.${focus.id}.beat`) || '').trim(); } catch { return ''; } })()) : null;
+    const _curBeatId = (focus && focusLib.isDriven(focus)) ? ((() => { try { return (db.getMeta(`focus.${focus.id}.beat`) || '').trim(); } catch { return ''; } })()) : null;
     if (!focus || _curBeatId) {
       try {
         const uw = require('./lib/user_work');
         // getUnstartedUserThreads, NOT getActiveOpenThreads: the latter orders stalest-first (for
         // the leash) and its window buried his newest asks under ancient threads (boot121: #3529
         // from 210h ago won over the fresh grid cluster).
-        const threads = (db.getUnstartedUserThreads(60) || [])
-          .filter((t) => t && !(db.getMeta(`focus.${t.id}.beat`) || '').trim() && String(db.getMeta(`focus.${t.id}.background`) || '') !== '1');
+        // THE OUTSTANDING SET (usage law, 2026-09-03 — "very incomplete work outstanding"): his unstarted
+        // asks PLUS the threads that once held the primary as his work and lost the pointer (superseded
+        // by a newer directive, a sibling run closing, a restart past the boot resume's 24h). Measured
+        // 09-03: three of his threads sat active+unpointed for days (#4142 the build order, #4155 twenty
+        // FL reps for the Rainey summit, #4198 the climate framing) while the sweep took the slot —
+        // pending+action_count=0 was the only shape this driver could see. Resumable iff the EXPLICIT
+        // user-origin stamp is on it (never the default), it is still open, he did not set it down
+        // (focus.<id>.stopped — user-stop / user-redirect stamp it), and it was touched within
+        // user_work.resume_max_days (default 7). The explicit-redirect seed above outranks this and may
+        // re-promote a stopped thread by his word.
+        const _resumeMaxMs = Math.max(1, _intMeta('user_work.resume_max_days', 7)) * 86400e3;
+        const _byId = new Map();
+        for (const t of (db.getUnstartedUserThreads(60) || []).concat(db.getActiveOpenThreads(200, { includeStalled: false, newestFirst: true }) || [])) {
+          if (!t || _byId.has(t.id)) continue;
+          if ((db.getMeta(`focus.${t.id}.beat`) || '').trim() || String(db.getMeta(`focus.${t.id}.background`) || '') === '1') continue;
+          _byId.set(t.id, t);
+        }
+        const _resumableOf = (id) => {
+          try {
+            if (focus && focus.id === id) return false;
+            if ((db.getMeta(`focus.${id}.origin`) || '') !== 'user') return false;
+            if (db.getMeta(`focus.${id}.stopped`)) return false;
+            const t = _byId.get(id);
+            return !!t && (Date.now() - (t.last_touched_ts || 0)) <= _resumeMaxMs;
+          } catch { return false; }
+        };
+        // The pool the stamping pass and the picker see: his unstarted asks + his resumable threads. Nothing
+        // else from the open set (the current focus, an orphaned wonder thread, a stranger's active row)
+        // reaches the classifier or the pick.
+        const threads = [..._byId.values()].filter((t) => (t.status === 'pending' && (t.action_count | 0) === 0) || _resumableOf(t.id));
         // ── TYPED ROUTING (2026-08-14 worklist audit: 0 of 18 pending threads passed the
         // research-verb filter — the whole seed queue was undrainable, including deadline-carrying
         // deliverable asks). Stamp each unstamped thread's lane: regex fast-path is free; the
@@ -17597,16 +17635,21 @@ async function _autonomicSchedulerTick() {
           if (ns) {
             db.setMeta('user_work.next_seed', '');
             const t = db.getOpenThread(ns);
-            if (t && ['pending', 'active', 'stalled'].includes(t.status)) { cand = t; console.log(`[user-work] redirect seed honored → thread #${t.id}`); }
+            if (t && ['pending', 'active', 'stalled'].includes(t.status)) {
+              cand = t; console.log(`[user-work] redirect seed honored → thread #${t.id}`);
+              try { if (db.getMeta(`focus.${t.id}.stopped`)) db.setMeta(`focus.${t.id}.stopped`, ''); } catch {}   // his word re-opens a thread he had set down
+            }
           }
         } catch {}
         if (!cand) cand = uw.pickUserThread(threads, {
           now: Date.now(),
           newsAtOf: (id) => parseInt(db.getMeta(`thread.${id}.news_at`) || '0', 10) || 0,
           laneOf: (id) => { try { return db.getMeta(`thread.${id}.lane`) || null; } catch { return null; } },
+          resumableOf: _resumableOf,
         });
         if (cand) {
           if (_curBeatId) { try { focusLib.clear('user-work-preempt'); } catch {} console.log(`[user-work] sweep yields — ${_curBeatId} paused for his thread #${cand.id}`); }
+          if (_resumableOf(cand.id)) console.log(`[user-work] RESUMED his outstanding thread #${cand.id} (was his focus; unpointed since ${new Date(cand.last_touched_ts || 0).toISOString().slice(0, 16)}Z) — "${String(cand.content).replace(/\s+/g, ' ').slice(0, 70)}"`);
           let f = null; try { f = focusLib.setCurrent(cand.id, { directed: true }); } catch {}
           // THE LIVING DOCUMENT: if a landed research doc already covers this topic, the run
           // CONTINUES it — the doc rides every synthesis as "what we already concluded" and the
@@ -17764,9 +17807,10 @@ async function _autonomicSchedulerTick() {
       } catch (e) { console.error('[user-work] driver failed:', e.message); }
     }
   }
-  if (focus && focusLib.isDirected(focus)) {
+  if (focus && focusLib.isDriven(focus)) {
+    if (focusLib.isDirected(focus)) return;                                         // his word (an adopted beat thread included) → never preempt, never rotate
     const beatId = (() => { try { return (db.getMeta(`focus.${focus.id}.beat`) || '').trim(); } catch { return ''; } })();
-    if (!beatId) return;                                                            // Lucas's own task → never preempt
+    if (!beatId) return;                                                            // driven but untagged → not the scheduler's to rotate
     // A BEAT focus is running — adopt it into scheduler state (survives a restart of a live beat) and decide
     // whether to rotate. `lastRun` is bumped every tick so the running beat stays "newest" and isn't re-picked.
     const bs = state.beats[beatId] || {};
@@ -17877,23 +17921,17 @@ function _userDirectedActive() {
     if (String(process.env.ZOE_DIRECTED_PREEMPT || '') === '0') return false;
     const focusLib = require('./lib/focus');
     const f = focusLib.getCurrent();
-    if (!f || !focusLib.isDirected(f)) return false;
-    if ((db.getMeta(`focus.${f.id}.beat`) || '').trim()) return false;   // an autonomic beat run is not HIS work
-    return focusLib.originOf(f) !== 'beat';
+    return !!(f && focusLib.isDirected(f));   // usage law (09-03): isDirected IS "his word" — an expansion (beat) focus is never directed, an adopted thread of his is
   } catch { return false; }
 }
 // HONEST SPEND TIER for a pass driving `focus` (2026-08-12 review H2): 'directed' is EARNED by THIS
-// focus being HIS work — same user-vs-beat test as _userDirectedActive, but on the focus the pass
-// actually drives, never the globally-current one (the global coupling let background passes running
-// alongside his standing focus self-label 'directed' and escape the pace governor). Declared as the
-// run's ambient spendTier at the pass call sites, so every nested cloud call inherits it.
+// focus being HIS work, on the focus the pass actually drives, never the globally-current one (the
+// global coupling let background passes running alongside his standing focus self-label 'directed' and
+// escape the pace governor). One definition (usage law 09-03): focus.isDirected — the sweep's expansion
+// focus bills research, paced; his word bills directed, floor-gated only. Declared as the run's ambient
+// spendTier at the pass call sites, so every nested cloud call inherits it.
 function _focusSpendTier(focus) {
-  try {
-    const focusLib = require('./lib/focus');
-    if (!focus || !focusLib.isDirected(focus)) return 'research';
-    if ((db.getMeta(`focus.${focus.id}.beat`) || '').trim()) return 'research';
-    return focusLib.originOf(focus) !== 'beat' ? 'directed' : 'research';
-  } catch { return 'research'; }
+  try { return (focus && require('./lib/focus').isDirected(focus)) ? 'directed' : 'research'; } catch { return 'research'; }
 }
 let _preemptLogAt = 0;
 function _pauseAllWorkers(state, why) {
@@ -18844,12 +18882,14 @@ async function _directedFocusTick() {
   const focusLib = require('./lib/focus');
   let focus = null;
   try { focus = focusLib.getCurrent(); } catch {}
-  if (!focus || !focusLib.isDirected(focus)) { stopDirectedFocusDriver(); return; }   // nothing assigned → idle off
+  if (!focus || !focusLib.isDriven(focus)) { stopDirectedFocusDriver(); return; }   // nothing driven (his task or the sweep) → idle off
   if ((db.getMeta('operator.mode') || 'full').trim() === 'off') return;
-  // BEAT-ORIGIN = IDLE TIER (Lucas 2026-07-29): a beat-seeded sweep carries directed:true and was
-  // running at his-order priority — a pass every 45s, 30s after his last keystroke, owning the
-  // browser. It yields to real idle + her reasoned work + idle cadence; user-origin foci untouched.
-  const _focusOrigin = focusLib.originOf(focus);
+  // BEAT-ORIGIN = IDLE TIER (Lucas 2026-07-29): a beat-seeded sweep shares the driver and was running at
+  // his-order priority — a pass every 45s, 30s after his last keystroke, owning the browser. It yields
+  // to real idle + her reasoned work + idle cadence; his directed foci are untouched. The gate reads the
+  // TIER (isExpansion), not the origin stamp: 88 resumed sweep threads carried a laundered 'user' stamp
+  // and passed this gate as his work (measured 09-03) — the "still firing on validate" he saw.
+  const _focusOrigin = focusLib.isExpansion(focus) ? 'beat' : 'user';
   {
     const bg = require('./lib/beat_scheduler').beatPassGate({
       origin: _focusOrigin, now: Date.now(), lastUserTurnTs,
@@ -21416,7 +21456,7 @@ async function laneSnapshot() {
   try {
     const focusLib = require('./lib/focus');
     const f = (() => { try { return focusLib.getCurrent(); } catch { return null; } })();
-    if (f && focusLib.isDirected(f)) {
+    if (f && focusLib.isDriven(f)) {   // "what are you doing" names the sweep too — an honest answer, not just his task
       let covered = []; try { covered = JSON.parse(db.getMeta(`focus.${f.id}.covered`) || '[]'); } catch {}
       let target = null; try { const t = JSON.parse(db.getMeta(`focus.${f.id}.target`) || 'null'); if (t && t.name) target = { name: t.name }; } catch {}
       snap.research = { goal: String(f.content || ''), covered, target };
