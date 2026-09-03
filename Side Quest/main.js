@@ -15481,10 +15481,12 @@ const operatorTools = {
   // threads, monologue, self-model. The local counterpart to Echo's db_query. Read-only by construction.
   localdb: async ({ sql } = {}) => {
     try {
-      const r = require('./lib/localdb').query(String(sql || ''));
+      // Freeze cut 15: the statement runs in the db worker (read-only, attachments intact); the loop stays free.
+      const L = require('./lib/localdb');
+      const r = await L.queryAsync(String(sql || ''));
       if (!r.ok) return 'ERROR: ' + r.error;
       if (!r.rows.length) return 'no rows';
-      return JSON.stringify(r.rows).slice(0, 3000) + (r.truncated ? `\n…(${r.count} rows total, showing ${r.rows.length})` : '');
+      return JSON.stringify(r.rows).slice(0, 3000) + (r.truncated ? `\n…(more than ${L.MAX_ROWS} rows — showing the first ${r.rows.length}; narrow with WHERE/LIMIT, or ask COUNT(*))` : '');
     } catch (e) { return 'ERROR: ' + e.message; }
   },
   localdb_map: async () => {

@@ -89,5 +89,38 @@ console.log('\nMANIFEST TABLE SELECTION');
   ok(okq.ok === true, 'an ordinary read is unaffected by the guard');
 }
 
-console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
-process.exit(fail === 0 ? 0 : 1);
+// ⭐ Freeze cut 15 — THE DOOR OFF THE MAIN THREAD: queryAsync runs the same statement in lib/db_worker
+// (a read-only connection with the same attachments), same shape; both doors stop the walk at MAX_ROWS + 1.
+(async () => {
+  const W = require('../lib/db_worker');
+  const a = await ldb.queryAsync("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name LIMIT 3");
+  const s = ldb.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name LIMIT 3");
+  ok(a.ok && JSON.stringify(a.rows) === JSON.stringify(s.rows), '⭐ queryAsync: the same rows as the synchronous door, produced in the db worker');
+  ok(W._live().some((k) => k.startsWith(process.env.SQ_DB_PATH)), 'queryAsync: a worker is live on the store file (the reply path left the main thread)');
+  const w1 = await ldb.queryAsync("INSERT INTO meta (key,value) VALUES ('x','y')");
+  const w2 = await ldb.queryAsync('SELECT 1; DELETE FROM meta');
+  ok(w1.ok === false && w2.ok === false, 'queryAsync: writes and multi-statements are refused before the worker is asked');
+  ok((await ldb.queryAsync("SELECT id, title FROM documents WHERE body LIKE '%x%'")).ok === false, 'queryAsync: the body-LIKE full-scan guard holds on the async door too');
+  ok((await ldb.queryAsync('SELECT nope FROM meta')).ok === false, 'queryAsync: a bad statement is an error, never a throw');
+  // the cap: a big result is walked only to MAX_ROWS + 1 on BOTH doors
+  const h = db.getDb();
+  h.exec('CREATE TABLE IF NOT EXISTS many (id INTEGER PRIMARY KEY, v TEXT)');
+  const ins = h.prepare("INSERT INTO many (v) VALUES ('r')"); for (let i = 0; i < ldb.MAX_ROWS + 50; i++) ins.run();
+  const big = await ldb.queryAsync('SELECT * FROM many');
+  const bigS = ldb.query('SELECT * FROM many');
+  ok(big.ok && big.rows.length === ldb.MAX_ROWS && big.truncated === true && big.count === ldb.MAX_ROWS, `queryAsync: a ${ldb.MAX_ROWS + 50}-row result is capped at ${ldb.MAX_ROWS} and marked truncated (the worker never materialized the rest)`);
+  ok(bigS.ok && bigS.rows.length === ldb.MAX_ROWS && bigS.truncated === true, 'query (sync): the same cap — the walk stops at MAX_ROWS + 1');
+  const small = await ldb.queryAsync('SELECT * FROM many LIMIT 5');
+  ok(small.ok && small.rows.length === 5 && small.truncated === false && small.count === 5, 'queryAsync: a small result keeps its exact count, not truncated');
+  // attachments ride into the worker: a sibling file answers by alias
+  const pullerTmp = path.join(os.tmpdir(), `puller_smoke_localdb_${Date.now()}.db`);
+  const pd = new (require('better-sqlite3'))(pullerTmp); pd.exec("CREATE TABLE targets (id INTEGER PRIMARY KEY, name TEXT); INSERT INTO targets (name) VALUES ('a'),('b')"); pd.close();
+  process.env.PULLER_DB_PATH = pullerTmp; ldb._reset();
+  ok(ldb._attachSpecs().some((x) => x.alias === 'puller' && x.path === pullerTmp), 'the worker is handed the same attachments the sync door uses (env overrides honoured)');
+  const viaAlias = await ldb.queryAsync('SELECT COUNT(*) c FROM puller.targets');
+  ok(viaAlias.ok && viaAlias.rows[0].c === 2, '⭐ queryAsync: an attached sibling answers by alias inside the worker (puller.targets)');
+  await W.closeAll();
+  try { require('fs').unlinkSync(pullerTmp); } catch {}
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+  process.exit(fail === 0 ? 0 : 1);
+})().catch((e) => { console.error('smoke_localdb crashed:', e); process.exit(1); });

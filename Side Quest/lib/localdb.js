@@ -104,9 +104,61 @@ function query(sql, params = []) {
   catch (e) { return { ok: false, error: 'invalid SQL: ' + e.message }; }   // also catches multi-statement
   if (!stmt.readonly) return { ok: false, error: 'only read-only SELECT queries are allowed' };
   try {
-    const rows = stmt.all(...(Array.isArray(params) ? params : []));
-    return { ok: true, rows: rows.slice(0, MAX_ROWS), count: rows.length, truncated: rows.length > MAX_ROWS };
+    // Freeze cut 15: never materialize past what is kept — a `SELECT *` over a big table used to build
+    // EVERY row before slicing to MAX_ROWS. The walk stops at MAX_ROWS + 1 (enough to say "truncated").
+    const rows = [];
+    for (const r of stmt.iterate(...(Array.isArray(params) ? params : []))) { rows.push(r); if (rows.length > MAX_ROWS) break; }
+    return _shape(rows);
   } catch (e) { return { ok: false, error: e.message }; }
+}
+function _shape(rows) {
+  const truncated = rows.length > MAX_ROWS;
+  const kept = truncated ? rows.slice(0, MAX_ROWS) : rows;
+  return { ok: true, rows: kept, count: kept.length, truncated };
+}
+// The pre-checks the two doors share: empty, a write keyword, the unindexable body scan.
+function _precheck(sql) {
+  const s = String(sql || '').trim().replace(/;\s*$/, '');
+  if (!s) return { error: 'empty query' };
+  if (WRITE_KW_RE.test(s)) return { error: 'only read-only SELECT queries are allowed' };
+  if (/\bfrom\s+documents\b/i.test(s) && /\bbody\s+like\s+'%/i.test(s)) {
+    return { error: "slow full-scan refused: `body LIKE '%term%'` on documents is unindexable (leading wildcard blocks any index) and blocks the main thread. Use full-text search: SELECT d.* FROM documents_fts f JOIN documents d ON d.id = f.rowid WHERE documents_fts MATCH 'term' ORDER BY bm25(documents_fts) LIMIT 20" };
+  }
+  return { sql: s };
+}
+// The attachments the worker must carry to answer `puller.targets`-style names: the same files, the
+// same env overrides, only the ones present.
+function _attachSpecs() {
+  const out = [];
+  for (const a of ATTACHED) {
+    const p = process.env[a.env] || _dataPath(a.file);
+    try { if (require('fs').existsSync(p)) out.push({ alias: a.alias, path: p }); } catch {}
+  }
+  return out;
+}
+const QUERY_TIMEOUT_MS = 60 * 1000;
+// ⭐ Freeze cut 15 — THE DOOR OFF THE MAIN THREAD. The model's own SQL through this tool ran on the
+// Electron main thread: p265's one slow statement was `SELECT * FROM documents WHERE title LIKE
+// '%…%'` at 1,041ms (unindexable — cut 7 moved the app's OWN title lookup onto documents_fts, but the
+// model writes what it writes), and a `SELECT *` with no LIMIT materialized every row before the
+// slice. Same pre-checks, same read-only guarantee (the worker's connection is read-only AND it
+// refuses a non-read-only statement), same attachments, same shape — the statement runs in
+// lib/db_worker and the reply awaits it while the loop stays free. A store with no file (':memory:'
+// in a bare smoke) keeps the synchronous door.
+async function queryAsync(sql, params = []) {
+  const pre = _precheck(sql);
+  if (pre.error) return { ok: false, error: pre.error };
+  const dbPath = dbLib.DB_PATH;
+  if (!dbPath || dbPath === ':memory:') return query(sql, params);
+  try {
+    const rows = await require('./db_worker').query(dbPath, pre.sql, Array.isArray(params) ? params : [], { attach: _attachSpecs(), limit: MAX_ROWS + 1, timeoutMs: QUERY_TIMEOUT_MS });
+    return _shape(Array.isArray(rows) ? rows : []);
+  } catch (e) {
+    const msg = (e && e.message) || String(e);
+    if (/only read-only/i.test(msg) || /readonly database/i.test(msg)) return { ok: false, error: 'only read-only SELECT queries are allowed' };
+    if (/syntax error|no such (?:table|column|function)|incomplete input|near "/i.test(msg)) return { ok: false, error: 'invalid SQL: ' + msg };
+    return { ok: false, error: msg };
+  }
 }
 
 // The map of her local store: every table + its row count, across sq.db AND the attached databases.
@@ -236,4 +288,4 @@ function schema(table) {
 // Which of the other databases are actually live right now (for the tool description / diagnostics).
 function attachedDbs() { _readerConn(); return _attached.slice(); }
 
-module.exports = { query, inventory, manifestTables, schema, attachedDbs, ATTACHED, CURATED, EXHAUST_RE, _reset, MAX_ROWS, WRITE_KW_RE };
+module.exports = { query, queryAsync, inventory, manifestTables, schema, attachedDbs, ATTACHED, CURATED, EXHAUST_RE, _reset, _attachSpecs, MAX_ROWS, WRITE_KW_RE, QUERY_TIMEOUT_MS };
