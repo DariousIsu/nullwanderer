@@ -645,6 +645,10 @@ const MIGRATIONS = [
   `ALTER TABLE documents ADD COLUMN promote_last_ts INTEGER`,
   `ALTER TABLE documents ADD COLUMN promote_error TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_documents_promote_turn ON documents(promoted, promote_attempts, promote_last_ts) WHERE promoted = 0`,
+  // THE FREEZE (2026-09-03 01:24): the promote scan's window function sorted every unpromoted row (38k)
+  // in a temp B-tree — 4.7s on the main thread, every 15-min beat. This partial index lets each lane's
+  // head be read in order (source, attempts, id) — a range scan, milliseconds.
+  `CREATE INDEX IF NOT EXISTS idx_documents_promote_source ON documents(source, promote_attempts, id) WHERE promoted = 0 AND superseded_by IS NULL`,
   `CREATE INDEX IF NOT EXISTS idx_documents_superseded ON documents(superseded_by)`,
 
   // KNOWN-INCORRECT (§7) — the inoculation record. A claim that has been DISPROVEN is kept, forever,
@@ -2121,21 +2125,32 @@ function getReflectionWorthyDocuments({ sinceId = 0, minImportance = 6, limit = 
 // meeting) go first — conversation_objects.js calls that landing "the memory event". A high-volume
 // lane (browser_download) still gets exactly its one-per-round share, so it can't crowd the others
 // out; its own backlog is a separate throughput/triage question, not a starvation of the rest.
-const _MEMORY_EVENT_FIRST = "CASE source WHEN 'conversation' THEN 0 WHEN 'meeting' THEN 0 "
-  + "WHEN 'meeting_transcript' THEN 0 ELSE 1 END";
 // The promote scan — round-robin across sources (each lane's oldest first, memory-event classes lead the
 // round), and since continuity cure #3 a doc that failed steps aside for a backoff that doubles per
 // attempt (1d, 2d, 4d … 30d) while untried docs of its lane go first. Nothing is dropped: a failed doc
 // simply comes back after its backoff.
 const DOC_PROMOTE_BACKOFF_DAY_MS = 24 * 60 * 60 * 1000;
 const _DOC_PROMOTE_ELIGIBLE = `(promote_last_ts IS NULL OR promote_last_ts + MIN(@day * (1 << MIN(MAX(COALESCE(promote_attempts, 1), 1) - 1, 5)), @day * 30) <= @now)`;
+// THE FREEZE (2026-09-03 01:24, the 73-minute generation that ended "not responding"): the window-function
+// form of this scan sorted EVERY unpromoted row (38k) in a temp B-tree — 4.7s on the main thread each
+// 15-min beat (stall-attrib: "promote-docs" 6,136ms). Now each lane's head is one range scan over the
+// partial index (source, promote_attempts, id) — LIMIT stops at the lane's first eligible rows — and the
+// round-robin merge (rank, memory-event classes first, id) is done in JS. Same contract, same order.
+const _MEMORY_EVENT_SOURCES = new Set(['conversation', 'meeting', 'meeting_transcript']);
 function listUnpromotedDocuments(limit = 100, { now = Date.now() } = {}) {
-  return getDb().prepare(
-    `SELECT * FROM (
-       SELECT *, ROW_NUMBER() OVER (PARTITION BY source ORDER BY COALESCE(promote_attempts, 0) ASC, id ASC) AS _rr
-       FROM documents WHERE promoted = 0 AND ${LIVE} AND ${_DOC_PROMOTE_ELIGIBLE}
-     ) ORDER BY _rr ASC, ${_MEMORY_EVENT_FIRST}, id ASC LIMIT @limit`
-  ).all({ day: DOC_PROMOTE_BACKOFF_DAY_MS, now, limit: Math.max(1, limit | 0) });
+  const d = getDb();
+  const lim = Math.max(1, limit | 0);
+  const sources = d.prepare(`SELECT source FROM documents WHERE promoted = 0 AND ${LIVE} GROUP BY source`).all().map((r) => r.source);
+  const head = d.prepare(
+    `SELECT * FROM documents WHERE promoted = 0 AND ${LIVE} AND source IS @s AND ${_DOC_PROMOTE_ELIGIBLE}
+      ORDER BY promote_attempts ASC, id ASC LIMIT @limit`);
+  const rows = [];
+  for (const s of sources) {
+    head.all({ s, day: DOC_PROMOTE_BACKOFF_DAY_MS, now, limit: lim }).forEach((r, i) => { r._rr = i + 1; rows.push(r); });
+  }
+  const cls = (src) => (_MEMORY_EVENT_SOURCES.has(src) ? 0 : 1);
+  rows.sort((a, b) => (a._rr - b._rr) || (cls(a.source) - cls(b.source)) || (a.id - b.id));
+  return rows.slice(0, lim);
 }
 // One promotion attempt that failed: count it, stamp it, keep the error (sliced) — the backoff reads the
 // count, the tee and the memory map read the error histogram.

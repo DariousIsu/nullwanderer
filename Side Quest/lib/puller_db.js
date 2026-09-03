@@ -125,6 +125,10 @@ CREATE TABLE IF NOT EXISTS retest_queue (
   updated_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_retest_status ON retest_queue(status);
+-- THE FREEZE (2026-09-03 01:24): listTargets ordered 675,888 rows by last_accessed_at in a temp B-tree on
+-- the main thread (0.6–2.3s, several times a minute from the monologue's profiling). This partial index
+-- serves ORDER BY last_accessed_at DESC for the live (un-merged) rows: LIMIT stops after a few pages.
+CREATE INDEX IF NOT EXISTS idx_tgt_recent ON targets(last_accessed_at DESC) WHERE merged_into IS NULL;
 
 -- F4 correction loop: an append-only, REVERSIBLE log of operator (or auto-sweep) identity corrections.
 -- Every merge/reassign/split records exactly what moved (moved_obs = json obs ids) so it can be undone.
