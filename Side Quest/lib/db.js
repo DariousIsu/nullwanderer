@@ -2140,9 +2140,15 @@ const _MEMORY_EVENT_SOURCES = new Set(['conversation', 'meeting', 'meeting_trans
 function listUnpromotedDocuments(limit = 100, { now = Date.now() } = {}) {
   const d = getDb();
   const lim = Math.max(1, limit | 0);
-  const sources = d.prepare(`SELECT source FROM documents WHERE promoted = 0 AND ${LIVE} GROUP BY source`).all().map((r) => r.source);
+  // the lanes present, by MANUAL SKIP-SCAN over the same index (one seek per lane, microseconds) — a
+  // GROUP BY walked all 38k index entries: 456ms on the main thread, measured on boot_p254
+  const sources = [];
+  if (d.prepare(`SELECT 1 FROM documents INDEXED BY idx_documents_promote_source WHERE promoted = 0 AND ${LIVE} AND source IS NULL LIMIT 1`).get()) sources.push(null);
+  const nextLane = d.prepare(`SELECT source FROM documents INDEXED BY idx_documents_promote_source WHERE promoted = 0 AND ${LIVE} AND source > @last ORDER BY source LIMIT 1`);
+  let lane = d.prepare(`SELECT source FROM documents INDEXED BY idx_documents_promote_source WHERE promoted = 0 AND ${LIVE} AND source IS NOT NULL ORDER BY source LIMIT 1`).get();
+  while (lane && sources.length < 64) { sources.push(lane.source); lane = nextLane.get({ last: lane.source }); }
   const head = d.prepare(
-    `SELECT * FROM documents WHERE promoted = 0 AND ${LIVE} AND source IS @s AND ${_DOC_PROMOTE_ELIGIBLE}
+    `SELECT * FROM documents INDEXED BY idx_documents_promote_source WHERE promoted = 0 AND ${LIVE} AND source IS @s AND ${_DOC_PROMOTE_ELIGIBLE}
       ORDER BY promote_attempts ASC, id ASC LIMIT @limit`);
   const rows = [];
   for (const s of sources) {
