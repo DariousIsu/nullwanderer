@@ -87,18 +87,57 @@ ok('contactsToRows → one verified NewCo row', bridged.length === 1 && bridged[
 const s3 = I.ingestRows(DB, bridged, { source: 'research:NewCo' });
 ok('bridged verified contact credits the newco.io first.last pattern', s3.targets === 1 && s3.patternHits === 1 && !!DB.getPatternState('newco.io').patterns['first.last']);
 
-// ⭐REGRESSION (the ~16s main-thread freeze): ingestRows rebuilds its (name,company)→id dedup set from the
-// WHOLE store on every call — fires on every doc-decomp. It MUST stream only the 3 lean columns via
-// eachTargetKey, NEVER listTargets({limit:1e7}) which SELECT *'d the entire ~271k-target population
-// synchronously and pegged the main thread (profiler-confirmed). Spy on which path runs.
+// ⭐REGRESSION (the main-thread freeze, cuts 12→13): ingestRows must never rebuild its (name,company)→id
+// dedup set from the whole store per call. Cut 13: it takes the store's CACHED key map when the store
+// offers one (built once per connection, refreshed above an id high-water); a store without it falls
+// back to the lean eachTargetKey stream; the full-population SELECT * (the ~16s freeze) is never used.
 {
-  let usedEach = 0, usedFullList = 0;
+  let usedMap = 0, usedEach = 0, usedFullList = 0;
   const spy = { ...DB,
+    targetKeyMap: () => { usedMap++; return DB.targetKeyMap(); },
     eachTargetKey: (cb) => { usedEach++; return DB.eachTargetKey(cb); },
     listTargets: (o) => { if (o && (o.limit || 0) >= 1e6) usedFullList++; return DB.listTargets(o); },
   };
   I.ingestRows(spy, [{ confidence: '95%', name: 'Spy One', company: 'SpyCo', email: 's@spyco.io' }], { source: 'spy' });
-  ok('ingest builds its dedup set via eachTargetKey (lean stream), never a full-population SELECT *', usedEach === 1 && usedFullList === 0);
+  ok('ingest takes the store\'s cached key map (no per-call stream, never a full-population SELECT *)', usedMap === 1 && usedEach === 0 && usedFullList === 0);
+  const lean = { ...spy }; delete lean.targetKeyMap;
+  I.ingestRows(lean, [{ confidence: '95%', name: 'Spy Two', company: 'SpyCo', email: 's2@spyco.io' }], { source: 'spy' });
+  ok('a store without a key map falls back to the lean eachTargetKey stream', usedEach === 1 && usedFullList === 0);
+}
+
+// ⭐CUT 13 PINS — the cached key map's contract against the stream it replaced.
+{
+  const st0 = DB._targetKeyStats();
+  const m1 = DB.targetKeyMap();
+  const m2 = DB.targetKeyMap();
+  ok('key map: cached across calls (the same Map, no second build)', m1 === m2 && DB._targetKeyStats().builds === st0.builds);
+  const fromStream = new Map(); DB.eachTargetKey((t) => fromStream.set(DB.keyOf(t.name, t.company), t.id));
+  ok('key map: identical to the eachTargetKey stream (size + every key → id)', fromStream.size === m1.size && [...fromStream].every(([k, id]) => m1.get(k) === id));
+  const t = DB.createTarget({ name: 'Elsewhere Person', company: 'OtherCo' });
+  ok('key map: a target created outside the ingest is absent until refreshed …', !m1.has(DB.keyOf('Elsewhere Person', 'OtherCo')));
+  ok('… and present after the next call (incremental refresh above the id high-water)', DB.targetKeyMap().get(DB.keyOf('Elsewhere Person', 'OtherCo')) === t.id && DB._targetKeyStats().maxId >= t.id);
+  const again = I.ingestRows(DB, rows, { source: 'test' });
+  ok('key map: dedup verdicts identical to the stream (re-run of the sheet creates 0, skips all 6 tracked)', again.targets === 0 && again.skippedDup === 6);
+  const twinA = DB.createTarget({ name: 'Twin A', company: 'MergeCo' });
+  const twinB = DB.createTarget({ name: 'Twin B', company: 'MergeCo' });
+  DB.targetKeyMap();
+  const mr = DB.mergeTarget(twinB.id, twinA.id, { reason: 'test' });
+  const afterMerge = DB.targetKeyMap();
+  const streamAfter = new Map(); DB.eachTargetKey((x) => streamAfter.set(DB.keyOf(x.name, x.company), x.id));
+  ok('key map: a merged-away donor leaves the map in place, the survivor stays (matches the stream)', !afterMerge.has(DB.keyOf('Twin B', 'MergeCo')) && afterMerge.get(DB.keyOf('Twin A', 'MergeCo')) === twinA.id && afterMerge.size === streamAfter.size);
+  DB.unmergeTarget(mr.correctionId);
+  ok('key map: an unmerge restores the donor\'s key (matches the stream again)', DB.targetKeyMap().get(DB.keyOf('Twin B', 'MergeCo')) === twinB.id);
+  // warm-up: a fresh connection builds in bounded slices; an ingest-time call finishes the walk on the same map
+  DB.close(); DB.init({ path: ':memory:' });
+  for (let i = 0; i < 7; i++) DB.createTarget({ name: `Warm ${i}`, company: 'WarmCo' });
+  const w1 = DB.warmTargetKeys({ rows: 3 });
+  ok('warm-up: one bounded slice (3 of 7 rows) reports not done', w1.done === false && w1.size === 3);
+  const full = DB.targetKeyMap();
+  ok('warm-up: the ingest-time call finishes the walk (all 7) on the same map', full.size === 7 && DB._targetKeyStats().live);
+  ok('warm-up: a further slice reports done', DB.warmTargetKeys({ rows: 3 }).done === true);
+  DB._bumpKeys();
+  const rebuilt = DB.targetKeyMap();
+  ok('_bumpKeys: the next call rebuilds from scratch (a fresh Map, the same 7 keys)', rebuilt !== full && rebuilt.size === 7);
 }
 
 DB.close();

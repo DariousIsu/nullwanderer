@@ -954,6 +954,29 @@ app.whenReady().then(() => {
   }
   setInterval(() => { _promoteUpTick().catch(() => {}); }, PROMOTE_UP_CHECK_MS).unref?.();
 
+  // THE TARGET-KEY WARM-UP (freeze cut 13): the puller's (name|company → id) key map is built once per
+  // connection and refreshed above an id high-water — but the FIRST build walks every live target
+  // (~676k rows, 2.6–2.9s on the profiler), and without this beat the first document drop after boot
+  // would pay it whole on the main thread. Pay it here instead: bounded slices (50k rows ≈ 35ms measured
+  // read-only on the live store) on a 2s cadence after boot grace while she is idle; an ingest arriving
+  // mid-warm-up finishes the walk inline. The label is left for the next lane to replace, like promote-up.
+  {
+    const KEYS_WARM_ROWS = parseInt(process.env.ZOE_TARGET_KEYS_WARM_ROWS, 10) || 50000;
+    let _keysWarmDone = false, _keysWarmT0 = 0;
+    const _keysWarmTick = setInterval(() => {
+      if (_keysWarmDone) { clearInterval(_keysWarmTick); return; }
+      if (_bootGraceActive() || _conversationActive() || Date.now() - lastUserTurnTs < 30 * 1000) return;
+      try {
+        const pdb = require('./lib/puller_db');
+        if (!_keysWarmT0) _keysWarmT0 = Date.now();
+        markActivity('target-keys-warm');
+        const r = pdb.warmTargetKeys({ rows: KEYS_WARM_ROWS });
+        if (r.done) { _keysWarmDone = true; console.log(`[puller] target key map warm — ${r.size.toLocaleString()} keys (high-water id ${r.maxId}) in ${Math.round((Date.now() - _keysWarmT0) / 1000)}s of ${KEYS_WARM_ROWS}-row slices`); }
+      } catch (e) { _keysWarmDone = true; console.error('[puller] target key warm-up failed:', e.message); }
+    }, 2000);
+    _keysWarmTick.unref?.();
+  }
+
   // THE PROMOTE-DOCS BEAT (continuity cure #3, 2026-09-02 — the audit measured the documents bridge alive
   // but +130/day behind: 150 per nightly pass against ~230 landing a day, 46 of the 150 wasted on
   // transient Echo failures retried every night). Every 15 min, idle (never over his turn, never mid-gate,

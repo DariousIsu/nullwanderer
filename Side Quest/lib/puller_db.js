@@ -216,6 +216,54 @@ function _P(sql) {
   return s;
 }
 function _preparedCount() { return _stmtDb === db ? _stmts.size : 0; }
+// ── THE TARGET KEY MAP (freeze cut 13) ─────────────────────────────────────────────────────────
+// The stall profiler (p263 2.6s, p264 2.9s): `70% next · 20% puller_ingest.js:57 · 8% eachTargetKey` —
+// the ingest rebuilt its (name|company → id) dedup set by streaming EVERY live target (676k keys) on
+// every doc-decomp ingest. One map per connection instead: built once, then refreshed INCREMENTALLY
+// above an id high-water (createTarget appends; ids only grow), consumed fully so the memoized
+// statement is never left mid-walk. The two writes that change which rows are live — mergeTarget
+// (donor tombstoned) and unmergeTarget (donor restored) — patch the map in place, so its answer is
+// the stream's: every non-merged row, the higher id winning a shared key. One documented corner: a
+// merged donor's key leaves the map even if an exact-key twin remains live (the stream would fall
+// back to the twin) — finding the twin costs a full scan per merge, and exact-key twins are what the
+// ingest's own dedup prevents; a _bumpKeys() rebuild restores it. `warmTargetKeys` lets a post-boot
+// beat pay the first build in bounded slices instead of the first document drop paying it whole.
+const _kclean = (s) => String(s == null ? '' : s).trim();
+/** The dedup key the ingest and the map share: lower-cased, trimmed `name|company`. */
+function keyOf(name, company) { return `${_kclean(name).toLowerCase()}|${_kclean(company).toLowerCase()}`; }
+let _keys = { db: null, map: null, maxId: 0, builds: 0, refreshes: 0, rows: 0 };
+const KEYS_SQL = `SELECT id, name, company FROM targets WHERE merged_into IS NULL AND id > ? ORDER BY id`;
+function _keysFor(d) {
+  if (_keys.db !== d || !_keys.map) _keys = { db: d, map: new Map(), maxId: 0, builds: _keys.builds + 1, refreshes: 0, rows: 0 };
+  return _keys;
+}
+// Walk the rows above the high-water into the map; `limit` bounds one slice (a warm-up), 0 = all.
+function _advanceKeys(k, limit) {
+  const stmt = _P(limit ? `${KEYS_SQL} LIMIT ?` : KEYS_SQL);
+  const it = limit ? stmt.iterate(k.maxId, limit) : stmt.iterate(k.maxId);
+  let n = 0;
+  for (const r of it) { k.map.set(keyOf(r.name, r.company), r.id); k.maxId = r.id; n++; }
+  if (n) { k.refreshes++; k.rows += n; }
+  return n;
+}
+/** The complete (name|company → id) map of live targets, current as of this call. Shared: a caller
+ *  that creates a target may set its key directly; the next call would find the row anyway. */
+function targetKeyMap() { const k = _keysFor(_db()); _advanceKeys(k, 0); return k.map; }
+/** One bounded slice of the build (a post-boot beat). Returns { done, size, maxId }. */
+function warmTargetKeys({ rows = 50000 } = {}) {
+  const lim = Math.max(1, rows | 0);
+  const k = _keysFor(_db());
+  const n = _advanceKeys(k, lim);
+  return { done: n < lim, size: k.map.size, maxId: k.maxId };
+}
+/** Forget the map: the next call rebuilds from scratch (an outside writer touched liveness). */
+function _bumpKeys() { _keys = { db: null, map: null, maxId: 0, builds: _keys.builds, refreshes: 0, rows: 0 }; }
+function _targetKeyStats() {
+  return { size: _keys.map ? _keys.map.size : 0, maxId: _keys.maxId, builds: _keys.builds, refreshes: _keys.refreshes, rows: _keys.rows, live: _keys.db === db && !!_keys.map };
+}
+// In-place patches for the two liveness writes (only while a map is live for this handle).
+function _keysDrop(t) { if (!t || _keys.db !== db || !_keys.map) return; const key = keyOf(t.name, t.company); if (_keys.map.get(key) === t.id) _keys.map.delete(key); }
+function _keysRestore(t) { if (!t || _keys.db !== db || !_keys.map) return; const key = keyOf(t.name, t.company); const cur = _keys.map.get(key); if (cur == null || cur < t.id) _keys.map.set(key, t.id); }
 let _dbPath = null;
 /** The store's file path as opened (':memory:' in smokes) — a worker opens its OWN read-only connection to it. */
 function dbPath() { if (!_dbPath) init(); return _dbPath; }
@@ -238,7 +286,7 @@ function populationReader(conn) {
     beliefValuesByType: (type) => { const m = new Map(); for (const r of conn.prepare(POPULATION_SQL.beliefs).all(type)) { if (!m.has(r.target_id)) m.set(r.target_id, r.value); } return m; },
   };
 }
-function close() { if (db) { try { db.close(); } catch {} db = null; } _bulkCache = { at: 0, set: null }; }
+function close() { if (db) { try { db.close(); } catch {} db = null; } _bulkCache = { at: 0, set: null }; _bumpKeys(); }
 const now = () => Date.now();
 const j = (v) => (v == null ? null : JSON.stringify(v));
 const pj = (s, dflt) => { if (s == null) return dflt; try { return JSON.parse(s); } catch { return dflt; } };
@@ -696,6 +744,7 @@ function mergeTarget(fromId, intoId, { actor = 'operator', confidence = null, re
     return _logCorrection({ op: 'merge', fromTarget: fromId, intoTarget: intoId, movedObs: obs, actor, confidence, reason });
   });
   const correctionId = tx();
+  _keysDrop(from);   // cut 13: the donor is no longer live — its key leaves the cached key map
   return { correctionId, movedObs: getCorrection(correctionId).moved_obs.length, into: getTarget(intoId) };
 }
 
@@ -712,6 +761,7 @@ function unmergeTarget(correctionId) {
     _db().prepare(`UPDATE corrections SET status = 'reverted', reverted_at = ? WHERE id = ?`).run(now(), correctionId);
   });
   tx();
+  if (c.op === 'merge') _keysRestore(getTarget(c.from_target));   // cut 13: the donor is live again
   return { reverted: correctionId, op: c.op, restored: (c.moved_obs || []).length };
 }
 
@@ -748,6 +798,7 @@ function splitTarget(fromId, { obsIds = [], name, company = null, domain = null,
 
 module.exports = {
   init, close, dbPath, populationReader, POPULATION_SQL, socialCandidates, _preparedCount,
+  keyOf, targetKeyMap, warmTargetKeys, _bumpKeys, _targetKeyStats,
   createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, drawPlans, listOrgTargets, bulkCompanies, eachTargetKey, promoteTarget, normalizeCrmId, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName, backfillOrgKinds,
   addObservation, listObservations, observationCounts, failedAddresses,
   upsertBelief, getBelief, beliefValuesByType, listBeliefs, markSendState, listBeliefsBySendState,

@@ -19,7 +19,10 @@ const B = require('./puller_beliefs');
 const { isJunkPersonName } = require('./puller_name_gate');   // #43: don't mint role/org/mailbox "people"
 
 const clean = (s) => String(s == null ? '' : s).trim();
-const key = (name, company) => `${clean(name).toLowerCase()}|${clean(company).toLowerCase()}`;
+// The dedup key is the STORE's (lib/puller_db keyOf) — one definition, so the store's cached target
+// key map and this ingest can never disagree about which rows are the same person.
+const { keyOf } = require('../lib/puller_db');
+const key = keyOf;
 
 function parseConfidence(c) {
   const m = /(\d+(?:\.\d+)?)\s*%/.exec(String(c == null ? '' : c));
@@ -50,12 +53,18 @@ function ingestRows(db, rows, opts = {}) {
   const source = opts.source || 'handoff sheet';
   const sourceUrl = opts.sourceUrl || null;   // CITATION: the document/page these contacts came from (Lucas's cite mandate)
   const obsKind = opts.obsKind || 'handoff';  // evidence kind for the non-email attrs (a doc drop passes 'doc')
-  // Build the (name, company) → id dedup set from the EXISTING store. ⭐Stream only the 3 dedup columns via
-  // eachTargetKey — never listTargets({limit:1e7}), which SELECT *'d the whole ~271k-target population into
-  // memory synchronously and pegged the main thread ~16s on every doc-decomp ingest (profiler-confirmed).
-  const seen = new Map();
-  if (typeof db.eachTargetKey === 'function') db.eachTargetKey((t) => seen.set(key(t.name, t.company), t.id));
-  else for (const t of db.listTargets({ limit: 1e7 })) seen.set(key(t.name, t.company), t.id);   // fallback: test doubles / older db instances
+  // The (name, company) → id dedup set. ⭐Cut 13: the STORE's cached key map — built once per connection,
+  // refreshed above an id high-water — instead of streaming all ~676k keys on every doc-decomp ingest
+  // (the profiler's p263/p264 answer, 2.6–2.9s a call). The seen.set after createTarget keeps the shared
+  // map current between refreshes. A store without the map streams the 3 lean columns (eachTargetKey);
+  // never listTargets({limit:1e7}), which SELECT *'d the whole population and pegged the thread ~16s.
+  let seen;
+  if (typeof db.targetKeyMap === 'function') seen = db.targetKeyMap();
+  else {
+    seen = new Map();
+    if (typeof db.eachTargetKey === 'function') db.eachTargetKey((t) => seen.set(key(t.name, t.company), t.id));
+    else for (const t of db.listTargets({ limit: 1e7 })) seen.set(key(t.name, t.company), t.id);   // fallback: test doubles / older db instances
+  }
   const patternStates = new Map();   // domain -> pure belief state
   const landed = [];   // every row mapped to a target ({name, company, targetId, created}) — feeds the People rail
   const stats = { rows: 0, targets: 0, skippedDup: 0, noName: 0, junkName: 0, observations: 0, beliefs: 0,
