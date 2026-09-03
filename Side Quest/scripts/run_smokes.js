@@ -594,6 +594,9 @@ const smokes = [
   // block that ends by marking another lane in the same macrotask was never named (47 sweep stalls
   // read "decompose doc#N (3ms)").
   'smoke_stall_attrib.js',
+  // Freeze cut 6 (09-03): read-only SQL OFF the main thread — a worker per database file with its own
+  // read-only connection; the encounters ranking (14.7s) and the tenant COUNT(*)s refresh their caches there.
+  'smoke_db_worker.js',
   // Run-4 collision guard: the test port tells the REAL user from its own injected turns; a recent
   // or unanswered real turn owns the pipeline (10min / 30min-capped) and the harness yields.
   'smoke_test_port_guard.js',

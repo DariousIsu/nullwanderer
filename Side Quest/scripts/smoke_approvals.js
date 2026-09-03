@@ -60,6 +60,13 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     const sec = snap.sections.find((s) => s.key === 'tenant-backlog');
     ok(sec && sec.count === 4 && /2 entity proposal\(s\) at\/above the 0.8 floor/.test(sec.top), 'the tenant backlog rides the manifest with honest counts');
     ok(/YOUR explicit call/.test(sec.label), 'the label says the drain is his call — never a timer (the charter)');
+    // Freeze cut 6: through the db worker the counts are the same — the three COUNT(*)s over ~146k
+    // proposals (~1s each on p256) no longer run on the main thread.
+    const dbw = require('../lib/db_worker');
+    const snapW = await ap.snapshot({ echoSuit: null, query: dbw.query });
+    const secW = snapW.sections.find((s) => s.key === 'tenant-backlog');
+    ok(secW && secW.count === 4 && /2 entity proposal\(s\) at\/above the 0.8 floor/.test(secW.top), 'CRITICAL: the tenant counts through the db worker match the inline read exactly');
+    await dbw.close(tmp); await new Promise((r) => setTimeout(r, 100));
     process.env.ZOE_TENANT_DB = path.join(os.tmpdir(), 'definitely-missing-tenant.db');
     const snap2 = await ap.snapshot({ echoSuit: null });
     ok(!snap2.sections.some((s) => s.key === 'tenant-backlog'), 'a missing tenant DB drops the section — never a fake zero');

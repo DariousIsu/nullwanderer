@@ -82,6 +82,46 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     ok(/Fresh Corp/.test(m3.text), 'past the 6h TTL the ranking recomputes and sees new claims');
     mem.prepare("DELETE FROM encounters WHERE object_key = 'k9'").run();
   }
+
+  // OFF THE MAIN THREAD (freeze cut 6): with a refresher dep, a cache miss serves what the cache holds
+  // NOW and kicks ONE async refresh; its result lands in meta; the next tick reads it. p256 paid 14.7s
+  // inline for this ranking; p257's autonomy tick blocked 12.7s with no single statement to name.
+  {
+    const store = {};
+    const mdb = { getDb: () => mem, getMeta: (k) => store[k] || '', setMeta: (k, v) => { store[k] = v; } };
+    let calls = 0, release;
+    const gate = new Promise((res) => { release = res; });
+    const refresher = async () => { calls++; await gate; return { n: 7, unknown: 3, singles: [{ object_label: 'Worker Corp', c: 5, srcs: 1 }] }; };
+    const m1 = auto.buildManifest({ db: mdb, now: NOW, deps: { encountersRefresh: refresher } });
+    ok(!store['autonomy.encounters_cache'] && !/CLAIMS HELD/.test(m1.text) && m1.counts.encountersStale === 1 && calls === 1,
+      'CRITICAL: a cache miss with a refresher does NOT compute inline — the tick serves what it holds (nothing yet, honestly) and kicks the refresh');
+    const m1b = auto.buildManifest({ db: mdb, now: NOW + 1000, deps: { encountersRefresh: refresher } });
+    ok(calls === 1 && m1b.counts.encountersStale === 1, 'one refresh in flight at a time — a second miss does not stack another');
+    release(); await new Promise((r) => setTimeout(r, 20));
+    const banked = JSON.parse(store['autonomy.encounters_cache'] || '{}');
+    ok(banked.n === 7 && banked.unknown === 3 && banked.singles && banked.singles[0].object_label === 'Worker Corp', 'the refresh banks its result in the 6h cache when it lands');
+    const m2 = auto.buildManifest({ db: mdb, now: NOW + 2000, deps: { encountersRefresh: refresher } });
+    ok(/Worker Corp \(5 claims, one source\)/.test(m2.text) && m2.counts.encounters === 7 && !m2.counts.encountersStale && calls === 1, 'the next tick reads the banked cache — no refresh, no scan');
+    const m3 = auto.buildManifest({ db: mdb, now: NOW + 7 * 3600e3, deps: { encountersRefresh: refresher } });
+    ok(/Worker Corp/.test(m3.text) && m3.counts.encountersStale === 1 && calls === 2, 'past the TTL the STALE cache still serves the tick while a fresh refresh runs off-thread');
+    await new Promise((r) => setTimeout(r, 20));
+    const failing = async () => { throw new Error('worker down'); };
+    const m4 = auto.buildManifest({ db: mdb, now: NOW + 14 * 3600e3, deps: { encountersRefresh: failing } });
+    await new Promise((r) => setTimeout(r, 20));
+    ok(/Worker Corp/.test(m4.text) && JSON.parse(store['autonomy.encounters_cache']).n === 7, 'a failed refresh leaves the cache as it was — the tick still has counts');
+    // THE REAL DOOR: the same three statements through the db worker against a file store
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const tmp = path.join(os.tmpdir(), `smoke_autonomy_enc_${process.pid}.db`);
+    const fdb = new Database(tmp);
+    fdb.exec("CREATE TABLE encounters (id INTEGER PRIMARY KEY, object_key TEXT, object_label TEXT, origin_host TEXT, source_ref TEXT, authority TEXT DEFAULT 'unknown')");
+    fdb.prepare("INSERT INTO encounters (object_key,object_label,origin_host,authority) VALUES ('a','Solo Org','one.org','unknown'),('a','Solo Org','one.org','unknown'),('b','Two Src','x.org','official'),('b','Two Src','y.org','official')").run();
+    fdb.close();
+    const dbw = require('../lib/db_worker');
+    const r = await auto.encountersRefreshVia(dbw.query, tmp)();
+    ok(r.n === 4 && r.unknown === 2 && r.singles.length === 1 && r.singles[0].object_label === 'Solo Org' && r.singles[0].c === 2,
+      'CRITICAL: the refresher runs the three statements through the db worker (off-thread, read-only) and returns the shape the inline path banks');
+    await dbw.close(tmp); await new Promise((r2) => setTimeout(r2, 100)); try { fs.unlinkSync(tmp); } catch {}
+  }
   ok(/OPEN LINES OF INQUIRY \(advancing one is the DEFAULT move\)/.test(man.text) && /\[inquiry #1\].*standing AI task forces.*next: work the NCSL tracker/.test(man.text),
     'O0: the manifest carries open inquiries with their own next steps');
   ok(/RECENT FAILURES/.test(man.text) && /doomed run.*operator returned no answer/.test(man.text),

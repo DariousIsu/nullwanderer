@@ -79,24 +79,44 @@ async function _echoSection(echoSuit) {
 // wiring ("no silent auto-promotion"), so the ONLY correct build is VISIBILITY: the count rides
 // the AWAITING-LUCAS manifest and the drain fires on HIS explicit word. Read-only count over the
 // tenant DB file; fail-soft — a missing/locked DB drops the section, it never fakes a zero.
+const TENANT_SQL = {
+  ents: 'SELECT COUNT(*) c FROM entity_proposals',
+  rels: 'SELECT COUNT(*) c FROM relation_proposals',
+  ready: 'SELECT COUNT(*) c FROM entity_proposals WHERE confidence >= 0.8',
+};
+function _tenantPath() { return process.env.ZOE_TENANT_DB || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo/data/mcps/rainey/isolated.db'; }
+function _tenantShape(ents, rels, ready) {
+  if (!(ents + rels)) return null;
+  return {
+    key: 'tenant-backlog',
+    label: 'Rainey tenant backlog (bulk-promote is YOUR explicit call — say "promote the tenant backlog")',
+    count: ents + rels,
+    top: `${ready} entity proposal(s) at/above the 0.8 floor would ride one promote_tenant_proposals call`,
+  };
+}
 function _tenantSection() {
   try {
-    const p = process.env.ZOE_TENANT_DB || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo/data/mcps/rainey/isolated.db';
+    const p = _tenantPath();
     if (!require('fs').existsSync(p)) return null;
     const Database = require('better-sqlite3');
     const d = new Database(p, { readonly: true });
     let ents = 0, rels = 0, ready = 0;
-    try { ents = d.prepare('SELECT COUNT(*) c FROM entity_proposals').get().c; } catch {}
-    try { rels = d.prepare('SELECT COUNT(*) c FROM relation_proposals').get().c; } catch {}
-    try { ready = d.prepare('SELECT COUNT(*) c FROM entity_proposals WHERE confidence >= 0.8').get().c; } catch {}
+    try { ents = d.prepare(TENANT_SQL.ents).get().c; } catch {}
+    try { rels = d.prepare(TENANT_SQL.rels).get().c; } catch {}
+    try { ready = d.prepare(TENANT_SQL.ready).get().c; } catch {}
     try { d.close(); } catch {}
-    if (!(ents + rels)) return null;
-    return {
-      key: 'tenant-backlog',
-      label: 'Rainey tenant backlog (bulk-promote is YOUR explicit call — say "promote the tenant backlog")',
-      count: ents + rels,
-      top: `${ready} entity proposal(s) at/above the 0.8 floor would ride one promote_tenant_proposals call`,
-    };
+    return _tenantShape(ents, rels, ready);
+  } catch { return null; }
+}
+// OFF THE MAIN THREAD (freeze cut 6): the three COUNT(*)s walk ~146k proposals — ~1s each on the main thread
+// (p256), every hourly refresh. Through the db worker (`query(dbPath, sql, params, {mode})`) the tenant file
+// is opened read-only on its own thread; each count still fails soft to 0, exactly as inline.
+async function _tenantSectionVia(query) {
+  try {
+    const p = _tenantPath();
+    if (!require('fs').existsSync(p)) return null;
+    const count = async (sql) => { try { const r = await query(p, sql, [], { mode: 'get' }); return Number((r && r.c) || 0); } catch { return 0; } };
+    return _tenantShape(await count(TENANT_SQL.ents), await count(TENANT_SQL.rels), await count(TENANT_SQL.ready));
   } catch { return null; }
 }
 
@@ -112,11 +132,14 @@ function _timed(label, fn) {
   finally { const ms = Date.now() - t0; if (ms >= SLOW_SECTION_MS) { try { console.warn(`[approvals] slow section ${label}: ${ms}ms`); } catch {} } }
 }
 
-// `sources` is injectable for smokes; production callers omit it.
-async function snapshot({ echoSuit = null, sources = null } = {}) {
+// `sources` is injectable for smokes; production callers omit it. `query` = the db worker's door — with
+// it the tenant counts run off the main thread (freeze cut 6); without it they run inline, timed.
+async function snapshot({ echoSuit = null, sources = null, query = null } = {}) {
   const secs = Array.isArray(sources)
     ? sources.slice()
-    : [_timed('puller', _pullerSection), _timed('gaps', _gapsSection), _timed('rehearsal', _rehearsalSection), _timed('tenant', _tenantSection), await _echoSection(echoSuit)];
+    : [_timed('puller', _pullerSection), _timed('gaps', _gapsSection), _timed('rehearsal', _rehearsalSection),
+       typeof query === 'function' ? await _tenantSectionVia(query) : _timed('tenant', _tenantSection),
+       await _echoSection(echoSuit)];
   const sections = secs.filter(Boolean);
   return { ts: Date.now(), sections, total: sections.reduce((n, s) => n + (s.count || 0), 0) };
 }

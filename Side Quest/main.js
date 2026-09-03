@@ -10282,7 +10282,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     const approvals = require('./lib/approvals');
     if (approvals.detectApprovalsQuestion(userMessage)) {
-      const block = approvals.buildBlock(await approvals.snapshot({ echoSuit }), userName);
+      const block = approvals.buildBlock(await approvals.snapshot({ echoSuit, query: require('./lib/db_worker').query }), userName);
       retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block;
       console.log('[approvals] AWAITING-LUCAS block surfaced for a sign-off question');
     }
@@ -16212,7 +16212,7 @@ async function autonomyTick() {
     try {
       let cachedA = null; try { cachedA = JSON.parse(db.getMeta('approvals.snapshot') || 'null'); } catch {}
       if (!cachedA || now - (cachedA.ts || 0) > 3600e3) {
-        const snap = await require('./lib/approvals').snapshot({ echoSuit });
+        const snap = await require('./lib/approvals').snapshot({ echoSuit, query: require('./lib/db_worker').query });   // tenant counts off-thread (freeze cut 6)
         db.setMeta('approvals.snapshot', JSON.stringify(snap));
         if (snap.sections.length) console.log(`[approvals] snapshot: ${snap.total} item(s) across ${snap.sections.length} queue(s)`);
       }
@@ -16220,7 +16220,12 @@ async function autonomyTick() {
     // Re-asserted after the awaits above: another lane's idle mark meanwhile clobbers the tick's label, and
     // the synchronous manifest build (10–14s on p256/p257) then logged as "idle" (freeze cut 5b).
     markActivity('autonomy-tick');
-    const manifest = autonomy.buildManifest({ db, now, deps: { forecast: () => lastForecast } });
+    // encountersRefresh: the 1.49M-row single-source ranking refreshes its 6h cache in the db worker, never
+    // inline (freeze cut 6 — 14.7s on p256).
+    const manifest = autonomy.buildManifest({ db, now, deps: {
+      forecast: () => lastForecast,
+      encountersRefresh: autonomy.encountersRefreshVia(require('./lib/db_worker').query, db.DB_PATH),
+    } });
     if (!manifest.text) { console.log('[autonomy] empty manifest — nothing to choose from'); return; }
     // IDLE-DEPTH LADDER (Slice 1, LOG-ONLY this pass): how deep this tick has EARNED to go, derived from
     // time since the last user turn. Budget-gating on this lands next; for now we watch the ladder compute

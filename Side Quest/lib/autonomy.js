@@ -74,6 +74,32 @@ function personaPressure({ lastAttendAt = 0, now = Date.now(), floorH = PERSONA_
 }
 
 const SLOW_SECTION_MS = 300;   // a manifest section at or above this names itself (see the section timer below)
+
+// The encounters section's three statements + its 6h cache. The single-source ranking is a GROUP BY over
+// every encounter (1.49M rows, 14.7s on p256) — with a refresher dep the manifest never runs it inline:
+// encountersRefreshVia(query, dbPath) turns any `query(dbPath, sql, params, {mode})` door (lib/db_worker's)
+// into the async refresher the section kicks on a cache miss.
+const ENCOUNTERS_CACHE_KEY = 'autonomy.encounters_cache';
+const ENCOUNTERS_CACHE_MS = 6 * 3600e3;
+const ENCOUNTERS_SQL = {
+  n: 'SELECT COUNT(*) n FROM encounters',
+  unknown: "SELECT COUNT(*) n FROM encounters WHERE authority = 'unknown'",
+  singles: `SELECT MAX(object_label) object_label, COUNT(*) c,
+                   COUNT(DISTINCT COALESCE(origin_host, source_ref, 'x')) srcs
+            FROM encounters WHERE object_label IS NOT NULL
+            GROUP BY object_key HAVING srcs = 1 ORDER BY c DESC LIMIT 3`,
+};
+let _encountersRefresh = null;   // the one refresh in flight (a promise), or null
+function encountersRefreshVia(query, dbPath) {
+  return async () => {
+    const n = Number((((await query(dbPath, ENCOUNTERS_SQL.n, [], { mode: 'get' })) || {}).n) || 0);
+    if (!n) return { n: 0, unknown: 0, singles: [] };
+    const unknown = Number((((await query(dbPath, ENCOUNTERS_SQL.unknown, [], { mode: 'get' })) || {}).n) || 0);
+    const singles = (await query(dbPath, ENCOUNTERS_SQL.singles, [])) || [];
+    return { n, unknown, singles };
+  };
+}
+
 function buildManifest({ db = null, now = Date.now(), skip = [], deps = {} } = {}) {
   const dbm = db || require('./db');
   let d = null;
@@ -149,21 +175,32 @@ function buildManifest({ db = null, now = Date.now(), skip = [], deps = {} } = {
     let n = 0, unknown = 0, singles = [];
     const hasMeta = typeof dbm.getMeta === 'function' && typeof dbm.setMeta === 'function';
     let cached = null;
-    if (hasMeta) { try { cached = JSON.parse(dbm.getMeta('autonomy.encounters_cache') || 'null'); } catch {} }
-    if (cached && now - (cached.ts || 0) < 6 * 3600e3 && typeof cached.n === 'number') {
+    if (hasMeta) { try { cached = JSON.parse(dbm.getMeta(ENCOUNTERS_CACHE_KEY) || 'null'); } catch {} }
+    const held = cached && typeof cached.n === 'number';
+    if (held && now - (cached.ts || 0) < ENCOUNTERS_CACHE_MS) {
       n = cached.n; unknown = cached.unknown || 0; singles = Array.isArray(cached.singles) ? cached.singles : [];
+    } else if (typeof deps.encountersRefresh === 'function' && hasMeta) {
+      // OFF THE MAIN THREAD (freeze cut 6): the ranking is a GROUP BY over 1.49M rows — 14.7s on p256, the
+      // largest single block of the night — and it feeds a CACHE, not a reply. A miss serves what the cache
+      // holds (stale, or nothing — honestly) and kicks ONE refresh through the db worker; the refresh banks
+      // its result when it lands and the next tick reads it. Nothing here waits.
+      if (held) { n = cached.n; unknown = cached.unknown || 0; singles = Array.isArray(cached.singles) ? cached.singles : []; }
+      counts.encountersStale = 1;
+      if (!_encountersRefresh) {
+        let p; try { p = Promise.resolve(deps.encountersRefresh()); } catch (e) { p = Promise.reject(e); }
+        _encountersRefresh = p
+          .then((r) => { if (r && typeof r.n === 'number') dbm.setMeta(ENCOUNTERS_CACHE_KEY, JSON.stringify({ ts: now, n: r.n, unknown: r.unknown || 0, singles: Array.isArray(r.singles) ? r.singles : [] })); })
+          .catch((e) => console.error('[autonomy] encounters refresh (off-thread) failed — the cache stays as it was:', e && e.message))
+          .finally(() => { _encountersRefresh = null; });
+      }
     } else {
       try {
-        n = d.prepare('SELECT COUNT(*) n FROM encounters').get().n;
+        n = d.prepare(ENCOUNTERS_SQL.n).get().n;
         if (n) {
-          unknown = d.prepare("SELECT COUNT(*) n FROM encounters WHERE authority = 'unknown'").get().n;
-          singles = d.prepare(`
-            SELECT MAX(object_label) object_label, COUNT(*) c,
-                   COUNT(DISTINCT COALESCE(origin_host, source_ref, 'x')) srcs
-            FROM encounters WHERE object_label IS NOT NULL
-            GROUP BY object_key HAVING srcs = 1 ORDER BY c DESC LIMIT 3`).all();
+          unknown = d.prepare(ENCOUNTERS_SQL.unknown).get().n;
+          singles = d.prepare(ENCOUNTERS_SQL.singles).all();
         }
-        if (hasMeta) dbm.setMeta('autonomy.encounters_cache', JSON.stringify({ ts: now, n, unknown, singles }));
+        if (hasMeta) dbm.setMeta(ENCOUNTERS_CACHE_KEY, JSON.stringify({ ts: now, n, unknown, singles }));
       } catch (e) { console.error('[autonomy] encounters section failed (degrades to counts):', e.message); }
     }
     counts.encounters = n;
@@ -749,6 +786,7 @@ async function personaAttend({ now = Date.now(), userName = 'Lucas', deps = {} }
 module.exports = {
   MOVES, HISTORY_KEY, HISTORY_MAX, PERSONA_ATTEND_KEY, PERSONA_FLOOR_H,
   buildManifest, liveDigest, LIVE_SECTIONS, historyRead, historyPush, historyBlock,
+  encountersRefreshVia, ENCOUNTERS_SQL, ENCOUNTERS_CACHE_KEY,   // the off-thread refresher (freeze cut 6)
   decide, validateDecision, DECISION_WANT,
   buildOperatorBrief, summarizeOutcome, slugify,
   verifyExpect, _validateExpectVerdict, parseAgentInbox, inboxSeenKey,
