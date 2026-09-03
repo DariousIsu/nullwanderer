@@ -128,6 +128,29 @@ Leg D, as a shape:
 
 Leg D slots between legs A and B in the order of section 4: it needs A's ledger and it feeds B's mining organ with labeled failures, which is exactly the signal RHO lacks.
 
+## 8. The usage law
+
+Lucas, after the swarm diagnosis: the only lane that should be slowed is basic database expansion, and only when research directives, user commands, and program development are queued; the pool is still on the very conservative side; and the swarms should not be included at all, since they use a cost-friendly model. His dashboard at that moment read 42.1 percent of the week used with three days to reset and 7.9 percent of the session used.
+
+**What the law does today** (`lib/quota.js`, `lib/quota_gate.js`). Four tiers: interactive, never throttled; directed, floor-gated only; research and idle, paced. Pacing is a share of the sustainable rate, computed as remaining pool over time to reset: research may spend 60 percent of that rate per hour and idle 40 percent, against the trailing hour's background spend, with a 0.85 hysteresis on reopening. A burst rule suspends pacing when the pool is at least ten percent ahead of the window's elapsed fraction. Cost is compute, tokens weighted by model size: gemma4:31b at 31, gpt-oss:120b at 120, deepseek-v4-flash at a named 100, glm-5.2 and kimi-k2.7-code at 300.
+
+**Why it closed everything.** At the time of his message the pool was 43.1 percent used with 51.7 percent of the window elapsed by the app's reset clock: 8.6 percent ahead, under the ten-percent burst margin, so pacing engaged. The dashboard's reset is about nine hours earlier than the app's clock, which alone is the difference between burst and paced. Background spend was 104,842 compute in the trailing hour against a 37,049 share for research. That spend was overwhelmingly the self-build operators on deepseek-v4-flash, weight 100, about 12 million tokens a day on the research lane. And the swarm partitions did not ride gemma: the swarm model slot `model.operator_swarm` is empty, so partitions resolve to the operator model, deepseek-v4-flash.
+
+**The redesign against his law.**
+
+| Tier | Members | Pacing |
+|---|---|---|
+| User | interactive, directed | Never. Floors only, as today |
+| Directives | his research asks and every partition or swarm they spawn | Never pace-slowed. Partitions inherit the parent's lane instead of resolving to research |
+| Development | pen, rehearsal, pursuit, the self-build operators | Its own tier, named and metered. Not slowed under his law; the tier exists so its burn is visible and can be routed |
+| Expansion | decomposition, news, enrichment, promotion, graph walk, subconscious drift | The only paced tier, and paced only when work is queued in a tier above it. With nothing queued above, expansion may spend the whole sustainable rate |
+
+Three more rules. Cheap-model calls, weight at or under about 35, never trip the pace gate; floors stay armed. The burst margin drops from ten percent to about two, so a pool ahead of schedule is never paced, and the reset clock re-anchors from the dashboard scrape. The swarm model slot is set to gemma4:31b-cloud, which is a meta flag and needs no reboot.
+
+**Measured effect to expect.** The research lane's closures, 121 deferrals on one generation, stop for directives and cheap-model work immediately. Echo's chat-triggered agents stop being refused once the governor asks the directed lane for chat triggers. The pool's burn rises toward the sustainable rate, which is the intent: the pool does not roll over.
+
+**Risk to name.** Development unthrottled at weight 100 is the burn that tripped the old law. Under the new law it is allowed, and the development tier's meter is what will show whether it needs routing to a cheaper model rather than pacing.
+
 ## Sources
 
 - https://github.com/raphaelchristi/harness-evolver
