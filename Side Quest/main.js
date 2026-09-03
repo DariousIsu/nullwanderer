@@ -6085,6 +6085,16 @@ try {
       const line = `${new Date(now).toISOString()}\tblocked~${drift}ms\tactive="${label}"\tran=${ranMs}ms\n`;
       try { require('fs').appendFile(_attribPath, line, () => {}); } catch {}
       try { console.warn(`[stall-attrib] main thread blocked ~${drift}ms — active: "${label}" (${ranMs}ms)`); } catch {}
+      // THE PROFILER'S ANSWER (freeze cut 8): the frames whose self-time fell inside the blocked window —
+      // the unmarked tail names its own function, file and line. Async, after the attrib line; fail-soft.
+      try {
+        const sp = require('./lib/stall_profile');
+        if (sp.armed()) sp.attribute({ endMs: now, driftMs: drift }).then((p) => {
+          if (!p) return;
+          try { console.warn(`[stall-profile] ${p.line}`); } catch {}
+          try { require('fs').appendFile(_attribPath, `${new Date(now).toISOString()}\tPROFILE\t${p.line}\n`, () => {}); } catch {}
+        }).catch(() => {});
+      } catch {}
     }
   }, 1000).unref?.();
 } catch {}
@@ -6098,6 +6108,15 @@ try {
     console.log(`[slow-sync] probe ${r.armed ? 'armed (statements ≥1s name themselves)' : `NOT armed: ${r.why}`}`);
   }
 } catch (e) { console.error('[slow-sync] arm failed:', e.message); }
+// THE STALL PROFILER (freeze cut 8): V8's sampling profiler on its own thread, rolling windows; a block's
+// window is attributed to the frames that held the loop (lib/stall_profile). Kill switch: ZOE_STALL_PROFILE=0.
+try {
+  if (String(process.env.ZOE_STALL_PROFILE || '1').trim() !== '0') {
+    require('./lib/stall_profile').arm().then((r) => {
+      console.log(`[stall-profile] ${r.armed ? 'armed (2ms samples, 60s windows — a block names its frames)' : `NOT armed: ${r.why}`}`);
+    }).catch((e) => console.error('[stall-profile] arm failed:', e.message));
+  }
+} catch (e) { console.error('[stall-profile] arm failed:', e.message); }
 
 // MAIN-THREAD LOAD GOVERNOR (Lucas 2026-07-24 — "the freezes are getting to where its hard to type in
 // the chat ... we need to better balance the load"). The cloud-slot board (lib/board) reserves a CLOUD

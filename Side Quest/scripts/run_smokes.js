@@ -597,6 +597,9 @@ const smokes = [
   // Freeze cut 6 (09-03): read-only SQL OFF the main thread — a worker per database file with its own
   // read-only connection; the encounters ranking (14.7s) and the tenant COUNT(*)s refresh their caches there.
   'smoke_db_worker.js',
+  // Freeze cut 8 (09-03): the stall PROFILER — V8's sampling profiler on its own thread names the function,
+  // file and line that held the loop when no lane marked itself and no statement was slow (the 1.5–2s tail).
+  'smoke_stall_profile.js',
   // Run-4 collision guard: the test port tells the REAL user from its own injected turns; a recent
   // or unanswered real turn owns the pipeline (10min / 30min-capped) and the harness yields.
   'smoke_test_port_guard.js',
