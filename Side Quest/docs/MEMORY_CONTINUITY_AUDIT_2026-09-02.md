@@ -161,8 +161,14 @@ on the status line and behind the state door):
 4. kg_anchor — 63 anchors to pruned entities: re-point through the canonical map or drop them
    (a live-DB write).
 5. civic_memberships — resolve seat-holders to CRM contacts (the roster organ should fill `crm_id`).
-6. Mine to cure, his word on priority: `promoteLocalEdgesUp` dead since 07-21; the absence pursuit
-   that never lands evidence; the documents promote pass under-draining (+130/day).
+6. ~~Mine to cure, his word on priority~~ — **cured the same night on his word ("go ahead with the
+   cures on your side, in that order")**: (1) the relation promoter — a ledger on every edge
+   (attempts, time, hold reason), a rotating scan with a doubling backoff, a hold histogram, a time
+   budget, and a 20-minute beat through the same resolution gate; (2) the absence pursuit — the
+   audit's "never answered" was a misread (see B), the real defect was quota skips counted as
+   attempts, cured with a 20-minute hold that leaves the attempt count alone; (3) the documents pass —
+   a ledger on every document, backoff rotation inside the round-robin, a junk net for error pages,
+   a time budget, and a 15-minute beat. Commits `c6e59d1` and `b922147`.
 7. saga.self_model → rename (supervisor_state) and fold the vestigial saga memory into the one
    memory.
 8. The three 0-byte phantoms — delete (his word).
