@@ -116,9 +116,28 @@ An Echo change, LOCAL commit only, in the campaign's cut shape (measure, build, 
 
 This cut goes first on resume, ahead of cut 18, because it is the DB-is-foundation law with a count on it: the reply path asks the graph and gets keywords back 829 times a morning. His word decides the order.
 
+### 3.5 Landed: cut 18-E (his word "proceed to build", 2026-09-03 13:18 Eastern)
+
+Echo LOCAL commit `bc66749` (never pushed): `Store.conn` is a property that hands the opening thread the primary connection and every other thread its own pooled clone (the primary's ATTACHes replayed from one `PRAGMA database_list` snapshot, an 8 MB page cache per schema, cap 24, reused after the thread dies, kill switch `NX_ECHO_THREAD_CONN=0`); the vector lane steps its process-wide connection under a lock and treats an empty embedding as no lane; `create_contact` runs its three inserts inside `transaction()`. Eight pins in `tests/test_store_thread_conn_18e.py`, including sixteen threads reading while writers commit with zero errors and zero orphaned foreign keys. The first draft deadlocked that pin on a lock-order inversion; the order is now snapshot lock, then write lock, and the pool lock alone.
+
+Gate: 3,844 passed, 67 failed, all 67 pre-existing (61 reproduce on a baseline copy with only the three files reverted; the other 6 plus the 30 nl tests fail on the tombstone `rainey.db` directory with the kill switch on too). The live-store surface test passes under the cut in 170 s, above the suite's 120 s clock. Items 3 (the single-writer audit queue) and the remaining writers stay open.
+
+The read on boot_p270 (root 40624, engine up 13:19), first 10.8 minutes, 3,265 tool calls and 10 contact creations:
+
+| Tally | p269, per 10 min | p270, first 10.8 min |
+|---|---|---|
+| hybrid path fell back to BM25 | 52 | 0 |
+| Error calling tool | 39 | 0 |
+| audit log failed | 46 | 0 |
+| crm_schema ensure failed | 9 | 0 |
+| security_audit mirror failed | 9 | 0 |
+| clone warnings (`thread-conn:`) | n/a | 0 |
+
+Engine RSS at the read: 4.2 GB (no p269 sample to compare; watch). A leftover Kokoro tuner sidecar from p267 (pid 32980, 727 MB, started 10:39) survived p267's death and is still running; his call.
+
 ## 4. The build order, revised
 
-1. **Cut 18-E, the shared-connection cure** (Echo, local). Section 3.4. Read: the fallback and error tallies on the next generation.
+1. **Cut 18-E, the shared-connection cure** (Echo, local). Section 3.4. LANDED 13:18 as `bc66749`; the first read is section 3.5 (0 / 0 / 0 against 52 / 39 / 46 per ten minutes). Open from it: the single-writer audit queue and the remaining writers inside `transaction()`.
 2. **Cut 18, the Side Quest siblings**: searchDocuments IDS shape (measured 1.3 to 1.8 s → 2 to 8 ms), localdb inventory in a worker or precomputed, retentionSweep off the tick, the meter-ring persist and spend fold, getKnowledgeVectorRows cached by version.
 3. **The usage law**: four tiers (user, directives, development, expansion), queue-aware pacing on expansion only, the cheap-model exemption, the swarm slot on gemma4:31b-cloud, burst margin 0.10 → 0.02, the reset re-anchor. With it the two lane fixes: chat-triggered Echo agents ask the directed lane; partitions inherit the parent's lane and log the swarm-live skip.
 4. **Stage 4.5 with the ports folded in**: the trigger-to-tier law (P5's routing table feeds it) → the role registry seeded from Bravo's templates, P7's five agents, P15's collector policy, the Alpha challenger → the run ledger (P5's envelope as the artifact record) → the swarm primitive with markers, the citation gate carrying P11's confidence levels, the challenger → the fold.
