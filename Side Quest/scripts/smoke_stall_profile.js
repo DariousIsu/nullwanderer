@@ -16,6 +16,18 @@ function hogTheLoopForTheSmoke(ms) {           // a NAMED synchronous hog — th
   return x;
 }
 function quietHelperForTheSmoke(ms) { return hogTheLoopForTheSmoke(ms); }
+// A NAMED caller whose time is spent in a NATIVE leaf (better-sqlite3 Statement.get) — the shape of the
+// live blocks the self-time line could not name (`30% get · 24% Statement · 11% all`, no repo frame).
+function stormOfGetsForTheSmoke(ms) {
+  const Database = require('better-sqlite3');
+  const d = new Database(':memory:');
+  d.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)'); d.prepare("INSERT INTO t (v) VALUES ('x')").run();
+  const stmt = d.prepare('SELECT v FROM t WHERE id = ?');
+  const end = Date.now() + ms; let n = 0;
+  while (Date.now() < end) { for (let i = 0; i < 200; i++) { stmt.get(1); n++; } }
+  d.close();
+  return n;
+}
 
 (async () => {
   const a = await P.arm({ windowMs: 5000 });
@@ -32,6 +44,21 @@ function quietHelperForTheSmoke(ms) { return hogTheLoopForTheSmoke(ms); }
     `CRITICAL: the top frame is the hog itself, by name, with the majority share (${r && r.top[0] && r.top[0].label} ${r && r.top[0] && r.top[0].pct}%)`);
   ok(r && /smoke_stall_profile\.js:\d+/.test(r.top[0].label), 'the frame carries its repo-relative file and line');
   ok(r && /ms sampled in the \d+ms block: \d+% hogTheLoopForTheSmoke/.test(r.line), 'the log line reads as one sentence: share, function, file:line');
+
+  // ⭐ cut 16 — WHO PAID: a storm of small calls is charged to the repo caller (nearest) and the lane (outermost)
+  // by INCLUSIVE time, whatever the leaf. (A quiet 1.2s first, so the slack window holds only the storm.)
+  await new Promise((res) => setTimeout(res, 1200));
+  const g0 = Date.now(); stormOfGetsForTheSmoke(400); const g1 = Date.now();
+  const g = await P.attribute({ endMs: g1, driftMs: g1 - g0 });
+  console.log('  storm: ' + (g && g.line));
+  ok(g && /scripts\/smoke_stall_profile\.js:\d+/.test(g.top[0].label), '⭐ frames are REPO-RELATIVE again (the profile URL is percent-encoded — `Side%20Quest` — and must be decoded before the repo-root test; every `via` had silently vanished since cut 10)');
+  ok(g && g.paidBy && g.paidBy.length && /^stormOfGetsForTheSmoke \(scripts\/smoke_stall_profile\.js:\d+\)$/.test(g.paidBy[0].label) && g.paidBy[0].pct >= 60,
+    `CRITICAL: the storm's own function is named as the NEAREST frame that paid (${g && g.paidBy ? g.paidBy.map((x) => x.pct + '% ' + x.label).join(' · ') : 'none'})`);
+  ok(g && g.under && g.under.length && /\(scripts\/smoke_stall_profile\.js:\d+\)$/.test(g.under[0].label) && g.under[0].pct >= 60,
+    `the OUTERMOST repo frame (the lane) is named under it (${g && g.under ? g.under.map((x) => x.pct + '% ' + x.label).join(' · ') : 'none'})`);
+  const natives = g ? g.top.filter((r) => !/\((?:scripts|lib|studio|main\.js)/.test(r.label) && !/garbage collector|\(program\)/.test(r.label)) : [];
+  ok(natives.every((r) => !!r.via), `every native/library leaf row carries a via (${natives.length ? natives.map((r) => `${r.label} via ${r.via}`).join(' · ') : 'no native leaf rows — better-sqlite3’s time folds into its JS caller in this build'})`);
+  ok(g && /— paid by: \d+% stormOfGetsForTheSmoke \(scripts\/smoke_stall_profile\.js:\d+\)/.test(g.line) && / — under: \d+% /.test(g.line), 'the log line ends with who paid and under which lane');
 
   // a quiet window attributes to nothing (no false culprit)
   await new Promise((res) => setTimeout(res, 120));
