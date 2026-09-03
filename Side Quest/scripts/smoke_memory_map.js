@@ -158,6 +158,12 @@ function ok(name, cond, detail = '') {
     ok('describe: the one-liner names the discontinuities and the files outside the map', /continuity: 1 dead end\(s\), 2 stalled bridge\(s\) · 1 store\(s\) outside the map/.test(dc.line), dc.line);
     ok('describe: the block carries the continuity line and the outside-the-map line', dc.block.some((l) => /^Continuity — memory that enters and never leaves: DEAD END electoral\._pending_data_stream_tags \(23,504 rows, gate never built\) · STALLED sq\.capability_needs \(31 pending, quiet 40 days\) · STALLED tenant_rainey\.inbox \(11,064 pending, never crossed\)\./.test(l)) && dc.block.some((l) => /^Outside the map: sq:stray\.db \(2\.5 MB, unmapped\) · echo:sq\.db \(phantom — 0 bytes\)\./.test(l)), dc.block.join('\n'));
     ok('describe: a clean map says continuity holds', d.block.some((l) => /^Continuity: every bridge has a built gate/.test(l)) && !/continuity:/.test(d.line));
+    // the shell race (boot_p248): Echo's half names tenant-local shells present on the union mount
+    const echoS = { ...echoHalf, continuity: { dead_ends: [], stalled: [], shells: [{ store: 'civic_graph', table: 'inbox', rows: 0 }, { store: 'civic_graph', table: 'documents', rows: 2 }] } };
+    const ms = M.assemble({ echo: echoS, sq: cleanHalf, nowMs: 5000 });
+    ok('assemble: shells ride the continuity block side-tagged', ms.continuity.shells.length === 2 && ms.continuity.shells.every((s) => s.side === 'echo'));
+    ok('describe: shells present are named with their row counts', M.describe(ms).block.some((l) => /^Shells present on the union mount \(2\).*civic_graph\.inbox \(0\) · civic_graph\.documents \(2\)\./.test(l)), M.describe(ms).block.join('\n'));
+    ok('describe: no shells → no shell line', !d.block.some((l) => /^Shells present/.test(l)));
   }
 
   // ── readEchoMap(): the Echo spawn contract (fake spawn) ──

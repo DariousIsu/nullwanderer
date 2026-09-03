@@ -21,7 +21,7 @@ function _dbm(deps) { return (deps && deps.db) || require('./db'); }
 function assemble({ echo = null, sq = null, nowMs = Date.now() } = {}) {
   const tiers = { [SHORT]: { tables: 0, stores: [] }, [LONG]: { tables: 0, stores: [] } };
   const warnings = [], bridges = [];
-  const continuity = { dead_ends: [], stalled: [] };
+  const continuity = { dead_ends: [], stalled: [], shells: [] };
   const unmapped = [], phantoms = [], clocks = {};
   const halves = { echo: !!(echo && echo.tiers), sq: !!(sq && sq.tiers) };
   for (const [side, half] of [['sq', sq], ['echo', echo]]) {
@@ -36,6 +36,7 @@ function assemble({ echo = null, sq = null, nowMs = Date.now() } = {}) {
     const c = half.continuity || {};
     for (const d of (c.dead_ends || [])) continuity.dead_ends.push({ ...d, side });
     for (const s of (c.stalled || [])) continuity.stalled.push({ ...s, side });
+    for (const s of (c.shells || [])) continuity.shells.push({ ...s, side });   // tenant-local shells on the union mount (the shell race)
     for (const u of (half.unmapped || [])) unmapped.push({ ...u, side });
     for (const p of (half.phantoms || [])) phantoms.push({ ...p, side });
     for (const [a, clk] of Object.entries(half.clocks || {})) clocks[`${side}.${a}`] = clk;
@@ -74,6 +75,9 @@ function describe(map) {
     for (const s of cont.stalled) parts.push(`STALLED ${s.from} (${_n(s.pending)} pending, ${s.why})`);
     block.push(`Continuity — memory that enters and never leaves: ${parts.join(' · ')}.`);
   } else block.push('Continuity: every bridge has a built gate that has fired within the stall window.');
+  if ((cont.shells || []).length) {
+    block.push(`Shells present on the union mount (${cont.shells.length}) — a non-union Store open created them; until the ghost-drop an unqualified read may resolve to the empty shell: ${cont.shells.map((s) => `${s.store}.${s.table} (${_n(s.rows)})`).join(' · ')}.`);
+  }
   if (nOut || (map.phantoms || []).length) {
     const parts = [...(map.unmapped || []).map((u) => `${u.side}:${u.path} (${u.size_mb} MB, unmapped)`), ...(map.phantoms || []).map((p) => `${p.side}:${p.path} (phantom — ${p.note})`)];
     block.push(`Outside the map: ${parts.join(' · ')}.`);

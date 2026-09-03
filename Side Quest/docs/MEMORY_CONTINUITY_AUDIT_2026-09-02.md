@@ -75,6 +75,23 @@ only — a grounded candidate leaves no timestamp, so the map cannot say when th
 tenant.`pruned_entity_proposals` (133,209) is reclassified as a **log**: every row is decided
 (`pruned_at` set); it was never a backlog.
 
+## B2. The shell race — caught live by the organ on its first boot
+
+Three minutes into boot_p248 the map warned: `civic_graph.inbox: looks like staging but is
+undeclared inside a long-term store`. There had been no such table an hour earlier. A probe found
+seven tenant-local tables (documents, projects, inbox, links, document_versions,
+cross_project_usage, plus audit) inside the long-term file, all empty, and six minutes later they
+were gone. Cause: `Store.__init__` defaulted to `create_local_tables=True`, and every caller that
+opened the foundation file without saying otherwise — the pass-worker's decompose job
+(`echo/jobs.py`), the portal, the crawler, the nl CLI — recreated the 17 tenant-local tables as
+empty shells; the union mount's ghost-drop removed them later. In that window an unqualified read
+could resolve to the empty shell (the "silent-0 ghost-drop race" the store's own comments name).
+
+Cure (Echo, local commit): the default now follows the file — `civic_graph.db` never gets local
+tables unless a caller asks explicitly; tenant and standalone stores keep the full schema. The map
+declares the 17 names as **shells** in civic_graph: present = named in `continuity.shells`
+(the race is open), rows in one = a re-aim warning, absent = no drift.
+
 ## C. Files outside the map
 
 Found and now declared: the tenant's sibling stores — `mcps/rainey/capture.db` (16 MB, the
