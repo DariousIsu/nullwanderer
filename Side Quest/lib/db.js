@@ -2940,8 +2940,11 @@ function listOperatorDropEntities({ limit = 60, docLimit = 20,
   sources = ['canvas_drop', 'upload', 'meeting', 'editor', 'editor_reference'] } = {}) {
   try {
     const sIn = sources.map(() => '?').join(',');
+    // pinned to the partial index (source, created_ts DESC) WHERE superseded_by IS NULL: without ANALYZE
+    // stats the planner took idx_documents_superseded + a temp B-tree over every live document (measured
+    // 770ms idle on boot_p255 with the index present; 7ms pinned) — the freeze's fourth named statement
     const docs = getDb().prepare(
-      `SELECT id FROM documents WHERE source IN (${sIn}) AND superseded_by IS NULL ORDER BY created_ts DESC LIMIT ?`
+      `SELECT id FROM documents INDEXED BY idx_documents_source_created WHERE source IN (${sIn}) AND superseded_by IS NULL ORDER BY created_ts DESC LIMIT ?`
     ).all(...sources, docLimit);
     if (!docs.length) return [];
     const urls = docs.map(d => 'docstore:' + d.id);
