@@ -185,6 +185,28 @@ if (DB) {
     ok('value-scope: tier A is served by idx_tgt_value (was a walk of all 676k live rows through idx_tgt_recent)', /idx_tgt_value/.test(plans.value) && !/TEMP B-TREE/.test(plans.value));
     ok('value-scope: tier C walks idx_tgt_recent with no temp B-tree (was idx_tgt_status + a sort of 675k rows)', /idx_tgt_recent/.test(plans.tail) && !/TEMP B-TREE/.test(plans.tail));
     ok('value-scope: bulkCompanies groups in idx_tgt_company order, no temp B-tree (was 2.5s at boot)', /idx_tgt_company/.test(plans.bulk) && !/TEMP B-TREE/.test(plans.bulk));
+    // ── PREPARED ONCE + THE STREAMED SOCIAL PICK (freeze cut 12) ────────────────────────────────
+    // The profiler (p263): runSocialEnrichMove materialized 100k rows and prepared a statement per row.
+    DB.getBelief(crm.id, 'email'); DB.getTarget(crm.id); DB.listBeliefs(crm.id);
+    const n1 = DB._preparedCount();
+    DB.getBelief(tail.id, 'email'); DB.getTarget(tail.id); DB.listBeliefs(tail.id); DB.getBelief(crm.id, 'role');
+    ok('prepared once: repeated per-target reads compile each SQL text a single time (the memo holds, repeats add nothing)', n1 >= 3 && DB._preparedCount() === n1);
+    { const w = Date.now() + 3; while (Date.now() < w) { /* a later millisecond: last_accessed_at ties break by row id */ } }
+    const gm = DB.createTarget({ name: 'Gina Mailer', company: 'Small Shop' });
+    DB.upsertBelief(gm.id, 'email', { value: 'gina.mailer@gmail.com', confidence: 0.8 });
+    { const w = Date.now() + 3; while (Date.now() < w) { /* same */ } }
+    const wk = DB.createTarget({ name: 'Wes Worker', company: 'Small Shop' });
+    DB.upsertBelief(wk.id, 'email', { value: 'wes@smallshop.com', confidence: 0.8 });
+    const bare = DB.createTarget({ name: 'Bare Person', company: 'Small Shop' });
+    const streamed = [...DB.socialCandidates()].map((t) => t.id);
+    ok('social stream: rows with an email belief or a CRM link ride, a bare row does not', streamed.includes(gm.id) && streamed.includes(wk.id) && streamed.includes(crm.id) && !streamed.includes(bare.id));
+    ok('social stream: newest-accessed first (wk, then gm, then the earlier-promoted crm) — ' + JSON.stringify(streamed),
+      streamed.indexOf(wk.id) < streamed.indexOf(gm.id) && streamed.indexOf(gm.id) < streamed.indexOf(crm.id));
+    ok('social stream: the joined email rides the row', [...DB.socialCandidates()].find((t) => t.id === gm.id).email === 'gina.mailer@gmail.com');
+    let firstOnly = null; for (const t of DB.socialCandidates()) { firstOnly = t.id; break; }   // an early break must leave the store usable
+    ok('social stream: a consumer may stop at the first row and the store keeps answering', firstOnly === wk.id && DB.getTarget(gm.id).name === 'Gina Mailer' && [...DB.socialCandidates()].length === streamed.length);
+    DB.close(); DB.init({ path: ':memory:' });
+    ok('prepared once: a re-opened connection starts with an empty memo (nothing stale compiled against the old handle)', DB._preparedCount() === 0);
     DB.close();
   } catch (e) { console.error('  ✗ value-scope threw: ' + e.message); fail++; }
 }

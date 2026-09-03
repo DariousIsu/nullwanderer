@@ -2486,20 +2486,28 @@ async function runSocialEnrichMove(preferIds = null) {
     // ENRICH-stage ordering (pipeline Slice 3): try the pipeline's enrich queue FIRST (contacted targets —
     // has-email, not-yet-deepened, active-first), then the full store as a fallback. Without a queue this is
     // the plain full scan (legacy). Dedup so a preferred id isn't re-visited in the fallback pass.
-    const orderedTargets = () => {
-      const seen = new Set(); const list = [];
-      if (Array.isArray(preferIds)) { for (const id of preferIds) { const t = pdb.getTarget(id); if (t && !seen.has(t.id)) { seen.add(t.id); list.push(t); } } }
-      for (const t of pdb.listTargets({ limit: 100000 })) { if (!seen.has(t.id)) { seen.add(t.id); list.push(t); } }
-      return list;
+    // STREAMED (freeze cut 12): this used to materialize listTargets(100000) — every live row into JS —
+    // and ask getBelief per row, every 90s (the profiler named it: `.all` 24%, GC 15%, a prepare per row).
+    // puller_db.socialCandidates walks the recency index with each row's email belief joined once and
+    // yields only rows that CAN qualify; the loop below stops at the first eligible one.
+    const orderedTargets = function* () {
+      const seen = new Set();
+      if (Array.isArray(preferIds)) {
+        for (const id of preferIds) {
+          const t = pdb.getTarget(id);
+          if (t && !seen.has(t.id)) { seen.add(t.id); yield { ...t, email: (pdb.getBelief(t.id, 'email') || {}).value || null }; }
+        }
+      }
+      for (const t of pdb.socialCandidates()) { if (!seen.has(t.id)) { seen.add(t.id); yield t; } }
     };
 
     // pick the first eligible target: not attempted, and a KNOWN-handle source exists (personal email → a
-    // localpart, or a crm_id whose CRM handles we'll fetch below). Bounded scan so a tick stays cheap.
+    // localpart, or a crm_id whose CRM handles we'll fetch below). The stream stops at the first hit.
     let pick = null, contact = null, scanned = 0;
     for (const t of orderedTargets()) {
       if (attempted.has(String(t.id))) continue;
       scanned++;
-      const email = (pdb.getBelief(t.id, 'email') || {}).value || null;
+      const email = t.email || null;
       const c = { name: t.name, email, company: t.company || null };
       if (em.knownHandles(c, []).length === 0 && t.crm_id == null) continue;   // no known-handle source
       pick = t; contact = { ...c, crmId: t.crm_id || null }; break;

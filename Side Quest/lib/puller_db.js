@@ -201,6 +201,21 @@ function init(opts = {}) {
   return db;
 }
 function _db() { return db || init(); }
+// ── PREPARED ONCE (freeze cut 12) ─────────────────────────────────────────────────────────────
+// The stall profiler (boot_p263): `26% Statement · 24% all · 17% get` under runSocialEnrichMove — the
+// per-target helpers compiled their statement on EVERY call (better-sqlite3 caches nothing), and the
+// hot loops call them thousands of times a tick. One compiled statement per SQL text per connection;
+// the memo empties when the connection changes (close / re-init — the smokes re-open in memory).
+let _stmtDb = null;
+const _stmts = new Map();
+function _P(sql) {
+  const d = _db();
+  if (_stmtDb !== d) { _stmts.clear(); _stmtDb = d; }
+  let s = _stmts.get(sql);
+  if (!s) { s = d.prepare(sql); _stmts.set(sql, s); }
+  return s;
+}
+function _preparedCount() { return _stmtDb === db ? _stmts.size : 0; }
 let _dbPath = null;
 /** The store's file path as opened (':memory:' in smokes) — a worker opens its OWN read-only connection to it. */
 function dbPath() { if (!_dbPath) init(); return _dbPath; }
@@ -291,7 +306,7 @@ function createTarget({ kind = 'person', name, company = null, domain = null, fu
   ).run(kind, name, company, domain, fn, priority, status, crmId, notes, ts, ts);
   return getTarget(info.lastInsertRowid);
 }
-function getTarget(id) { return _db().prepare(`SELECT * FROM targets WHERE id = ?`).get(id) || null; }
+function getTarget(id) { return _P(`SELECT * FROM targets WHERE id = ?`).get(id) || null; }
 function listTargets({ status = null, domain = null, limit = 200, offset = 0, includeMerged = false } = {}) {
   const where = [], args = [];
   if (status) { where.push('status = ?'); args.push(status); }
@@ -475,7 +490,7 @@ function _obsRow(r) { return r ? { ...r, meta: pj(r.meta, null) } : null; }
 function listObservations(targetId, { attr = null } = {}) {
   const where = ['target_id = ?'], args = [targetId];
   if (attr) { where.push('attr = ?'); args.push(attr); }
-  return _db().prepare(`SELECT * FROM observations WHERE ${where.join(' AND ')} ORDER BY captured_at ASC, id ASC`)
+  return _P(`SELECT * FROM observations WHERE ${where.join(' AND ')} ORDER BY captured_at ASC, id ASC`)
     .all(...args).map(_obsRow);
 }
 // BULK degree map: observation count per target, in ONE grouped query. buildPopulation (the F4 dedup
@@ -510,7 +525,21 @@ function upsertBelief(targetId, type, { value = null, confidence = null, derivat
 }
 function _beliefRow(r) { return r ? { ...r, supporting_obs: pj(r.supporting_obs, []) } : null; }
 function getBelief(targetId, type) {
-  return _beliefRow(_db().prepare(`SELECT * FROM beliefs WHERE target_id = ? AND type = ?`).get(targetId, type));
+  return _beliefRow(_P(`SELECT * FROM beliefs WHERE target_id = ? AND type = ?`).get(targetId, type));
+}
+// THE SOCIAL-ENRICH PICK, STREAMED (freeze cut 12): runSocialEnrichMove materialized listTargets(100000)
+// — every live row into JS — and asked getBelief per row until one carried a known handle, every 90s
+// (the profiler: 24% `.all`, 15% garbage collection, the per-row prepares). This walks the recency
+// index and joins each row's active email belief once, yielding only rows that CAN qualify (an email
+// value the caller tests for a personal-domain localpart, or a CRM link); the caller stops at the first
+// eligible row — a handful, not a hundred thousand. Prepared fresh per call: an iterator left mid-walk
+// must never leave a memoized statement busy.
+function* socialCandidates() {
+  const stmt = _db().prepare(`SELECT t.*, b.value AS email FROM targets t INDEXED BY idx_tgt_recent
+    LEFT JOIN beliefs b ON b.target_id = t.id AND b.type = 'email' AND b.status = 'active'
+    WHERE t.merged_into IS NULL AND (t.crm_id IS NOT NULL OR b.value IS NOT NULL)
+    ORDER BY t.last_accessed_at DESC`);
+  for (const r of stmt.iterate()) yield r;
 }
 // BULK belief-value map: the active value of ONE belief type across the whole population, in a single
 // query (Map<target_id, value>). Same purpose as observationCounts — buildPopulation needed the 'role'
@@ -536,7 +565,7 @@ function listBeliefsBySendState({ sendState = 'verified', type = 'email', limit 
      ORDER BY b.confidence DESC LIMIT ?`).all(...args).map(_beliefRow);
 }
 function listBeliefs(targetId) {
-  return _db().prepare(`SELECT * FROM beliefs WHERE target_id = ? ORDER BY type ASC`).all(targetId).map(_beliefRow);
+  return _P(`SELECT * FROM beliefs WHERE target_id = ? ORDER BY type ASC`).all(targetId).map(_beliefRow);
 }
 
 // ---- pattern beliefs (bridge to studio/puller_beliefs: persists the pure state json) -------------
@@ -718,7 +747,7 @@ function splitTarget(fromId, { obsIds = [], name, company = null, domain = null,
 }
 
 module.exports = {
-  init, close, dbPath, populationReader, POPULATION_SQL,
+  init, close, dbPath, populationReader, POPULATION_SQL, socialCandidates, _preparedCount,
   createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, drawPlans, listOrgTargets, bulkCompanies, eachTargetKey, promoteTarget, normalizeCrmId, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName, backfillOrgKinds,
   addObservation, listObservations, observationCounts, failedAddresses,
   upsertBelief, getBelief, beliefValuesByType, listBeliefs, markSendState, listBeliefsBySendState,
