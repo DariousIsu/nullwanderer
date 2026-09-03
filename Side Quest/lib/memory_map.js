@@ -123,8 +123,64 @@ async function refresh({ deps = {}, nowMs = Date.now() } = {}) {
   return map;
 }
 
+// ── OFF THE MAIN THREAD (freeze cut 14) ──────────────────────────────────────────────────────────
+// The stall profiler (boot_p264, a 2.5s block every 15 min): `43% spawn · 39% all · 8% run` under
+// this refresh — the Side Quest half COUNT(*)ed every table in-process, then readEchoMap's spawn paid
+// Windows process creation (~1.3s) synchronously. Both now run in a worker_thread that re-runs THIS
+// module with workerData set: every store (the live sq.db included) is opened on the worker's OWN
+// read-only handle by path — never the app's write connection (WAL: a reader never blocks the
+// writer) — the Echo interpreter is spawned from the worker's loop, and one message posts both
+// halves. The main thread only assembles and stores the map. A worker failure or timeout returns
+// { error } so the caller keeps the stored map and says so — never an inline fallback, because the
+// inline path IS the block. Smokes and bare stores keep refresh() with injected deps.
+function _readonlyOpen(spec) {
+  const Database = require('better-sqlite3');
+  const h = new Database(spec.path, { readonly: true, fileMustExist: true });
+  return { conn: h, close() { try { h.close(); } catch {} } };
+}
+function refreshInWorker({ deps = {}, nowMs = Date.now(), timeoutMs = 150000 } = {}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    let w = null;
+    try {
+      const { Worker } = require('worker_threads');
+      w = new Worker(__filename, { workerData: { __memoryMap: true, python: deps.python || null, cwd: deps.cwd || null,
+        counts: deps.counts !== false, nowMs, paths: deps.paths || null, dataDir: deps.dataDir || null } });
+    } catch (e) { return done({ error: `worker spawn failed: ${e.message}` }); }
+    const t = setTimeout(() => { try { w.terminate(); } catch {} done({ error: `worker timed out after ${timeoutMs}ms` }); }, timeoutMs);
+    if (t.unref) t.unref();
+    w.once('message', (halves) => {
+      clearTimeout(t); try { w.terminate(); } catch {}
+      if (!halves || halves.error) return done({ error: (halves && halves.error) || 'worker posted nothing' });
+      const map = assemble({ echo: halves.echo, sq: halves.sq, nowMs });
+      try { _dbm(deps).setMeta(META_KEY, JSON.stringify(map)); } catch {}
+      done(map);
+    });
+    w.once('error', (e) => { clearTimeout(t); done({ error: `worker error: ${(e && e.message) || e}` }); });
+    w.once('exit', (code) => { clearTimeout(t); if (!settled) done({ error: `worker exited ${code} before posting` }); });
+  });
+}
+
 function stored(deps = {}) {
   try { const m = JSON.parse(_dbm(deps).getMeta(META_KEY) || 'null'); return (m && m.at) ? m : null; } catch { return null; }
 }
 
-module.exports = { assemble, describe, readEchoMap, refresh, stored, META_KEY, SHORT, LONG };
+module.exports = { assemble, describe, readEchoMap, refresh, refreshInWorker, _readonlyOpen, stored, META_KEY, SHORT, LONG };
+
+// Worker entry — refreshInWorker() re-runs THIS module in a worker_thread with workerData set: both
+// halves are produced here, off the main thread (read-only handles by path; the Echo spawn on this
+// loop), and posted as one message.
+try {
+  const wt = require('worker_threads');
+  if (!wt.isMainThread && wt.workerData && wt.workerData.__memoryMap) {
+    const { python, cwd, counts, nowMs, paths, dataDir } = wt.workerData;
+    (async () => {
+      let sq;
+      try { sq = require('./memory_tiers').render({ counts: counts !== false, nowMs, openFn: _readonlyOpen, paths: paths || null, dataDir: dataDir || null }); }
+      catch (e) { sq = { error: (e && e.message) || String(e) }; }
+      const echo = await readEchoMap({ python, cwd, counts: counts !== false });
+      wt.parentPort.postMessage({ sq, echo });
+    })().catch((e) => { try { wt.parentPort.postMessage({ error: (e && e.message) || String(e) }); } catch {} });
+  }
+} catch { /* not a worker context */ }

@@ -185,6 +185,31 @@ function ok(name, cond, detail = '') {
   ok('refresh: merges and persists under memory.map', r.at === 9000 && JSON.parse(meta[M.META_KEY]).backlog === 187125);
   ok('stored(): reads it back (null when absent)', M.stored({ db: fakeDb }).backlog === 187125 && M.stored({ db: { getMeta: () => null } }) === null);
 
+  // ── ⭐ refreshInWorker(): both halves off the main thread (freeze cut 14) — an on-disk fixture ──
+  {
+    const os = require('os'), fs = require('fs');
+    const fixture = path.join(os.tmpdir(), `smoke_memory_map_${process.pid}.db`);
+    try { fs.unlinkSync(fixture); } catch {}
+    const fdb = new Database(fixture);
+    fdb.exec('CREATE TABLE documents (id INTEGER PRIMARY KEY, promoted INTEGER DEFAULT 0, updated_ts INTEGER); INSERT INTO documents (promoted) VALUES (0),(0),(1);');
+    fdb.close();
+    const meta2 = {};
+    const fakeDb2 = { setMeta: (k, v) => { meta2[k] = v; }, getMeta: (k) => meta2[k] };
+    const t0 = Date.now();
+    const liveSpec = { sq: { path: fixture, registry: 'sq', optional: false, live: true } };
+    const wm = await M.refreshInWorker({ deps: { db: fakeDb2, python: null, cwd: null, paths: liveSpec }, nowMs: 4242, timeoutMs: 60000 });
+    ok('⭐ refreshInWorker: the SQ half renders in a worker on a read-only handle BY PATH (the live flag never reaches the app\'s connection)', wm && !wm.error && wm.halves.sq === true && wm.tiers['short-term'].tables >= 1 && wm.at === 4242, JSON.stringify(wm && (wm.error || wm.tiers)));
+    ok('refreshInWorker: the documents bridge is measured off-thread (promoted=0 → 2 pending)', wm && (wm.bridges || []).some((b) => b.from === 'sq.documents' && b.pending === 2), JSON.stringify(wm && wm.bridges));
+    ok('refreshInWorker: a missing Echo half is NAMED, never assumed (no python → "echo half unavailable")', wm && wm.halves.echo === false && wm.warnings.some((w) => /echo half unavailable/.test(w)));
+    ok('refreshInWorker: the merged map is persisted under memory.map on the main thread', (JSON.parse(meta2[M.META_KEY] || 'null') || {}).at === 4242);
+    const bogus = await M.refreshInWorker({ deps: { db: fakeDb2, python: null, cwd: null, paths: { sq: { path: path.join(os.tmpdir(), `nope_${process.pid}.db`), registry: 'sq', optional: false, live: true } } }, nowMs: 5, timeoutMs: 60000 });
+    ok('refreshInWorker: a missing required store is a warning in the map, not a crash of the main thread', bogus && !bogus.error && bogus.warnings.some((w) => /sq: store missing/.test(w)), JSON.stringify(bogus && (bogus.error || bogus.warnings)));
+    const slow = await M.refreshInWorker({ deps: { db: fakeDb2, python: null, cwd: null, paths: {} }, nowMs: 6, timeoutMs: 1 });
+    ok('refreshInWorker: a timeout returns { error } and the caller keeps its stored map (no inline fallback)', slow && /timed out/.test(slow.error || '') && JSON.parse(meta2[M.META_KEY]).at === 5, JSON.stringify(slow));
+    try { fs.unlinkSync(fixture); } catch {}
+    console.log(`  (worker refreshes: ${Date.now() - t0}ms for three runs)`);
+  }
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

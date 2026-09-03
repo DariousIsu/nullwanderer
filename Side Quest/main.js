@@ -5890,11 +5890,16 @@ try {
   // sides, the promotion bridges and their measured backlog, tier warnings — refreshed every 15 min
   // (first read ~3 min after boot) and stored for the status vector. Read-only on every store; the
   // Echo half is `nx-echo memory-map --json` (seconds; capped counts). Fail-soft: a missing half is
-  // NAMED in the map, never assumed.
+  // NAMED in the map, never assumed. Freeze cut 14: both halves run in a worker_thread (the table
+  // counts and the interpreter spawn were a 2.5s main-thread block every 15 min); a worker failure
+  // keeps the stored map and is logged — never an inline fallback.
   const _mmTick = () => {
     const mmLib = require('./lib/memory_map');
-    mmLib.refresh({ deps: { python: echoVenv && echoVenv.python, cwd: echoVenv && echoVenv.cwd } })
-      .then((m) => { const d = mmLib.describe(m); if (d.line) console.log(`[memory-map] ${d.line}`); for (const w of (m.warnings || []).slice(0, 5)) console.error(`[memory-map] ${w}`); })
+    mmLib.refreshInWorker({ deps: { python: echoVenv && echoVenv.python, cwd: echoVenv && echoVenv.cwd } })
+      .then((m) => {
+        if (!m || m.error) { console.error(`[memory-map] refresh failed (worker): ${(m && m.error) || 'no map'} — the stored map stands`); return; }
+        const d = mmLib.describe(m); if (d.line) console.log(`[memory-map] ${d.line}`); for (const w of (m.warnings || []).slice(0, 5)) console.error(`[memory-map] ${w}`);
+      })
       .catch((e) => console.error('[memory-map] refresh failed:', e && e.message));
   };
   setTimeout(_mmTick, 3 * 60 * 1000).unref?.();
