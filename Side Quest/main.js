@@ -1455,11 +1455,13 @@ app.whenReady().then(() => {
     let pdb; try { pdb = require('./lib/puller_db'); pdb.init(); } catch { return; }
     let fp = '0:0'; try { fp = pdb.storeFingerprint(); } catch {}
     if (fp === db.getMeta('last_dedup_fingerprint')) return;    // FINGERPRINT GATE — no writes → nothing to sweep
-    dedupRunning = true; markActivity('dedup-sweep');   // stall-attrib (diagnostic — runSweep is synchronous O(n²) on the main thread)
+    dedupRunning = true; markActivity('dedup-sweep');   // stall-attrib (diagnostic — the merges apply here; the reads + scan run in a worker)
     db.setMeta('last_dedup_at', String(Date.now()));
     try {
       const corrections = require('./lib/puller_corrections');
-      const r = corrections.runSweep({ apply: true });         // auto-fold the safe tier; surface the rest
+      // OFF THE MAIN THREAD (freeze cut 9): the population reads + the first-name-blocked scan run in a
+      // worker over a read-only handle (4.7s blocked on p261); only the reversible merges apply here.
+      const r = await corrections.runSweepInWorker({ apply: true, dbPath: pdb.dbPath() });   // auto-fold the safe tier; surface the rest
       db.setMeta('last_dedup_fingerprint', fp);
       if (r.autoApplied.length || r.attractorFlags.length || r.proposals.length) {
         console.log(`[dedup] sweep (scanned ${r.scanned}, ${r.candidates} weak): auto-folded=${r.autoApplied.length} proposals=${r.proposals.length} flagged=${r.attractorFlags.length}`);

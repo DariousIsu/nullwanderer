@@ -89,5 +89,40 @@ const fpMid = db2.storeFingerprint();
 ok(db2.storeFingerprint() === fpMid, 'no write → fingerprint stable (idle poll skips the sweep)');
 
 db2.close();
-console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+
+// ── OFF THE MAIN THREAD (freeze cut 9): the population reads + the scan run in a worker over a READ-ONLY
+// handle to the store file; only the reversible merges apply here. p261 blocked 4.7s on the inline sweep.
+(async () => {
+  console.log('== the worker sweep: reads + scan off-thread, the same merges applied here ==');
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const tmp = path.join(os.tmpdir(), `smoke_corrections_${process.pid}.db`);
+  const db3 = require('../lib/puller_db');
+  db3.init({ path: tmp });
+  ok(db3.dbPath() === tmp, 'dbPath() names the store file the worker will open');
+  const c4 = db3.createTarget({ name: 'Priya Nair', kind: 'person', domain: 'w.com' });
+  db3.upsertBelief(c4.id, 'role', { value: 'Data Lead', confidence: 0.8 });
+  db3.addObservation(c4.id, { attr: 'email', value: 'priya.nair@w.com', kind: 'verified' });
+  const low4 = db3.createTarget({ name: 'Priya the data lead', kind: 'person' });
+  db3.addObservation(low4.id, { attr: 'note', value: 'data contact', kind: 'meeting' });
+  const attr4 = db3.createTarget({ name: 'Priya', kind: 'person' });
+  for (let i = 0; i < 12; i++) db3.addObservation(attr4.id, { attr: 'note', value: `mention ${i}`, kind: 'meeting' });
+  // the reader binds the SAME statements the live functions run — one SQL, two doors
+  const reader = db3.populationReader(require('better-sqlite3')(tmp, { readonly: true }));
+  ok(reader.listTargets({ limit: 10 }).length === 3 && reader.observationCounts().get(attr4.id) === 12 && reader.beliefValuesByType('role').get(c4.id) === 'Data Lead',
+    'populationReader over a read-only handle reads the same population the live functions do');
+  const dry = await corrections.runSweepInWorker({ db: db3, apply: false });
+  ok(dry.via === 'worker' && dry.proposals.some((p) => p.fromId === low4.id) && dry.autoApplied.length === 0 && db3.getTarget(low4.id).merged_into == null,
+    `CRITICAL: the WORKER found the fragment (via ${dry.via}); a dry run applies nothing and the store is untouched`);
+  const sw = await corrections.runSweepInWorker({ db: db3, apply: true });
+  ok(sw.via === 'worker' && sw.autoApplied.length === 1 && sw.autoApplied[0].fromId === low4.id && db3.liveTarget(low4.id).id === c4.id,
+    'CRITICAL: the merges the worker found are applied HERE, reversibly — the fragment now resolves to its canonical');
+  ok(sw.attractorFlags.some((f) => f.id === attr4.id && f.kind === 'suspected-attractor') && db3.getTarget(attr4.id).merged_into == null,
+    'the attractor is flagged, not merged — identical verdicts to the inline sweep');
+  const mem = await corrections.runSweepInWorker({ db: db3, dbPath: ':memory:', apply: false });
+  ok(mem && mem.via !== 'worker' && Array.isArray(mem.proposals), 'an in-memory store (no shareable file) falls back to the inline sweep');
+  db3.close();
+  await new Promise((r) => setTimeout(r, 150));
+  try { fs.unlinkSync(tmp); } catch {}
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})().catch((e) => { console.error('worker sweep section crashed:', e); process.exit(1); });

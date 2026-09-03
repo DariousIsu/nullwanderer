@@ -160,6 +160,7 @@ CREATE INDEX IF NOT EXISTS idx_corr_from ON corrections(from_target);
 function init(opts = {}) {
   if (db) return db;
   const dbPath = opts.path || process.env.PULLER_DB_PATH || path.join(DATA_DIR, 'puller.db');
+  _dbPath = dbPath;
   if (dbPath !== ':memory:') { try { fs.mkdirSync(path.dirname(dbPath), { recursive: true }); } catch {} }
   db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
@@ -200,6 +201,28 @@ function init(opts = {}) {
   return db;
 }
 function _db() { return db || init(); }
+let _dbPath = null;
+/** The store's file path as opened (':memory:' in smokes) — a worker opens its OWN read-only connection to it. */
+function dbPath() { if (!_dbPath) init(); return _dbPath; }
+
+// ── THE POPULATION READER (freeze cut 9) ──────────────────────────────────────────────────────────
+// The dedup sweep's three bulk reads — every live target, the observation count per target, the active
+// value of one belief type — are right-but-big (4.7s on p261: beliefValuesByType('role') alone 2.3s cold)
+// and they feed a SWEEP, not a reply. `populationReader(conn)` binds the SAME statements the live
+// functions run to ANY connection, so a worker thread with its own read-only handle builds the
+// population off the main thread (lib/puller_corrections runSweepInWorker). One SQL, two doors.
+const POPULATION_SQL = {
+  targets: `SELECT * FROM targets WHERE merged_into IS NULL ORDER BY last_accessed_at DESC LIMIT ? OFFSET ?`,
+  degrees: `SELECT target_id, COUNT(*) c FROM observations GROUP BY target_id`,
+  beliefs: `SELECT target_id, value FROM beliefs WHERE type = ? AND status = 'active'`,
+};
+function populationReader(conn) {
+  return {
+    listTargets: ({ limit = 200, offset = 0 } = {}) => conn.prepare(POPULATION_SQL.targets).all(limit, offset),
+    observationCounts: () => { const m = new Map(); for (const r of conn.prepare(POPULATION_SQL.degrees).all()) m.set(r.target_id, r.c); return m; },
+    beliefValuesByType: (type) => { const m = new Map(); for (const r of conn.prepare(POPULATION_SQL.beliefs).all(type)) { if (!m.has(r.target_id)) m.set(r.target_id, r.value); } return m; },
+  };
+}
 function close() { if (db) { try { db.close(); } catch {} db = null; } _bulkCache = { at: 0, set: null }; }
 const now = () => Date.now();
 const j = (v) => (v == null ? null : JSON.stringify(v));
@@ -459,11 +482,7 @@ function listObservations(targetId, { attr = null } = {}) {
 // sweep) previously called listObservations(id).length PER target — ~67k queries that each LOADED every
 // observation row just to count it — which pegged the main thread for seconds every sweep. This returns a
 // Map<target_id, count> in a single pass so the whole population's degrees cost one query, not 67k.
-function observationCounts() {
-  const m = new Map();
-  for (const r of _db().prepare(`SELECT target_id, COUNT(*) c FROM observations GROUP BY target_id`).all()) m.set(r.target_id, r.c);
-  return m;
-}
+function observationCounts() { return populationReader(_db()).observationCounts(); }
 
 // Per-node BLACKLIST: the set of email addresses that have BOUNCED for this target (lower-cased). The
 // next-guess logic must never re-offer any of these — this is the durable "don't retry a dead address"
@@ -497,13 +516,7 @@ function getBelief(targetId, type) {
 // query (Map<target_id, value>). Same purpose as observationCounts — buildPopulation needed the 'role'
 // belief per target and was doing 67k getBelief() calls. One active belief per (target,type) by schema, so
 // no ambiguity. Used by the F4 dedup sweep to avoid the per-target query storm.
-function beliefValuesByType(type) {
-  const m = new Map();
-  for (const r of _db().prepare(`SELECT target_id, value FROM beliefs WHERE type = ? AND status = 'active'`).all(type)) {
-    if (!m.has(r.target_id)) m.set(r.target_id, r.value);
-  }
-  return m;
-}
+function beliefValuesByType(type) { return populationReader(_db()).beliefValuesByType(type); }
 // Set ONLY the delivery/verify marker (leaves value/confidence untouched) — the single write path for
 // send_state transitions (verified / bounced / rerun_pending / exhausted / catchall).
 function markSendState(targetId, type, sendState) {
@@ -705,7 +718,7 @@ function splitTarget(fromId, { obsIds = [], name, company = null, domain = null,
 }
 
 module.exports = {
-  init, close,
+  init, close, dbPath, populationReader, POPULATION_SQL,
   createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, drawPlans, listOrgTargets, bulkCompanies, eachTargetKey, promoteTarget, normalizeCrmId, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName, backfillOrgKinds,
   addObservation, listObservations, observationCounts, failedAddresses,
   upsertBelief, getBelief, beliefValuesByType, listBeliefs, markSendState, listBeliefsBySendState,
