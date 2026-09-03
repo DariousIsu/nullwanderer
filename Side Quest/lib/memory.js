@@ -116,6 +116,38 @@ function cosine(a, b) {
   return d;
 }
 
+// ── THE VECTOR CACHE (freeze cut 11, 2026-09-03) ─────────────────────────────────────────────────
+// The stall profiler's second live answer (boot_p262, a 2.1s block): `28% all · 21% Statement · 13% get ·
+// 13% (garbage collector) · 9% _storeDedupedInner` — db.getAllKnowledgeEmbeddings() re-read and JSON.parsed
+// ALL 7,342 embeddings (59MB of JSON, 2.8M floats) on every call, and four readers call it: the dedup bank
+// (every fact), recall, scored retrieval (the CHAT path), and reflection's nearest-note link. The parsed
+// vectors change only when a stored embedding is set, cleared or deleted (db.js bumps a version then);
+// everything else about a row — last_used_ts drives recency — is read fresh each call from the light rows.
+// New ids are fetched once, by id. Float64Array keeps the JSON doubles exactly, so every cosine is the
+// same number the old path computed.
+let _kv = { version: -1, vec: new Map(), fetched: 0, rebuilds: 0 };
+function knowledgeVectors() {
+  const light = typeof db.getKnowledgeVectorRows === 'function' && typeof db.knowledgeVectorsVersion === 'function' && typeof db.getKnowledgeEmbeddingsByIds === 'function';
+  if (!light) {   // a store without the doors (a mock db in a test) → the old shape, parsed per call
+    const out = [];
+    for (const r of db.getAllKnowledgeEmbeddings()) { let v = null; try { v = JSON.parse(r.embedding); } catch {} if (Array.isArray(v)) out.push({ ...r, vec: v }); }
+    return out;
+  }
+  const ver = db.knowledgeVectorsVersion();
+  if (ver !== _kv.version) _kv = { version: ver, vec: new Map(), fetched: _kv.fetched, rebuilds: _kv.rebuilds + (_kv.version >= 0 ? 1 : 0) };
+  const rows = db.getKnowledgeVectorRows();
+  const missing = rows.filter((r) => !_kv.vec.has(r.id)).map((r) => r.id);
+  if (missing.length) {
+    for (const e of db.getKnowledgeEmbeddingsByIds(missing)) {
+      try { const v = JSON.parse(e.embedding); if (Array.isArray(v)) { _kv.vec.set(e.id, Float64Array.from(v)); _kv.fetched++; } } catch {}
+    }
+  }
+  const out = [];
+  for (const r of rows) { const vec = _kv.vec.get(r.id); if (vec) out.push({ ...r, vec }); }
+  return out;
+}
+function _knowledgeVectorsStats() { return { version: _kv.version, cached: _kv.vec.size, fetched: _kv.fetched, rebuilds: _kv.rebuilds }; }
+
 // Reciprocal-rank fusion of two ranked id-lists. Robust, scale-free, no score
 // normalization needed. Returns ids sorted by fused score.
 function fuse(semIds, ftsIds, k = 4, C = 60) {
@@ -167,9 +199,8 @@ async function _storeDedupedInner({ kind = 'note', content, source = null, impor
   if (emb) {
     let best = null, bestSim = 0;
     let bestTopic = null, bestTopicSim = 0;
-    for (const r of db.getAllKnowledgeEmbeddings()) {
-      let v; try { v = JSON.parse(r.embedding); } catch { continue; }
-      const s = cosine(emb, v);
+    for (const r of knowledgeVectors()) {
+      const s = cosine(emb, r.vec);
       if (s > bestSim) { bestSim = s; best = r; }
       if (r.level === 'topic' && s > bestTopicSim) { bestTopicSim = s; bestTopic = r; }
     }
@@ -389,12 +420,10 @@ async function retrieve(query, { k = 4, kinds = null, preferLeaf = false, exclud
   // Semantic over all stored embeddings (small N; ms).
   let semIds = [];
   if (qv) {
-    const all = db.getAllKnowledgeEmbeddings();
     const scored = [];
-    for (const r of all) {
+    for (const r of knowledgeVectors()) {
       if (kinds && !kinds.includes(r.kind)) continue;
-      let v; try { v = JSON.parse(r.embedding); } catch { continue; }
-      scored.push([r.id, cosine(qv, v)]);
+      scored.push([r.id, cosine(qv, r.vec)]);
     }
     scored.sort((a, b) => b[1] - a[1]);
     semIds = scored.slice(0, k * 3).map(([id]) => id);
@@ -452,7 +481,7 @@ function _normalize(map) {
  * drops out and ranking is recency+importance.
  */
 async function retrieveScored(query, { k = 4, kinds = null, weights = { recency: 0.5, relevance: 3, importance: 2 }, decayPerHour = 0.99, excludeSources = QUARANTINE_SOURCES, minRelevance = 0, qv: precomputedQv = null } = {}) {
-  const rows = db.getAllKnowledgeEmbeddings();
+  const rows = knowledgeVectors();
   if (!rows || rows.length === 0) return [];
 
   let qv = precomputedQv || null;
@@ -466,7 +495,7 @@ async function retrieveScored(query, { k = 4, kinds = null, weights = { recency:
     // spawn-gate bookkeeping, not knowledge, and were taking top slots on topical queries.
     if (excludeSources && r.source && excludeSources.includes(r.source)) continue;
     let rel = 0;
-    if (qv) { try { rel = cosine(qv, JSON.parse(r.embedding)); } catch { rel = 0; } }
+    if (qv) { try { rel = cosine(qv, r.vec); } catch { rel = 0; } }
     // RELEVANCE FLOOR — a note must clear minRelevance (RAW cosine, BEFORE normalization) to be a
     // candidate at all. Without it, the min-max normalize below makes the "least irrelevant" note
     // look relevant on a query with no real match, so importance/recency drag in off-topic notes and
@@ -532,5 +561,6 @@ function warm() { return getExtractor().then(() => true).catch(() => false); }
 
 module.exports = {
   embed, store, storeDeduped, logAction, retrieve, retrieveScored, retrieveTurns, backfillTurnEmbeddings, backfillMissingEmbeddings, formatForPrompt, warm, isReady,
+  knowledgeVectors, _knowledgeVectorsStats,   // the parsed-vector cache (freeze cut 11) — reflection reads it too
   cosine, fuse, _normalize, _tierSame, SIM_SAME  // exported for unit tests
 };

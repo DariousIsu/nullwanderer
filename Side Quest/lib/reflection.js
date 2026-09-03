@@ -27,9 +27,8 @@ async function nearestKnowledge(text, threshold = 0.6) {
   let qv; try { qv = await memoryLib.embed(text); } catch { return null; }
   if (!qv) return null;
   let bestId = null, bestSim = 0;
-  for (const r of db.getAllKnowledgeEmbeddings()) {
-    let v; try { v = JSON.parse(r.embedding); } catch { continue; }
-    const sim = memoryLib.cosine(qv, v);
+  for (const r of memoryLib.knowledgeVectors()) {   // the parsed-vector cache (freeze cut 11) — no 59MB re-parse per link
+    const sim = memoryLib.cosine(qv, r.vec);
     if (sim > bestSim) { bestSim = sim; bestId = r.id; }
   }
   return (bestId && bestSim >= threshold) ? bestId : null;

@@ -600,6 +600,10 @@ const smokes = [
   // Freeze cut 8 (09-03): the stall PROFILER — V8's sampling profiler on its own thread names the function,
   // file and line that held the loop when no lane marked itself and no statement was slow (the 1.5–2s tail).
   'smoke_stall_profile.js',
+  // Freeze cut 11 (09-03): the knowledge store's parsed-vector cache — four readers re-parsed 59MB of
+  // embedding JSON per call (the profiler's second live answer); vectors cached, metadata fresh, a
+  // changed/cleared/deleted vector rebuilds.
+  'smoke_knowledge_vectors.js',
   // Run-4 collision guard: the test port tells the REAL user from its own injected turns; a recent
   // or unanswered real turn owns the pipeline (10min / 30min-capped) and the harness yields.
   'smoke_test_port_guard.js',

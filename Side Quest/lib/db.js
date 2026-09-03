@@ -1370,7 +1370,7 @@ function getTurnsMissingEmbedding(limit = 300) {
 function getKnowledgeMissingEmbedding(limit = 150) {
   return getDb().prepare('SELECT id, content FROM knowledge WHERE embedding IS NULL AND content IS NOT NULL ORDER BY id DESC LIMIT ?').all(limit);
 }
-function setKnowledgeEmbedding(id, embedding) { getDb().prepare('UPDATE knowledge SET embedding = ? WHERE id = ?').run(embedding, id); }
+function setKnowledgeEmbedding(id, embedding) { _bumpKnowledgeVectors(); getDb().prepare('UPDATE knowledge SET embedding = ? WHERE id = ?').run(embedding, id);}
 function getSelfModelMissingEmbedding(limit = 60) {
   return getDb().prepare('SELECT id, content FROM self_model WHERE embedding IS NULL AND content IS NOT NULL ORDER BY id DESC LIMIT ?').all(limit);
 }
@@ -2256,6 +2256,7 @@ function updateKnowledge(id, { content, embedding = null, importance = null, cle
   else if (clearEmbedding) sets.push('embedding = NULL');
   if (importance != null) { sets.push('importance = ?'); args.push(importance); }
   args.push(id);
+  if (embedding != null || clearEmbedding) _bumpKnowledgeVectors();   // a stored vector changed or went away
   getDb().prepare(`UPDATE knowledge SET ${sets.join(', ')} WHERE id = ?`).run(...args);
   // keep FTS in sync (no UPDATE on a contentless fts5 table → delete + reinsert the row)
   try { getDb().prepare('DELETE FROM knowledge_fts WHERE rowid = ?').run(id); getDb().prepare('INSERT INTO knowledge_fts(rowid, content) VALUES (?, ?)').run(id, String(content).trim()); } catch {}
@@ -2288,6 +2289,26 @@ function getAllKnowledgeEmbeddings() {
   return getDb()
     .prepare('SELECT id, kind, source, embedding, importance, created_ts, last_used_ts, level, parent_id FROM knowledge WHERE embedding IS NOT NULL')
     .all();
+}
+// ── THE VECTOR CACHE'S DOORS (freeze cut 11) ────────────────────────────────────────────────────
+// The stall profiler named it on boot_p262: getAllKnowledgeEmbeddings re-read and JSON.parsed ALL 7,342
+// embeddings (59MB of JSON) on every call — and it has four callers, one of them the chat's scored recall.
+// lib/memory keeps the parsed vectors (id → Float64Array) and reads only the LIGHT rows here per call —
+// last_used_ts drives recency, so the metadata must be fresh — then fetches the few embeddings it has
+// never parsed by id. A version stamp tells it when a stored vector CHANGED (set / cleared / deleted):
+// inserts need no bump (a new id is simply missing from the cache), touches never change a vector.
+let _knowledgeVectorsVersion = 0;
+function knowledgeVectorsVersion() { return _knowledgeVectorsVersion; }
+function _bumpKnowledgeVectors() { _knowledgeVectorsVersion++; }
+function getKnowledgeVectorRows() {
+  return getDb()
+    .prepare('SELECT id, kind, source, importance, created_ts, last_used_ts, level, parent_id FROM knowledge WHERE embedding IS NOT NULL')
+    .all();
+}
+function getKnowledgeEmbeddingsByIds(ids = []) {
+  const list = (Array.isArray(ids) ? ids : []).map(Number).filter(Number.isFinite);
+  if (!list.length) return [];
+  return getDb().prepare('SELECT id, embedding FROM knowledge WHERE embedding IS NOT NULL AND id IN (SELECT value FROM json_each(?))').all(JSON.stringify(list));
 }
 
 // FTS5 keyword search. Caller passes raw text; we tokenize to words OR-joined so
@@ -2334,6 +2355,7 @@ function deleteKnowledgeBySource(source) {
   // behind. That mismatch was the source of 155 ghost FTS rows (drift vs knowledge). Verified
   // empirically: plain DELETE removes them and MATCH still works.
   const rows = getDb().prepare('SELECT id FROM knowledge WHERE source = ?').all(source);
+  if (rows.length) _bumpKnowledgeVectors();
   for (const { id } of rows) {
     getDb().prepare('DELETE FROM knowledge WHERE id = ?').run(id);
     try { getDb().prepare('DELETE FROM knowledge_fts WHERE rowid = ?').run(id); }
@@ -3190,7 +3212,7 @@ module.exports = {
   countOpenAgenda,
   setAgendaStatus,
   getUserAssignedThreads,
-  getAllKnowledgeEmbeddings,
+  getAllKnowledgeEmbeddings, knowledgeVectorsVersion, getKnowledgeVectorRows, getKnowledgeEmbeddingsByIds,
   ftsSearchKnowledge,
   getKnowledgeBySourceSince,
   getKnowledgeByIds,
