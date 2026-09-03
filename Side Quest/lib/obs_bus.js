@@ -44,7 +44,8 @@ function _ensure(deps) {
       ref TEXT,
       data TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_obs_events_lane_id ON obs_events(lane, id);`);
+    CREATE INDEX IF NOT EXISTS idx_obs_events_lane_id ON obs_events(lane, id);
+    CREATE INDEX IF NOT EXISTS idx_obs_events_ts ON obs_events(ts);`);   // the age prune runs every 20th flush (30s); by ts it scanned all 20k rows (1.8s on p257) — a range now
     _ready = true;
   }
   return d;

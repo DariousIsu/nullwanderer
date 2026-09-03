@@ -184,6 +184,7 @@ if (DB) {
     const plans = DB.drawPlans();
     ok('value-scope: tier A is served by idx_tgt_value (was a walk of all 676k live rows through idx_tgt_recent)', /idx_tgt_value/.test(plans.value) && !/TEMP B-TREE/.test(plans.value));
     ok('value-scope: tier C walks idx_tgt_recent with no temp B-tree (was idx_tgt_status + a sort of 675k rows)', /idx_tgt_recent/.test(plans.tail) && !/TEMP B-TREE/.test(plans.tail));
+    ok('value-scope: bulkCompanies groups in idx_tgt_company order, no temp B-tree (was 2.5s at boot)', /idx_tgt_company/.test(plans.bulk) && !/TEMP B-TREE/.test(plans.bulk));
     DB.close();
   } catch (e) { console.error('  ✗ value-scope threw: ' + e.message); fail++; }
 }

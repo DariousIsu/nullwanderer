@@ -134,6 +134,9 @@ CREATE INDEX IF NOT EXISTS idx_tgt_recent ON targets(last_accessed_at DESC) WHER
 -- recency order, makes that draw a read of its first page.
 CREATE INDEX IF NOT EXISTS idx_tgt_value ON targets(last_accessed_at DESC)
   WHERE merged_into IS NULL AND kind = 'person' AND (crm_id IS NOT NULL OR status = 'promoted');
+-- bulkCompanies' GROUP BY company walked idx_tgt_recent + a temp B-tree over 676k rows (230ms idle, 2.5s at
+-- boot — the pipeline snapshot's first stall on p257). Grouped in index order instead: 25ms.
+CREATE INDEX IF NOT EXISTS idx_tgt_company ON targets(company) WHERE merged_into IS NULL AND company IS NOT NULL;
 
 -- F4 correction loop: an append-only, REVERSIBLE log of operator (or auto-sweep) identity corrections.
 -- Every merge/reassign/split records exactly what moved (moved_obs = json obs ids) so it can be undone.
@@ -290,12 +293,11 @@ function listTargets({ status = null, domain = null, limit = 200, offset = 0, in
 const BULK_COMPANY_MIN = 300;
 const BULK_CACHE_MS = 10 * 60 * 1000;
 let _bulkCache = { at: 0, set: null };
+const BULK_SQL = `SELECT company FROM targets INDEXED BY idx_tgt_company WHERE merged_into IS NULL AND company IS NOT NULL GROUP BY company HAVING COUNT(*) >= ?`;
 function bulkCompanies({ min = BULK_COMPANY_MIN } = {}) {
   const now = Date.now();
   if (_bulkCache.set && (now - _bulkCache.at) < BULK_CACHE_MS) return _bulkCache.set;
-  const rows = _db().prepare(
-    `SELECT company FROM targets WHERE merged_into IS NULL AND company IS NOT NULL GROUP BY company HAVING COUNT(*) >= ?`
-  ).all(min);
+  const rows = _db().prepare(BULK_SQL).all(min);
   _bulkCache = { at: now, set: new Set(rows.map((r) => r.company)) };
   return _bulkCache.set;
 }
@@ -329,7 +331,7 @@ function listValueScopedTargets({ limit = 500, crmShare = 300, bulkMin = BULK_CO
 function drawPlans() {
   const d = _db();
   const plan = (sql, args) => d.prepare('EXPLAIN QUERY PLAN ' + sql).all(...args).map((r) => r.detail).join(' | ');
-  return { value: plan(VALUE_DRAW_SQL, [10]), tail: plan(tailDrawSql(2), ['a', 'b', 10]) };
+  return { value: plan(VALUE_DRAW_SQL, [10]), tail: plan(tailDrawSql(2), ['a', 'b', 10]), bulk: plan(BULK_SQL, [300]) };
 }
 
 // The ORG worklist (docs/ORG_RESEARCH_LANE.md) — the mirror of listValueScopedTargets for kind='org'.

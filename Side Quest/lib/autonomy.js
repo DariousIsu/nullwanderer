@@ -73,6 +73,7 @@ function personaPressure({ lastAttendAt = 0, now = Date.now(), floorH = PERSONA_
   };
 }
 
+const SLOW_SECTION_MS = 300;   // a manifest section at or above this names itself (see the section timer below)
 function buildManifest({ db = null, now = Date.now(), skip = [], deps = {} } = {}) {
   const dbm = db || require('./db');
   let d = null;
@@ -80,10 +81,16 @@ function buildManifest({ db = null, now = Date.now(), skip = [], deps = {} } = {
   const sections = [];
   const counts = {};
   const _skip = Array.isArray(skip) ? skip : [];
+  // SECTION TIMER (freeze cut 5b): the autonomy tick blocked the main thread 10–14s on p256 and p257 with
+  // no single statement ≥1s to name — the manifest is built synchronously, section by section. Every
+  // section that costs SLOW_SECTION_MS or more is named in one line, so the next cut has its target.
+  const slow = [];
   const grab = (label, fn) => {
     if (_skip.includes(label)) return;   // caller (liveDigest) skips expensive sections it discards — no scan
+    const t0 = Date.now();
     try { const s = fn(); if (s) sections.push(s); }
     catch (e) { console.error(`[autonomy] manifest source failed (${label}):`, e.message); }
+    finally { const ms = Date.now() - t0; if (ms >= SLOW_SECTION_MS) slow.push(`${label} ${ms}ms`); }
   };
 
   // C4 — WHO YOU ARE, first: persona is a competing DRIVE, not the leftover after the task queue empties.
@@ -370,7 +377,8 @@ function buildManifest({ db = null, now = Date.now(), skip = [], deps = {} } = {
     return `• WHAT IS RUNNING IN YOU NOW (the workstream board — never start a duplicate of a running kind):\n${lines.join('\n')}`;
   });
 
-  return { text: sections.join('\n'), counts };
+  if (slow.length) { try { console.warn(`[autonomy] slow manifest section(s): ${slow.join(', ')}`); } catch {} }
+  return { text: sections.join('\n'), counts, slow };
 }
 
 // THE LIVE DIGEST — what is IN FLIGHT right now, for a reader who cannot take the whole manifest

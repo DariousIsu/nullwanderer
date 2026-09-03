@@ -195,6 +195,15 @@ ok(Array.isArray(sweep.findUndecomposed(db, { limit: 0 })), 'garbage bounds → 
   const b7 = sweep2.nextBatch(db, { limit: 50, dailyChunks: 99999, now: T0 + sweep.POOL_FULL_TTL_MS + 7000 });
   ok(b7.pool.mode === 'full', 'past the TTL the pool is rebuilt from the store');
   ok(sweep2.nextBatch(db, { limit: 50, dailyChunks: 99999, now: T0 + 1000, poolTtlMs: 0 }).pool.mode === 'full', 'poolTtlMs: 0 forces a full walk (a deliberate run)');
+  // The refresh keeps known lengths and measures only new ids (boot_p257: the first walk was 7.1s of body reads)
+  const bare = sweep2.findUndecomposed(db, { limit: 50, chars: false });
+  const full = sweep2.findUndecomposed(db, { limit: 50 });
+  ok(bare.length >= full.length && bare.every((r) => r.chars === null) && full.every((r) => r.chars > 0 && bare.some((b) => b.id === r.id)),
+    'chars:false walks without the body (chars null, same ids) — the refresh measures only what it has never measured');
+  const refreshed = sweep2.candidatePool(db, { now: T0 + 2 * sweep.POOL_FULL_TTL_MS });
+  ok(refreshed.mode === 'full' && refreshed.rows.length > 0
+     && refreshed.rows.every((r) => r.chars > 0 && r.chars === String((db.getDocument(r.id) || {}).body || '').length),
+    'a TTL refresh carries every candidate with its REAL length (known ones kept, new ones measured, empty bodies dropped)');
 }
 
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);

@@ -102,11 +102,21 @@ function _tenantSection() {
 
 // ---- the read-model -----------------------------------------------------------------------------
 
+// SECTION TIMER (freeze cut 5b): the snapshot runs inside the autonomy tick, synchronously, and the tick
+// blocked the main thread 10–14s on p256/p257 with no single statement ≥1s to name. A section at or above
+// the floor names itself (the tenant section's three COUNT(*)s over ~146k proposals are the known suspect).
+const SLOW_SECTION_MS = 300;
+function _timed(label, fn) {
+  const t0 = Date.now();
+  try { return fn(); }
+  finally { const ms = Date.now() - t0; if (ms >= SLOW_SECTION_MS) { try { console.warn(`[approvals] slow section ${label}: ${ms}ms`); } catch {} } }
+}
+
 // `sources` is injectable for smokes; production callers omit it.
 async function snapshot({ echoSuit = null, sources = null } = {}) {
   const secs = Array.isArray(sources)
     ? sources.slice()
-    : [_pullerSection(), _gapsSection(), _rehearsalSection(), _tenantSection(), await _echoSection(echoSuit)];
+    : [_timed('puller', _pullerSection), _timed('gaps', _gapsSection), _timed('rehearsal', _rehearsalSection), _timed('tenant', _tenantSection), await _echoSection(echoSuit)];
   const sections = secs.filter(Boolean);
   return { ts: Date.now(), sections, total: sections.reduce((n, s) => n + (s.count || 0), 0) };
 }

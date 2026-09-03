@@ -16217,6 +16217,9 @@ async function autonomyTick() {
         if (snap.sections.length) console.log(`[approvals] snapshot: ${snap.total} item(s) across ${snap.sections.length} queue(s)`);
       }
     } catch (e) { console.error('[approvals] snapshot refresh failed:', e.message); }
+    // Re-asserted after the awaits above: another lane's idle mark meanwhile clobbers the tick's label, and
+    // the synchronous manifest build (10–14s on p256/p257) then logged as "idle" (freeze cut 5b).
+    markActivity('autonomy-tick');
     const manifest = autonomy.buildManifest({ db, now, deps: { forecast: () => lastForecast } });
     if (!manifest.text) { console.log('[autonomy] empty manifest — nothing to choose from'); return; }
     // IDLE-DEPTH LADDER (Slice 1, LOG-ONLY this pass): how deep this tick has EARNED to go, derived from

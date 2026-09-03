@@ -220,10 +220,14 @@ function ensureSchema() {
     -- Freeze cut 5 (boot_p256): storiesForDaily's OR read EVERY closed story (104k of 104.6k rows) to
     -- keep the 3.3k inside the grace window — 2–4s on the main thread, hourly. The closed arm gets its
     -- own range. And the forecast's whole-table read (startMs 0) sorted all 104k rows for the 8k
-    -- corroborated ones: the worthy index carries exactly those, in last_ts order. The literal in its
-    -- WHERE is WORTHY_TERM — a query must carry the identical term to be served by it.
+    -- corroborated ones: the worthy index carries exactly those, in the READ'S OWN ORDER (corroboration,
+    -- reach, sources, recency), so the LIMIT stops after its first rows instead of sorting 8k of them
+    -- (p257 under a cold cache: 1.7s → 200 row reads). The literal in its WHERE is WORTHY_TERM — a query
+    -- must carry the identical term to be served by it. The last_ts-only worthy index (p257) is retired.
     CREATE INDEX IF NOT EXISTS idx_news_stories_closed ON news_stories(closed_at) WHERE status = 'closed';
-    CREATE INDEX IF NOT EXISTS idx_news_stories_worthy ON news_stories(last_ts) WHERE ${WORTHY_TERM};
+    DROP INDEX IF EXISTS idx_news_stories_worthy;
+    CREATE INDEX IF NOT EXISTS idx_news_stories_worthy_rank
+      ON news_stories(MIN(outlet_count, report_count) DESC, outlet_count DESC, source_count DESC, last_ts DESC) WHERE ${WORTHY_TERM};
     CREATE TABLE IF NOT EXISTS news_story_updates (
       id        INTEGER PRIMARY KEY,
       story_id  INTEGER NOT NULL,
@@ -560,8 +564,9 @@ const WINDOW_ORDER = 'ORDER BY MIN(outlet_count, report_count) DESC, outlet_coun
 const WINDOW_SQL = `SELECT * FROM news_stories WHERE last_ts >= ? ${WINDOW_ORDER}`;
 // worthyOnly (freeze cut 5): the forecast reads the WHOLE table (startMs 0) and keeps only corroborated
 // events — 104k rows sorted in a temp B-tree on the main thread (2.7s live) for the 8k that qualify. With
-// the worthy term in the WHERE, the partial index bounds the scan to exactly those rows.
-const WINDOW_WORTHY_SQL = `SELECT * FROM news_stories INDEXED BY idx_news_stories_worthy WHERE ${WORTHY_TERM} AND last_ts >= ? ${WINDOW_ORDER}`;
+// the worthy term in the WHERE, the partial index bounds the scan to exactly those rows — and since it is
+// keyed in this read's order, the LIMIT ends the walk after its first rows (no sort, no 8k row reads).
+const WINDOW_WORTHY_SQL = `SELECT * FROM news_stories INDEXED BY idx_news_stories_worthy_rank WHERE ${WORTHY_TERM} AND last_ts >= ? ${WINDOW_ORDER}`;
 function storiesActiveInWindow(startMs, { limit = 200, worthyOnly = false } = {}) {
   ensureSchema();
   return newsdb.get().prepare(worthyOnly ? WINDOW_WORTHY_SQL : WINDOW_SQL).all(startMs, limit).map(hydrateStory);

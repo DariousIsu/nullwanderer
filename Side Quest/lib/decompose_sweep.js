@@ -85,7 +85,7 @@ function markAttempted(db, ids = []) {
  *
  * Returns [{ id, title, source, origin_host, chars }]. Never throws.
  */
-function findUndecomposed(db, { limit = 50, sinceId = 0, sources = null } = {}) {
+function findUndecomposed(db, { limit = 50, sinceId = 0, sources = null, chars = true } = {}) {
   const attempted = attemptedSet(db);
   // Default: every lane EXCEPT the self-keyed ones (see SELF_KEYED_LANES — inverted 2026-07-30).
   // An explicit `sources` still wins, so a caller can deliberately sweep one lane.
@@ -111,16 +111,28 @@ function findUndecomposed(db, { limit = 50, sinceId = 0, sources = null } = {}) 
     // 1,207 on boot_p256 — and every one of them paid the LENGTH(body) read before being thrown away.
     // json_each turns the marker into an ephemeral index the planner probes BEFORE the body is touched.
     if (attempted.size) { where.push('d.id NOT IN (SELECT value FROM json_each(?))'); args.push(JSON.stringify([...attempted])); }
+    // chars:false — the walk WITHOUT the body: LENGTH(body) is what turns a 0.8s walk into a 2–7s one
+    // (the pool's refresh keeps the lengths it already knows and measures only new ids — see _charsOf).
+    // A row then carries chars:null, and an empty body is the caller's to drop (its length is 0).
     rows = db.getDb().prepare(
-      `SELECT d.id, d.title, d.source, d.origin_host, LENGTH(d.body) AS chars
+      `SELECT d.id, d.title, d.source, d.origin_host, ${chars ? 'LENGTH(d.body)' : 'NULL'} AS chars
          FROM documents d
         WHERE ${where.join(' AND ')}
           AND NOT EXISTS (SELECT 1 FROM encounters e WHERE e.source_ref = 'doc:' || d.id)
-          AND d.body IS NOT NULL AND LENGTH(d.body) > 0
+          AND d.body IS NOT NULL${chars ? ' AND LENGTH(d.body) > 0' : ''}
         ORDER BY d.id DESC
         LIMIT ?`).all(...args, Math.max(1, Number(limit) || 50));
   } catch { return []; }
   return rows.filter((r) => !attempted.has(Number(r.id))).slice(0, Math.max(1, Number(limit) || 50));
+}
+// Body lengths for a set of ids in ONE statement (the only body reads a pool refresh pays).
+function _charsOf(db, ids) {
+  const m = new Map();
+  if (!ids.length) return m;
+  try {
+    for (const r of db.getDb().prepare('SELECT id, LENGTH(body) AS chars FROM documents WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify(ids))) m.set(Number(r.id), Number(r.chars) || 0);
+  } catch { /* fail-soft: unknown lengths read as 0 and are dropped this refresh */ }
+  return m;
 }
 
 /**
@@ -190,10 +202,18 @@ function candidatePool(db, { now = Date.now(), fullTtlMs = POOL_FULL_TTL_MS, lim
   // window) refills early — the drain must reach them, not wait out the TTL on an empty pool.
   const drained = pool && !pool.rows.length && pool.full;
   if (!pool || drained || !(fullTtlMs > 0) || now - pool.at >= fullTtlMs) {
-    const rows = findUndecomposed(db, { limit });
-    pool = { at: now, maxId, full: rows.length >= limit, rows };
+    // The refresh KEEPS the lengths it already knows (boot_p257: the first full walk was 7.1s under boot
+    // load — the body reads of 233 giants). The walk itself runs without the body; only ids the pool
+    // has never measured pay for LENGTH, in one statement.
+    const known = new Map(((pool && pool.rows) || []).map((r) => [Number(r.id), r]));
+    const found = findUndecomposed(db, { limit, chars: false });
+    const lengths = _charsOf(db, found.filter((r) => !known.has(Number(r.id))).map((r) => Number(r.id)));
+    const rows = found
+      .map((r) => known.get(Number(r.id)) || { ...r, chars: lengths.get(Number(r.id)) || 0 })
+      .filter((r) => r.chars > 0);
+    pool = { at: now, maxId, full: found.length >= limit, rows };
     _savePool(db, pool);
-    return { rows: pool.rows, mode: 'full', fresh: rows.length };
+    return { rows: pool.rows, mode: 'full', fresh: rows.filter((r) => !known.has(Number(r.id))).length };
   }
   let fresh = 0;
   if (maxId > pool.maxId) {

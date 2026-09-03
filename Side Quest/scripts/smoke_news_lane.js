@@ -231,7 +231,7 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
     const pd = plan(lane.DAILY_SQL, [0, 2, 10]);
     ok(/idx_news_stories_closed/.test(pd) && !/SCAN news_stories\b(?! USING)/.test(pd), 'storiesForDaily: the closed arm is a closed_at range on its partial index (was every closed story)');
     const pw = plan(lane.WINDOW_WORTHY_SQL, [0, 10]);
-    ok(/idx_news_stories_worthy/.test(pw), 'storiesActiveInWindow(worthyOnly): served by the corroborated partial index — the same literal term implies it');
+    ok(/idx_news_stories_worthy_rank/.test(pw) && !/TEMP B-TREE/.test(pw), 'storiesActiveInWindow(worthyOnly): served by the corroborated RANKED partial index in the read’s own order — the same literal term implies it, no sort');
     const worthy = lane.storiesActiveInWindow(0, { worthyOnly: true });
     ok(worthy.length === 1 && /Kyiv/.test(worthy[0].title) && lane.storiesActiveInWindow(0).length === 2,
       'worthyOnly keeps exactly the corroborated stories; the plain window still returns all');
