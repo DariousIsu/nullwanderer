@@ -144,6 +144,24 @@ The program is custom-fitted to one operator, and two months of sessions are the
 
 The design change this implies: an operator model as a first-class store, in the shape of the harness's user and feedback memories, loaded on every turn and every brief: how he communicates, his laws with dates, his reserved levers, his needs list. Today those live partly in the directives table and partly nowhere. With the store, a new session, a new role agent, or a swarm partition starts already fitted, and a correction from him lands in one place that every lane reads.
 
+## 7. The Cowork record, and what to mine from it
+
+Lucas: the Cowork side of his Claude holds the production values and user maps, his writing style and design needs, research concepts, workspaces and tool concepts in testing; his global CLAUDE.md is the bare minimum. Found, read-only, on this machine:
+
+- **199 Cowork session transcripts**, February 25 to August 19, 39 MB, as local JSON under the desktop app's local-agent-mode session directory, each with a title, the working folder, the folders he selected, and the full exchange. The titles are the user map: op-eds and their citation verification and fact-checks (the data-center series, Flock, water, the Voters Have Spoken and ELI pieces), legislator databases by state, briefs and memos, the LAMP network, the MOU drafts, the AURA builds of March (Alpha through v4, the manager-first agent pipeline, the display sandbox, the self-care mode), brand voice guidelines (May 6), briefing document styles and guidelines (April 12), the research storage protocol (March 14), the project bible template (March 24), the citation verification skill template (May 1), the AI manager personality (April 12), and the design work on avatars, logos and dashboards.
+- **The Cowork working folder** on the Desktop, named Claude: the skill builder with a master skill and unified skill sheets, an agents folder with a data collector, a build-deploy-verify skill, and the EVE and branding packages.
+- **The enabled knowledge-work plugins**: brand voice, legal, finance, productivity, marketing, operations, bio-research, and plugin management, cached with their agents and commands.
+- **His own frameworks under the Claude home**: PAUL, a plan-apply-unify loop with acceptance criteria, work units sized to half a context, deviation rules and a research-quality-control reference with confidence levels, source verification and negative-claim checks; and CARL, keyword-triggered rule domains injected by a prompt-submit hook with context brackets. These are the cut cadence and the research contract's quality rules in his own hand, and they are already the shape of the operator model.
+
+What to mine, as one bounded job before stage 4.5's role registry is seeded:
+
+1. From the brand-voice, briefing-styles, project-bible and citation-verification-template sessions: the writing style, the document shapes and the verification method, into the operator model store and the writer, citation-checker and challenger roles.
+2. From the research-storage-protocol and the AURA design sessions: the research concepts and the earlier agent designs, into the archaeology.
+3. From PAUL and CARL: the loop, the sizing rule, the acceptance-criteria format and the rule domains, into the pen's cadence and the hooks that inject rules at every prompt build.
+4. From the titles as a whole: the task distribution, which is the acceptance suite. The research paper is one of its shapes; the cited op-ed, the legislator database and the verified memo are the others.
+
+Nothing in the transcripts was read past the title level in this pass. The mining job reads them as data.
+
 ## Sources
 
 - https://claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them
