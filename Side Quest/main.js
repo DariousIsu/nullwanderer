@@ -1398,6 +1398,29 @@ app.whenReady().then(() => {
   };
   setInterval(() => { maybeSecurityScan().catch(() => {}); }, SECSCAN_CHECK_MS).unref?.();
   setTimeout(() => { maybeSecurityScan().catch(() => {}); }, 240000).unref?.();   // catch-up kick ~4min after boot
+  // ── SECURITY RUNTIME-PROBE ORGAN (increment 4, 2026-09-04): the own-host probes. Enumerate this host's
+  // listeners (a local read), scope FINDINGS to her own process tree (a host/OS bind is posture she reports,
+  // never a fix she owns), and do ONE benign loopback GET per owned http service (capped, rate-limited, no
+  // payload) to catch a LAN-reachable bind or a live debug endpoint. Probe-and-report, never exploit-to-escape.
+  // The most sensitive class (it touches live services), so its OWN switch ZOE_SECURITY_PROBES=0 and a
+  // nightly cadence. Findings become pen proposals / cards downstream, like every other producer.
+  const SECPROBE_MIN_MS = (parseFloat(process.env.ZOE_SECURITY_PROBE_MIN) || 1440) * 60 * 1000;   // nightly
+  let secProbeRunning = false;
+  const maybeSecurityProbe = async () => {
+    if (/^(0|false|no|off)$/i.test(String(process.env.ZOE_SECURITY_PROBES || '').trim())) return;   // kill switch
+    if (secProbeRunning) return;
+    if (Date.now() - parseInt(db.getMeta('last_security_probe_at') || '0', 10) < SECPROBE_MIN_MS) return;
+    secProbeRunning = true; markActivity('security-probe');
+    db.setMeta('last_security_probe_at', String(Date.now()));
+    try {
+      const r = await require('./lib/security_probe').runProbeOnce({ deps: { trigger_kind: 'scheduled' } });
+      console.log(`[security] runtime probe: ${r.listeners} listeners, ${r.probed} probed, ${r.recorded} new finding(s), ${r.summary.open} open${r.notes && r.notes.length ? ` — ${r.notes.join(' | ')}` : ''}`);
+      if (r.recorded > 0) { try { require('./lib/obs_bus').emit({ lane: 'security', kind: 'findings', level: 'warn', text: `runtime probe: ${r.recorded} new exposure(s), ${r.summary.open} open`, data: r.summary.bySeverity }); } catch {} }
+    } catch (e) { console.error('[security] probe organ failed:', e.message); }
+    finally { markActivity('idle'); secProbeRunning = false; }
+  };
+  setInterval(() => { maybeSecurityProbe().catch(() => {}); }, SECSCAN_CHECK_MS).unref?.();
+  setTimeout(() => { maybeSecurityProbe().catch(() => {}); }, 300000).unref?.();   // catch-up kick ~5min after boot (after the file scan)
   // F2 GATE-LESS GROUNDED AUTO-PROMOTE LANE — the landing gap closed. Staged proposals used to sit
   // unpromoted (operator-gated); this drains the GROUNDED promote-band (calibrated conf >= floor + a real
   // citation) into civic_graph autonomously, in bounded chunks until the queue empties. Every promotion is

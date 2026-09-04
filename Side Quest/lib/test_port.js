@@ -250,6 +250,14 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
           .catch((e) => send(500, { ok: false, error: (e && e.message) || String(e) }));
         return;
       }
+      // POST /security/probe → the own-host RUNTIME probe ON DEMAND (increment 4). Enumerate listeners,
+      // scope findings to her own tree, benign loopback GETs only. Non-GET, so it passed the gate above.
+      if (req.method === 'POST' && req.url.startsWith('/security/probe')) {
+        require('./security_probe').runProbeOnce({ deps: { trigger_kind: 'directed' } })
+          .then((r) => send(200, { ok: r.ok, listeners: r.listeners, probed: r.probed, recorded: r.recorded, ...r.summary, run_id: r.run_id, notes: r.notes || [], at: Date.now() }))
+          .catch((e) => send(500, { ok: false, error: (e && e.message) || String(e) }));
+        return;
+      }
       // ── THE PARLOR doors (09-01): outside seats post attributed turns; zoe's seat posts only
       // from inside the process (a port caller may not speak AS her). Loopback-only server.
       if (req.method === 'POST' && req.url === '/parlor/say') {
