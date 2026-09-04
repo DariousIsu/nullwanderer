@@ -18323,7 +18323,7 @@ async function startSwarm({ target, requestedK = null, requestedBy = 'chat' } = 
     // stage 4.5 D: an engine-native partition goes to the engine role that fits it; a refusal falls back here
     const _ex = _pickPartitionExecutor({ beat, targets: parts[i] });
     if (_ex.executor === 'echo') {
-      const d = await _dispatchPartitionToEngine({ role: _ex.role, goal: beat.goal, targets: parts[i], index: i + 1, of: parts.length, facets: beat.facets || null, lane: _swarmLane, parentRunId: state.swarm.run_id || null, beatId: beat.id, trigger_kind: requestedBy === 'chat' ? 'swarm_chat' : 'scheduled', autonomous: requestedBy !== 'chat' });
+      const d = await _dispatchPartitionToEngine({ role: _ex.role, mode: _ex.mode, members: _ex.members, validator: _ex.validator, workflow: _ex.workflow, goal: beat.goal, targets: parts[i], index: i + 1, of: parts.length, facets: beat.facets || null, lane: _swarmLane, parentRunId: state.swarm.run_id || null, beatId: beat.id, trigger_kind: requestedBy === 'chat' ? 'swarm_chat' : 'scheduled', autonomous: requestedBy !== 'chat' });
       if (d.ok) { state.swarm.parts[i + 1] = d.part; console.log(`[swarm] partition ${i + 1}/${parts.length} → engine role ${_ex.role} (${_ex.why}) — run ${d.part.echo_run_id}`); continue; }
       console.log(`[swarm] partition ${i + 1}/${parts.length}: engine dispatch failed (${d.why}) — falling back to this side's worker`);
     }
@@ -18512,7 +18512,7 @@ async function startFocusSwarm(focus, { requestedK = null, requestedBy = 'auto' 
     // stage 4.5 D: the pick reads HIS focus's plan too (a roster of contacts → the collector); a refusal falls back here
     const _ex = _pickPartitionExecutor({ beat, plan: { ...plan, goal }, targets: parts[i] });
     if (_ex.executor === 'echo') {
-      const d = await _dispatchPartitionToEngine({ role: _ex.role, goal: partGoal, targets: parts[i], index: i + 1, of: parts.length, facets: beat.facets, lane: _focusLane, parentRunId: state.swarm.run_id || null, beatId, trigger_kind: requestedBy === 'chat' ? 'swarm_chat' : 'scheduled', autonomous: requestedBy !== 'chat' });
+      const d = await _dispatchPartitionToEngine({ role: _ex.role, mode: _ex.mode, members: _ex.members, validator: _ex.validator, workflow: _ex.workflow, goal: partGoal, targets: parts[i], index: i + 1, of: parts.length, facets: beat.facets, lane: _focusLane, parentRunId: state.swarm.run_id || null, beatId, trigger_kind: requestedBy === 'chat' ? 'swarm_chat' : 'scheduled', autonomous: requestedBy !== 'chat' });
       if (d.ok) { state.swarm.parts[i + 1] = d.part; console.log(`[swarm] focus #${fid} partition ${i + 1}/${parts.length} → engine role ${_ex.role} (${_ex.why}) — run ${d.part.echo_run_id}`); continue; }
       console.log(`[swarm] focus #${fid} partition ${i + 1}/${parts.length}: engine dispatch failed (${d.why}) — falling back to this side's worker`);
     }

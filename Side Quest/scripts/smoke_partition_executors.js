@@ -48,6 +48,19 @@ ok(r.executor === 'echo' && r.role === 'collector', 'a beat asking for the engin
 r = P.pick({ beat: county, plan: { shape: 'contacts', goal: 'find the email and phone of each county clerk' }, roles });
 ok(r.executor === 'echo' && r.role === 'collector', "the plan's goal counts too (a focus plan asking for emails and phones)");
 ok(P.pick({}).executor === 'sq' && P.pick({ beat: null, roles: [] }).role === 'swarm-worker', 'no beat, no roles → this side, never a throw');
+ok(P.pick({ beat: county, roles }).mode === 'sq' || P.pick({ beat: county, roles }).mode === 'agent', 'every pick carries a mode');
+
+// ── the team supervisor + workflow door as EXECUTORS (stage 4.5) — declared only, never auto-selected ──
+r = P.pick({ beat: { id: 'draft-brief', kind: 'entity', executor: 'team', members: ['collector', 'briefing-writer', 'challenger'], validator: 'citation-verifier', goal: 'collect, draft and verify a brief' }, roles });
+ok(r.executor === 'echo' && r.mode === 'team' && r.members.length === 3 && r.validator === 'citation-verifier' && r.role === 'team:collector+briefing-writer+challenger', 'a beat declaring executor:team → a team executor (a star of members with a validator)');
+r = P.pick({ beat: { id: 'wf', kind: 'entity', executor: 'workflow', workflow: 'brief-with-citations', goal: 'run the briefing workflow' }, roles });
+ok(r.executor === 'echo' && r.mode === 'workflow' && r.workflow === 'brief-with-citations' && r.role === 'workflow:brief-with-citations', 'a beat declaring executor:workflow → a workflow executor (a named graph)');
+// THE GUARD: team/workflow are NEVER auto-selected — the app's partition swarm stays the one primitive
+ok(P.pick({ beat: bills, targets: ['HB 1'], roles }).mode === 'agent' && P.pick({ beat: contacts, roles }).mode === 'agent', 'a bill/contact beat picks a single AGENT — team/workflow are never auto-selected (no rival swarm)');
+ok(P.pick({ beat: { executor: 'team', members: ['collector'] }, roles: roles.filter((x) => x.name !== 'collector') }).mode === 'team', 'a declared team does not require its members to be echo-registered by the app pick (the engine staffs them)');
+ok(P.pick({ beat: { executor: 'team', members: ['collector'] }, roles, policy: 'sq' }).executor === 'sq' && P.pick({ beat: { executor: 'workflow', workflow: 'w' }, roles, policy: 'sq' }).executor === 'sq', 'policy swarm.executors=sq forces a declared team/workflow back to this side');
+ok(P.pick({ beat: { executor: 'team', members: ['x'] }, roles, engineConnected: false }).executor === 'sq' && /not connected/.test(P.pick({ beat: { executor: 'team', members: ['x'] }, roles, engineConnected: false }).why), 'a declared team with the engine down falls back to this side, reason named');
+ok(P.pick({ beat: { executor: 'team' }, roles }).mode === 'agent' && P.pick({ beat: { executor: 'workflow' }, roles }).mode === 'agent', 'executor:team with no members / executor:workflow with no name is ignored (falls through to the normal pick)');
 
 // ── the brief an engine partition receives ─────────────────────────────────────────────────────
 const b = P.brief({ goal: 'compile leadership contacts for the parishes', targets: ['Jefferson Parish', 'Orleans Parish'], index: 2, of: 3, facets: ['president', 'clerk'] });
@@ -85,7 +98,7 @@ ok(f4.covered.length === 1, 'a target named twice is covered once');
   const dbSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'db.js'), 'utf8');
   db.exec(dbSrc.match(/`CREATE TABLE IF NOT EXISTS runs \([\s\S]*?\)`/)[0].slice(1, -1));
   const L0 = require('../lib/run_ledger');
-  const ledger = { start: (a) => L0.start(a, { db }), finishByEcho: (id, p) => L0.finishByEcho(id, p, { db }), live: () => L0.live({ db }), get: (id) => L0.get(id, { db }) };
+  const ledger = { start: (a) => L0.start(a, { db }), finish: (id, p) => L0.finish(id, p, { db }), finishByEcho: (id, p) => L0.finishByEcho(id, p, { db }), live: () => L0.live({ db }), get: (id) => L0.get(id, { db }) };
   const calls = [];
   let T = 1_800_000_000_000;
   const dispatch = async (tag, opts) => {
@@ -93,6 +106,8 @@ ok(f4.covered.length === 1, 'a target named twice is covered once');
     if (tag.name === 'spawn_agent_async') return { ok: true, text: JSON.stringify({ run_id: `eng-${calls.length}`, state: 'queued' }) };
     if (tag.name === 'agent_status') return { ok: true, text: JSON.stringify({ run_id: tag.args.run_id, state: tag.args.run_id === 'eng-1' ? 'succeeded' : 'running' }) };
     if (tag.name === 'get_agent_output') return { ok: true, text: JSON.stringify([{ run_id: tag.args.run_id, output: 'FOUND:\n- Jefferson Parish — president X (https://a)\n- Orleans Parish — president Y (https://b)\nNOT FOUND:\n- St. Charles Parish\nSOURCES: https://a, https://b' }]) };
+    if (tag.name === 'team_spawn') return { ok: true, text: JSON.stringify({ team_run_id: `team-${calls.length}`, state: 'queued', members: tag.args.members }) };
+    if (tag.name === 'spawn_workflow') return { ok: true, text: JSON.stringify({ thread_id: `wf-${calls.length}`, workflow: tag.args.name, state: 'succeeded', final_state: 'FOUND:\n- Jefferson Parish — via the workflow (https://w)\nSOURCES: https://w' }) };
     return { ok: false, text: 'unknown' };
   };
   const parent = ledger.start({ role: 'swarm', executor: 'sq', trigger_kind: 'scheduled', lane: 'research', now: T });
@@ -117,6 +132,30 @@ ok(f4.covered.length === 1, 'a target named twice is covered once');
   const fold2 = X.foldEchoPartition({ part: d1.part, run: ledger.get(d1.part.run_id), coveredKey: 'focus.42.covered', getMeta: (k) => meta[k], setMeta: (k, v) => { meta[k] = v; } });
   ok(fold2.added === 0 && JSON.parse(meta['focus.42.covered']).length === 3, 'folding twice adds nothing twice');
   ok(X.foldEchoPartition({ part: d2.part, run: ledger.get(d2.part.run_id), coveredKey: 'k', getMeta: () => null, setMeta: () => {} }).covered === 0, 'an unfinished run folds nothing');
+
+  // ── a TEAM executor: team_spawn, keyed on team_run_id, polled + folded like an agent ────────────
+  const dt = await X.dispatchEchoPartition({ mode: 'team', members: ['collector', 'briefing-writer', 'challenger'], validator: 'citation-verifier', goal: 'collect+draft+verify', targets: ['Jefferson Parish'], index: 1, of: 1, lane: 'directed', parentRunId: parent, beatId: 'brief', deps: { dispatch, ledger, now: () => T } });
+  ok(dt.ok && dt.part.mode === 'team' && /^team-/.test(dt.part.echo_run_id) && dt.part.role === 'team:collector+briefing-writer+challenger' && dt.part.done === false, 'a team partition dispatches team_spawn and is keyed on team_run_id');
+  const teamCall = calls.find((c) => c.name === 'team_spawn');
+  ok(teamCall && teamCall.args.members.length === 3 && teamCall.args.validator === 'citation-verifier' && teamCall.args.lane === 'directed' && /partition 1\/1/.test(teamCall.args.task), "team_spawn carries the members, the validator, the parent's lane and the brief as the task");
+  ok(ledger.get(dt.part.run_id).echo_run_id === dt.part.echo_run_id && ledger.get(dt.part.run_id).parent_run_id === parent && ledger.get(dt.part.run_id).state === 'queued', "the team's ledger run is under the parent, keyed on team_run_id");
+  // the team parent row is an agent_runs run, so the SAME closeEchoRuns poll finishes it
+  const dispatchTeamDone = async (tag) => (tag.name === 'agent_status' ? { ok: true, text: JSON.stringify({ run_id: tag.args.run_id, state: 'succeeded' }) } : tag.name === 'get_agent_output' ? { ok: true, text: JSON.stringify([{ output: 'FOUND:\n- Jefferson Parish — team result (https://t)\nSOURCES: https://t' }]) } : { ok: false });
+  const ct = await X.closeEchoRuns({ deps: { dispatch: dispatchTeamDone, ledger, now: T + 60000 } });
+  ok(ct.closed >= 1 && ledger.get(dt.part.run_id).state === 'succeeded' && /team result/.test(ledger.get(dt.part.run_id).output || ''), 'the team run closes through the same agent_status/get_agent_output poll (team_run_id is an agent_runs row)');
+  const meta2 = {};
+  const fteam = X.foldEchoPartition({ part: dt.part, run: ledger.get(dt.part.run_id), coveredKey: 'focus.brief.covered', getMeta: (k) => meta2[k], setMeta: (k, v) => { meta2[k] = v; } });
+  ok(fteam.ok && fteam.covered === 1 && JSON.parse(meta2['focus.brief.covered'] || '[]').includes('Jefferson Parish'), "a team's result folds onto the parent's covered list, same as an agent's");
+
+  // ── a WORKFLOW executor: spawn_workflow BLOCKS, its ledger run opens+closes inline, then folds ──
+  const dw = await X.dispatchEchoPartition({ mode: 'workflow', workflow: 'brief-with-citations', goal: 'run the workflow', targets: ['Jefferson Parish'], index: 1, of: 1, lane: 'directed', parentRunId: parent, beatId: 'wf', deps: { dispatch, ledger, now: () => T } });
+  ok(dw.ok && dw.part.mode === 'workflow' && dw.part.role === 'workflow:brief-with-citations' && /^wf-/.test(dw.part.echo_run_id) && dw.part.done === false, 'a workflow partition dispatches spawn_workflow, keyed on thread_id, done:false so the maintainer folds it');
+  ok(ledger.get(dw.part.run_id).state === 'succeeded' && /via the workflow/.test(ledger.get(dw.part.run_id).output || ''), 'the workflow ran INLINE (blocking) — its ledger run is already terminal with the final_state as output');
+  ok(!(ledger.live() || []).some((r) => r.run_id === dw.part.run_id), 'the terminal workflow run is NOT in live() — the closer tick never polls it');
+  const meta3 = {};
+  const fwf = X.foldEchoPartition({ part: dw.part, run: ledger.get(dw.part.run_id), coveredKey: 'focus.wf.covered', getMeta: (k) => meta3[k], setMeta: (k, v) => { meta3[k] = v; } });
+  ok(fwf.ok && fwf.covered === 1 && JSON.parse(meta3['focus.wf.covered'] || '[]').includes('Jefferson Parish'), "the workflow's final_state folds onto the parent's covered list, same path");
+
   db.close();
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 
@@ -126,6 +165,7 @@ ok(f4.covered.length === 1, 'a target named twice is covered once');
   ok(/^async function _dispatchPartitionToEngine\(/m.test(main) && /require\('\.\/lib\/lane'\)\.run\(\{ autonomous: args\.autonomous !== false, spendTier: args\.lane \}/.test(main) && /dispatchEchoPartition\(\{ \.\.\.args, deps: \{ dispatch: \(t, o\) => echoSuit\.dispatch\(t, o\), ledger: require\('\.\/lib\/run_ledger'\) \} \}\)/.test(main), "the dispatch runs under the parent's tier on the ambient lane, through the suit, into the ledger");
   ok((main.match(/const _ex = _pickPartitionExecutor\(\{ beat/g) || []).length === 2 && (main.match(/if \(d\.ok\) \{ state\.swarm\.parts\[i \+ 1\] = d\.part;/g) || []).length === 2 && (main.match(/engine dispatch failed \(\$\{d\.why\}\) — falling back to this side's worker/g) || []).length === 2, 'both swarm doors pick per partition, keep the engine part record, and fall back to a thread on a refusal');
   ok(/_pickPartitionExecutor\(\{ beat, plan: \{ \.\.\.plan, goal \}, targets: parts\[i\] \}\)/.test(main), "the focus door's pick reads HIS plan (a roster of contacts → the collector)");
+  ok((main.match(/mode: _ex\.mode, members: _ex\.members, validator: _ex\.validator, workflow: _ex\.workflow/g) || []).length === 2, 'both swarm doors flow the executor MODE (agent/team/workflow) + members/validator/workflow through to the dispatch');
   ok(/_maintainSwarm[\s\S]*?if \(p\.echo_run_id && !p\.thread\) \{[\s\S]*?L\.TERMINAL\.has\(run\.state\)[\s\S]*?foldEchoPartition\(\{ part: p, run, coveredKey/.test(main), 'the maintainer treats an engine partition as done when its ledger run is terminal and folds a finished one onto the parent');
   ok(/_maintainSwarm[\s\S]*?engine partition silent \$\{Math\.round\(SWARM_STALE_MS \/ 3600000\)\}h — expired at release/.test(main), 'a silent engine partition expires after the same 6h as a thread (no engine partition can hold a swarm open)');
   ok(/^async function _ledgerEchoTick\(/m.test(main) && /closeEchoRuns\(\{ deps: \{ dispatch: \(t, o\) => echoSuit\.dispatch\(t, o\), ledger: require\('\.\/lib\/run_ledger'\), pendingIds/.test(main) && /_ledgerEchoTick\(\)\.catch[\s\S]{0,120}45 \* 1000/.test(main), 'the closer tick runs every 45s beside the consume watcher, skipping the runs a chat watcher owns');

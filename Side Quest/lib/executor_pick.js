@@ -36,13 +36,27 @@ function pick({ beat = null, plan = null, targets = [], roles = [], policy = 'mi
   const pol = POLICIES.includes(policy) ? policy : 'mixed';
   const goal = _goalOf(beat, plan);
   const declared = beat && beat.executor;
-  if (declared === 'sq') return { executor: 'sq', role: 'swarm-worker', why: 'the beat pins this side' };
-  if (pol === 'sq') return { executor: 'sq', role: 'swarm-worker', why: 'policy swarm.executors=sq' };
+  if (declared === 'sq') return { executor: 'sq', mode: 'agent', role: 'swarm-worker', why: 'the beat pins this side' };
+  if (pol === 'sq') return { executor: 'sq', mode: 'agent', role: 'swarm-worker', why: 'policy swarm.executors=sq' };
+  // ECHO'S TEAM SUPERVISOR AND WORKFLOW DOOR AS EXECUTORS (stage 4.5, merge map contract part 4: "Echo's
+  // team supervisor and workflow door become executors of THIS primitive rather than a second swarm").
+  // They are reached ONLY when a beat/plan DECLARES them — never auto-selected — so the app's partition
+  // swarm stays the one primitive and a team/workflow is an executor within it, carrying the partition's
+  // lane, parent run, and fold. A team is a star of members with an optional validator; a workflow is a
+  // named registered graph. A disconnected engine falls back to this side's worker, reason named.
+  if (declared === 'team' && Array.isArray(beat && beat.members) && beat.members.length) {
+    if (!engineConnected) return { executor: 'sq', mode: 'agent', role: 'swarm-worker', why: 'a team was declared but the engine is not connected' };
+    return { executor: 'echo', mode: 'team', members: beat.members.slice(), validator: (beat.validator || null), role: `team:${beat.members.join('+')}`, why: 'the beat declares a team executor (a star of members with a validator)' };
+  }
+  if (declared === 'workflow' && beat && beat.workflow) {
+    if (!engineConnected) return { executor: 'sq', mode: 'agent', role: 'swarm-worker', why: 'a workflow was declared but the engine is not connected' };
+    return { executor: 'echo', mode: 'workflow', workflow: String(beat.workflow), role: `workflow:${beat.workflow}`, why: 'the beat declares a workflow executor (a named registered graph)' };
+  }
   const has = (name) => (roles || []).some((r) => r && r.name === name && r.executor === 'echo');
   const consider = (role, why) => {
-    if (!engineConnected) return { executor: 'sq', role: 'swarm-worker', why: `${role} fits but the engine is not connected` };
-    if (!has(role)) return { executor: 'sq', role: 'swarm-worker', why: `${role} fits but is not in the registry` };
-    return { executor: 'echo', role, why };
+    if (!engineConnected) return { executor: 'sq', mode: 'agent', role: 'swarm-worker', why: `${role} fits but the engine is not connected` };
+    if (!has(role)) return { executor: 'sq', mode: 'agent', role: 'swarm-worker', why: `${role} fits but is not in the registry` };
+    return { executor: 'echo', mode: 'agent', role, why };
   };
   if (declared && declared !== 'echo') return consider(String(declared), 'the beat names its executor role');
   const kind = String((beat && beat.kind) || '').toLowerCase();
@@ -50,7 +64,7 @@ function pick({ beat = null, plan = null, targets = [], roles = [], policy = 'mi
     if (kind === rule.kind || rule.goal.test(goal)) return consider(rule.role, rule.why);
   }
   if (declared === 'echo') return consider('collector', 'the beat asks for the engine without a role — the collector is the general engine-native worker');
-  return { executor: 'sq', role: 'swarm-worker', why: 'web research (a roster validated against the web, or a topic) — this side\'s worker' };
+  return { executor: 'sq', mode: 'agent', role: 'swarm-worker', why: 'web research (a roster validated against the web, or a topic) — this side\'s worker' };
 }
 
 /**

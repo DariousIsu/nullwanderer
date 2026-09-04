@@ -13,27 +13,68 @@ const rf = require('./review_fanout');
 const { brief } = require('./executor_pick');
 const { foldResult } = require('./partition_fold');
 
+// Pull a specific id key out of an engine reply ("team_run_id"/"thread_id"), tolerant of JSON/prose.
+function _parseKey(text, key) {
+  const m = new RegExp(`["']?${key}["']?\\s*[:=]\\s*["']([\\w.-]+)["']`).exec(String(text || ''));
+  return m ? m[1] : null;
+}
+// The workflow's result text: its final_state, else its output — for the fold.
+function _workflowOutput(text) {
+  const s = String(text || '');
+  let m = /"final_state"\s*:\s*("(?:[^"\\]|\\.)*"|\{[\s\S]*?\}|\[[\s\S]*?\])/.exec(s);
+  if (m) { try { return typeof JSON.parse(m[1]) === 'string' ? JSON.parse(m[1]) : m[1]; } catch { return m[1]; } }
+  return rf.parseRunOutput(s) || s;
+}
+
 /**
- * Dispatch ONE partition to an engine role: spawn_agent_async(name=role, prompt=brief, lane=the parent's
- * tier) and open the child run in the ledger keyed on the engine's run id. Returns the part record the
- * swarm state keeps, or {ok:false, why}.
+ * Dispatch ONE partition to an engine EXECUTOR (stage 4.5): mode 'agent' → spawn_agent_async (a single
+ * role, polled to done); mode 'team' → team_spawn (Echo's star supervisor — its parent row lives in
+ * agent_runs under team_run_id, so the SAME agent_status/get_agent_output poll closes it); mode
+ * 'workflow' → spawn_workflow (a named graph — BLOCKING, returns final_state inline, so its ledger run
+ * opens and closes in this call). Every mode carries the partition's lane + parent run + beat, opens a
+ * ledger run keyed on the engine's id, and folds onto the parent — the team/workflow are executors OF
+ * the one primitive, never a second swarm. Returns the part record, or {ok:false, why} to fall back.
  */
-async function dispatchEchoPartition({ role, goal, targets, index, of, facets = null, lane, parentRunId = null, beatId = null, trigger_kind = 'scheduled', autonomous = true,
+async function dispatchEchoPartition({ role, mode = 'agent', members = null, validator = null, workflow = null, goal, targets, index, of, facets = null, lane, parentRunId = null, beatId = null, trigger_kind = 'scheduled', autonomous = true,
                                        deps = {} } = {}) {
   const { dispatch, ledger, now = Date.now } = deps;
   if (typeof dispatch !== 'function' || !ledger) return { ok: false, why: 'no dispatch / ledger' };
-  const prompt = brief({ goal, targets, index, of, facets });
+  const prompt = brief({ goal, targets, index, of, facets, markers: mode !== 'workflow' });
+  const meta = { beatId, partition: index, of, autonomous, via: 'swarm-executor', mode };
+  const cap = `${beatId || 'swarm'} partition ${index}/${of} → ${mode}:${role} (${targets.length} targets)`;
   let r = null;
-  try { r = await dispatch({ kind: 'do', name: 'spawn_agent_async', args: { name: role, prompt, lane, canvas_tab: beatId ? `swarm-${String(beatId).slice(0, 24)}-${index}` : undefined } }, { autonomous }); }
-  catch (e) { return { ok: false, why: `dispatch threw: ${(e && e.message) || e}` }; }
+  try {
+    if (mode === 'team') {
+      r = await dispatch({ kind: 'do', name: 'team_spawn', args: { task: prompt, members: members || [], validator: validator || undefined, lane } }, { autonomous });
+    } else if (mode === 'workflow') {
+      r = await dispatch({ kind: 'do', name: 'spawn_workflow', args: { name: workflow, input: { prompt }, lane } }, { autonomous });
+    } else {
+      r = await dispatch({ kind: 'do', name: 'spawn_agent_async', args: { name: role, prompt, lane, canvas_tab: beatId ? `swarm-${String(beatId).slice(0, 24)}-${index}` : undefined } }, { autonomous });
+    }
+  } catch (e) { return { ok: false, why: `dispatch threw: ${(e && e.message) || e}` }; }
   if (!r || r.ok === false || r.isError) return { ok: false, why: `engine refused: ${String((r && r.text) || '').slice(0, 160)}` };
-  const echoRunId = rf.parseRunId(r && r.text);
-  if (!echoRunId) return { ok: false, why: `no run_id in the engine's reply: ${String((r && r.text) || '').slice(0, 120)}` };
+
+  if (mode === 'workflow') {
+    // BLOCKING: the workflow already ran; open + close the ledger run inline and mark the part done so
+    // the maintainer folds it on the next tick (no poll — spawn_workflow returned the final state).
+    const tid = _parseKey(r.text, 'thread_id') || `wf_${index}`;
+    const state = (rf.parseRunState(r.text) === 'failed') ? 'failed' : 'succeeded';
+    const output = _workflowOutput(r.text);
+    let runId = null;
+    try { runId = ledger.start({ role: `workflow:${workflow}`, executor: 'echo', trigger_kind, trigger_meta: { ...meta, workflow }, lane, parent_run_id: parentRunId, echo_run_id: tid, state: 'running', input_preview: cap, now: now() }); if (runId) ledger.finish(runId, { state, output, now: now() }); } catch {}
+    // done:false though it already ran — the ledger run is TERMINAL, so the maintainer folds it (onto the
+    // parent's covered list) on the next tick through the same engine-part path as a team/agent, then marks it done.
+    return { ok: true, part: { executor: 'echo', mode, role: `workflow:${workflow}`, workflow, echo_run_id: tid, run_id: runId, n: targets.length, targets: targets.slice(), done: false, startedAt: now() } };
+  }
+
+  const echoRunId = mode === 'team' ? _parseKey(r.text, 'team_run_id') : rf.parseRunId(r && r.text);
+  if (!echoRunId) return { ok: false, why: `no ${mode === 'team' ? 'team_run_id' : 'run_id'} in the engine's reply: ${String((r && r.text) || '').slice(0, 120)}` };
+  const ledgerRole = mode === 'team' ? `team:${(members || []).join('+')}` : role;
   let runId = null;
   try {
-    runId = ledger.start({ role, executor: 'echo', trigger_kind, trigger_meta: { beatId, partition: index, of, autonomous, via: 'swarm-executor' }, lane, parent_run_id: parentRunId, echo_run_id: echoRunId, state: 'queued', input_preview: `${beatId || 'swarm'} partition ${index}/${of} → ${role} (${targets.length} targets)`, now: now() });
+    runId = ledger.start({ role: ledgerRole, executor: 'echo', trigger_kind, trigger_meta: { ...meta, ...(members ? { members } : {}) }, lane, parent_run_id: parentRunId, echo_run_id: echoRunId, state: 'queued', input_preview: cap, now: now() });
   } catch {}
-  return { ok: true, part: { executor: 'echo', role, echo_run_id: echoRunId, run_id: runId, n: targets.length, targets: targets.slice(), done: false, startedAt: now() } };
+  return { ok: true, part: { executor: 'echo', mode, role: ledgerRole, members: members || undefined, echo_run_id: echoRunId, run_id: runId, n: targets.length, targets: targets.slice(), done: false, startedAt: now() } };
 }
 
 /**
