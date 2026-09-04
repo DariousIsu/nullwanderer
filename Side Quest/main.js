@@ -21246,7 +21246,7 @@ async function startReviewFanout(goal) {
   const runs = [];
   for (let i = 0; i < shards.length; i++) {
     const task = rf.buildShardTask({ goal, files: shards[i], index: i, total: shards.length });
-    const r = await echoSuit.dispatch({ kind: 'do', name: 'spawn_agent_async', args: { name: 'code-reviewer', prompt: task } }, { autonomous: false });
+    const r = await echoSuit.dispatch({ kind: 'do', name: 'spawn_agent_async', args: { name: 'code-reviewer', prompt: task, lane: 'development' } }, { autonomous: false });   // item 3b: pen work bills development
     const runId = r && r.ok !== false ? rf.parseRunId(r.text) : null;
     if (runId) runs.push({ run_id: runId, label: `shard-${i + 1}`, files: shards[i].length, state: 'queued' });
     else console.error(`[review-fanout] shard ${i + 1} spawn failed: ${(r && r.text || 'no result').slice(0, 160)}`);

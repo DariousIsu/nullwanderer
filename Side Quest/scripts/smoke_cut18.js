@@ -109,7 +109,7 @@ const src = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
   const Database = require('better-sqlite3');
   const sagaPath = path.join(tmp, 'saga.db');
   const saga = new Database(sagaPath);
-  saga.exec('CREATE TABLE agent_trajectory (id INTEGER PRIMARY KEY, asserted_at INTEGER, llm_model_name TEXT, llm_token_count_total INTEGER, llm_token_count_prompt INTEGER, llm_token_count_completion INTEGER)');
+  saga.exec('CREATE TABLE agent_trajectory (id INTEGER PRIMARY KEY, asserted_at INTEGER, llm_model_name TEXT, llm_token_count_total INTEGER, llm_token_count_prompt INTEGER, llm_token_count_completion INTEGER, tags_json TEXT)');
   const nowS = Math.floor(Date.now() / 1000);
   const ins = saga.prepare('INSERT INTO agent_trajectory (id, asserted_at, llm_model_name, llm_token_count_total) VALUES (?, ?, ?, ?)');
   for (let i = 1; i <= 6; i++) ins.run(i, nowS - i * 60, 'gpt-oss:120b', 1000 * i);

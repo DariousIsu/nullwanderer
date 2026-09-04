@@ -867,6 +867,11 @@ class EchoSuit {
         // (5s default kills a big-table scan). Pure + deterministic; a no-op for every other tool.
         let callArgs = prepareDoArgs(tag.name, tag.args || {});
         if (opts.maintain) { try { const f = require('./echo_tier').maintainForcedArgs(tag.name); if (f) callArgs = { ...callArgs, ...f }; } catch {} }
+        // THE DELEGATE'S LANE (stage 4.5 item 3b): a spawn/delegate carries the caller's usage-law tier
+        // so the engine bills the run to it (lib/lane.delegateLane). An explicit args.lane wins.
+        if (/^(delegate_to_|spawn_agent|spawn_workflow|team_spawn)$|^(delegate_to_|spawn_agent)/.test(tag.name) && callArgs.lane == null) {
+          try { callArgs = { ...callArgs, lane: require('./lane').delegateLane(opts.autonomous) }; } catch { /* the engine falls to the law's default */ }
+        }
         // B1 DEDUPE GATE (run-2, 2026-08-19): a repeat spawn of the SAME agent input inside the hour
         // is answered from the consume ledger — the completed run's stored output (read-through via
         // get_agent_output), or an honest "already running, don't re-spawn". Run-2 spawned the same
@@ -965,6 +970,7 @@ class EchoSuit {
         const envelope = '\n\nYour final reply IS the return value — not a message to anyone. End with a compact summary in this shape: FOUND: <what you established, one line each> · NOT FOUND: <what you could not establish> · SOURCES: <the urls/records behind the found items>.';
         const args = { prompt: String(tag.task || '') + envelope };
         if (tag.agent) args.name = tag.agent;
+        try { args.lane = require('./lane').delegateLane(opts.autonomous); } catch { /* the engine falls to the law's default */ }   // item 3b: the caller's tier rides the spawn
         const r = normalizeToolResult(await c.callTool('spawn_agent_async', args));
         // B1 REGISTER (chat-triggered delegates): same consume bookkeeping as the do-branch spawns —
         // hash on the RAW task (hashInput strips our envelope), so a repeat of the same delegation

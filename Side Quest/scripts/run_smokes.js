@@ -624,6 +624,7 @@ const smokes = [
   // THE TRIGGER-TO-TIER LAW (stage 4.5 item 2, 09-04): one table both runtimes read (GET /tiers), the usage
   // law's tiers by trigger kind; his master-skill dispatcher (P5) folded in as data.
   'smoke_tier_law.js',
+  'smoke_delegate_lane.js',
   // Run-4 collision guard: the test port tells the REAL user from its own injected turns; a recent
   // or unanswered real turn owns the pipeline (10min / 30min-capped) and the harness yields.
   'smoke_test_port_guard.js',

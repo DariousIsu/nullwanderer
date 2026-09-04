@@ -89,10 +89,11 @@ async function runChecks({
   if (delegate) {
     const payload = { session_id: sessionId, source_doc_path: sourceDocPath, source_version: sourceVersion, author_name: author, parent_session_id: null };
     const evt = buildEventPrompt('verification:session_open', payload);
-    const cv = normalizeToolResult(await callTool('delegate_to_rainey_citation_verifier', { prompt: evt }));
+    // item 3b: his document's verification is HIS work — the delegates bill `directed`, never background.
+    const cv = normalizeToolResult(await callTool('delegate_to_rainey_citation_verifier', { prompt: evt, lane: 'directed' }));
     runIds.citeVerify = (parseJson(cv.text) || {}).run_id || null;
     if (factCheck) {
-      const fc = normalizeToolResult(await callTool('delegate_to_rainey_fact_checker', { prompt: evt }));
+      const fc = normalizeToolResult(await callTool('delegate_to_rainey_fact_checker', { prompt: evt, lane: 'directed' }));
       runIds.factCheck = (parseJson(fc.text) || {}).run_id || null;
     }
   }

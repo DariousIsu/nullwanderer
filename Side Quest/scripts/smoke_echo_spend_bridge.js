@@ -24,7 +24,7 @@ conn.exec(`CREATE TABLE agent_trajectory (
   id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, turn_idx INTEGER, asserted_at INTEGER,
   action_type TEXT, action_name TEXT, agent_kind TEXT,
   llm_model_name TEXT, llm_token_count_prompt INTEGER, llm_token_count_completion INTEGER,
-  llm_token_count_total INTEGER)`);
+  llm_token_count_total INTEGER, tags_json TEXT)`);
 const NOW = 1787300000000;                       // fixed clock — determinism, and never Date.now()
 const secs = (ms) => Math.floor(ms / 1000);
 const ins = conn.prepare(`INSERT INTO agent_trajectory
@@ -39,7 +39,7 @@ conn.prepare(`INSERT INTO agent_trajectory (session_id, turn_idx, asserted_at, a
 
 // ── fakes ───────────────────────────────────────────────────────────────────────────────────────
 const recorded = [];
-const meter = { record: (model, tokens, ts) => recorded.push({ model, tokens, ts }) };
+const meter = { record: (model, tokens, ts, lane) => recorded.push({ model, tokens, ts, lane }) };
 const meta = {};
 const deps = { now: NOW, dbPath, meter, getMeta: (k) => meta[k], setMeta: (k, v) => { meta[k] = v; } };
 
@@ -64,6 +64,26 @@ ins.run(secs(NOW - 10e3), 'deepseek-v4-flash', 200, 100, 300);
 const r3 = bridge.foldOnce(deps);
 ok(r3.folded === 1 && recorded[2].model === 'deepseek-v4-flash' && recorded[2].tokens === 300,
    'a row written after the watermark folds on the next tick');
+ok(recorded.every((r) => r.lane === '?'), "rows without a lane tag are metered as '?' (untagged — the pre-4.5 shape)");
+
+// ── stage 4.5 item 3a (09-04): the lane rides the row — Echo tags each spend row 'lane:<tier>' and the
+// meter is charged under that tier. Before this his chat-delegated agents and Saga's own replies landed
+// untagged, which the pace check counts as BACKGROUND (p285: 405k–570k "BACKGROUND" an hour).
+const insL = conn.prepare(`INSERT INTO agent_trajectory
+  (session_id, turn_idx, asserted_at, action_type, agent_kind, llm_model_name,
+   llm_token_count_prompt, llm_token_count_completion, llm_token_count_total, tags_json)
+  VALUES ('s', 0, ?, 'message', 'llm_spend', ?, ?, ?, ?, ?)`);
+insL.run(secs(NOW - 9e3), 'gemma4:31b-cloud', 400, 100, 500, '["lane:directed"]');           // a chat-delegated agent
+insL.run(secs(NOW - 8e3), 'deepseek-v4-flash', 300, 40, 340, '["lane:interactive","x"]');     // Saga's own reply
+insL.run(secs(NOW - 7e3), 'gemma4:31b-cloud', 200, 20, 220, '["lane:research"]');             // a pass (expansion)
+insL.run(secs(NOW - 6e3), 'gemma4:31b-cloud', 10, 10, 20, '{not json');                       // a corrupt tag list
+const rL = bridge.foldOnce(deps);
+const lanes = recorded.slice(-4).map((r) => r.lane);
+ok(rL.folded === 4 && lanes.join(',') === 'directed,interactive,research,?',
+   `each row is metered under the lane it carries; a corrupt tag list stays '?' (got ${lanes.join(',')})`);
+ok(recorded.slice(-4).map((r) => r.tokens).join(',') === '500,340,220,20', 'the lane never changes what is metered, only where');
+ok(/tags_json/.test(require('fs').readFileSync(path.join(__dirname, '..', 'lib', 'echo_spend_bridge.js'), 'utf8')
+     .match(/const ROWS_SQL =[\s\S]*?LIMIT \?`/)[0]), 'ROWS_SQL selects tags_json (the async door reads the same SQL)');
 
 // ── fail-soft: a missing saga.db is a quiet no-op, never a throw ────────────────────────────────
 const r4 = bridge.foldOnce({ ...deps, dbPath: path.join(dir, 'nope.db') });

@@ -38,7 +38,8 @@ const ROWS_SQL =
   `SELECT id, asserted_at,
           COALESCE(llm_model_name, 'unknown') AS model,
           COALESCE(llm_token_count_total,
-                   COALESCE(llm_token_count_prompt, 0) + COALESCE(llm_token_count_completion, 0)) AS tokens
+                   COALESCE(llm_token_count_prompt, 0) + COALESCE(llm_token_count_completion, 0)) AS tokens,
+          tags_json
    FROM agent_trajectory
    WHERE id > ?
      AND (llm_token_count_total IS NOT NULL
@@ -62,6 +63,19 @@ function _fastForward(tip, wm, sm) {
 }
 // Replay the fetched rows into the meter and advance the watermark. Shared by both doors, so the
 // worker path and the synchronous path cannot drift.
+// THE LANE RIDES THE ROW (stage 4.5 item 3a, 2026-09-04): Echo stamps each spend row's usage-law tier as
+// a 'lane:<tier>' tag (trajectory_log.record_llm_spend); the meter is charged under that lane. Before
+// this every Echo-side row landed UNTAGGED ('?'), which the pace check counts as BACKGROUND — his
+// chat-delegated agents and Saga's own replies paced her expansion (p285: 405k–570k "BACKGROUND"
+// compute an hour against a 65k rate, 11 research deferrals in 20 minutes). Untagged stays '?'.
+function laneOf(tagsJson) {
+  try {
+    const tags = JSON.parse(tagsJson || '[]');
+    if (!Array.isArray(tags)) return '?';
+    for (const t of tags) { const m = /^lane:([a-z_]+)$/i.exec(String(t || '')); if (m) return m[1].toLowerCase(); }
+  } catch { /* an unreadable tag list is untagged */ }
+  return '?';
+}
 function _fold(rows, { now, um, sm, wm }) {
   if (!rows || !rows.length) return { folded: 0 };
   let folded = 0, maxId = wm;
@@ -70,7 +84,7 @@ function _fold(rows, { now, um, sm, wm }) {
     if (!r.tokens || r.tokens <= 0) continue;
     const ts = (r.asserted_at || 0) * 1000;               // agent_trajectory stamps SECONDS
     if (!ts || now - ts > MAX_AGE_MS) continue;           // ring-order protection (header note)
-    um.record(r.model, r.tokens, Math.min(ts, now));      // never stamp the future
+    um.record(r.model, r.tokens, Math.min(ts, now), laneOf(r.tags_json));   // never stamp the future; the row's lane
     folded++;
   }
   sm(META_KEY, String(maxId));                            // advance even when all rows were skipped

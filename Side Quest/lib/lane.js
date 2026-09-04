@@ -77,4 +77,16 @@ function resolveSpendTier({ explicit, ambient, autonomous } = {}) {
 // the choke-point gate AND were invisible to the background burn-down pace they exist to be paced by.
 function ambientSpendTier() { const c = current(); return resolveSpendTier({ ambient: c.spendTier, autonomous: c.autonomous }); }
 
-module.exports = { run, current, isAutonomous, resolveSpendTier, ambientSpendTier };
+// ── THE DELEGATE'S LANE (stage 4.5 item 3b, 2026-09-04) ──────────────────────────────────────────
+// An Echo delegate (spawn_agent / spawn_agent_async / delegate_to_*) bills the tier of WHOEVER ASKED,
+// carried to the engine as the call's `lane` arg — before this every delegate was Echo's "chat" kind
+// and billed `directed` (unpaced) even when her idle sweep fired it (p286: bill-tracker runs from
+// the research lane landing as lane:directed). Order: the ambient tier the orchestrator declared →
+// a bare-autonomous run is `research` → a non-autonomous dispatch is his turn, `directed`.
+function delegateLane(autonomous) {
+  const t = ambientSpendTier();
+  if (t) return t;
+  return isAutonomous(autonomous) ? 'research' : 'directed';
+}
+
+module.exports = { run, current, isAutonomous, resolveSpendTier, ambientSpendTier, delegateLane };
