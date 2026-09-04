@@ -424,5 +424,21 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
   ok(uw.pickUserThread([unstartedHis], { now: NOW, resumableOf: () => true }).id === 10, 'a resumable thread that never got a pass (seeded then displaced) returns too — the stamp, not the count, is the truth');
 }
 
+// ── partitionPool (cut 20, 2026-09-03): HERS vs HIS. Measured live: 41 threads the subconscious spawned
+// from its own synthesis, 39 seeded as "HIS research thread" at user cadence. The split is pure. ──
+{
+  const his = { id: 20, status: 'pending', action_count: 0, created_ts: NOW - H, content: 'research how the AI program could be used to control a robot' };
+  const hers = { id: 21, status: 'pending', action_count: 0, created_ts: NOW - H / 2, content: 'Investigate: Determine whether the database is locked errors are transient or persistent' };
+  const split = uw.partitionPool([his, hers, null], { selfOf: (id) => id === 21 });
+  ok(split.his.length === 1 && split.his[0].id === 20 && split.self.length === 1 && split.self[0].id === 21, '⭐ a subconscious-born thread never sits in HIS pool');
+  ok(uw.pickUserThread(split.his, { now: NOW }).id === 20, 'the pick over his pool cannot return hers even when hers is newer');
+  ok(uw.pickUserThread(split.self, { now: NOW }).id === 21, 'her pool picks on its own (the empty-slot seed)');
+  const d = uw.partitionPool([his, hers]);
+  ok(d.his.length === 2 && d.self.length === 0, 'without a lineage test everything is his (the pre-cut pool)');
+  const thrown = uw.partitionPool([his], { selfOf: () => { throw new Error('x'); } });
+  ok(thrown.his.length === 1 && thrown.self.length === 0, 'an unreadable lineage keeps the pre-cut behavior (his pool)');
+  ok(uw.partitionPool(null).his.length === 0 && uw.partitionPool(undefined, {}).self.length === 0, 'null/undefined pools split to empty');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

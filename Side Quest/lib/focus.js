@@ -88,7 +88,7 @@ function setCurrent(threadId, { directed = false, origin = null } = {}) {
   const t = db.getOpenThread(threadId);
   if (!t) return null;
   const o = _resolveOrigin(threadId, origin, t);
-  const expansion = o === 'beat';
+  const expansion = o === 'beat' || o === 'subc';   // the sweep, or her own subconscious-born investigation
   db.setMeta(CURRENT_KEY, String(threadId));
   _saveState({ id: threadId, ticks: 0, strikes: 0, startedTs: Date.now(), directed: !!directed && !expansion, expansion });
   // WHO seeded this focus — 'user' (a real directive), 'beat' (the autonomic scheduler), 'self' (a
@@ -112,8 +112,39 @@ function _resolveOrigin(threadId, origin, thread) {
   try { beatTag = (db.getMeta(`focus.${threadId}.beat`) || '').trim(); } catch {}
   try { prior = db.getMeta(`focus.${threadId}.origin`) || ''; } catch {}
   if (beatTag) return _bornFromUser(thread || db.getOpenThread(threadId)) ? 'user' : 'beat';
+  // SELF-DIRECTED LINEAGE (cut 20) outranks a prior stamp: a laundered 'user' on a thread her own
+  // subconscious spawned heals here, the way a laundered beat thread does above.
+  const self = selfLineage(threadId);
+  if (self && !_bornFromUser(thread || db.getOpenThread(threadId))) return self;
   return prior || 'user';
 }
+// SELF-DIRECTED LINEAGE (cut 20, 2026-09-03): a thread the subconscious spawned from its own synthesis
+// (thread.<id>.spawned_from = 'subc', lib/monologue) was born from no turn of his. Measured 09-03: 41 such
+// threads, 39 stamped origin=user — the user-work driver saw "pending, never driven" and seeded each as
+// "HIS research thread" at user cadence (#4210, "Investigate: Determine whether the `database is locked`
+// errors are transient…", a tension the subconscious read out of the engine's own log). A self-spawned
+// thread is EXPANSION: her own investigation, the driven mechanics, none of the priority — it yields to
+// his outstanding work and runs idle-gated. A thread spawned FROM another thread (spawned_from = '<id>',
+// run-closure's children) inherits its parent's lineage, so a child of his ask stays his word and a child
+// of her own stays hers. Returns 'subc' | 'beat' | null (null = his, or no lineage). Fail-closed on an
+// unreadable stamp: no lineage claimed.
+function selfLineage(threadId, depth = 0) {
+  if (depth > 6) return null;
+  let sf = '';
+  try { sf = String(db.getMeta(`thread.${threadId}.spawned_from`) || '').trim(); } catch { return null; }
+  if (!sf) return null;
+  if (sf === 'subc') return 'subc';
+  const pid = parseInt(sf, 10);
+  if (!pid || pid === threadId) return null;
+  const up = selfLineage(pid, depth + 1);
+  if (up) return up;
+  let porigin = '';
+  try { porigin = db.getMeta(`focus.${pid}.origin`) || ''; } catch {}
+  if (porigin === 'beat' || porigin === 'subc') return porigin;
+  try { if ((db.getMeta(`focus.${pid}.beat`) || '').trim()) return 'beat'; } catch {}
+  return null;
+}
+function isSelfSpawned(threadId) { return selfLineage(threadId) != null; }
 // Was this thread minted from one of HIS turns? (source_turn_id → a 'user' speaker row.) Fail-closed: an
 // unreadable lineage is not his — a beat thread must never be promoted by an error.
 function _bornFromUser(thread) {
@@ -149,7 +180,7 @@ function isExpansion(focus) {
   const s = _stateFor(focus);
   if (!s) return false;
   if (s.expansion != null) return !!s.expansion;
-  return _beatTagged(focus.id) && !_bornFromUser(db.getOpenThread(focus.id));
+  return (_beatTagged(focus.id) || !!selfLineage(focus.id)) && !_bornFromUser(db.getOpenThread(focus.id));
 }
 // Is the currently-served focus HIS WORD (a Lucas-assigned, directed task)? True only while that focus
 // is the active pointer — and NEVER for an expansion focus, whatever flag it was pointed with.
@@ -578,7 +609,7 @@ function inquiryVocabTokens() {
 }
 
 module.exports = {
-  getCurrent, isActive, setCurrent, isDirected, isExpansion, isDriven, isDirectedStop, originOf, setFromDirective, setExpansion, clear,
+  getCurrent, isActive, setCurrent, isDirected, isExpansion, isDriven, isDirectedStop, originOf, selfLineage, isSelfSpawned, setFromDirective, setExpansion, clear,
   setFromText, recentlyTombstoned, stripControlTags, parseControlTags,
   isNovel, recordOutcome, domainLeashTokens, inquiryVocabTokens,
   setBackground, recordOutcomeBackground,

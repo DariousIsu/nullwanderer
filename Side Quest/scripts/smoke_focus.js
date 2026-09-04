@@ -28,6 +28,7 @@ function reset() {
   // open_threads ids RESTART after a full delete (INTEGER PRIMARY KEY, no AUTOINCREMENT), so per-id focus
   // meta (origin / beat / stopped) from an earlier section would leak onto a later section's thread.
   db.getDb().prepare("DELETE FROM meta WHERE key LIKE 'focus.%'").run();
+  db.getDb().prepare("DELETE FROM meta WHERE key LIKE 'thread.%'").run();   // lineage stamps (spawned_from) are per-id too
   db.setMeta('current_focus_id', '');
   db.setMeta('focus_state', '');
 }
@@ -240,6 +241,51 @@ async function run() {
   db.setMeta('focus_state', JSON.stringify({ id: legacyHis.id, ticks: 3, strikes: 0, startedTs: Date.now(), directed: true }));
   ok('a pre-split focus_state on an UNTAGGED focus still reads DIRECTED (his overnight task survives the cycle)',
     focus.isDirected(focus.getCurrent()) && !focus.isExpansion(focus.getCurrent()));
+
+  // --- SELF-DIRECTED LINEAGE (cut 20). Measured 09-03: 41 threads the subconscious spawned from its own
+  // synthesis (thread.<id>.spawned_from='subc'), 39 stamped origin=user and seeded as "HIS research thread"
+  // at user cadence (#4210 was a tension read out of the engine's own log). Hers is EXPANSION. ---
+  console.log('\nself-directed lineage (subconscious-born = EXPANSION, never his word):');
+  reset();
+  const own = db.insertOpenThread({ content: 'Investigate: Determine whether the database is locked errors are transient or persistent' });
+  db.setMeta(`thread.${own.id}.spawned_from`, 'subc');
+  ok('selfLineage reads the subconscious stamp', focus.selfLineage(own.id) === 'subc' && focus.isSelfSpawned(own.id) === true);
+  ok('a thread with no lineage stamp is not self-spawned', focus.selfLineage(999999) === null && focus.isSelfSpawned(999999) === false);
+  const ownF = focus.setCurrent(own.id, { directed: true });            // the user-work driver's seed call, verbatim
+  ok('⭐ a subconscious-born thread pointed with {directed:true} is EXPANSION, not directed', !!ownF && focus.isExpansion(ownF) && !focus.isDirected(ownF) && focus.isDriven(ownF));
+  ok('…and its origin stamp is subc', focus.originOf(own.id) === 'subc');
+  ok('the run state records the split (directed:false, expansion:true)', (() => { const s = JSON.parse(db.getMeta('focus_state')); return s.directed === false && s.expansion === true; })());
+  const dispSelf = await focus.setFromDirective('catalog every right-of-center energy think tank');
+  ok('⭐ a user directive DISPLACES her own investigation (expansion yields to his word)', !!dispSelf && focus.isDirected(focus.getCurrent()) && focus.getCurrent().id !== own.id);
+  reset();
+  const laundered = db.insertOpenThread({ content: 'Investigate: why the audit writer retried twenty times' });
+  db.setMeta(`thread.${laundered.id}.spawned_from`, 'subc');
+  db.setMeta(`focus.${laundered.id}.origin`, 'user');                    // the laundered stamp, as found live on #4210
+  const lf = focus.setCurrent(laundered.id, { directed: true });
+  ok('⭐ a laundered user stamp on a subconscious-born thread HEALS to subc on re-point', !!lf && focus.isExpansion(lf) && !focus.isDirected(lf) && focus.originOf(laundered.id) === 'subc');
+  ok('a beat seed displaces her investigation (both expansion; the beat lane keeps its turn)', !!(await focus.setExpansion('Compile the county-level governing board for Adams County, Wisconsin')) && focus.getCurrent().id !== laundered.id);
+  // lineage through a parent: run-closure's children inherit
+  const childOfOwn = db.insertOpenThread({ content: 'follow-up: which tools time out under the lock' });
+  db.setMeta(`thread.${childOfOwn.id}.spawned_from`, String(laundered.id));
+  ok('a child spawned FROM her thread is hers (lineage recurses)', focus.selfLineage(childOfOwn.id) === 'subc');
+  const beatParent = db.insertOpenThread({ content: 'VALIDATE the elected officials of every county in Kansas' });
+  db.setMeta(`focus.${beatParent.id}.beat`, 'county-commissions-ks');
+  const childOfBeat = db.insertOpenThread({ content: 'follow-up: the Sedgwick County commission roster' });
+  db.setMeta(`thread.${childOfBeat.id}.spawned_from`, String(beatParent.id));
+  ok('a child spawned from a BEAT thread is the sweep\'s (beat)', focus.selfLineage(childOfBeat.id) === 'beat');
+  const hisT = await focus.setFromDirective('study every right-of-center think tank');
+  const childOfHis = db.insertOpenThread({ content: 'follow-up: which think tanks publish energy modeling' });
+  db.setMeta(`thread.${childOfHis.id}.spawned_from`, String(hisT.focus.id));
+  ok('a child spawned from HIS thread stays his (no self lineage)', focus.selfLineage(childOfHis.id) === null && !focus.isSelfSpawned(childOfHis.id));
+  const cf = focus.setCurrent(childOfHis.id, { directed: true });
+  ok('…and pointing it yields DIRECTED (his word by lineage)', !!cf && focus.isDirected(cf) && !focus.isExpansion(cf));
+  // the pre-split legacy state on a self-spawned current focus reads expansion via the durable stamp
+  reset();
+  const legacySelf = db.insertOpenThread({ content: 'Investigate: the parlor 429 pattern' });
+  db.setMeta(`thread.${legacySelf.id}.spawned_from`, 'subc');
+  db.setMeta('current_focus_id', String(legacySelf.id));
+  db.setMeta('focus_state', JSON.stringify({ id: legacySelf.id, ticks: 3, strikes: 0, startedTs: Date.now(), directed: true }));
+  ok('a pre-split focus_state on a subconscious-born focus reads EXPANSION, not directed', focus.isExpansion(focus.getCurrent()) && !focus.isDirected(focus.getCurrent()));
 
   // --- THE LIVE WIRING: structural pins over main.js / lib/monologue.js — the sites that must key on the
   // RIGHT predicate (isDriven = mechanics; isDirected = his word). A regression here is the disease back. ---

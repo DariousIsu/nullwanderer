@@ -613,4 +613,18 @@ When defer is false, item/when may be empty and days 0.`,
   };
 }
 
-module.exports = { RESEARCH_RE, isResearchShaped, classifyThreadLane, buildLaneAsk, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, inheritedBaseDocId, priorSectionFor, priorOrgsIn, facetAppliesTo, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, SEQUENCED_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };
+// THE POOL SPLIT (cut 20, 2026-09-03): the driver's pool holds HIS asks and the threads her own subconscious
+// spawned (thread.<id>.spawned_from = 'subc' — lib/focus.selfLineage). The picker must never mistake hers
+// for his: measured 09-03, 39 self-spawned threads had been seeded as "HIS research thread" at user cadence.
+// `selfOf(id)` is the lineage test; pure, so the split is pinned. Returns { his, self }.
+function partitionPool(threads, { selfOf = () => false } = {}) {
+  const his = [], self = [];
+  for (const t of (Array.isArray(threads) ? threads : [])) {
+    if (!t) continue;
+    let mine = false; try { mine = !!selfOf(t.id); } catch { mine = false; }
+    (mine ? self : his).push(t);
+  }
+  return { his, self };
+}
+
+module.exports = { RESEARCH_RE, isResearchShaped, classifyThreadLane, buildLaneAsk, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, inheritedBaseDocId, priorSectionFor, priorOrgsIn, facetAppliesTo, parkDeliverable, scoreThread, pickUserThread, partitionPool, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, SEQUENCED_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };

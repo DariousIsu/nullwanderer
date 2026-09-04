@@ -1007,8 +1007,11 @@ app.whenReady().then(() => {
       const r = await promoteDocumentsPass({ limit: PROMOTE_DOCS_BATCH, timeBudgetMs: 90 * 1000 });
       if (r && !r.skipped && (r.promoted || r.failed || r.skippedJunk)) {
         const bl = db.promoteDocsBacklog();
+        // bl.errors are the BACKLOG's standing failure notes (every unpromoted row's last promote_error,
+        // whenever it was written) — not this tick's. Labelled so ("backlog notes"), because unlabelled it
+        // read as 92 fresh ingest failures on a tick that had 0 (boot_p278, cut 20).
         const top = (bl.errors || []).slice(0, 2).map((e) => `${e.error} ×${e.n}`).join(', ');
-        console.log(`[promote-docs] ${r.promoted} promoted · ${r.failed} failed${top ? ` (${top})` : ''}${r.skippedJunk ? ` · ${r.skippedJunk} junk` : ''}${r.budgetHit ? ' · budget hit' : ''} · backlog ${bl.pending} (${bl.eligible} eligible, ${bl.backingOff} backing off)`);
+        console.log(`[promote-docs] ${r.promoted} promoted · ${r.failed} failed${r.skippedJunk ? ` · ${r.skippedJunk} junk` : ''}${r.budgetHit ? ' · budget hit' : ''} · backlog ${bl.pending} (${bl.eligible} eligible, ${bl.backingOff} backing off)${top ? ` · backlog notes: ${top}` : ''}`);
       }
     } catch (e) { console.error('[promote-docs] tick failed:', e.message); }
     finally { _promoteDocsBusy = false; markActivity('idle'); }
@@ -17578,6 +17581,7 @@ async function _autonomicSchedulerTick() {
         const _resumableOf = (id) => {
           try {
             if (focus && focus.id === id) return false;
+            if (focusLib.isSelfSpawned(id)) return false;                       // her own lineage is never "his outstanding work" (cut 20)
             if ((db.getMeta(`focus.${id}.origin`) || '') !== 'user') return false;
             if (db.getMeta(`focus.${id}.stopped`)) return false;
             const t = _byId.get(id);
@@ -17588,6 +17592,11 @@ async function _autonomicSchedulerTick() {
         // else from the open set (the current focus, an orphaned wonder thread, a stranger's active row)
         // reaches the classifier or the pick.
         const threads = [..._byId.values()].filter((t) => (t.status === 'pending' && (t.action_count | 0) === 0) || _resumableOf(t.id));
+        // THE POOL SPLIT (cut 20, 2026-09-03): his asks vs the threads her own subconscious spawned
+        // (thread.<id>.spawned_from='subc'). Measured 09-03: 41 self-spawned threads, 39 seeded as "HIS
+        // research thread" at user cadence (#4210 was a tension read out of the engine's log). Hers run
+        // only in an EMPTY slot, as EXPANSION (idle-gated, yielding to his work) — never as his word.
+        const { his: _hisThreads, self: _selfThreads } = uw.partitionPool(threads, { selfOf: (id) => focusLib.isSelfSpawned(id) });
         // ── TYPED ROUTING (2026-08-14 worklist audit: 0 of 18 pending threads passed the
         // research-verb filter — the whole seed queue was undrainable, including deadline-carrying
         // deliverable asks). Stamp each unstamped thread's lane: regex fast-path is free; the
@@ -17641,28 +17650,36 @@ async function _autonomicSchedulerTick() {
         // EXPLICIT REDIRECT SEED (the user-redirect wire): a chat-registered pivot names the
         // next focus outright — it outranks the recency ordering ONCE, then clears. Any live
         // status qualifies (a redirect may re-promote an already-driven thread).
-        let cand = null;
+        let cand = null, _hisWord = false;
         try {
           const ns = parseInt(db.getMeta('user_work.next_seed') || '0', 10) || 0;
           if (ns) {
             db.setMeta('user_work.next_seed', '');
             const t = db.getOpenThread(ns);
             if (t && ['pending', 'active', 'stalled'].includes(t.status)) {
-              cand = t; console.log(`[user-work] redirect seed honored → thread #${t.id}`);
+              cand = t; _hisWord = true; console.log(`[user-work] redirect seed honored → thread #${t.id}`);   // his word: even one of her own threads becomes DIRECTED by it
               try { if (db.getMeta(`focus.${t.id}.stopped`)) db.setMeta(`focus.${t.id}.stopped`, ''); } catch {}   // his word re-opens a thread he had set down
             }
           }
         } catch {}
-        if (!cand) cand = uw.pickUserThread(threads, {
+        const _pickOpts = {
           now: Date.now(),
           newsAtOf: (id) => parseInt(db.getMeta(`thread.${id}.news_at`) || '0', 10) || 0,
           laneOf: (id) => { try { return db.getMeta(`thread.${id}.lane`) || null; } catch { return null; } },
           resumableOf: _resumableOf,
-        });
+        };
+        if (!cand) cand = uw.pickUserThread(_hisThreads, _pickOpts);
+        let _selfCand = false;
+        if (!cand && !focus && _selfThreads.length) {
+          // HER OWN investigation takes only an EMPTY slot: never over his work, never preempting a beat
+          // (both are expansion; the beat lane keeps its turn). Seeded below with origin 'subc' → expansion.
+          const sc = uw.pickUserThread(_selfThreads, { ..._pickOpts, resumableOf: () => false });
+          if (sc) { cand = sc; _selfCand = true; }
+        }
         if (cand) {
           if (_curBeatId) { try { focusLib.clear('user-work-preempt'); } catch {} console.log(`[user-work] sweep yields — ${_curBeatId} paused for his thread #${cand.id}`); }
           if (_resumableOf(cand.id)) console.log(`[user-work] RESUMED his outstanding thread #${cand.id} (was his focus; unpointed since ${new Date(cand.last_touched_ts || 0).toISOString().slice(0, 16)}Z) — "${String(cand.content).replace(/\s+/g, ' ').slice(0, 70)}"`);
-          let f = null; try { f = focusLib.setCurrent(cand.id, { directed: true }); } catch {}
+          let f = null; try { f = focusLib.setCurrent(cand.id, { directed: true, origin: _selfCand ? 'subc' : (_hisWord ? 'user' : null) }); } catch {}
           // THE LIVING DOCUMENT: if a landed research doc already covers this topic, the run
           // CONTINUES it — the doc rides every synthesis as "what we already concluded" and the
           // deliverable header names its lineage. Compounding depth, not restarting.
@@ -17812,7 +17829,8 @@ async function _autonomicSchedulerTick() {
             } catch (e) { console.error('[contract] canvas emit failed (user-work seed):', e.message); }
           }
           kickDirectedFocusDriver();
-          console.log(`[user-work] seeded HIS research thread #${cand.id} at user cadence — "${String(cand.content).slice(0, 70)}"`);
+          if (_selfCand) console.log(`[user-work] seeded HER OWN research thread #${cand.id} as EXPANSION (subconscious-born; idle-gated, yields to his work) — "${String(cand.content).slice(0, 70)}"`);
+          else console.log(`[user-work] seeded HIS research thread #${cand.id} at user cadence — "${String(cand.content).slice(0, 70)}"`);
           _saveSchedState(state);
           return;
         }
