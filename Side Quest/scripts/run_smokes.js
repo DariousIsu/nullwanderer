@@ -621,6 +621,9 @@ const smokes = [
   // THE ORPHANED TURN (cut 24, 09-04): a message of his that the previous generation died on is found
   // at boot (lib/orphan_turn) and served through the one chat door — the same row, its own session.
   'smoke_orphan_turn.js',
+  // THE TRIGGER-TO-TIER LAW (stage 4.5 item 2, 09-04): one table both runtimes read (GET /tiers), the usage
+  // law's tiers by trigger kind; his master-skill dispatcher (P5) folded in as data.
+  'smoke_tier_law.js',
   // Run-4 collision guard: the test port tells the REAL user from its own injected turns; a recent
   // or unanswered real turn owns the pipeline (10min / 30min-capped) and the harness yields.
   'smoke_test_port_guard.js',

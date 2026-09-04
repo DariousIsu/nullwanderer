@@ -211,6 +211,12 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
         const v = require('./quota_gate').peek(lane);
         return send(200, { ok: true, ...v, at: Date.now() });
       }
+      // ── THE TRIGGER-TO-TIER LAW's read door (stage 4.5 item 2, 09-04): GET /tiers → the one table
+      // (trigger kind → tier, the four tiers, the expansion pair) both runtimes read. Echo's governor
+      // maps a run's trigger kind through it instead of carrying a second copy that drifts.
+      if (req.method === 'GET' && req.url.startsWith('/tiers')) {
+        return send(200, { ok: true, ...require('./tier_law').table(), at: Date.now() });
+      }
       // ── THE PARLOR doors (09-01): outside seats post attributed turns; zoe's seat posts only
       // from inside the process (a port caller may not speak AS her). Loopback-only server.
       if (req.method === 'POST' && req.url === '/parlor/say') {
