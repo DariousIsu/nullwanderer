@@ -46,7 +46,7 @@ One contradiction must clear before principle 2 can run. Her autonomous loop is 
 | 22 | Security and permissions | echo tier policy, content firewall | enforcement, os permissions | One tier policy and one firewall | Tools row | Partial |
 | 23 | Data lanes and ingest | news lane, puller, api stream, feeds, decomposition sweep | ingestion, refresh sources, extraction, pipelines, corpora | One ingest registry on the expansion tier | Organs row | Partial |
 | 24 | Verification and citation | anti-fabrication gate, corroboration, substantiation | verification, citation packs, cite floor | One substantiation grade; unknown never vouches on either side | Verification row, new | Partial |
-| 25 | Repo, gate and pen | one repo, 603 smokes, pen jail | one mirror, pytest, no pen | Stage 5 | 5 | Not started |
+| 25 | Repo, gate and pen | one repo, 603 smokes, pen jail | one mirror, pytest, no pen | TWO RUNTIMES KEPT; ONE gate + ONE pen (Lucas 09-04); repo stays split — revisit ~09-11 after the build ships + field-tests | 5 | Decided 09-04, build pending |
 | 26 | Name and vocabulary | Zoe | Saga, Skuld, Rainey, tenant | One name, one operator record, one seat prompt | 6 | Not started |
 
 Rows 9 and 10 are the answer to the question that produced this map: there was no plan for the agents or the swarms. Rows 6, 8, 11, 15, 17, 18, 19, 20, 23 and 24 were likewise not stages. Every one of them now is.
