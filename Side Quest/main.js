@@ -1336,6 +1336,46 @@ app.whenReady().then(() => {
   };
   setInterval(() => { maybeRunEventAging().catch(() => {}); }, AGING_CHECK_MS).unref?.();
   setTimeout(() => { maybeRunEventAging().catch(() => {}); }, 120000).unref?.();   // catch-up kick ~2min after boot
+  // ── LEG B — THE TRAJECTORY-MINING ORGAN (merge map trajectory row / harness-eval §3 borrow 2, 2026-09-04):
+  // a nightly pass mines the RUN LEDGER (lib/db.js `runs`, built stage 4.5 C) for recurring failure classes —
+  // RHO's recipe over the substrate we already keep. It records the ranked brief (read at GET /trajectory and
+  // by the status vector) and, for a class that RECURS across the window, mints a capability_need on the SAME
+  // open→rehearse→proposal-card→Lucas pipeline self_watch's log-anomaly needs ride (a proposal for him, never
+  // a landed change). self_watch mines the log stream; this mines the ledger — its own `trajectory:` born_from
+  // and its own open-need cap keep the two from colliding. Cheap + LOCAL (SELECTs over an indexed table, no
+  // Echo, no model), so it is not gated on the attach; the fuller land-through-leg-A / queue-to-the-pen (leg D)
+  // paths wait on those legs. Kill switch: ZOE_TRAJECTORY_MINE=0.
+  const TRAJ_CHECK_MS = (parseFloat(process.env.ZOE_TRAJECTORY_CHECK_MIN) || 60) * 60 * 1000;   // how often we POLL
+  const TRAJ_MINE_MS = (parseFloat(process.env.ZOE_TRAJECTORY_MINE_MIN) || 1440) * 60 * 1000;   // at most once a day
+  const TRAJ_MAX_NEEDS = Math.max(0, parseInt(process.env.ZOE_TRAJECTORY_MAX_NEEDS || '2', 10)); // trajectory-born open cap
+  let trajRunning = false;
+  const maybeMineTrajectory = async () => {
+    if (/^(0|false|no|off)$/i.test(String(process.env.ZOE_TRAJECTORY_MINE || '').trim())) return;   // kill switch
+    if (trajRunning) return;
+    if (Date.now() - parseInt(db.getMeta('last_trajectory_mine_at') || '0', 10) < TRAJ_MINE_MS) return;
+    trajRunning = true; markActivity('trajectory-mine');   // stall-attrib (diagnostic)
+    db.setMeta('last_trajectory_mine_at', String(Date.now()));
+    try {
+      const tm = require('./lib/trajectory_mine');
+      const m = tm.mine({ now: Date.now() });
+      const b = tm.brief({ now: Date.now(), mined: m });
+      try { db.setMeta('trajectory.last_brief', JSON.stringify({ ts: Date.now(), ...b })); } catch {}
+      console.log(`[trajectory] mined ${b.totals.runs} terminal run(s) over ${b.window.days}d: ${b.totals.failed} failed, ${b.classes.length} class(es), ${b.recurring} recurring; top=${b.classes[0] ? `"${b.classes[0].sig}" ${b.classes[0].count}x` : 'none'}`);
+      if (TRAJ_MAX_NEEDS > 0 && b.recurring > 0) {
+        const cn = require('./lib/capability_need');
+        let open = cn.listOpen().filter((r) => String(r.born_from || '').startsWith('trajectory')).length;
+        for (const c of m.classes) {
+          if (open >= TRAJ_MAX_NEEDS) break;
+          if (!c.recurring) continue;
+          const r = cn.record(`I need a fix for ${tm.needText(c)}`, { bornFrom: tm.needBornFrom(c), similarFloor: 0.8 });
+          if (r.id != null && !r.deduped) { open++; console.log(`[trajectory] recurring failure class -> need #${r.id}: ${tm.retestHint(c)}`); }
+        }
+      }
+    } catch (e) { console.error('[trajectory] mining pass failed:', e.message); }
+    finally { markActivity('idle'); trajRunning = false; }
+  };
+  setInterval(() => { maybeMineTrajectory().catch(() => {}); }, TRAJ_CHECK_MS).unref?.();
+  setTimeout(() => { maybeMineTrajectory().catch(() => {}); }, 180000).unref?.();   // catch-up kick ~3min after boot
   // F2 GATE-LESS GROUNDED AUTO-PROMOTE LANE — the landing gap closed. Staged proposals used to sit
   // unpromoted (operator-gated); this drains the GROUNDED promote-band (calibrated conf >= floor + a real
   // citation) into civic_graph autonomously, in bounded chunks until the queue empties. Every promotion is

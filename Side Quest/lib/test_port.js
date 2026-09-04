@@ -223,6 +223,15 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
       if (req.method === 'GET' && req.url.startsWith('/roles')) {
         return send(200, { ok: true, ...require('./role_registry').table(), at: Date.now() });
       }
+      // ── LEG B — THE TRAJECTORY-MINING ORGAN's read door (2026-09-04): GET /trajectory[?days=N] → the
+      // ranked recurring-failure-class brief the nightly organ mines from the run ledger. The observable
+      // half of "retest the kind": what keeps failing, by class, with a retest hint on each. Read-only.
+      if (req.method === 'GET' && req.url.startsWith('/trajectory')) {
+        const u = new URL(req.url, 'http://x');
+        const tm = require('./trajectory_mine');
+        const days = Math.max(1, Math.min(90, parseFloat(u.searchParams.get('days')) || tm.DEFAULT_WINDOW_DAYS));
+        return send(200, { ok: true, ...tm.brief({ windowDays: days }), at: Date.now() });
+      }
       // ── THE PARLOR doors (09-01): outside seats post attributed turns; zoe's seat posts only
       // from inside the process (a port caller may not speak AS her). Loopback-only server.
       if (req.method === 'POST' && req.url === '/parlor/say') {
