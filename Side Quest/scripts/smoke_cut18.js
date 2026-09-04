@@ -189,6 +189,22 @@ const src = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
   ok(ds.candidatePool(db, { now: Date.now() }).mode === 'incremental', 'and the tick after that is incremental again');
   ok(!/findUndecomposed\(db, \{ limit, chars: false \}\)/.test(src('lib/decompose_sweep.js')) || /_poolWalkAsync\(db, pool, \{ limit \}\)/.test(src('lib/decompose_sweep.js')), 'the full walk path goes through _poolWalkAsync first');
 
+  // ── 11. cut 19: the CRM door's surname expression is the one Echo indexes (character for character) ──
+  console.log('\ncut 19 — the CRM door\'s findByBlock expression index:');
+  {
+    const doorSrc = src('lib/crm_door.js');
+    const m = doorSrc.match(/const lastNorm = "([^"]+)"/);
+    ok(!!m, 'crm_door declares its normalized-surname expression as one string constant (lastNorm)');
+    const echoSchema = path.join(process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo', 'echo', 'crm_schema.py');
+    if (m && fs.existsSync(echoSchema)) {
+      const sch = fs.readFileSync(echoSchema, 'utf8');
+      const want = m[1].replace('c.LastName', 'LastName');
+      ok(sch.includes(`idx_contact_lastname_norm ON contact(${want})`), '⭐ Echo\'s idx_contact_lastname_norm carries the door\'s expression exactly (a drift on either side silently disables the index)');
+    } else {
+      ok(true, '(Echo repo not on this machine — the expression pin is Echo-side: tests/test_crm_lastname_norm_index_19.py)');
+    }
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   try { pdb.close && pdb.close(); } catch {}
   try { db.getDb().close(); } catch {}
