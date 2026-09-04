@@ -178,7 +178,15 @@ const src = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
   const after = JSON.parse(db.getMeta(ds.POOL_KEY));
   ok(Array.isArray(after.rows) && !after.rows.some((r) => r.id === 999) && after.rows.length === 4 && after.maxId === idOf(d4), `the landed pool holds the store's truth (${after.rows.length} candidates, maxId ${after.maxId})`);
   const second = ds.candidatePool(db, { now: Date.now() });
-  ok(second.mode === 'incremental' && second.rows.length === 4, 'the next tick is incremental over the landed pool');
+  ok(second.mode === 'incremental' && second.rows.length === 4, 'the next tick is incremental over the landed pool (nothing new: no walk)');
+  // the INCREMENTAL walk in the worker too (p275's first tick paid 9.5s on the main thread for it)
+  const d5 = db.insertDocument({ title: 'Epsilon landed later', body: 'a fresh body that has never been read', source: 'smoke' });
+  const third = ds.candidatePool(db, { now: Date.now() });
+  ok(third.mode === 'stale' && third.rows.length === 4, `new documents since the pool's high-water mark → the pool in hand is served while the worker walks (mode ${third.mode})`);
+  await ds.poolRefreshPromise();
+  const grown = JSON.parse(db.getMeta(ds.POOL_KEY));
+  ok(grown.rows.some((r) => r.id === idOf(d5)) && grown.rows.length === 5 && grown.maxId === idOf(d5), `the landed walk EXTENDS the pool (+1 → ${grown.rows.length}, maxId ${grown.maxId})`);
+  ok(ds.candidatePool(db, { now: Date.now() }).mode === 'incremental', 'and the tick after that is incremental again');
   ok(!/findUndecomposed\(db, \{ limit, chars: false \}\)/.test(src('lib/decompose_sweep.js')) || /_poolWalkAsync\(db, pool, \{ limit \}\)/.test(src('lib/decompose_sweep.js')), 'the full walk path goes through _poolWalkAsync first');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

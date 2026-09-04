@@ -203,12 +203,12 @@ function _stillUnread(db, id) {
 // One walk in flight at a time; a failed walk keeps the pool it had and logs once.
 let _poolRefresh = null;
 function poolRefreshPromise() { return _poolRefresh; }
-function _poolWalkAsync(db, pool, { limit = POOL_LIMIT } = {}) {
+function _poolWalkAsync(db, pool, { limit = POOL_LIMIT, sinceId = 0, incremental = false } = {}) {
   const dbPath = db.DB_PATH;
   if (!dbPath || dbPath === ':memory:') return false;
   if (_poolRefresh) return true;
   let q;
-  try { q = _undecomposedQuery(db, { limit, chars: false }); } catch { return false; }
+  try { q = _undecomposedQuery(db, { limit, sinceId, chars: false }); } catch { return false; }
   const worker = require('./db_worker');
   _poolRefresh = worker.query(dbPath, q.sql, q.args, { limit: limit + 10, timeoutMs: 180000 })
     .then(async (found) => {
@@ -220,9 +220,19 @@ function _poolWalkAsync(db, pool, { limit = POOL_LIMIT } = {}) {
         const lr = await worker.query(dbPath, 'SELECT id, LENGTH(body) AS chars FROM documents WHERE id IN (SELECT value FROM json_each(?))', [JSON.stringify(need)], { limit: need.length + 10, timeoutMs: 180000 });
         for (const r of lr || []) lengths.set(Number(r.id), Number(r.chars) || 0);
       }
-      const rows = found.map((r) => known.get(Number(r.id)) || { ...r, chars: lengths.get(Number(r.id)) || 0 }).filter((r) => r.chars > 0);
-      _savePool(db, { at: Date.now(), maxId: _maxDocId(db), full: found.length >= limit, rows });
-      console.log(`[decomp-sweep] pool refreshed off the main thread — ${rows.length} candidate(s)${need.length ? `, ${need.length} newly measured` : ''}`);
+      const measured = found.map((r) => known.get(Number(r.id)) || { ...r, chars: lengths.get(Number(r.id)) || 0 }).filter((r) => r.chars > 0);
+      if (incremental) {
+        // the new candidates JOIN the pool in hand; its clock and its full flag stay as they were
+        const rows = (pool.rows || []).slice();
+        const have = new Set(rows.map((r) => Number(r.id)));
+        let added = 0;
+        for (const r of measured) if (!have.has(Number(r.id))) { rows.push(r); added++; }
+        _savePool(db, { ...pool, maxId: _maxDocId(db), rows });
+        console.log(`[decomp-sweep] pool extended off the main thread — +${added} candidate(s) (${rows.length} now)`);
+      } else {
+        _savePool(db, { at: Date.now(), maxId: _maxDocId(db), full: found.length >= limit, rows: measured });
+        console.log(`[decomp-sweep] pool refreshed off the main thread — ${measured.length} candidate(s)${need.length ? `, ${need.length} newly measured` : ''}`);
+      }
     })
     .catch((e) => { try { console.error('[decomp-sweep] pool refresh failed (the pool in hand is kept):', e && e.message); } catch {} })
     .finally(() => { _poolRefresh = null; });
@@ -261,6 +271,10 @@ function candidatePool(db, { now = Date.now(), fullTtlMs = POOL_FULL_TTL_MS, lim
   }
   let fresh = 0;
   if (maxId > pool.maxId) {
+    // The INCREMENTAL walk off the main thread too (cut 18 residue, p275's first tick: 9.5s — the
+    // rows landed since the last save carry their bodies, and LENGTH(body) over a boot's worth of
+    // them is seconds). The pool in hand is served; the new candidates join it when the worker lands.
+    if (_poolWalkAsync(db, pool, { limit, sinceId: pool.maxId, incremental: true })) return { rows: pool.rows, mode: 'stale', fresh: 0 };
     const add = findUndecomposed(db, { limit, sinceId: pool.maxId });
     const have = new Set(pool.rows.map((r) => Number(r.id)));
     const rows = pool.rows.slice();
