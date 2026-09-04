@@ -120,8 +120,11 @@ function outline(fragments, { max = 10 } = {}) {
   return picked.length >= 3 ? picked : DEFAULT_SECTIONS;
 }
 
-function sectionPrompt({ goal, heading, material, sources, covered = [] }) {
+function sectionPrompt({ goal, heading, material, sources, covered = [], corrections = '' }) {
   const srcList = sources.map((s) => `[${s.n}] ${s.title ? s.title + ' — ' : ''}${s.url}`).join('\n');
+  // THE ADVERSARIAL RE-RUN (stage 4.5, 2026-09-04): on a challenger revision, its corrections fold
+  // into every section's prompt so the re-write addresses them (lib/challenge_gate.corrections).
+  const corrBlock = corrections ? `\nADVERSARIAL REVIEWER'S CORRECTIONS — address these in this re-write:\n${corrections}\n` : '';
   // SECTION-OVERLAP CURE (2026-08-14, Block 3): the first accepted paper repeated the same
   // CoreWeave/financing facts across sections because each write was blind to the others. The
   // loop is sequential, so each section sees a digest of what is ALREADY ON THE PAGE.
@@ -133,6 +136,7 @@ function sectionPrompt({ goal, heading, material, sources, covered = [] }) {
     + `SECTION: "${heading}"\n\n`
     + `THE NUMBERED SOURCE LIST (the ONLY citable sources):\n${srcList}\n\n`
     + coveredBlock
+    + corrBlock
     + `THE GATHERED MATERIAL (the ONLY facts you may use):\n${material.slice(0, 24000)}\n\n`
     + `Write the section now, 250-450 words, polished prose (no bullet dumps unless the content is a list by nature). `
     + `EVERY factual claim that traces to a source carries an inline citation like [3] using ONLY numbers from the list above. `
@@ -156,7 +160,7 @@ function assemble({ title, goal, sections, sources, dateStr }) {
  * finalize({topic, title, goal, tokens, write, dir, outDir}) → { ok, path, sections, sourceCount }
  * `write(prompt)` is the injected model pass (async → section body text). ONE canonical output file.
  */
-async function finalize({ topic, title, goal, tokens, exclude, write, frozenOutline = null, dir = NOTES_DIR, outDir = NOTES_DIR, land = true } = {}) {
+async function finalize({ topic, title, goal, tokens, exclude, write, frozenOutline = null, dir = NOTES_DIR, outDir = NOTES_DIR, land = true, challenge = null, maxIterations = 3 } = {}) {
   const toks = tokens && tokens.length ? tokens : _norm(topic).split(' ').filter(Boolean);
   const fragments = await gatherFragmentsAsync({ tokens: toks, exclude, dir });
   if (!fragments.length) return { ok: false, reason: `no fragments for "${topic}"` };
@@ -165,27 +169,45 @@ async function finalize({ topic, title, goal, tokens, exclude, write, frozenOutl
   // locks at the first finalize and scope can never grow across re-runs.
   const heads = (Array.isArray(frozenOutline) && frozenOutline.length >= 2) ? frozenOutline : outline(fragments);
   const material = fragments.map((f) => `--- from ${f.file} ---\n${f.text}`).join('\n\n');
-  const sections = [];
+  const docTitle = title || `${topic} — Research Paper`;
   // CoT-REJECT (2026-08-13, first live run): a reasoning model that returns EMPTY content gets its
   // chain-of-thought salvaged by the ollama lib — "We need to write the section…" landed as body
   // text. Deliberation about the task is never the paper; reject it and let the section drop
   // (an honest thin paper beats a poisoned one; the caller sees the section count).
   const COT_RE = /^\s*(?:We (?:need|must|should|have to)|Let'?s|The (?:instruction|user|task) (?:says|asks|wants))\b|\bthe numbered source list\b/i;
-  for (const heading of heads) {
-    const covered = sections.map((s) => ({ heading: s.heading, gist: s.body.trim().replace(/\s+/g, ' ').slice(0, 220) }));
-    let body = '';
-    try { body = String(await write(sectionPrompt({ goal: goal || topic, heading, material, sources, covered })) || ''); } catch {}
-    if (COT_RE.test(body)) { body = ''; }
-    if (body.trim().length > 80) sections.push({ heading, body });
+  // PRODUCE: write every section and assemble the document. `corrText` is null on the first pass and
+  // the adversarial reviewer's corrections on a re-run (stage 4.5). The outline stays frozen either way.
+  async function produce(corrText) {
+    const sections = [];
+    for (const heading of heads) {
+      const covered = sections.map((s) => ({ heading: s.heading, gist: s.body.trim().replace(/\s+/g, ' ').slice(0, 220) }));
+      let body = '';
+      try { body = String(await write(sectionPrompt({ goal: goal || topic, heading, material, sources, covered, corrections: corrText || '' })) || ''); } catch {}
+      if (COT_RE.test(body)) { body = ''; }
+      if (body.trim().length > 80) sections.push({ heading, body });
+    }
+    return { output: assemble({ title: docTitle, goal: goal || topic, sections, sources }), sections };
   }
-  if (sections.length < 2) return { ok: false, reason: `only ${sections.length} section(s) produced` };
-  const docTitle = title || `${topic} — Research Paper`;
-  const doc = assemble({ title: docTitle, goal: goal || topic, sections, sources });
+
+  let doc, sectionCount, gate = null;
+  if (typeof challenge === 'function') {
+    // THE ADVERSARIAL STEP (stage 4.5): the assembled deliverable ends in the challenger — a different
+    // model family — which approves, requests a bounded re-run, or passes with caveats (lib/challenge_gate).
+    const cg = require('./challenge_gate');
+    const r = await cg.runGate({ task: goal || topic, produce, challenge, maxIterations });
+    if (!r.produced || (r.produced.sections || []).length < 2) return { ok: false, reason: `only ${(r.produced && (r.produced.sections || []).length) || 0} section(s) produced` };
+    doc = r.output; sectionCount = r.produced.sections.length;
+    gate = { outcome: r.outcome, iterations: r.iterations, score: r.verdict ? r.verdict.score : null, label: r.verdict ? cg.label(r.verdict.score) : null, corrections: r.verdict ? (r.verdict.correction_notes || []).length : 0 };
+  } else {
+    const p = await produce(null);
+    if ((p.sections || []).length < 2) return { ok: false, reason: `only ${(p.sections || []).length} section(s) produced` };
+    doc = p.output; sectionCount = p.sections.length;
+  }
   const slug = _norm(topic).replace(/\s+/g, '_').slice(0, 60) || 'paper';
   const outPath = path.join(outDir, `${slug}_FINAL.md`);
   fs.writeFileSync(outPath, doc, 'utf8');   // ONE canonical file — overwrites, never siblings
   if (land) { try { require('./doc_store').land({ title: docTitle, body: doc, source: 'paper_finalize', ref: outPath }); } catch {} }
-  return { ok: true, path: outPath, sections: sections.length, sourceCount: sources.length, fragments: fragments.length, outline: heads, fragmentStats: fragments.map((f) => ({ file: f.file, len: f.text.length })) };
+  return { ok: true, path: outPath, sections: sectionCount, sourceCount: sources.length, fragments: fragments.length, outline: heads, gate, fragmentStats: fragments.map((f) => ({ file: f.file, len: f.text.length })) };
 }
 
 // A FINISHED PAPER RESOLVES ITS OWN ORDER-THREADS (Block 3, 2026-08-14). Measured: stale

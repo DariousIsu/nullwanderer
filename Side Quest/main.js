@@ -7431,7 +7431,33 @@ async function runPaperFinalize({ sessionId, topic, focusId }) {
     try { const f = require('./lib/focus').getCurrent(); return f && f.id; } catch { return null; }
   })();
   const _contract = fid != null ? dcLib.get(fid) : null;
-  const r = await pf.finalize({ topic, goal: `A complete, sourced research paper on ${topic}.`, write, exclude, frozenOutline: _contract && _contract.outline });
+  // THE ADVERSARIAL STEP (stage 4.5, 2026-09-04): the assembled paper ends in the challenger — a
+  // different model family (the registry's challenger role, qwen3.5) — which approves, requests a
+  // bounded re-run, or passes with caveats. A BLOCKING spawn: finalize needs the verdict inline. Off
+  // by default (kill switch meta swarm.challenge_deliverables=0); absent when the engine is down or
+  // the role is missing (finalize then behaves exactly as before — auto-approve by absence). Each
+  // challenge is a run in the ledger, keyed on the engine run id, billed on the deliverable's lane.
+  const _challengeOn = (() => { try { return (db.getMeta('swarm.challenge_deliverables') || '1').trim() !== '0'; } catch { return true; } })();
+  const _challengerAvailable = _challengeOn && echoSuit && echoSuit.connected
+    && (() => { try { return require('./lib/role_registry').byName('challenger'); } catch { return false; } })();
+  const challenge = _challengerAvailable ? async (output, task) => {
+    const prompt = `Original task:\n${String(task || topic)}\n\nGenerated response (review it adversarially, then return ONLY the verdict JSON):\n${String(output || '').slice(0, 12000)}`;
+    let text = null, echoRunId = null;
+    try {
+      const res = await require('./lib/lane').run({ autonomous: false, spendTier: 'directed' }, () =>
+        echoSuit.dispatch({ kind: 'do', name: 'spawn_agent', args: { name: 'challenger', prompt, lane: 'directed' } }, { autonomous: false }));
+      text = require('./lib/review_fanout').parseRunOutput(res && res.text) || (res && res.text) || null;
+      echoRunId = require('./lib/review_fanout').parseRunId(res && res.text);
+    } catch (e) { console.error('[paper] challenger dispatch failed:', e && e.message); return null; }
+    try {
+      const L = require('./lib/run_ledger');
+      const rid = L.start({ role: 'challenger', executor: 'echo', trigger_kind: 'directed', lane: 'directed', echo_run_id: echoRunId, state: 'succeeded', input_preview: `challenge: ${String(topic).slice(0, 120)}` });
+      L.finish(rid, { state: 'succeeded', output: text });
+    } catch {}
+    return text;
+  } : null;
+  const r = await pf.finalize({ topic, goal: `A complete, sourced research paper on ${topic}.`, write, exclude, frozenOutline: _contract && _contract.outline, challenge });
+  if (r && r.gate) console.log(`[paper] adversarial gate: ${r.gate.outcome} after ${r.gate.iterations} iteration(s)${r.gate.score != null ? ` (score ${r.gate.score}, ${r.gate.label})` : ''}${r.gate.corrections ? `, ${r.gate.corrections} correction(s) folded` : ''}`);
   const _say = (msg) => {
     try {
       const row = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'delivery', unprompted: 1 });
@@ -7486,7 +7512,12 @@ async function runPaperFinalize({ sessionId, topic, focusId }) {
   const _citeClause = r.sourceCount > 0
     ? `${r.sections} sections, ${r.sourceCount} sources, every inline citation resolving in the source list`
     : `${r.sections} sections, synthesized from held material (no external sources cited)`;
-  _say(`It's done — the finished paper on "${_paperTitle}" is on your canvas now${docxPath ? ' (styled .docx saved beside the canonical file)' : ''}: ${_citeClause}.`);
+  // THE ADVERSARIAL VERDICT, said out loud (stage 4.5): a paper that passed with caveats says so —
+  // an honest deliverable never claims a clean bill the challenger withheld.
+  const _gateClause = (r.gate && r.gate.outcome === 'passed_with_caveats')
+    ? ` The adversarial reviewer still had ${r.gate.corrections || 'open'} note(s) after ${r.gate.iterations} passes, so it's landed with caveats rather than held — worth a look before it goes out.`
+    : (r.gate && r.gate.outcome === 'approved') ? ` It cleared an adversarial review${r.gate.label ? ` (${r.gate.label})` : ''}.` : '';
+  _say(`It's done — the finished paper on "${_paperTitle}" is on your canvas now${docxPath ? ' (styled .docx saved beside the canonical file)' : ''}: ${_citeClause}.${_gateClause}`);
 }
 
 async function canvasUpsertBlock({ focusId, blockId, title, tabMode = 'DOC', blockType = 'paragraph', data }) {
