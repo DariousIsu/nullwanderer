@@ -629,6 +629,7 @@ const smokes = [
   'smoke_run_ledger.js',
   'smoke_partition_executors.js',
   'smoke_challenge_gate.js',
+  'smoke_markers.js',
   // Run-4 collision guard: the test port tells the REAL user from its own injected turns; a recent
   // or unanswered real turn owns the pipeline (10min / 30min-capped) and the harness yields.
   'smoke_test_port_guard.js',

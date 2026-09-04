@@ -48,4 +48,27 @@ function foldFound({ output = '', targets = [] } = {}) {
   return { covered, found, notFound, sources, unmatched };
 }
 
-module.exports = { foldFound };
+/**
+ * foldResult({ output, targets }) → the marker-contract fold (stage 4.5). Composes foldFound (FOUND
+ * lines) with the marker contract (lib/markers.parseResult): coverage is the UNION of FOUND-line
+ * targets and `target:<name>` markers, and the non-target markers (document/entity/url/…) are the
+ * ADDRESSES the assembler and challenger read by, kept alongside — never the raw text. Backward
+ * compatible: a partition that returned only FOUND lines yields the same coverage foldFound gives.
+ */
+function foldResult({ output = '', targets = [] } = {}) {
+  const M = require('./markers');
+  const base = foldFound({ output, targets });
+  const parsed = M.parseResult(output);
+  const covered = base.covered.slice();
+  for (const mk of parsed.markers) {
+    if (mk.type !== 'target') continue;
+    const hit = (targets || []).find((t) => targetIsCovered([mk.ref], t) || targetIsCovered([`${mk.ref} ${mk.summary}`.slice(0, 60)], t));
+    if (hit && !covered.includes(hit)) covered.push(hit);
+  }
+  const addressMarkers = parsed.markers.filter((m) => m.type !== 'target');
+  const sources = Array.from(new Set([...base.sources, ...parsed.sources]));
+  return { covered, markers: parsed.markers, addressMarkers, summary: parsed.summary, content: parsed.content,
+           found: base.found, notFound: base.notFound, sources, unmatched: base.unmatched };
+}
+
+module.exports = { foldFound, foldResult };

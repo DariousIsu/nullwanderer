@@ -11,7 +11,7 @@
 
 const rf = require('./review_fanout');
 const { brief } = require('./executor_pick');
-const { foldFound } = require('./partition_fold');
+const { foldResult } = require('./partition_fold');
 
 /**
  * Dispatch ONE partition to an engine role: spawn_agent_async(name=role, prompt=brief, lane=the parent's
@@ -69,7 +69,11 @@ async function closeEchoRuns({ deps = {} } = {}) {
 function foldEchoPartition({ part, run, coveredKey, getMeta, setMeta, log = () => {} } = {}) {
   if (!part || !run) return { ok: false, why: 'no part/run' };
   if (run.state !== 'succeeded') return { ok: true, covered: 0, state: run.state };
-  const f = foldFound({ output: run.output || '', targets: part.targets || [] });
+  // THE MARKER CONTRACT (stage 4.5): foldResult unions FOUND-line coverage with `target:` markers and
+  // pulls the ADDRESS markers (document/entity/url/…) the partition stored — the assembler reads those
+  // by address, never the raw text. The addresses ride the part record for the assembler to resolve.
+  const f = foldResult({ output: run.output || '', targets: part.targets || [] });
+  if (part && f.addressMarkers.length) part.markers = f.addressMarkers;
   let added = 0;
   if (coveredKey && f.covered.length) {
     let covered = [];
@@ -78,8 +82,8 @@ function foldEchoPartition({ part, run, coveredKey, getMeta, setMeta, log = () =
     for (const t of f.covered) if (!seen.has(String(t).toLowerCase())) { covered.push(t); seen.add(String(t).toLowerCase()); added++; }
     if (added) { try { setMeta(coveredKey, JSON.stringify(covered)); } catch {} }
   }
-  log(`[swarm-executor] partition ${part.role} folded: ${f.covered.length} of ${(part.targets || []).length} target(s) established (${added} newly covered), ${f.notFound.length} not found, ${f.sources.length} source(s)`);
-  return { ok: true, covered: f.covered.length, added, notFound: f.notFound.length, sources: f.sources.length, unmatched: f.unmatched.length };
+  log(`[swarm-executor] partition ${part.role} folded: ${f.covered.length} of ${(part.targets || []).length} target(s) established (${added} newly covered), ${f.addressMarkers.length} marker(s), ${f.notFound.length} not found, ${f.sources.length} source(s)`);
+  return { ok: true, covered: f.covered.length, added, markers: f.addressMarkers.length, notFound: f.notFound.length, sources: f.sources.length, unmatched: f.unmatched.length };
 }
 
 module.exports = { dispatchEchoPartition, closeEchoRuns, foldEchoPartition };

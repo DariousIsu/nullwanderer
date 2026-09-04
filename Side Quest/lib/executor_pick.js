@@ -53,11 +53,29 @@ function pick({ beat = null, plan = null, targets = [], roles = [], policy = 'mi
   return { executor: 'sq', role: 'swarm-worker', why: 'web research (a roster validated against the web, or a topic) — this side\'s worker' };
 }
 
-/** The brief an engine-executed partition receives: the goal, its targets, and the shape the fold reads. */
-function brief({ goal = '', targets = [], index = 1, of = 1, facets = null } = {}) {
+/**
+ * The brief an engine-executed partition receives: the goal, its targets, and the shape the fold reads.
+ * `markers` (stage 4.5, the sub-agent result contract): when true, the partition also returns MARKERS —
+ * pointers to what it STORED (a document id, an entity id, a covered target, a url), so the assembler
+ * reads its findings by address rather than carrying the raw text (lib/markers). A `target:<name>`
+ * marker doubles as the coverage signal, so the fold reads coverage from FOUND lines AND from markers.
+ */
+function brief({ goal = '', targets = [], index = 1, of = 1, facets = null, markers = false } = {}) {
   const list = (targets || []).map((t, i) => `${i + 1}. ${t}`).join('\n');
   const fac = Array.isArray(facets) && facets.length ? `\nFacets to establish for each target: ${facets.join('; ')}.` : '';
-  return `${String(goal || '').trim()}\n\nThis is partition ${index}/${of} of a swarm. Your targets — establish each one, in order:\n${list}${fac}\n\n`
+  const head = `${String(goal || '').trim()}\n\nThis is partition ${index}/${of} of a swarm. Your targets — establish each one, in order:\n${list}${fac}\n\n`;
+  if (markers) {
+    return head
+      + 'Your reply IS the return value and MUST be COMPACT — store your raw findings in the stores you use '
+      + '(documents, entities, facts, notes, sources); the reply carries only POINTERS. End in this exact shape:\n'
+      + 'SUMMARY: <one line — what the partition established>\n'
+      + 'CONTENT: <the compact findings, no raw pastes>\n'
+      + 'MARKERS: <one per line; for EACH target you established a "target:<the target name exactly as listed> — <what you found>" marker, '
+      + 'plus "document:<id>" / "entity:<id>" / "url:<url>" markers pointing at what you stored>\n'
+      + 'NOT FOUND: <the targets you could not establish, each starting with its name as listed>\n'
+      + 'SOURCES: <the urls/records behind the found items>';
+  }
+  return head
     + 'Your final reply IS the return value — not a message to anyone. End with a compact summary in this shape: '
     + 'FOUND: <one line per target you established, each STARTING WITH THE TARGET NAME EXACTLY AS LISTED, then what you established and its source> · '
     + 'NOT FOUND: <the targets you could not establish, each starting with its name as listed> · SOURCES: <the urls/records behind the found items>.';
