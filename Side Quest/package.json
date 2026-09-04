@@ -9,6 +9,7 @@
     "build:editor": "node scripts/build_editor.js",
     "build:avatar": "node scripts/build_avatar.js",
     "test": "node scripts/run_smokes.js",
+    "gate": "node scripts/gate_all.js",
     "lint": "eslint lib main.js preload.js studio scripts renderer",
     "build:kg3d": "node scripts/build_kg3d.js"
   },
