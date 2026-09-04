@@ -634,6 +634,8 @@ const smokes = [
   'smoke_trajectory_mine.js',
   'smoke_security_scope.js',
   'smoke_security_scan.js',
+  'smoke_security_config.js',
+  'smoke_security_deps.js',
   // Run-4 collision guard: the test port tells the REAL user from its own injected turns; a recent
   // or unanswered real turn owns the pipeline (10min / 30min-capped) and the harness yields.
   'smoke_test_port_guard.js',

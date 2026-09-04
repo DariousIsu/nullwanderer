@@ -63,7 +63,10 @@ ok(F.maskSecret('sk-abcd1234efgh5678') === '<redacted:19 chars…5678>' && !/abc
 const stored = F.get(r1.id, { deps });
 ok(stored && !/abcd1234efgh/.test(stored.evidence || '') && /redacted/.test(stored.evidence || ''), 'the stored evidence for a secret is masked, not the raw value');
 
-ok(F.record({ asset: 'x', class: 'bananas', severity: 'apocalyptic', title: 'weird one' }, { deps }).id && F.get(F.list({ deps })[0].id, { deps }).class === 'config', 'an unknown class falls to config (and an unknown severity to info)');
+const weird = F.get(F.record({ asset: 'x', class: 'bananas', severity: 'apocalyptic', title: 'weird one' }, { deps }).id, { deps });
+ok(weird && weird.class === 'config' && weird.severity === 'info', 'an unknown class falls to config (and an unknown severity to info)');
+ok(F.list({ deps })[0].id !== weird.id && F.list({ deps }).slice(-1)[0].id === weird.id, 'list() is severity-first — an info finding sorts last, never buries a high');
+ok(F.list({ class: 'config', deps }).every((f) => f.class === 'config') && F.list({ class: 'config', deps }).length >= 1, 'list({class}) filters one class');
 ok(F.record({ asset: 'x', class: 'code', title: '' }, { deps }).id === null, 'a finding with no title is refused, not stored');
 
 ok(F.setStatus(r1.id, 'fixed', { deps }) && F.get(r1.id, { deps }).status === 'fixed', 'setStatus moves a finding to a terminal state');

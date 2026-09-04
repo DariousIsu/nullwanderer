@@ -105,21 +105,25 @@ function fileSearchSync({ root, needle, maxFiles = 2000, maxMatches = 60, maxFil
 }
 
 /**
- * securityScanSync({ roots }) → [{ root, scanned, found, findings }] — the READ-ONLY secret scanner
- * (lib/security_scan) over each IN-SCOPE root, OFF the main thread (a full-repo walk would stall). The
- * scope gate clears every path; findings carry MASKED evidence and need no db in the worker (maskSecret
- * is pure), so the main thread records them. Security modules are required LAZILY so a plain fs job
- * never loads them.
+ * securityScanSync({ roots }) → [{ root, scanned, found, findings, config }] — the READ-ONLY file
+ * scanners over each IN-SCOPE root, OFF the main thread (a full-repo walk would stall): the secret scanner
+ * (lib/security_scan) then the config reviewer (lib/security_config), which also learns which files carry
+ * secrets so it can ask git whether any is tracked. The scope gate clears every path; findings carry
+ * MASKED evidence and need no db in the worker (maskSecret is pure), so the main thread records them.
+ * Security modules are required LAZILY so a plain fs job never loads them.
  */
 function securityScanSync({ roots = [] } = {}) {
   const sc = require('./security_scan');
+  const cfg = require('./security_config');
   const scope = require('./security_scope');
   const out = [];
   for (const root of (roots || [])) {
     try {
       const r = sc.scanSecrets(root, { deps: { gate: scope.pathInScope } });
-      if (r && r.ok) out.push({ root, scanned: r.scanned, found: r.found, findings: r.findings });
-      else out.push({ root, scanned: 0, found: 0, findings: [], skipped: (r && r.why) || 'off-scope' });
+      if (!r || !r.ok) { out.push({ root, scanned: 0, found: 0, findings: [], skipped: (r && r.why) || 'off-scope' }); continue; }
+      const c = cfg.scanConfig(root, { deps: { gate: scope.pathInScope, secretFiles: r.findings } });   // a low (fixture) secret never escalates its file
+      const findings = r.findings.concat((c && c.ok && c.findings) || []);
+      out.push({ root, scanned: r.scanned, found: findings.length, findings, config: (c && c.ok) ? c.found : 0 });
     } catch (e) { out.push({ root, error: (e && e.message) || String(e), findings: [] }); }
   }
   return out;

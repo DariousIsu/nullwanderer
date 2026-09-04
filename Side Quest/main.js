@@ -1391,8 +1391,8 @@ app.whenReady().then(() => {
     db.setMeta('last_security_scan_at', String(Date.now()));
     try {
       const r = await require('./lib/security_scan').runScanOnce({ deps: { trigger_kind: 'scheduled' } });
-      console.log(`[security] secret scan: ${r.scanned} files, ${r.recorded} new finding(s), ${r.summary.open} open ${JSON.stringify(r.summary.bySeverity)}`);
-      if (r.recorded > 0) { try { require('./lib/obs_bus').emit({ lane: 'security', kind: 'findings', level: 'warn', text: `secret scan: ${r.recorded} new issue(s), ${r.summary.open} open`, data: r.summary.bySeverity }); } catch {} }
+      console.log(`[security] audit pass: ${r.scanned} files, ${r.packages || 0} packages, ${r.recorded} new finding(s), ${r.summary.open} open ${JSON.stringify(r.summary.bySeverity)}${r.notes && r.notes.length ? ` notes: ${r.notes.join(' | ')}` : ''}`);
+      if (r.recorded > 0) { try { require('./lib/obs_bus').emit({ lane: 'security', kind: 'findings', level: 'warn', text: `audit pass: ${r.recorded} new issue(s), ${r.summary.open} open`, data: r.summary.bySeverity }); } catch {} }
     } catch (e) { console.error('[security] scan organ failed:', e.message); }
     finally { markActivity('idle'); secScanRunning = false; }
   };

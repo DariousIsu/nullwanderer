@@ -20,25 +20,35 @@ const SCAN_EXT = new Set(['.js', '.cjs', '.mjs', '.ts', '.py', '.json', '.toml',
   '.sh', '.ps1', '.ini', '.cfg', '.conf']);
 const MAX_FILE = 512 * 1024;   // a secret scanner is not for blobs
 const MAX_FILES = 20000;       // a BOUNDED walk — never run away over a vendored tree (the p295 timeout: 58k sidecar files)
-// The scanner's OWN test fixtures intentionally carry fake secrets to exercise the patterns — never flag them.
-const SKIP_FILE_RE = /^smoke_security_(scan|scope)\.js$/;
+// The audit's OWN test fixtures intentionally carry fake secrets + weak settings to exercise the patterns — never flag them.
+const SKIP_FILE_RE = /^smoke_security_\w+\.js$/;
 
 // Each pattern captures the SECRET (group `g`, default the whole match) so it can be masked. A placeholder
-// or an env reference in an assignment is not a leak, so the assignment pattern screens those out.
+// or an env reference in an assignment is not a leak, so the assignment pattern screens those out. The
+// assignment name matches by SUFFIX (shared_token, admin_token, DB_PASSWORD) and tolerates a quoted key
+// (JSON "password": "…"); a project-prefixed key shape (sk-proj-…) counts as an OpenAI-style key.
 const PATTERNS = [
   { name: 'private key block', severity: 'critical', re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/ },
   { name: 'AWS access key id', severity: 'high', re: /\bAKIA[0-9A-Z]{16}\b/ },
   { name: 'Google API key', severity: 'high', re: /\bAIza[0-9A-Za-z_-]{35}\b/ },
   { name: 'Slack token', severity: 'high', re: /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/ },
   { name: 'GitHub token', severity: 'high', re: /\bgh[pousr]_[0-9A-Za-z]{36,}\b/ },
-  { name: 'OpenAI-style key', severity: 'high', re: /\bsk-[A-Za-z0-9]{24,}\b/ },
+  { name: 'OpenAI-style key', severity: 'high', re: /\bsk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{24,}/ },
   { name: 'secret assignment', severity: 'medium', g: 1,
-    re: /\b(?:api[_-]?key|secret|token|password|passwd|client[_-]?secret|access[_-]?token)\b\s*[:=]\s*["']([^"'\s]{12,})["']/i },
+    re: /\b\w*(?:api[_-]?key|secret|token|password|passwd|client[_-]?secret|access[_-]?token)\b\s*["']?\s*[:=]\s*["']([^"'\s]{12,})["']/i },
 ];
 
-const _PLACEHOLDER = /^(?:x{3,}|\.{3,}|<[^>]+>|\$\{?[a-z_.]+\}?|process\.env|os\.environ|your[_-]?\w*|changeme|change[_-]?me|placeholder|example|examplekey|test|dummy|null|none|true|false|redacted)/i;
+const _PLACEHOLDER = /^(?:x{3,}|\.{3,}|<[^>]+>|\$\{?[a-z_.]+\}?|process\.env|os\.environ|your[_-]?\w*|changeme|change[_-]?me|replace[_-]?me|placeholder|example|examplekey|sample|test|dummy|fake|mock|stub|null|none|true|false|redacted)/i;
+const _ENV_NAME = /^[A-Z][A-Z0-9_]{5,}$/;   // `api_key = "ABUSEIPDB_API_KEY"` names the env var — it is not the value
+// A secret in a test tree or a test file is almost always a fixture: still reported (a real one can land
+// there), but LOW and named as such, and it never escalates the file as secret-bearing.
+const _TEST_PATH = /(?:^|[\\/])(?:tests?|__tests__|spec|fixtures?)[\\/]|(?:^|[\\/])(?:test_[^\\/]+|[^\\/]+[._-](?:test|spec))\.[a-z]+$/i;
 
-function _walk(root, out, gate, cap) {
+// The default file filter: code + config by extension, never the audit's own fixtures. A sibling scanner
+// (lib/security_config) passes its own `accept` to widen the set (dot-env files carry no extension).
+function _acceptDefault(name) { return !SKIP_FILE_RE.test(name) && SCAN_EXT.has(path.extname(name).toLowerCase()); }
+
+function _walk(root, out, gate, cap, accept = _acceptDefault) {
   if (out.length >= cap) return;
   let entries;
   try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
@@ -47,10 +57,9 @@ function _walk(root, out, gate, cap) {
     const p = path.join(root, e.name);
     if (e.isDirectory()) {
       if (SKIP_DIRS.has(e.name) || e.name.startsWith('.')) continue;
-      _walk(p, out, gate, cap);
+      _walk(p, out, gate, cap, accept);
     } else if (e.isFile()) {
-      if (SKIP_FILE_RE.test(e.name)) continue;   // the scanner's own fixtures carry fake secrets by design
-      if (!SCAN_EXT.has(path.extname(e.name).toLowerCase())) continue;
+      if (!accept(e.name)) continue;
       if (gate && !gate(p)) continue;   // the scope gate — every file cleared before it is opened
       out.push(p);
     }
@@ -84,10 +93,11 @@ function scanSecrets(root, { deps = {} } = {}) {
         if (!m) continue;
         const val = pat.g ? m[pat.g] : m[0];
         if (!val) continue;
-        if (pat.g && _PLACEHOLDER.test(val)) continue;   // a placeholder / env-ref assignment is not a leak
+        if (pat.g && (_PLACEHOLDER.test(val) || _ENV_NAME.test(val))) continue;   // a placeholder / env-ref / env-NAME assignment is not a leak
+        const fixture = _TEST_PATH.test(f);
         const finding = {
-          asset: f, class: 'secret', severity: pat.severity,
-          title: `${pat.name} in ${path.basename(f)}`,
+          asset: f, class: 'secret', severity: fixture ? 'low' : pat.severity,
+          title: `${pat.name} in ${path.basename(f)}${fixture ? ' (test fixture)' : ''}`,
           evidence: `${path.basename(f)}:${i + 1} — ${secfind.maskSecret(val)}`,
           proposed_fix: 'move the secret to the OS keychain / env and rotate it if it was ever committed',
         };
@@ -102,10 +112,13 @@ function scanSecrets(root, { deps = {} } = {}) {
 /**
  * Run ONE audit pass and record its findings — the reusable operation both the nightly organ (main.js)
  * and the on-demand control-port door (POST /security/scan → the universal tool surface) call, so a scan
- * is the same whether she runs it herself, an operator asks for it, or the schedule fires. The heavy walk
- * runs OFF-THREAD in lib/fs_worker; findings are recorded on the caller's thread. No cooldown here — the
- * organ owns the cadence; a manual trigger is always allowed. Collaborators are injected (fs_worker,
- * findings, ledger, scope) so the smoke drives it offline. Returns { ok, scanned, recorded, summary, run_id }.
+ * is the same whether she runs it herself, an operator asks for it, or the schedule fires. Three scanners
+ * ride one pass: the secret scanner + the config reviewer (lib/security_config) walk the files OFF-THREAD
+ * in lib/fs_worker; the dependency scanner (lib/security_deps) then reads the lockfiles on this thread and
+ * asks OSV — the one network step, a failure there is a NOTE, never the pass's failure. Findings are
+ * recorded on the caller's thread. No cooldown here — the organ owns the cadence; a manual trigger is
+ * always allowed. Collaborators are injected (fs_worker, findings, ledger, scope, depsScan) so the smoke
+ * drives it offline. Returns { ok, scanned, packages, recorded, summary, run_id, notes }.
  */
 async function runScanOnce({ deps = {} } = {}) {
   const scope = deps.scope || require('./security_scope');
@@ -116,18 +129,35 @@ async function runScanOnce({ deps = {} } = {}) {
   const roots = deps.roots || scope.describe().roots;
   const trigger_kind = deps.trigger_kind || 'scheduled';
   let runId = null;
-  try { if (ledger) runId = ledger.start({ role: 'security-audit', executor: 'sq', trigger_kind, lane: 'development', input_preview: `secret scan of ${roots.length} owned repo(s)`, now: nowFn() }); } catch {}
-  let scanned = 0, recorded = 0, error = null;
+  try { if (ledger) runId = ledger.start({ role: 'security-audit', executor: 'sq', trigger_kind, lane: 'development', input_preview: `audit pass (secrets + config + deps) over ${roots.length} owned repo(s)`, now: nowFn() }); } catch {}
+  let scanned = 0, packages = 0, recorded = 0, error = null;
+  const notes = [];
+  const rec = (f) => { const rr = find.record({ ...f, run_id: runId }, { nowMs: nowFn() }); if (rr && rr.id != null && !rr.deduped) recorded++; };
   try {
     const out = await fw.securityScan({ roots }, { timeoutMs: deps.timeoutMs || 180000 });
     for (const r of (out || [])) {
       scanned += r.scanned || 0;
-      for (const f of (r.findings || [])) { const rr = find.record({ ...f, run_id: runId }, { nowMs: nowFn() }); if (rr && rr.id != null && !rr.deduped) recorded++; }
+      if (r.error) notes.push(`${path.basename(r.root || '')}: ${r.error}`);
+      for (const f of (r.findings || [])) rec(f);
     }
   } catch (e) { error = (e && e.message) || String(e); }
+  // The dependency advisories: main thread, one fixed public host (OSV). Kill switch ZOE_SECURITY_DEPS=0;
+  // `depsScan: false` skips it (a caller that must stay offline), a function replaces it (the smoke).
+  const depsOff = deps.depsScan === false || /^(0|false|no|off)$/i.test(String(process.env.ZOE_SECURITY_DEPS || '').trim());
+  if (!depsOff) {
+    try {
+      const ds = deps.depsScan || ((rs) => require('./security_deps').scanDeps(rs));
+      const d = await ds(roots);
+      packages = (d && d.packages) || 0;
+      for (const f of ((d && d.findings) || [])) rec(f);
+      for (const n of ((d && d.notes) || [])) notes.push(n);
+      if (d && d.error) notes.push(`deps: ${d.error}`);
+    } catch (e) { notes.push(`deps: ${(e && e.message) || String(e)}`); }
+  }
   const summary = find.summary();
-  try { if (ledger && runId) ledger.finish(runId, { state: error ? 'failed' : 'succeeded', output: error ? null : `scanned ${scanned}; ${recorded} new; ${summary.open} open`, error, now: nowFn() }); } catch {}
-  return { ok: !error, scanned, recorded, summary, run_id: runId, error };
+  const output = `scanned ${scanned} files, ${packages} packages; ${recorded} new; ${summary.open} open${notes.length ? `; notes: ${notes.join(' | ')}` : ''}`;
+  try { if (ledger && runId) ledger.finish(runId, { state: error ? 'failed' : 'succeeded', output: error ? null : output, error, now: nowFn() }); } catch {}
+  return { ok: !error, scanned, packages, recorded, summary, run_id: runId, error, notes };
 }
 
-module.exports = { scanSecrets, runScanOnce, PATTERNS, SKIP_DIRS, SCAN_EXT, MAX_FILE, MAX_FILES };
+module.exports = { scanSecrets, runScanOnce, PATTERNS, SKIP_DIRS, SCAN_EXT, MAX_FILE, MAX_FILES, SKIP_FILE_RE, _walk, _acceptDefault };

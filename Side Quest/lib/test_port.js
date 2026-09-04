@@ -236,14 +236,17 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
       // the scan organ recorded (masked), summarized and the open ones listed. Read-only, beside /trajectory.
       if (req.method === 'GET' && req.url.startsWith('/security')) {
         const sf = require('./security_findings');
-        return send(200, { ok: true, boundary: require('./security_scope').describe(), ...sf.summary(), open: sf.list({ status: 'open', limit: 20 }), at: Date.now() });
+        const u = new URL(req.url, 'http://x');
+        const cls = String(u.searchParams.get('class') || '').trim().toLowerCase() || null;   // secret | config | dependency | …
+        const limit = Math.max(1, Math.min(500, parseInt(u.searchParams.get('limit') || '', 10) || 60));
+        return send(200, { ok: true, boundary: require('./security_scope').describe(), ...sf.summary(), open: sf.list({ status: 'open', class: cls, limit }), at: Date.now() });
       }
       // POST /security/scan → run an audit pass ON DEMAND (the universal tool surface: the nightly organ owns
       // the cadence, this is the on-demand trigger an operator, an agent, or an MCP tool calls). Bypasses the
       // cooldown; scope-gated inside runScanOnce. Non-GET, so it already passed the token/loopback gate above.
       if (req.method === 'POST' && req.url.startsWith('/security/scan')) {
         require('./security_scan').runScanOnce({ deps: { trigger_kind: 'directed' } })
-          .then((r) => send(200, { ok: r.ok, scanned: r.scanned, recorded: r.recorded, ...r.summary, run_id: r.run_id, at: Date.now() }))
+          .then((r) => send(200, { ok: r.ok, scanned: r.scanned, packages: r.packages || 0, recorded: r.recorded, ...r.summary, run_id: r.run_id, notes: r.notes || [], at: Date.now() }))
           .catch((e) => send(500, { ok: false, error: (e && e.message) || String(e) }));
         return;
       }

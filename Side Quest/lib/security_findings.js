@@ -56,22 +56,28 @@ function setStatus(id, status, { deps = {}, nowMs = Date.now() } = {}) {
 function get(id, { deps = {} } = {}) {
   try { return _db(deps).getDb().prepare('SELECT * FROM security_findings WHERE id = ?').get(Number(id) || 0) || null; } catch { return null; }
 }
-function list({ status = null, limit = 50, deps = {} } = {}) {
+// Severity-first (critical → info), newest within a severity — so a flood of dependency mediums never
+// buries a critical. Optional status + class filters.
+const _SEV_ORDER = "CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END";
+function list({ status = null, class: cls = null, limit = 50, deps = {} } = {}) {
   try {
     const d = _db(deps).getDb();
-    return status
-      ? d.prepare('SELECT * FROM security_findings WHERE status = ? ORDER BY created_ts DESC LIMIT ?').all(_s(status), Math.max(1, limit | 0))
-      : d.prepare('SELECT * FROM security_findings ORDER BY created_ts DESC LIMIT ?').all(Math.max(1, limit | 0));
+    const where = [], args = [];
+    if (status) { where.push('status = ?'); args.push(_s(status)); }
+    if (cls) { where.push('class = ?'); args.push(_s(cls).toLowerCase()); }
+    args.push(Math.max(1, limit | 0));
+    return d.prepare(`SELECT * FROM security_findings${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY ${_SEV_ORDER}, created_ts DESC LIMIT ?`).all(...args);
   } catch { return []; }
 }
 function summary({ deps = {} } = {}) {
   try {
     const d = _db(deps).getDb();
-    const bySeverity = {};
+    const bySeverity = {}, byClass = {};
     for (const r of d.prepare("SELECT severity, COUNT(*) n FROM security_findings WHERE status IN ('open','proposed') GROUP BY severity").all()) bySeverity[r.severity] = r.n;
+    for (const r of d.prepare("SELECT class, COUNT(*) n FROM security_findings WHERE status IN ('open','proposed') GROUP BY class").all()) byClass[r.class] = r.n;
     const open = (d.prepare("SELECT COUNT(*) n FROM security_findings WHERE status IN ('open','proposed')").get() || {}).n || 0;
-    return { open, bySeverity };
-  } catch { return { open: 0, bySeverity: {} }; }
+    return { open, bySeverity, byClass };
+  } catch { return { open: 0, bySeverity: {}, byClass: {} }; }
 }
 
 module.exports = { CLASSES: [...CLASSES], SEVERITIES, STATUSES, record, setStatus, get, list, summary, maskSecret, _sig };
