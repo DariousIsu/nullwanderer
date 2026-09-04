@@ -301,6 +301,29 @@ const MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_runs_state_started ON runs(state, started_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_runs_echo ON runs(echo_run_id)`,
   `CREATE INDEX IF NOT EXISTS idx_runs_thread ON runs(thread_id)`,
+  // THE SECURITY-FINDINGS STORE (security self-audit, 2026-09-04; design ZOE_SECURITY_SELF_AUDIT_DESIGN):
+  // one row per weakness the audit lane found on an IN-SCOPE asset — asset, class, severity, a MASKED
+  // evidence reference (never a raw secret — inherits the never-repeat-a-key law), a proposed fix, and a
+  // link to the run ledger. Deduped by sig (class+asset+title). Remediation lands elsewhere (a pen
+  // proposal / a card); this only records. lib/security_findings.js. The scope allowlist that decides
+  // what may be tested (lib/security_scope.js) is a CONSTITUTIONAL file: widening it goes through the
+  // standard proposal card, never a silent self-edit.
+  `CREATE TABLE IF NOT EXISTS security_findings (
+    id INTEGER PRIMARY KEY,
+    sig TEXT NOT NULL,
+    asset TEXT NOT NULL,
+    class TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'info' CHECK(severity IN ('info','low','medium','high','critical')),
+    title TEXT NOT NULL,
+    evidence TEXT,
+    proposed_fix TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','proposed','fixed','accepted_risk','dismissed')),
+    run_id TEXT,
+    created_ts INTEGER NOT NULL,
+    updated_ts INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_security_findings_status ON security_findings(status, created_ts DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_security_findings_sig ON security_findings(sig)`,
   // open_questions — questions ZOE asked Lucas that await an answer (the QUD/grounding
   // stack). Distinct from open_threads (her goals) and commitments (her beliefs): this is
   // live CONVERSATIONAL state — "I asked, he hasn't answered." Surfaced on his next turn so
