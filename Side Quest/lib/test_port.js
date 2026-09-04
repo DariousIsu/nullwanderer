@@ -217,6 +217,12 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
       if (req.method === 'GET' && req.url.startsWith('/tiers')) {
         return send(200, { ok: true, ...require('./tier_law').table(), at: Date.now() });
       }
+      // ── THE ROLE REGISTRY's read door (stage 4.5 B, 09-04): GET /roles → ONE table of every agent
+      // and worker kind on both sides (the engine's manifests through list_agents + the app's lanes),
+      // each with its executor, slot, weight, tools, trigger kinds and the tier it bills.
+      if (req.method === 'GET' && req.url.startsWith('/roles')) {
+        return send(200, { ok: true, ...require('./role_registry').table(), at: Date.now() });
+      }
       // ── THE PARLOR doors (09-01): outside seats post attributed turns; zoe's seat posts only
       // from inside the process (a port caller may not speak AS her). Loopback-only server.
       if (req.method === 'POST' && req.url === '/parlor/say') {

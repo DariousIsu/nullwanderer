@@ -2134,8 +2134,12 @@ app.whenReady().then(() => {
         try { echoSuit.reset('attach timeout'); } catch {}
         pushEchoStatus(null); return false;
       }
-      if (r.ok) console.log(`[main] echo suit attached: ${r.tools} tools`);
-      else {
+      if (r.ok) {
+        console.log(`[main] echo suit attached: ${r.tools} tools`);
+        // THE ROLE REGISTRY (stage 4.5 B): pull the engine's manifests through list_agents into the one
+        // table (lib/role_registry; GET /roles). Fail-soft — an attach never waits on it.
+        try { require('./lib/role_registry').refresh({ dispatch: (t) => echoSuit.dispatch(t, { autonomous: true }) }).then((x) => { if (x && !x.ok) console.log(`[roles] registry refresh skipped: ${x.why}`); }).catch(() => {}); } catch {}
+      } else {
         // p208 (08-31): connect() settled NOT-OK every beat for 25 minutes — this branch was
         // SILENT (p193's cure covered the hang, not the graceful refusal) and the poisoned
         // transport was never reset, so the same dead client quiet-failed forever beside a

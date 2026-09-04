@@ -625,6 +625,7 @@ const smokes = [
   // law's tiers by trigger kind; his master-skill dispatcher (P5) folded in as data.
   'smoke_tier_law.js',
   'smoke_delegate_lane.js',
+  'smoke_role_registry.js',
   // Run-4 collision guard: the test port tells the REAL user from its own injected turns; a recent
   // or unanswered real turn owns the pipeline (10min / 30min-capped) and the harness yields.
   'smoke_test_port_guard.js',
