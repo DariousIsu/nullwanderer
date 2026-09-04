@@ -610,6 +610,10 @@ const smokes = [
   // and the spend fold off the main thread, the meter's minute buckets, the retention sweep's worker
   // counts, the spawned (never execSync) profile sweep, the worker-side puller snapshot.
   'smoke_cut18.js',
+  // Cut 22 (09-04): two residue blocks from p279's stall ledger — the fragment probe's stat storm moved
+  // into lib/fs_worker's thread (one predicate for thread, fallback and gate), and the console tee's
+  // companion write to the launcher's stdout file made async (lib/console_tee).
+  'smoke_cut22.js',
   // Run-4 collision guard: the test port tells the REAL user from its own injected turns; a recent
   // or unanswered real turn owns the pipeline (10min / 30min-capped) and the harness yields.
   'smoke_test_port_guard.js',

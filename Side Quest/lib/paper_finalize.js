@@ -41,52 +41,49 @@ const BOILER_RE = /^(research plan|research deliverable|sources|objective|approa
 // headings (which, measured live, they usually can't: they're org profiles and dossier scaffolds).
 const DEFAULT_SECTIONS = ['Executive Summary', 'Background', 'Projects and Facilities', 'Financing and Partnerships', 'Community and Regional Impact', 'Risks and Open Questions'];
 
-function _norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim(); }
+// ONE normalizer and ONE probe (lib/fs_worker): the gather's predicate runs in a worker thread for the
+// live callers and synchronously for the fallback and the gate — the same function either way.
+const fsw = require('./fs_worker');
+const _norm = fsw.norm;
+// HEAD PROBE (cut 18, 09-03): the probe only ever looked at the name and the first 800 characters, but
+// every one of the 2,665 note files was read in FULL to get them — 6 profiled blocks, 32s, on the main
+// thread per paper. The probe reads a HEAD_BYTES = 4096 head; the whole file only for a match.
+const HEAD_BYTES = fsw.HEAD_BYTES;
+const _readHead = fsw.readHead;
 
-// The first HEAD_BYTES of a file as UTF-8 (≥ 800 characters at any width — the probe's window), or null
-// when the file cannot be opened. A multibyte character cut at the boundary decodes as U+FFFD, which
-// _norm discards; the probe never sees it.
-const HEAD_BYTES = 4096;
-function _readHead(p) {
-  let fd = null;
-  try {
-    fd = fs.openSync(p, 'r');
-    const buf = Buffer.alloc(HEAD_BYTES);
-    const n = fs.readSync(fd, buf, 0, HEAD_BYTES, 0);
-    return buf.toString('utf8', 0, n);
-  } catch { return null; }
-  finally { if (fd != null) { try { fs.closeSync(fd); } catch {} } }
+function _gatherOpts({ tokens, exclude = [], dir = NOTES_DIR } = {}) {
+  return {
+    dir,
+    toks: (tokens || []).map(_norm).filter(Boolean),
+    ex: (exclude || []).map(_norm).filter(Boolean),
+    maxFragments: MAX_FRAGMENTS,
+    maxTotalChars: MAX_TOTAL_CHARS,
+  };
 }
 
 /** gatherFragments({tokens, exclude, dir}) → [{file, mtime, text}] — files whose NAME or HEAD
  *  carries every token. `exclude` tokens veto a file (the ENTITY-SCOPE filter, 08-13: the CRM's
  *  near-duplicate accounts — "Applied Digital Solutions, Inc.", the unrelated Florida VeriChip
- *  company — matched the topic tokens and contaminated the paper). */
-function gatherFragments({ tokens, exclude = [], dir = NOTES_DIR } = {}) {
-  const toks = (tokens || []).map(_norm).filter(Boolean);
-  const ex = (exclude || []).map(_norm).filter(Boolean);
-  if (!toks.length) return [];
-  let names = [];
-  try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.md')); } catch { return []; }
-  const out = [];
-  for (const f of names) {
-    const p = path.join(dir, f);
-    let st; try { st = fs.statSync(p); } catch { continue; }
-    // HEAD PROBE (cut 18, 09-03): the probe only ever looked at the name and the first 800 characters,
-    // but every one of the 2,665 note files was read in FULL to get them — 6 profiled blocks, 32s, on
-    // the main thread per paper. Read the head; read the whole file only for a match.
-    const head = _readHead(p);
-    if (head == null) continue;
-    const probe = _norm(f + ' ' + head.slice(0, 800));
-    if (ex.some((t) => probe.includes(t))) continue;
-    if (!toks.every((t) => probe.includes(t))) continue;
-    let text; try { text = fs.readFileSync(p, 'utf8'); } catch { continue; }
-    out.push({ file: f, mtime: st.mtimeMs, text });
+ *  company — matched the topic tokens and contaminated the paper). SYNCHRONOUS — the gate's door
+ *  and the fallback; a live caller uses gatherFragmentsAsync. */
+function gatherFragments(opts = {}) {
+  const o = _gatherOpts(opts);
+  if (!o.toks.length) return [];
+  return fsw.probeFragmentsSync(o);
+}
+
+/** The same gather OFF the main thread (cut 22, 2026-09-04): the stat + head read of every note file
+ *  ran on the main thread on EVERY driver tick of a paper focus — a 1.5 s profiled block on p279 with
+ *  2,665 notes. The worker does the walk; a worker failure falls back to the synchronous probe so the
+ *  gather never goes dark. */
+async function gatherFragmentsAsync(opts = {}) {
+  const o = _gatherOpts(opts);
+  if (!o.toks.length) return [];
+  try { return await fsw.probeFragments(o); }
+  catch (e) {
+    try { console.error('[paper] fragment probe fell back to the main thread:', e && e.message); } catch {}
+    return fsw.probeFragmentsSync(o);
   }
-  out.sort((a, b) => b.mtime - a.mtime);
-  const capped = out.slice(0, MAX_FRAGMENTS);
-  let total = 0;
-  return capped.filter((x) => { total += x.text.length; return total <= MAX_TOTAL_CHARS; });
 }
 
 /** harvestSources(fragments) → [{n, url, title}] — every unique URL across the fragments, numbered. */
@@ -161,7 +158,7 @@ function assemble({ title, goal, sections, sources, dateStr }) {
  */
 async function finalize({ topic, title, goal, tokens, exclude, write, frozenOutline = null, dir = NOTES_DIR, outDir = NOTES_DIR, land = true } = {}) {
   const toks = tokens && tokens.length ? tokens : _norm(topic).split(' ').filter(Boolean);
-  const fragments = gatherFragments({ tokens: toks, exclude, dir });
+  const fragments = await gatherFragmentsAsync({ tokens: toks, exclude, dir });
   if (!fragments.length) return { ok: false, reason: `no fragments for "${topic}"` };
   const sources = harvestSources(fragments);
   // THE DONE CONTRACT (2026-08-14): a revision rewrites the SAME frozen sections — the outline
@@ -216,4 +213,4 @@ function threadsSatisfiedBy(topic, threads) {
   return out;
 }
 
-module.exports = { gatherFragments, harvestSources, outline, sectionPrompt, assemble, finalize, threadsSatisfiedBy, NOTES_DIR, DEFAULT_SECTIONS, PAPER_VERB_RE, PAPER_TOPIC_RE };
+module.exports = { gatherFragments, gatherFragmentsAsync, harvestSources, outline, sectionPrompt, assemble, finalize, threadsSatisfiedBy, NOTES_DIR, DEFAULT_SECTIONS, PAPER_VERB_RE, PAPER_TOPIC_RE };

@@ -34,22 +34,10 @@ function logCrash(kind, info) {
 }
 process.on('unhandledRejection', (reason) => logCrash('unhandledRejection', reason));
 process.on('uncaughtException', (err) => logCrash('uncaughtException', err));
-// THE CONSOLE TEE (09-01, rides the self-reboot organ): a self-relaunched generation loses the
-// launcher's stdout redirect, so every console line ALSO lands in boot_self.log — evidence
-// survives whoever started the process. Rotates at 20MB. Generation header marks each boot.
-(() => {
-  const fs = require('fs');
-  const LOG = path.join(__dirname, 'boot_self.log');
-  try { if (fs.existsSync(LOG) && fs.statSync(LOG).size > 20 * 1024 * 1024) fs.renameSync(LOG, LOG + '.1'); } catch {}
-  let stream = null;
-  try { stream = fs.createWriteStream(LOG, { flags: 'a' }); stream.write(`\n══ boot generation pid ${process.pid} @ ${new Date().toISOString()} ══\n`); } catch {}
-  if (stream) {
-    for (const k of ['log', 'warn', 'error']) {
-      const orig = console[k].bind(console);
-      console[k] = (...a) => { orig(...a); try { stream.write(a.map((x) => (typeof x === 'string' ? x : (() => { try { return JSON.stringify(x); } catch { return String(x); } })())).join(' ') + '\n'); } catch {} };
-    }
-  }
-})();
+// THE CONSOLE TEE (09-01, rides the self-reboot organ; lib/console_tee since cut 22): every console
+// line lands in boot_self.log AND the launcher's redirect — both through async streams, so a burst of
+// lines under a saturated disk never blocks the loop (the 3.8 s writeBuffer block on boot_p279).
+try { require('./lib/console_tee').install({ logPath: path.join(__dirname, 'boot_self.log') }); } catch (e) { try { console.error('[tee] install failed:', e && e.message); } catch {} }
 // RECOVER a crashed renderer (audit S10): Electron never auto-reloads a dead render process, and
 // the KEEP-HER-ALIVE backend runs on regardless — so a crashed chat/voice/avatar surface stayed
 // dead forever. Reload it, throttled so a genuinely broken page can't storm into a reload loop;
@@ -21585,7 +21573,7 @@ async function runDirectedResearchPass(focus) {
     if (contract && contract.topic) {
       const _toks = contract.topic.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
       const _excl = (process.env.ZOE_PAPER_EXCLUDE || 'solutions inc,digital angel,verichip').split(',').map((s) => s.trim()).filter(Boolean);
-      const _sig = dc.gatherSignature(pfLib.gatherFragments({ tokens: _toks, exclude: _excl }));
+      const _sig = dc.gatherSignature(await pfLib.gatherFragmentsAsync({ tokens: _toks, exclude: _excl }));   // off the main thread (cut 22): every tick of a paper focus stat'd 2,665 notes
       dc.recordGatherSig(focus.id, _sig);
       if (/\b(paper|report|briefing|document)\b/i.test(_goal) && dc.shouldAutoFinalize(focus.id)) {
         console.log(`[contract] DRY for focus #${focus.id} — ${dc.DRY_RUN_COUNT} identical gathers; finalizing instead of another pass`);

@@ -235,7 +235,8 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
     'v1.3 wiring: the ✕ rides needs:decide as "seen"; the renderer shows it on finished runs only');
   ok(/function _selfRebootTick/.test(main) && /pen\.self_reboot/.test(main) && /app\.relaunch\(\)/.test(main) && /pen\.reboot_at/.test(main),
     '⭐ v1.3 HER REBOOT (his order): a landed change cycles HER program — kill-switch meta, cooldown, live-guards, announced');
-  ok(/boot_self\.log/.test(main) && /boot generation pid/.test(main),
+  // cut 22 (09-04): the tee lives in lib/console_tee (async streams for both files); main.js installs it.
+  ok(/boot_self\.log/.test(main) && /console_tee'\)\.install\(/.test(main) && /boot generation pid/.test(fs.readFileSync(path.join(__dirname, '..', 'lib', 'console_tee.js'), 'utf8')),
     'v1.3 wiring: the console tee — a self-relaunched generation keeps its logs regardless of launcher');
   ok(/st\.pursuit = true; st\.redrove = false/.test(main) && /PURSUIT: proposal #/.test(main),
     "⭐ THE PURSUIT (his law: we don't take no for an answer): a second gate red converts the thread to a diagnosis brief — the ✗ pins become HER problem, never a silent close");
