@@ -120,6 +120,17 @@ ok(f4.covered.length === 1, 'a target named twice is covered once');
   db.close();
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 
+  // ── the wiring: both swarm doors pick + dispatch; the maintainer folds; the closer tick runs ────
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/^function _pickPartitionExecutor\(/m.test(main) && /require\('\.\/lib\/executor_pick'\)\.pick\(\{ beat, plan, targets, roles, policy, engineConnected: !!\(echoSuit && echoSuit\.connected\) \}\)/.test(main) && /db\.getMeta\('swarm\.executors'\) \|\| 'mixed'/.test(main), 'the pick reads the registry rows, the swarm.executors policy and the engine connection');
+  ok(/^async function _dispatchPartitionToEngine\(/m.test(main) && /require\('\.\/lib\/lane'\)\.run\(\{ autonomous: args\.autonomous !== false, spendTier: args\.lane \}/.test(main) && /dispatchEchoPartition\(\{ \.\.\.args, deps: \{ dispatch: \(t, o\) => echoSuit\.dispatch\(t, o\), ledger: require\('\.\/lib\/run_ledger'\) \} \}\)/.test(main), "the dispatch runs under the parent's tier on the ambient lane, through the suit, into the ledger");
+  ok((main.match(/const _ex = _pickPartitionExecutor\(\{ beat/g) || []).length === 2 && (main.match(/if \(d\.ok\) \{ state\.swarm\.parts\[i \+ 1\] = d\.part;/g) || []).length === 2 && (main.match(/engine dispatch failed \(\$\{d\.why\}\) — falling back to this side's worker/g) || []).length === 2, 'both swarm doors pick per partition, keep the engine part record, and fall back to a thread on a refusal');
+  ok(/_pickPartitionExecutor\(\{ beat, plan: \{ \.\.\.plan, goal \}, targets: parts\[i\] \}\)/.test(main), "the focus door's pick reads HIS plan (a roster of contacts → the collector)");
+  ok(/_maintainSwarm[\s\S]*?if \(p\.echo_run_id && !p\.thread\) \{[\s\S]*?L\.TERMINAL\.has\(run\.state\)[\s\S]*?foldEchoPartition\(\{ part: p, run, coveredKey/.test(main), 'the maintainer treats an engine partition as done when its ledger run is terminal and folds a finished one onto the parent');
+  ok(/_maintainSwarm[\s\S]*?engine partition silent \$\{Math\.round\(SWARM_STALE_MS \/ 3600000\)\}h — expired at release/.test(main), 'a silent engine partition expires after the same 6h as a thread (no engine partition can hold a swarm open)');
+  ok(/^async function _ledgerEchoTick\(/m.test(main) && /closeEchoRuns\(\{ deps: \{ dispatch: \(t, o\) => echoSuit\.dispatch\(t, o\), ledger: require\('\.\/lib\/run_ledger'\), pendingIds/.test(main) && /_ledgerEchoTick\(\)\.catch[\s\S]{0,120}45 \* 1000/.test(main), 'the closer tick runs every 45s beside the consume watcher, skipping the runs a chat watcher owns');
+  ok(/if \(p && p\.thread && !p\.done\) backgroundWorkerPass\(p\.thread\)/.test(main) && /if \(!p \|\| !p\.thread\) continue;/.test(main), 'the drive loop and the release skip parts without threads (an engine partition has none)');
+
   console.log(`\nsmoke_partition_executors: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

@@ -2072,6 +2072,8 @@ app.whenReady().then(() => {
   // in agent_runs while she asked Lucas to paste them. Review-fanout runs are excluded (that organ
   // compiles its own shards). Fail-soft everywhere; gives up honestly after 30 min.
   setInterval(() => { _agentConsumeTick().catch((e) => console.error('[agent-consume] tick failed:', e && e.message)); }, 45 * 1000).unref?.();
+  // stage 4.5 D/E: the closer for engine runs the ledger holds open that no chat watcher owns (an autonomous swarm's engine partitions)
+  setInterval(() => { _ledgerEchoTick().catch((e) => console.error('[swarm-executor] close tick failed:', e && e.message)); }, 45 * 1000).unref?.();
   const echoCfg = readEchoConfig(ECHO_CWD);
   echoHttp = { base: `http://${echoCfg.host}:${echoCfg.port}`, token: echoCfg.token };   // for GET /canvas
   // p211 (08-31): THE RESET-REBUILD TRAP — reset() (the p208 cure) nulls the client, and the
@@ -18221,6 +18223,35 @@ function _resolveSwarmBeat(text) {
   return bestScore > 0 ? best : null;
 }
 
+// PARTITIONS AS EXECUTORS (stage 4.5 D, 2026-09-04; merge map contract part 4): a partition runs on
+// whichever registry row fits its goal — an engine role for engine-native work (bills → the bill
+// tracker, contact rosters → the collector), this side's worker for web research. The pick is pure
+// (lib/executor_pick); the dispatch opens the child run in the ledger keyed on the engine's run id
+// (lib/swarm_executors); a refusal falls back to a thread on this side. Policy meta swarm.executors.
+function _pickPartitionExecutor({ beat, plan = null, targets = [] } = {}) {
+  try {
+    const roles = require('./lib/role_registry').table().rows;
+    const policy = (db.getMeta('swarm.executors') || 'mixed').trim();
+    return require('./lib/executor_pick').pick({ beat, plan, targets, roles, policy, engineConnected: !!(echoSuit && echoSuit.connected) });
+  } catch (e) { return { executor: 'sq', role: 'swarm-worker', why: `pick failed: ${e.message}` }; }
+}
+async function _dispatchPartitionToEngine(args) {
+  try {
+    return await require('./lib/lane').run({ autonomous: args.autonomous !== false, spendTier: args.lane }, () =>
+      require('./lib/swarm_executors').dispatchEchoPartition({ ...args, deps: { dispatch: (t, o) => echoSuit.dispatch(t, o), ledger: require('./lib/run_ledger') } }));
+  } catch (e) { return { ok: false, why: (e && e.message) || String(e) }; }
+}
+// The closer for engine runs the ledger holds open that no chat watcher owns (an autonomous swarm's
+// engine partitions): agent_status → get_agent_output → the ledger row finishes; the maintainer folds.
+async function _ledgerEchoTick() {
+  if (!echoSuit || !echoSuit.connected) return;
+  const ac = require('./lib/agent_consume');
+  const store = { get: (k) => db.getMeta(k), set: (k, v) => db.setMeta(k, v) };
+  const pendingIds = new Set(ac.pending(store).map((e) => e && e.runId).filter(Boolean));
+  const r = await require('./lib/swarm_executors').closeEchoRuns({ deps: { dispatch: (t, o) => echoSuit.dispatch(t, o), ledger: require('./lib/run_ledger'), pendingIds, now: Date.now(), log: (m) => console.log(m) } });
+  if (r && r.closed) _pushSwarmChip();
+}
+
 // Start a ROSTER swarm: partition the beat's targets across the available swarm workers and seed a background
 // run per partition. Returns { ok, beatId, targets, workers } or { ok:false, reason }.
 async function startSwarm({ target, requestedK = null, requestedBy = 'chat' } = {}) {
@@ -18241,6 +18272,13 @@ async function startSwarm({ target, requestedK = null, requestedBy = 'chat' } = 
   const _swarmLane = requestedBy === 'chat' ? 'directed' : 'research';
   try { state.swarm.run_id = require('./lib/run_ledger').start({ role: 'swarm', executor: 'sq', trigger_kind: requestedBy === 'chat' ? 'swarm_chat' : 'scheduled', trigger_meta: { beatId: beat.id, mode: 'roster', requestedBy, targets: targets.length }, lane: _swarmLane, input_preview: `swarm on ${beat.id} (${targets.length} targets)` }); } catch {}
   for (let i = 0; i < parts.length; i++) {
+    // stage 4.5 D: an engine-native partition goes to the engine role that fits it; a refusal falls back here
+    const _ex = _pickPartitionExecutor({ beat, targets: parts[i] });
+    if (_ex.executor === 'echo') {
+      const d = await _dispatchPartitionToEngine({ role: _ex.role, goal: beat.goal, targets: parts[i], index: i + 1, of: parts.length, facets: beat.facets || null, lane: _swarmLane, parentRunId: state.swarm.run_id || null, beatId: beat.id, trigger_kind: requestedBy === 'chat' ? 'swarm_chat' : 'scheduled', autonomous: requestedBy !== 'chat' });
+      if (d.ok) { state.swarm.parts[i + 1] = d.part; console.log(`[swarm] partition ${i + 1}/${parts.length} → engine role ${_ex.role} (${_ex.why}) — run ${d.part.echo_run_id}`); continue; }
+      console.log(`[swarm] partition ${i + 1}/${parts.length}: engine dispatch failed (${d.why}) — falling back to this side's worker`);
+    }
     const r = await seedBeatRun(beat, { background: true, targetsOverride: parts[i] });
     if (r && r.ok) {
       state.swarm.parts[i + 1] = { thread: r.focusId, n: parts[i].length, done: false };
@@ -18289,6 +18327,26 @@ function _maintainSwarm(state) {
     const now = Date.now();
     for (const p of Object.values(state.swarm.parts)) {
       if (!p || p.done) continue;
+      if (p.echo_run_id && !p.thread) {
+        // AN ENGINE PARTITION (stage 4.5 D/E): done when its ledger run is terminal (the closer tick /
+        // the consume watcher finish it); a succeeded one FOLDS onto the parent's covered list; a silent
+        // one expires after the same 6h as a thread, so no engine partition can hold a swarm open.
+        const L = require('./lib/run_ledger');
+        let run = null; try { run = p.run_id ? L.get(p.run_id) : null; } catch {}
+        if (run && L.TERMINAL.has(run.state)) {
+          p.done = true; if (run.state !== 'succeeded') p.failed = true;
+          try {
+            const coveredKey = state.swarm.parentFocus ? `focus.${state.swarm.parentFocus}.covered`
+              : (state.beats && state.beats[state.swarm.beatId] && state.beats[state.swarm.beatId].thread ? `focus.${state.beats[state.swarm.beatId].thread}.covered` : null);
+            require('./lib/swarm_executors').foldEchoPartition({ part: p, run, coveredKey, getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v), log: (m) => console.log(m) });
+          } catch (e) { console.error('[swarm-executor] fold failed:', e.message); }
+        } else if ((now - (p.startedAt || state.swarm.startedAt || now)) > SWARM_STALE_MS) {
+          p.done = true; p.stalled = true;
+          try { if (p.run_id) L.finish(p.run_id, { state: 'failed', error: `engine partition silent ${Math.round(SWARM_STALE_MS / 3600000)}h — expired at release` }); } catch {}
+          console.warn(`[swarm] engine partition ${p.echo_run_id} (${p.role}) silent ${Math.round((now - (p.startedAt || state.swarm.startedAt)) / 3600000)}h — expiring it so the swarm can release`);
+        }
+        continue;
+      }
       let t = null; try { t = db.getOpenThread(p.thread); } catch {}
       if (!t || !['pending', 'active'].includes(t.status)) { p.done = true; }   // resolved/gone → this partition converged
       else {
@@ -18403,6 +18461,13 @@ async function startFocusSwarm(focus, { requestedK = null, requestedBy = 'auto' 
     // partitions must be K separate threads, not one
     const partGoal = `${goal} — swarm partition ${i + 1}/${parts.length}: ${parts[i].slice(0, 3).join(', ')}${parts[i].length > 3 ? ` (+${parts[i].length - 3} more)` : ''}`;
     const beat = { id: beatId, goal: partGoal, kind, depth, facets: (Array.isArray(plan.facets) && plan.facets.length) ? plan.facets : null };
+    // stage 4.5 D: the pick reads HIS focus's plan too (a roster of contacts → the collector); a refusal falls back here
+    const _ex = _pickPartitionExecutor({ beat, plan: { ...plan, goal }, targets: parts[i] });
+    if (_ex.executor === 'echo') {
+      const d = await _dispatchPartitionToEngine({ role: _ex.role, goal: partGoal, targets: parts[i], index: i + 1, of: parts.length, facets: beat.facets, lane: _focusLane, parentRunId: state.swarm.run_id || null, beatId, trigger_kind: requestedBy === 'chat' ? 'swarm_chat' : 'scheduled', autonomous: requestedBy !== 'chat' });
+      if (d.ok) { state.swarm.parts[i + 1] = d.part; console.log(`[swarm] focus #${fid} partition ${i + 1}/${parts.length} → engine role ${_ex.role} (${_ex.why}) — run ${d.part.echo_run_id}`); continue; }
+      console.log(`[swarm] focus #${fid} partition ${i + 1}/${parts.length}: engine dispatch failed (${d.why}) — falling back to this side's worker`);
+    }
     const r = await seedBeatRun(beat, { background: true, targetsOverride: parts[i] });
     if (r && r.ok) {
       state.swarm.parts[i + 1] = { thread: r.focusId, n: parts[i].length, done: false };
