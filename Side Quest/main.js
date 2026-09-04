@@ -954,8 +954,14 @@ app.whenReady().then(() => {
   // read-only on the live store) on a 2s cadence after boot grace while she is idle; an ingest arriving
   // mid-warm-up finishes the walk inline. The label is left for the next lane to replace, like promote-up.
   {
-    const KEYS_WARM_ROWS = parseInt(process.env.ZOE_TARGET_KEYS_WARM_ROWS, 10) || 50000;
-    let _keysWarmDone = false, _keysWarmT0 = 0;
+    // Cut 23 (09-04): the slice is bounded by TIME (lib/puller_db: 40 ms of the main thread), so the row cap
+    // is a ceiling for a warm cache, not the slice's size — 500k rows lets the budget alone bound each beat
+    // (a warm cache walks ~60k in 40 ms; a cold one ~2k). Cadence 750 ms: the whole 677k-key map warms in
+    // ~10 s warm, and an ingest arriving mid-warm has less of the walk left to finish inline (p283: a 2.0 s
+    // targetKeyMap block when a decomp ingest landed 20 s after boot, before the 2 s beats had finished).
+    const KEYS_WARM_ROWS = parseInt(process.env.ZOE_TARGET_KEYS_WARM_ROWS, 10) || 500000;
+    const KEYS_WARM_BUDGET_MS = parseInt(process.env.ZOE_TARGET_KEYS_WARM_MS, 10) || 40;
+    let _keysWarmDone = false, _keysWarmT0 = 0, _keysWarmSlices = 0;
     const _keysWarmTick = setInterval(() => {
       if (_keysWarmDone) { clearInterval(_keysWarmTick); return; }
       if (_bootGraceActive() || _conversationActive() || Date.now() - lastUserTurnTs < 30 * 1000) return;
@@ -963,10 +969,11 @@ app.whenReady().then(() => {
         const pdb = require('./lib/puller_db');
         if (!_keysWarmT0) _keysWarmT0 = Date.now();
         markActivity('target-keys-warm');
-        const r = pdb.warmTargetKeys({ rows: KEYS_WARM_ROWS });
-        if (r.done) { _keysWarmDone = true; console.log(`[puller] target key map warm — ${r.size.toLocaleString()} keys (high-water id ${r.maxId}) in ${Math.round((Date.now() - _keysWarmT0) / 1000)}s of ${KEYS_WARM_ROWS}-row slices`); }
+        const r = pdb.warmTargetKeys({ rows: KEYS_WARM_ROWS, budgetMs: KEYS_WARM_BUDGET_MS });
+        _keysWarmSlices++;
+        if (r.done) { _keysWarmDone = true; console.log(`[puller] target key map warm — ${r.size.toLocaleString()} keys (high-water id ${r.maxId}) in ${Math.round((Date.now() - _keysWarmT0) / 1000)}s, ${_keysWarmSlices} slice(s) of ≤${KEYS_WARM_BUDGET_MS}ms`); }
       } catch (e) { _keysWarmDone = true; console.error('[puller] target key warm-up failed:', e.message); }
-    }, 2000);
+    }, 750);
     _keysWarmTick.unref?.();
   }
   // THE TOKEN WARM-UP (freeze cut 17): the Google access token is minted in a worker after boot grace,

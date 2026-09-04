@@ -266,44 +266,39 @@ const SEARCH_MAX_MATCHES = 60;
 const SEARCH_MAX_FILE_BYTES = 512 * 1024;
 const SEARCH_SKIP_DIRS = new Set(['node_modules', '.git', 'data', '.cache']);
 
-function fileSearch(dir, query) {
+// ONE search (lib/fs_worker.fileSearchSync) serves the synchronous door, the worker thread and the gate.
+// Cut 25 (2026-09-04): the walk read whole files on the MAIN thread inside her reply — a 1.7 s block on
+// boot_p284 while she double-checked his Florida list; the chat tag now goes through the worker.
+function _searchOpts(dir, query) {
   const root = dir && dir.trim() ? resolvePath(dir) : WORKSPACE;
   const q = (query || '').trim();
+  return { root, q, opts: { root, needle: q.toLowerCase(), maxFiles: SEARCH_MAX_FILES, maxMatches: SEARCH_MAX_MATCHES, maxFileBytes: SEARCH_MAX_FILE_BYTES, skipDirs: [...SEARCH_SKIP_DIRS] } };
+}
+function _searchResult(root, q, r) {
+  const matches = (r && r.matches) || [];
+  return { ok: true, root, query: q, matches, scanned: (r && r.scanned) || 0, capped: matches.length >= SEARCH_MAX_MATCHES };
+}
+function fileSearch(dir, query) {
+  const { root, q, opts } = _searchOpts(dir, query);
   if (!q) return { ok: false, reason: 'search needs a query' };
-  const needle = q.toLowerCase();
-  const matches = [];
-  let scanned = 0;
   try {
     if (!fs.existsSync(root)) return { ok: false, reason: 'directory does not exist', path: root };
-    const stack = [root];
-    while (stack.length && scanned < SEARCH_MAX_FILES && matches.length < SEARCH_MAX_MATCHES) {
-      const cur = stack.pop();
-      let ents;
-      try { ents = fs.readdirSync(cur, { withFileTypes: true }); } catch { continue; }
-      for (const e of ents) {
-        const full = path.join(cur, e.name);
-        if (e.isDirectory()) {
-          if (!SEARCH_SKIP_DIRS.has(e.name)) stack.push(full);
-          continue;
-        }
-        if (scanned >= SEARCH_MAX_FILES || matches.length >= SEARCH_MAX_MATCHES) break;
-        scanned++;
-        let st;
-        try { st = fs.statSync(full); } catch { continue; }
-        if (st.size > SEARCH_MAX_FILE_BYTES) continue;
-        let text;
-        try { text = fs.readFileSync(full, 'utf8'); } catch { continue; }
-        if (text.includes(String.fromCharCode(0))) continue;  // crude binary skip
-        const lines = text.split(/\r?\n/);
-        for (let i = 0; i < lines.length; i++) {
-          if (lines[i].toLowerCase().includes(needle)) {
-            matches.push({ path: full, line: i + 1, text: lines[i].trim().slice(0, 200) });
-            if (matches.length >= SEARCH_MAX_MATCHES) break;
-          }
-        }
-      }
+    return _searchResult(root, q, require('./fs_worker').fileSearchSync(opts));
+  } catch (err) {
+    return { ok: false, reason: err.message, path: root };
+  }
+}
+/** The same search OFF the main thread; a worker failure falls back to the synchronous door. */
+async function fileSearchAsync(dir, query) {
+  const { root, q, opts } = _searchOpts(dir, query);
+  if (!q) return { ok: false, reason: 'search needs a query' };
+  try {
+    if (!fs.existsSync(root)) return { ok: false, reason: 'directory does not exist', path: root };
+    try { return _searchResult(root, q, await require('./fs_worker').probeSearch(opts)); }
+    catch (e) {
+      try { console.error('[files] search fell back to the main thread:', e && e.message); } catch {}
+      return _searchResult(root, q, require('./fs_worker').fileSearchSync(opts));
     }
-    return { ok: true, root, query: q, matches, scanned, capped: matches.length >= SEARCH_MAX_MATCHES };
   } catch (err) {
     return { ok: false, reason: err.message, path: root };
   }
@@ -344,7 +339,7 @@ async function dispatch({ tag, attrs, body }) {
     case 'file-list':   return fileList(attrs.path || attrs.name);
     case 'file-move':   return fileMove(attrs.from, attrs.to);
     case 'file-copy':   return fileCopy(attrs.from, attrs.to);
-    case 'file-search': return fileSearch(attrs.dir || attrs.path, attrs.query || body);
+    case 'file-search': return fileSearchAsync(attrs.dir || attrs.path, attrs.query || body);   // off the main thread (cut 25)
     default:            return { ok: false, reason: `unknown file tag ${tag}` };
   }
 }
@@ -366,7 +361,7 @@ ONE SUBJECT = ONE NOTE FILE. Before starting a new note, file-search for the sub
 module.exports = {
   WORKSPACE,
   ensureWorkspace, resolvePath,
-  fileWrite, fileAppend, fileRead, fileReadFull, fileList, fileMove, fileCopy, fileSearch,
+  fileWrite, fileAppend, fileRead, fileReadFull, fileList, fileMove, fileCopy, fileSearch, fileSearchAsync,
   findCanonicalSibling, lastWriteTs, lastWrite,
   parseTags, stripTags, dispatch,
   buildPromptBlock

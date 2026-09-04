@@ -60,6 +60,50 @@ function probeFragmentsSync({ dir, toks = [], ex = [], maxFragments = 25, maxTot
   return capped.filter((x) => { total += x.text.length; return total <= maxTotalChars; });
 }
 
+/**
+ * fileSearchSync({ root, needle, maxFiles, maxMatches, maxFileBytes, skipDirs }) → { matches, scanned }
+ * The workspace substring search (lib/files.fileSearch, the chat's <file-search> tag): a directory
+ * walk reading up to `maxFiles` files of at most `maxFileBytes`, case-insensitive line matches. Cut 25
+ * (2026-09-04): this ran on the MAIN thread inside her reply — a 1.7 s block on boot_p284 while she
+ * double-checked his Florida list; it runs in the thread now, this one function serving both doors.
+ */
+function fileSearchSync({ root, needle, maxFiles = 2000, maxMatches = 60, maxFileBytes = 512 * 1024, skipDirs = ['node_modules', '.git', 'data', '.cache'] } = {}) {
+  const skip = new Set(skipDirs || []);
+  const q = String(needle || '').toLowerCase();
+  const matches = [];
+  let scanned = 0;
+  if (!q || !root) return { matches, scanned };
+  const stack = [root];
+  while (stack.length && scanned < maxFiles && matches.length < maxMatches) {
+    const cur = stack.pop();
+    let ents;
+    try { ents = fs.readdirSync(cur, { withFileTypes: true }); } catch { continue; }
+    for (const e of ents) {
+      const full = path.join(cur, e.name);
+      if (e.isDirectory()) {
+        if (!skip.has(e.name)) stack.push(full);
+        continue;
+      }
+      if (scanned >= maxFiles || matches.length >= maxMatches) break;
+      scanned++;
+      let st;
+      try { st = fs.statSync(full); } catch { continue; }
+      if (st.size > maxFileBytes) continue;
+      let text;
+      try { text = fs.readFileSync(full, 'utf8'); } catch { continue; }
+      if (text.includes(String.fromCharCode(0))) continue;  // crude binary skip
+      const lines = text.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].toLowerCase().includes(q)) {
+          matches.push({ path: full, line: i + 1, text: lines[i].trim().slice(0, 200) });
+          if (matches.length >= maxMatches) break;
+        }
+      }
+    }
+  }
+  return { matches, scanned };
+}
+
 // ── the worker door (main thread side) ─────────────────────────────────────────────────────────
 let _entry = null;   // { w, pending: Map<id, {resolve, reject, timer}>, seq }
 
@@ -90,8 +134,8 @@ function _get() {
   return entry;
 }
 
-/** The probe in the worker thread. Rejects on a worker error or after `timeoutMs`; the caller falls back. */
-function probeFragments(opts = {}, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+/** One job in the worker thread. Rejects on a worker error or after `timeoutMs`; the caller falls back. */
+function _job(kind, opts = {}, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     let entry;
     try { entry = _get(); } catch (err) { return reject(err); }
@@ -104,23 +148,28 @@ function probeFragments(opts = {}, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     }, timeoutMs);
     timer.unref?.();
     entry.pending.set(id, { resolve, reject, timer });
-    try { entry.w.postMessage({ id, kind: 'fragments', opts: { ...opts, toks: [...(opts.toks || [])], ex: [...(opts.ex || [])] } }); }
+    try { entry.w.postMessage({ id, kind, opts: JSON.parse(JSON.stringify(opts || {})) }); }
     catch (err) { entry.pending.delete(id); clearTimeout(timer); reject(err); }
   });
 }
+/** The fragment probe in the worker thread. */
+function probeFragments(opts = {}, o = {}) { return _job('fragments', { ...opts, toks: [...(opts.toks || [])], ex: [...(opts.ex || [])] }, o); }
+/** The workspace search in the worker thread (cut 25). */
+function probeSearch(opts = {}, o = {}) { return _job('search', opts, o); }
 
 async function close() { const e = _entry; const w = e && e.w; _drop(new Error('fs worker closed')); if (w) { try { await w.terminate(); } catch {} } }
 function _live() { return !!(_entry && _entry.w); }
 
-module.exports = { probeFragments, probeFragmentsSync, readHead, norm, close, HEAD_BYTES, DEFAULT_TIMEOUT_MS, _live };
+module.exports = { probeFragments, probeFragmentsSync, probeSearch, fileSearchSync, readHead, norm, close, HEAD_BYTES, DEFAULT_TIMEOUT_MS, _live };
 
 // ── worker entry: this module re-runs in the thread with workerData set ─────────────────────────
 try {
   if (!isMainThread && workerData && workerData.__fsWorker) {
     parentPort.on('message', (m) => {
       try {
-        if (m.kind !== 'fragments') throw new Error(`unknown fs job: ${m.kind}`);
-        parentPort.postMessage({ id: m.id, rows: probeFragmentsSync(m.opts || {}) });
+        if (m.kind === 'fragments') parentPort.postMessage({ id: m.id, rows: probeFragmentsSync(m.opts || {}) });
+        else if (m.kind === 'search') parentPort.postMessage({ id: m.id, rows: fileSearchSync(m.opts || {}) });
+        else throw new Error(`unknown fs job: ${m.kind}`);
       } catch (e) { parentPort.postMessage({ id: m.id, error: (e && e.message) || String(e) }); }
     });
   }

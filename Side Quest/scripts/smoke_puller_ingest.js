@@ -147,6 +147,9 @@ ok('bridged verified contact credits the newco.io first.last pattern', s3.target
   let guard = 0, last = wNext; while (last && !last.done && guard++ < 10000) last = DB.warmTargetKeys({ rows: 100000, budgetMs: 1 });
   ok('warm-up: repeated budgeted slices converge (done=true) with the full map', last && last.done === true && last.size === 3007 && DB.targetKeyMap().size === 3007);
   ok('warm-up: the default budget is 40 ms of the main thread per beat', /budgetMs = 40/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'puller_db.js'), 'utf8')));
+  const mainSrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/pdb\.warmTargetKeys\(\{ rows: KEYS_WARM_ROWS, budgetMs: KEYS_WARM_BUDGET_MS \}\)/.test(mainSrc) && /KEYS_WARM_ROWS = parseInt\(process\.env\.ZOE_TARGET_KEYS_WARM_ROWS, 10\) \|\| 500000/.test(mainSrc) && /\}, 750\);/.test(mainSrc),
+    'the boot beat passes the time budget, lets it alone bound the slice (500k-row ceiling) and beats every 750 ms (the map warms in seconds, not a 2 s cadence × 14)');
   DB._bumpKeys();
   const rebuilt = DB.targetKeyMap();
   ok('_bumpKeys: the next call rebuilds from scratch (a fresh Map, the same 3,007 keys — 7 warm + 3,000 cold)', rebuilt !== full && rebuilt.size === 3007);

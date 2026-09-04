@@ -73,6 +73,30 @@ const src = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
   ok(tee._isFileFd(outFd === undefined ? 1 : fs.openSync(outP, 'r')) === true && /_isFileFd\(stdoutFd\)/.test(src('lib/console_tee.js')), 'the async path is taken only for a FILE fd (a terminal or a Windows pipe keeps the original console)');
   ok(/require\('\.\/lib\/console_tee'\)\.install\(\{ logPath: path\.join\(__dirname, 'boot_self\.log'\) \}\)/.test(src('main.js')) && !/stream\.write\(a\.map/.test(src('main.js')), 'main.js installs the tee from the module; the old inline tee is gone');
 
+  // ── 3. the workspace search in the worker (cut 25, boot_p284: a 1.7 s block inside her reply) ─────
+  console.log('\nfileSearch (worker thread):');
+  const files = require('../lib/files');
+  const fsw2 = require('../lib/fs_worker');
+  const sroot = path.join(tmp, 'ws'); fs.mkdirSync(path.join(sroot, 'notes'), { recursive: true }); fs.mkdirSync(path.join(sroot, 'node_modules', 'x'), { recursive: true });
+  fs.writeFileSync(path.join(sroot, 'notes', 'florida.md'), '# Florida roster\nline two mentions Tallahassee\n');
+  fs.writeFileSync(path.join(sroot, 'notes', 'other.md'), 'nothing here\n');
+  fs.writeFileSync(path.join(sroot, 'node_modules', 'x', 'skip.md'), 'Tallahassee inside node_modules must be skipped\n');
+  fs.writeFileSync(path.join(sroot, 'notes', 'big.md'), 'Tallahassee '.repeat(60000));          // > 512 KB → skipped
+  fs.writeFileSync(path.join(sroot, 'notes', 'bin.dat'), Buffer.from('Tallahassee\0binary'));    // NUL → skipped
+  const sSync = files.fileSearch(sroot, 'tallahassee');
+  const origRead = fs.readFileSync; let reads = 0; fs.readFileSync = (...a) => { reads++; return origRead(...a); };
+  let sAsync; try { sAsync = await files.fileSearchAsync(sroot, 'tallahassee'); } finally { fs.readFileSync = origRead; }
+  ok(sSync.ok && sSync.matches.length === 1 && /florida\.md$/.test(sSync.matches[0].path) && sSync.matches[0].line === 2, `the sync search: one match, at its line; node_modules, the >512 KB file and the binary file are skipped (${sSync.matches.length} match, ${sSync.scanned} scanned)`);
+  ok(sAsync.ok && JSON.stringify(sAsync.matches) === JSON.stringify(sSync.matches) && sAsync.scanned === sSync.scanned, '⭐ the worker returns the SAME matches and scan count (one function, both doors)');
+  ok(reads === 0, `⭐ the async search read nothing on the main thread (${reads} readFileSync calls)`);
+  ok((await files.fileSearchAsync(sroot, '')).ok === false && (await files.fileSearchAsync(path.join(tmp, 'nowhere'), 'x')).ok === false, 'an empty query and a missing dir are honest refusals, never a throw');
+  const origProbeS = fsw2.probeSearch; fsw2.probeSearch = async () => { throw new Error('worker down'); };
+  const sFb = await files.fileSearchAsync(sroot, 'tallahassee');
+  fsw2.probeSearch = origProbeS;
+  ok(sFb.ok && sFb.matches.length === 1, 'a worker failure falls back to the sync search (same answer)');
+  ok(/case 'file-search': return fileSearchAsync\(/.test(src('lib/files.js')) && /async function dispatch\(/.test(src('lib/files.js')), 'the chat tag <file-search> dispatches through the worker door (every caller already awaits dispatch)');
+  await fsw2.close();
+
   console.log(`\nsmoke_cut22: ${pass} passed, ${fail} failed`);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
   process.exit(fail ? 1 : 0);
