@@ -9402,10 +9402,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // system wrote nothing anywhere. Detection is deliberately narrow (a persistence marker AND a
   // behavioural verb aimed at her) because over-capture would bury the real rules in noise.
   try {
-    const _rule = require('./lib/directives').detect(userMessage);
+    let _rule = require('./lib/directives').detect(userMessage);
+    let _via = 'implicit';
+    if (!_rule) {
+      // LEG D — the explicit "make this a rule" verb turns a correction WITHOUT a persistence marker
+      // ("don't use em-dashes") into a directive; standalone ("make that a rule") promotes the previous
+      // user message, the correction he just gave.
+      let _prev = null;
+      try { const _us = db.getSessionUserTurns(sessionId, 4) || []; _prev = (_us.filter((t) => t.content !== userMessage).slice(-1)[0] || {}).content || null; } catch {}
+      _rule = require('./lib/directives').detectExplicit(userMessage, { prev: _prev });
+      if (_rule) _via = 'explicit';
+    }
     if (_rule) {
       const _r = require('./lib/directives').record(_rule, { turnId: null });
-      if (_r) console.log(`[directive] ${_r.duplicate ? 'reinforced' : 'RECORDED'}: "${_rule.slice(0, 90)}"`);
+      if (_r) console.log(`[directive] ${_r.duplicate ? 'reinforced' : 'RECORDED'} (${_via}): "${_rule.slice(0, 90)}"`);
     }
   } catch (e) { console.error('[directive] capture failed:', e.message); }
   const pendingInbounds = db.getPendingInbounds(6);

@@ -49,6 +49,11 @@ const _BEHAVIOUR = /\b(?:say|said|write|written|answer|reply|respond|use|using|c
 // Not a directive: a question, or Lucas describing HIMSELF or the world.
 const _QUESTION = /\?\s*$/;
 const _ABOUT_HIM = /^\s*(?:i|we|my|our)\b/i;
+// LEG D — the EXPLICIT promotion verb (P12 "make this a rule"). Lucas can turn ANY correction into a
+// standing rule by naming it, WITHOUT a persistence marker — closing the gap where "don't use em-dashes"
+// (a real instruction with no always/never) was lost. Explicit intent, so it is not the over-capture the
+// implicit net guards against. ASCII-only (the smoke checks every regex literal).
+const _EXPLICIT = /\b(?:make\s+(?:this|that|it)\s+(?:a\s+)?(?:standing\s+)?rule|add\s+(?:a\s+|this\s+as\s+a\s+)?rule|(?:a\s+)?new\s+rule|remember\s+this(?:\s+rule)?|that'?s\s+(?:now\s+)?a\s+rule|treat\s+(?:this|that)\s+as\s+a\s+rule)\b/i;
 
 /**
  * Does this message set a standing rule for how she works? Returns the normalised rule, or null.
@@ -68,6 +73,31 @@ function detect(text) {
     return s.slice(0, MAX_LEN);
   }
   return null;
+}
+
+/**
+ * The EXPLICIT promotion door (leg D): Lucas names a correction as a rule. INLINE ("new rule: X",
+ * "make it a rule to X") promotes the text after the verb; STANDALONE ("make that a rule") promotes
+ * `prev` — the previous user message, the correction he just gave. No persistence marker or behavioural
+ * verb is required, because the intent is explicit. Pure — no DB, no model.
+ */
+function detectExplicit(text, { prev = null } = {}) {
+  const raw = String(text || '').trim();
+  if (!raw || raw.length > 600) return null;
+  const m = _EXPLICIT.exec(raw);
+  if (!m) return null;
+  let after = raw.slice(m.index + m[0].length)
+    .replace(/^[\s:,.–—-]+/, '')       // strip leading separators (colon / dash / em-dash)
+    .replace(/^(?:that|to|is|of)\s+/i, '')       // and a leading connective word
+    .replace(/[\s,]*please\.?\s*$/i, '')         // and a trailing "please"
+    .trim();
+  let rule = (after && after.length >= 6) ? after : String(prev || '').trim();
+  if (!rule) return null;
+  rule = rule.replace(/\s+/g, ' ').slice(0, MAX_LEN);
+  if (rule.length < 6) return null;
+  if (_QUESTION.test(rule)) return null;      // don't promote a question
+  if (_EXPLICIT.test(rule)) return null;      // prev was itself the verb — nothing concrete to promote
+  return rule;
 }
 
 // ── STORE ───────────────────────────────────────────────────────────────────────────────────────
@@ -103,4 +133,4 @@ function buildBlock({ userName = 'Lucas', rows = null } = {}) {
     + lines.join('\n');
 }
 
-module.exports = { detect, record, active, retire, buildBlock, MAX_ACTIVE, MAX_LEN, _PERSIST, _AT_HER, _BEHAVIOUR };
+module.exports = { detect, detectExplicit, record, active, retire, buildBlock, MAX_ACTIVE, MAX_LEN, _PERSIST, _AT_HER, _BEHAVIOUR, _EXPLICIT };

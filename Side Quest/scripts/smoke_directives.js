@@ -114,5 +114,28 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
   ok(/\[directive\]/.test(m), 'with a log line — an unmeasured capture is assumed to work');
 }
 
+// ── LEG D: the explicit "make this a rule" verb — a correction WITHOUT a persistence marker ──────
+{
+  ok(D.detectExplicit('make that a rule', { prev: "Don't use em-dashes in op-eds." }) === "Don't use em-dashes in op-eds.",
+    'standalone verb promotes the previous correction verbatim');
+  ok(D.detect("Don't use em-dashes in op-eds.") === null,
+    'and that correction was INVISIBLE to the implicit net — the gap leg D closes');
+  ok(D.detectExplicit('New rule: cite every number.') === 'cite every number.',
+    'inline "new rule: X" promotes X');
+  ok(D.detectExplicit('make it a rule to always verify a quote before you use it') === 'always verify a quote before you use it',
+    'inline "make it a rule to X" strips the connective and promotes X');
+  ok(D.detectExplicit('add a rule: keep op-eds under 700 words') === 'keep op-eds under 700 words',
+    'inline "add a rule: X" promotes X — no behavioural verb required (explicit intent)');
+  ok(D.detectExplicit('what time is the huddle?') === null, 'no verb → nothing promoted');
+  ok(D.detectExplicit('make that a rule', { prev: null }) === null, 'standalone with no previous message promotes nothing');
+  ok(D.detectExplicit('make this a rule?', { prev: null }) === null, 'a bare question is never promoted');
+  ok(D.detectExplicit('make it a rule', { prev: 'make it a rule' }) === null, 'the previous message being the verb itself promotes nothing');
+  ok(!/[^\x00-\x7F]/.test(String(D._EXPLICIT)), 'the explicit-verb regex is ASCII-only');
+
+  const m2 = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/detectExplicit\(userMessage, \{ prev:/.test(m2), 'the chat door tries the explicit verb when the implicit net misses');
+  ok(/getSessionUserTurns\(sessionId/.test(m2), 'and fetches the previous user turn to promote it');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
