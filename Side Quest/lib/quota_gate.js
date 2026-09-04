@@ -98,10 +98,53 @@ function spentLastHourBackground(now = Date.now()) {
  * @param {string} lane      'interactive' | 'directed' | 'research' | 'idle'
  * @param {number} estimate  expected COMPUTE for this call — quota.costOf({model, tokens})
  */
-function allow(lane, { estimate = 0, now = Date.now(), quiet = false } = {}) {
+// ── WORK QUEUED ABOVE EXPANSION? (usage law 09-03) ───────────────────────────────────────────────
+// Expansion is paced only while something outranks it is waiting: his outstanding threads (pending,
+// never driven, not self-spawned, not a beat's), his directed focus holding the slot, or the pen's
+// work queue (development). Read at most every QUEUE_TTL_MS — the gate is asked on every cloud call.
+// Fail-CLOSED to "queued" (the conservative side of his law) on any error. Transitions are logged
+// once, so the ledger shows when expansion opened up and when it went back to being paced.
+const QUEUE_TTL_MS = 30 * 1000;
+let _queueAt = 0, _queueVal = null, _queueWhy = '';
+function queuedAbove(now = Date.now()) {
+  if (_queueVal !== null && now - _queueAt < QUEUE_TTL_MS) return _queueVal;
+  let val = true, why = 'unreadable';
+  try {
+    const db = _db();
+    const focusLib = require('./focus');
+    const parts = [];
+    let directed = false;
+    try { const f = focusLib.getCurrent(); directed = !!(f && focusLib.isDirected(f)); } catch {}
+    if (directed) parts.push('his directed focus');
+    let his = 0;
+    try {
+      for (const t of (db.getUnstartedUserThreads(60) || [])) {
+        if (!t) continue;
+        try { if ((db.getMeta(`focus.${t.id}.beat`) || '').trim()) continue; } catch {}
+        try { if (focusLib.isSelfSpawned(t.id)) continue; } catch {}
+        his++;
+      }
+    } catch {}
+    if (his) parts.push(`${his} of his threads`);
+    let pen = 0;
+    try { pen = (require('./code_pen').workQueue() || []).length; } catch {}
+    if (pen) parts.push(`${pen} pen job(s)`);
+    val = parts.length > 0;
+    why = parts.length ? parts.join(', ') : 'nothing above';
+  } catch (e) { val = true; why = `unreadable (${e && e.message})`; }
+  if (_queueVal !== null && val !== _queueVal) {
+    console.log(val ? `[quota] expansion PACED — queued above it: ${why}` : '[quota] expansion UNPACED — nothing queued above it; the whole sustainable rate is hers');
+  }
+  _queueAt = now; _queueVal = val; _queueWhy = why;
+  return val;
+}
+function queuedAboveWhy() { return _queueWhy; }
+function _resetQueueCache() { _queueAt = 0; _queueVal = null; _queueWhy = ''; }
+
+function allow(lane, { estimate = 0, model = '', now = Date.now(), quiet = false } = {}) {
   try {
     const st = state(now);
-    const r = quota.check({ lane, st, spentLastHour: spentLastHour(now), spentLastHourBg: spentLastHourBackground(now), estimate, reopening: !!closedSince(lane) });
+    const r = quota.check({ lane, st, spentLastHour: spentLastHour(now), spentLastHourBg: spentLastHourBackground(now), estimate, reopening: !!closedSince(lane), model, queuedAbove: queuedAbove(now) });
     if (!r.allow && !quiet && now - _lastLog > 5 * 60 * 1000) {
       _lastLog = now;
       console.log(`[quota] ${lane} DEFERRED — ${r.reason}`);
@@ -140,10 +183,10 @@ function peek(lane, { now = Date.now() } = {}) {
   try {
     const st = state(now);
     const spent = spentLastHour(now), spentBg = spentLastHourBackground(now);
-    const r = quota.check({ lane, st, spentLastHour: spent, spentLastHourBg: spentBg, estimate: 0, reopening: !!closedSince(lane) });
+    const r = quota.check({ lane, st, spentLastHour: spent, spentLastHourBg: spentBg, estimate: 0, reopening: !!closedSince(lane), queuedAbove: queuedAbove(now) });
     const since = closedSince(lane);
     return {
-      lane: String(lane), allow: !!r.allow, reason: r.reason || '',
+      lane: String(lane), allow: !!r.allow, reason: r.reason || '', queuedAbove: queuedAbove(now), queuedAboveWhy: queuedAboveWhy(),
       known: !!st.known, usedPct: st.known ? st.usedPct : null, hoursLeft: st.known && Number.isFinite(st.hoursLeft) ? st.hoursLeft : null,
       pacePerHour: st.known && Number.isFinite(st.pacePerHour) ? st.pacePerHour : null,
       spentLastHour: spent, spentLastHourBg: spentBg, closedSinceMs: since ? now - since : null,
@@ -156,4 +199,4 @@ function peek(lane, { now = Date.now() } = {}) {
 /** One line for boot / status. */
 function describe(now = Date.now()) { return quota.describe(state(now)); }
 
-module.exports = { allow, peek, state, describe, spentLastHour, spentLastHourBackground, closedSince, _noteClosure };
+module.exports = { allow, peek, state, describe, spentLastHour, spentLastHourBackground, closedSince, queuedAbove, queuedAboveWhy, _noteClosure, _resetQueueCache };

@@ -69,21 +69,40 @@ const HOUR = 3600 * 1000;
 
 // Lanes, most protective first. Interactive work is never throttled by this module — it is the thing
 // the quota is FOR. The autonomous lanes are ordered by how little is lost when they wait.
+// ⭐ THE USAGE LAW (Lucas 2026-09-03, verbatim-close: "The ONLY lane that should be slowed is BASIC
+// DATABASE EXPANSION, and only when there are research directives in the queue, user commands in the
+// queue, and program development to do. We are still on the very conservative side. The swarms
+// shouldn't really be included, since we use such a cost-friendly model."). Four tiers:
+//   user        = interactive (his turn) + directed (his word, and his swarms' partitions): NEVER slowed
+//   development = the program building itself (pen cures, rehearsal, pursuit, the self-build operators):
+//                 its own tier — named and measurable, floor-gated only, never paced
+//   expansion   = research + idle (the sweep, decomposition, news, enrichment, promotion, the subconscious):
+//                 the ONLY paced tier, and paced ONLY when work is QUEUED above it; otherwise it may use
+//                 the whole sustainable rate (use-it-or-lose-it — the pool does not roll over)
+// Cheap-model calls (weight ≤ CHEAP_WEIGHT: gemma4:31b) never trip the pace gate at all; the FLOORS below
+// stay armed for every tier, so his chat reserve survives everything.
 const TIER = {
   interactive: 0,   // Lucas is typing. Never blocked.
   directed: 1,      // work he explicitly assigned. Blocked only when the pool is genuinely empty.
-  research: 2,      // autonomous research passes.
-  idle: 3,          // graph-walk / puller / subconscious drift.
+  development: 2,   // the program's own build. Floor-gated only.
+  research: 3,      // autonomous research passes (EXPANSION).
+  idle: 4,          // graph-walk / puller / subconscious drift (EXPANSION).
 };
+const EXPANSION_TIERS = new Set(['research', 'idle']);
 // Fraction of the pool each tier is allowed to consume. Interactive keeps a reserve nothing else can
 // touch: at 99% spent she must still be able to answer.
-const TIER_FLOOR = { interactive: 0.00, directed: 0.03, research: 0.10, idle: 0.15 };
+const TIER_FLOOR = { interactive: 0.00, directed: 0.03, development: 0.05, research: 0.10, idle: 0.15 };
+// Models at or under this weight (billions of parameters) are the cost-friendly fleet — the swarm's
+// gemma4:31b — and never trip the PACE check (his law: "the swarms shouldn't really be included").
+const CHEAP_WEIGHT = 35;
 // THE BURST RULE (2026-08-29, Lucas: "we have zero quota constraints" — dashboard 48.3% used with
 // ~24h to reset while the pace gate deferred every autonomous lane; the pool does not roll over, so
 // pacing a pool that is AHEAD of schedule defends quota that will simply expire). The window is the
 // provider's weekly cycle; ahead = usage % lagging elapsed % by a clear margin (no flapping).
+// Margin 0.10 → 0.02 (usage law 09-03): ahead of schedule at all is no pacing; the hysteresis on a
+// reopening lane below is what keeps the threshold from strobing.
 const WINDOW_H = 168;
-const BURST_AHEAD_MARGIN = 0.10;
+const BURST_AHEAD_MARGIN = 0.02;
 
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
@@ -190,7 +209,11 @@ function state({ limit = 0, markPct = 0, markAt = 0, spentSince = 0, resetAt = 0
 // `reopening` (09-01 flap fix: seven 1-minute open/close cycles as the hour drained): a lane that
 // is currently CLOSED reopens only when comfortably under pace (85% of its share) — hysteresis, so
 // the threshold crossing doesn't strobe the log and the closure ledger every minute.
-function check({ lane = 'idle', st = null, spentLastHour = 0, spentLastHourBg = null, estimate = 0, reopening = false } = {}) {
+// `model` (usage law 09-03): the cheap-model exemption needs the model — a call on the cost-friendly
+// fleet never trips the pace check. `queuedAbove` (usage law): is work QUEUED above expansion — his
+// outstanding threads, his directed focus, the pen's queue? false = nothing above → expansion may
+// spend the whole sustainable rate; true or unknown (an old caller) = the conservative shares.
+function check({ lane = 'idle', st = null, spentLastHour = 0, spentLastHourBg = null, estimate = 0, reopening = false, model = '', queuedAbove = null } = {}) {
   const tier = TIER[lane] != null ? lane : 'idle';
   if (tier === 'interactive') return { allow: true, reason: 'interactive — never throttled' };
   if (!st || !st.known) return { allow: true, reason: 'no quota configured' };
@@ -214,6 +237,14 @@ function check({ lane = 'idle', st = null, spentLastHour = 0, spentLastHourBg = 
   // reverse. See [[db-is-foundation-no-recall-only]]'s sibling principle on priority. Interactive already
   // returned at the top; directed exits here; only research/idle reach the rate check.
   if (tier === 'directed') return { allow: true, reason: 'directed — user work, floor-gated only (never pace-throttled)', usedPct: st.usedPct, pacePerHour: st.pacePerHour };
+  // DEVELOPMENT (usage law 09-03): the program building itself — pen cures, rehearsal, pursuit, the
+  // self-build operators — is its own tier: named, measured in the meter, floor-gated only, never paced.
+  if (tier === 'development') return { allow: true, reason: 'development — the program\'s own build, floor-gated only (never pace-throttled)', usedPct: st.usedPct, pacePerHour: st.pacePerHour };
+  // THE CHEAP-MODEL EXEMPTION (usage law 09-03): a call on the cost-friendly fleet (gemma4:31b, the
+  // swarm's model) never trips the pace gate — the floors above already held. Weight from the name.
+  if (model && weightFor(model) <= CHEAP_WEIGHT) {
+    return { allow: true, cheap: true, reason: `cheap model (${model}, weight ${weightFor(model)} ≤ ${CHEAP_WEIGHT}) — the pace gate never trips; floors still armed`, usedPct: st.usedPct, pacePerHour: st.pacePerHour };
+  }
   // Pace is a rate check, so it needs the trailing hour, not the instant. The background tiers get a slice
   // of the sustainable rate — autonomous research a little, idle/subconscious drift the least (throttled
   // first + hardest, so subconscious yields before anything else Lucas cares about).
@@ -246,19 +277,23 @@ function check({ lane = 'idle', st = null, spentLastHour = 0, spentLastHourBg = 
   const ENDGAME_H = 36;
   const base = tier === 'research' ? 0.60 : 0.40;
   const ramp = st.hoursLeft < ENDGAME_H ? (1 - st.hoursLeft / ENDGAME_H) : 0;   // 0 → 1 across the final window
-  const share = base + (0.95 - base) * ramp;
+  // THE QUEUED-ABOVE RULE (usage law 09-03): expansion is paced ONLY when work is queued above it. With
+  // nothing above (no outstanding thread of his, no directed focus, an empty pen queue) the shares fall
+  // away and expansion may spend the WHOLE sustainable rate — never more: the burn-down is the ceiling.
+  const unpaced = queuedAbove === false && EXPANSION_TIERS.has(tier);
+  const share = unpaced ? 1.0 : base + (0.95 - base) * ramp;
   const allowedThisHour = st.pacePerHour * share * (reopening ? 0.85 : 1);
   // #115: background paces against background spend when the caller can split the hour.
   const paceSpend = spentLastHourBg != null ? num(spentLastHourBg) : num(spentLastHour);
   if (paceSpend + num(estimate) > allowedThisHour) {
     return {
       allow: false,
-      reason: `over burn-down pace: ${Math.round(paceSpend).toLocaleString()} ${spentLastHourBg != null ? 'BACKGROUND ' : ''}compute in the last hour vs ${Math.round(allowedThisHour).toLocaleString()} sustainable for ${tier} (${Math.round(st.remaining).toLocaleString()} left, ${st.hoursLeft.toFixed(1)}h to reset)`,
+      reason: `over burn-down pace: ${Math.round(paceSpend).toLocaleString()} ${spentLastHourBg != null ? 'BACKGROUND ' : ''}compute in the last hour vs ${Math.round(allowedThisHour).toLocaleString()} sustainable for ${tier}${unpaced ? ' (the whole rate — nothing queued above)' : ''} (${Math.round(st.remaining).toLocaleString()} left, ${st.hoursLeft.toFixed(1)}h to reset)`,
       usedPct: st.usedPct,
       pacePerHour: st.pacePerHour,
     };
   }
-  return { allow: true, reason: 'within pace', usedPct: st.usedPct, pacePerHour: st.pacePerHour };
+  return { allow: true, reason: unpaced ? 'within the sustainable rate — nothing queued above expansion, so it is unpaced' : 'within pace', usedPct: st.usedPct, pacePerHour: st.pacePerHour, unpaced };
 }
 
 /** One line for the log / status surface. Honest when nothing is configured. */
@@ -269,4 +304,4 @@ function describe(st) {
     + `${st.hoursLeft.toFixed(1)}h to reset · sustainable ${Math.round(st.pacePerHour).toLocaleString()}/h`;
 }
 
-module.exports = { state, check, describe, weightFor, costOf, TIER, TIER_FLOOR, HOUR, NAMED_WEIGHTS, DEFAULT_WEIGHT, WINDOW_H, BURST_AHEAD_MARGIN };
+module.exports = { state, check, describe, weightFor, costOf, TIER, TIER_FLOOR, EXPANSION_TIERS, CHEAP_WEIGHT, HOUR, NAMED_WEIGHTS, DEFAULT_WEIGHT, WINDOW_H, BURST_AHEAD_MARGIN };

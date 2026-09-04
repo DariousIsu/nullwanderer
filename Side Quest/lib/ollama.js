@@ -106,7 +106,7 @@ async function streamChat({ model, messages, options = {}, onToken, onThinking, 
       const _chars = (messages || []).reduce((n, m) => n + String((m && m.content) || '').length, 0);
       const _estTokens = Math.round(_chars / 3.2) + 500;   // prompt + a nominal completion
       const _est = require('./quota').costOf({ model, tokens: _estTokens });
-      const _r = require('./quota_gate').allow(lane, { estimate: _est });
+      const _r = require('./quota_gate').allow(lane, { estimate: _est, model });   // model: the cheap-fleet exemption (usage law)
       if (!_r.allow) { const e = new Error(`quota: ${lane} deferred — ${_r.reason}`); e.deferred = true; e.lane = lane; throw e; }
     } catch (e) { if (e && e.deferred) throw e; /* gate infra failure → FAIL OPEN, make the call */ }
   }
@@ -275,7 +275,7 @@ async function completeDetailed({ model, messages, options = {}, base = OLLAMA_B
     try {
       const _chars = (messages || []).reduce((n, m) => n + String((m && m.content) || '').length, 0);
       const _est = require('./quota').costOf({ model, tokens: Math.round(_chars / 3.2) + 500 });
-      const _r = require('./quota_gate').allow(lane, { estimate: _est });
+      const _r = require('./quota_gate').allow(lane, { estimate: _est, model });   // model: the cheap-fleet exemption (usage law)
       if (!_r.allow) { const e = new Error(`quota: ${lane} deferred — ${_r.reason}`); e.deferred = true; e.lane = lane; throw e; }
     } catch (e) { if (e && e.deferred) throw e; /* fail open */ }
   }

@@ -299,8 +299,13 @@ async function run() {
       /if \(!focus \|\| !focusLib\.isDriven\(focus\)\) \{ stopDirectedFocusDriver\(\); return; \}/.test(mainSrc));
     ok('⭐ the beat pass gate reads the TIER (isExpansion), never the once-laundered origin stamp',
       /const _focusOrigin = focusLib\.isExpansion\(focus\) \? 'beat' : 'user';/.test(mainSrc));
+    // usage law (the rest of it, 09-04): _focusSpendTier keys on isDirected for HIS word, and carries the
+    // two lane rules above it — a pen-work thread bills DEVELOPMENT, a chat-commanded swarm's partitions
+    // bill DIRECTED (partitions inherit the parent's lane). Nothing else may mint 'directed'.
     ok('_focusSpendTier and _userDirectedActive key on isDirected alone (one definition of "his word")',
-      /function _focusSpendTier\(focus\) \{\s*try \{ return \(focus && require\('\.\/lib\/focus'\)\.isDirected\(focus\)\) \? 'directed' : 'research'; \}/.test(mainSrc)
+      /function _focusSpendTier\(focus\) \{[\s\S]{0,1200}?return require\('\.\/lib\/focus'\)\.isDirected\(focus\) \? 'directed' : 'research';/.test(mainSrc)
+      && /focus\.\$\{focus\.id\}\.pen`\)\) return 'development';/.test(mainSrc)
+      && /focus\.\$\{focus\.id\}\.swarm_by`\) === 'chat'\) return 'directed';/.test(mainSrc)
       && /return !!\(f && focusLib\.isDirected\(f\)\);\s*\/\/ usage law/.test(mainSrc));
     ok('the scheduler never preempts a DIRECTED focus and rotates only DRIVEN beat foci',
       /if \(focus && focusLib\.isDriven\(focus\)\) \{\s*if \(focusLib\.isDirected\(focus\)\) return;/.test(mainSrc));

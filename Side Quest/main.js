@@ -15841,7 +15841,9 @@ function _researchCadenceMs() { return Math.max(5000, _intMeta('research.cadence
 function _laneModelOverride(focusId) {
   try {
     if (db.getMeta(`focus.${focusId}.deep`) === '1') { const m = (db.getMeta('model.operator_deep') || '').trim(); if (m) return m; }
-    if (db.getMeta(`focus.${focusId}.swarm`) === '1') { const m = (db.getMeta('model.operator_swarm') || '').trim(); if (m) return m; }
+    // THE SWARM SLOT (usage law 09-03, his word): gemma4:31b-cloud — the cost-friendly model, and the
+    // one the cheap-fleet exemption never paces. An operator-set model.operator_swarm still overrides.
+    if (db.getMeta(`focus.${focusId}.swarm`) === '1') { const m = (db.getMeta('model.operator_swarm') || '').trim(); return m || 'gemma4:31b-cloud'; }
   } catch {}
   return null;
 }
@@ -16762,6 +16764,7 @@ async function autonomyTick() {
       const _rehearseResearch = (q) => runCloudOperator({
         userMessage: `RESEARCH ONLY — do not build anything. ${String(q).slice(0, 200)}. Search the web / your own stores and READ what you find (never run it). Reply in at most 1000 chars: what you learned + source URLs.`,
         autonomous: true,
+        lane: 'development',   // usage law 09-03: the rehearsal loop is the program building itself — its own tier, never paced
       }).then((sp) => {
         const a = String((sp && sp.answer) || '');
         // M6.3: narration is not a finding — hand the driver an honest empty, not process talk.
@@ -17949,7 +17952,17 @@ function _userDirectedActive() {
 // focus bills research, paced; his word bills directed, floor-gated only. Declared as the run's ambient
 // spendTier at the pass call sites, so every nested cloud call inherits it.
 function _focusSpendTier(focus) {
-  try { return (focus && require('./lib/focus').isDirected(focus)) ? 'directed' : 'research'; } catch { return 'research'; }
+  try {
+    if (!focus) return 'research';
+    // DEVELOPMENT (usage law 09-03): a pen-work thread is the program building itself — its own tier,
+    // named and measured, floor-gated only, never paced.
+    try { if (db.getMeta(`focus.${focus.id}.pen`)) return 'development'; } catch {}
+    // PARTITIONS INHERIT THE PARENT'S LANE (usage law 09-03): a swarm he commanded from chat is his word,
+    // so its partitions bill directed (never paced) — before the split they rode 'research' and the pace
+    // gate starved his own swarm while the pool sat ahead of schedule.
+    try { if (db.getMeta(`focus.${focus.id}.swarm`) === '1' && db.getMeta(`focus.${focus.id}.swarm_by`) === 'chat') return 'directed'; } catch {}
+    return require('./lib/focus').isDirected(focus) ? 'directed' : 'research';
+  } catch { return 'research'; }
 }
 let _preemptLogAt = 0;
 function _pauseAllWorkers(state, why) {
@@ -18055,6 +18068,7 @@ async function backgroundWorkerPass(focusId) {
   } catch (e) { console.error('[worker] pass failed:', e.message); }
   finally { markActivity('idle'); _bgInFlight.delete(focusId); }
 }
+let _swarmLiveLogAt = 0;
 function startBackgroundWorkers() {
   if (_bgTimer) return;
   // v1.4 (audit F37): worker count 1 — the documented default — used to mean NO timer at all,
@@ -18071,6 +18085,12 @@ function startBackgroundWorkers() {
         if (!_userDirectedActive()) {
           for (const w of Object.values(st.workers || {})) { const bid = w && w.beatId; const th = bid && st.beats[bid] && st.beats[bid].thread; if (th) backgroundWorkerPass(th).catch(() => {}); }
           if (st.wonder && st.wonder.thread) backgroundWorkerPass(st.wonder.thread).catch(() => {});   // the WONDERING lane — driven IN PARALLEL with research; yields to his directed work like the fleet
+        } else if (st.swarm && st.swarm.parts && Date.now() - _swarmLiveLogAt > 10 * 60 * 1000) {
+          // THE SWARM-LIVE SKIP, said out loud (usage law 09-03): his directed work holds the breadth workers,
+          // but a swarm is his word too — its partitions keep driving on his lane. One line per ten minutes.
+          _swarmLiveLogAt = Date.now();
+          const live = Object.values(st.swarm.parts).filter((p) => p && p.thread && !p.done).length;
+          console.log(`[swarm] live during his directed work — ${live} partition(s) keep driving on the directed lane (his word); breadth workers hold`);
         }
         if (st.swarm && st.swarm.parts) for (const p of Object.values(st.swarm.parts)) { if (p && p.thread && !p.done) backgroundWorkerPass(p.thread).catch(() => {}); }   // drive the swarm partitions too
       }
@@ -18169,7 +18189,7 @@ async function startSwarm({ target, requestedK = null, requestedBy = 'chat' } = 
   state.swarm = { beatId: beat.id, mode: 'roster', startedAt: Date.now(), requestedBy, parts: {} };
   for (let i = 0; i < parts.length; i++) {
     const r = await seedBeatRun(beat, { background: true, targetsOverride: parts[i] });
-    if (r && r.ok) { state.swarm.parts[i + 1] = { thread: r.focusId, n: parts[i].length, done: false }; try { db.setMeta(`focus.${r.focusId}.swarm`, '1'); } catch {} }   // tag so it surfaces while breadth is quieted
+    if (r && r.ok) { state.swarm.parts[i + 1] = { thread: r.focusId, n: parts[i].length, done: false }; try { db.setMeta(`focus.${r.focusId}.swarm`, '1'); db.setMeta(`focus.${r.focusId}.swarm_by`, String(requestedBy || 'chat')); } catch {} }   // tag so it surfaces while breadth is quieted; swarm_by = whose word (a chat swarm's partitions bill directed)
   }
   const seeded = Object.keys(state.swarm.parts).length;
   if (!seeded) { delete state.swarm; return { ok: false, reason: 'failed to seed any swarm worker' }; }
