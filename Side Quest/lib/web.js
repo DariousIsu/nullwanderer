@@ -172,14 +172,24 @@ function findChrome() { for (const p of CHROME_PATHS) { try { if (fs.existsSync(
 // launched is orphaned — these pile up across restarts, and MULTIPLE windows in a Meet
 // both play audio (the echo) + fight over the profile lock (join flakiness/drops). Only
 // runs on a fresh launch (context === null), so it can't kill the current session's browser.
+// CUT 18 (09-03): SPAWNED, never execSync — the synchronous PowerShell held the main thread for the
+// whole process enumeration (the profiler's "spawn" blocks, 3 × ~2s post-freeze) inside the turn that
+// first opened her browser. Resolves when the sweep exits, errors, or hits the 8s cap; never rejects.
 function killStaleProfileChrome() {
-  if (process.platform !== 'win32') return;
-  try {
-    require('child_process').execSync(
-      "powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='chrome.exe'\\\" | Where-Object { $_.CommandLine -like '*web_profile*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\"",
-      { timeout: 8000, stdio: 'ignore' }
-    );
-  } catch {}
+  if (process.platform !== 'win32') return Promise.resolve();
+  return new Promise((resolve) => {
+    let done = false;
+    const fin = () => { if (!done) { done = true; resolve(); } };
+    try {
+      const cp = require('child_process').spawn('powershell', [
+        '-NoProfile', '-Command',
+        "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*web_profile*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+      ], { stdio: 'ignore', windowsHide: true });
+      const t = setTimeout(() => { try { cp.kill(); } catch {} fin(); }, 8000);
+      cp.on('exit', () => { clearTimeout(t); fin(); });
+      cp.on('error', () => { clearTimeout(t); fin(); });
+    } catch { fin(); }
+  });
 }
 function isConnected() { return !!(context && page); }
 
@@ -223,7 +233,7 @@ async function ensure() {
   if (!executablePath) throw new Error('chrome.exe/msedge.exe not found in standard paths');
   try { if (!fs.existsSync(PROFILE_DIR)) fs.mkdirSync(PROFILE_DIR, { recursive: true }); } catch {}
   try { if (!fs.existsSync(DOWNLOADS_DIR)) fs.mkdirSync(DOWNLOADS_DIR, { recursive: true }); } catch {}
-  killStaleProfileChrome();   // clear orphaned windows on her profile (echo + lock conflicts)
+  await killStaleProfileChrome();   // clear orphaned windows on her profile (echo + lock conflicts) — off the loop (cut 18)
   context = await pw.chromium.launchPersistentContext(PROFILE_DIR, {
     headless: false,
     executablePath,

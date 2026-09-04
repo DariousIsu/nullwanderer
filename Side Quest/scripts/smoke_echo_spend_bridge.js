@@ -85,7 +85,7 @@ ok(r6.folded === 1 && recorded[recorded.length - 1].tokens === 75, 'post-fast-fo
 
 // ── wiring grep: the live 60s tick actually calls the bridge ────────────────────────────────────
 const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-ok(/echo_spend_bridge'\)\.foldOnce\(\)/.test(mainSrc), 'main.js 60s meter tick calls foldOnce()');
+ok(/echo_spend_bridge'\)\.foldOnceAsync\(\)\.then/.test(mainSrc), 'main.js 60s meter tick calls foldOnceAsync() (cut 18: the saga.db reads run in the db worker)');
 ok(/\[echo-spend\] folded/.test(mainSrc), 'the fold logs its count (observable, never silent)');
 
 conn.close();

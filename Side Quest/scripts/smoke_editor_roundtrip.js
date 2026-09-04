@@ -81,14 +81,20 @@ function ok(name, cond, detail = '') {
     const init = await echo.initialize();
     ok('connected to Echo', !!echo.ready, JSON.stringify(init && init.serverInfo));
 
-    // 1) open
+    // 1) open — WITHOUT the autonomous chain (cut 18, 2026-09-03). Opening a session fires the two
+    // Rainey checker agents by default; this smoke did that on every gate run (three times per red
+    // gate, with the harness's retries) — 166s of cloud agent work and locked writes in the sidecar
+    // each time, the "database is locked" storm that wedged every tool behind the audit lock. The
+    // lifecycle is proved with a TEST payload; no agent may fire from a smoke.
     const openRes = await echo.callTool('rainey_open_verification_session', {
       source_doc_path: DOC, author_name: 'Charles Walker',
-      notes: 'editor round-trip smoke (test findings, no agent run)'
+      notes: 'editor round-trip smoke (test findings, no agent run)',
+      dispatch_agents: false
     });
     const open = payload(openRes);
     sessionId = open && (open.session_id || open.id || (open.session && open.session.id));
     ok('opened verification session', !!sessionId, JSON.stringify(open).slice(0, 200));
+    ok('⭐ no checker agent was dispatched by the smoke', !!open && open.event_dispatched === 0 && open.dispatch === 'suppressed', JSON.stringify(open).slice(0, 160));
     if (!sessionId) throw new Error('no session_id returned');
 
     // 2) attach test cite-verify findings

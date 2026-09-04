@@ -413,6 +413,61 @@ function listValueScopedTargets({ limit = 500, crmShare = 300, bulkMin = BULK_CO
   const c = _db().prepare(tailDrawSql(bulk.length)).all(...bulk, rest);
   return a.concat(c);
 }
+// CUT 18 (09-03): the pipeline's candidate SNAPSHOT off the main thread. listValueScopedTargets was the
+// ledger's second-largest block post-freeze (70 × ≥1s, 130s) and the caller then asked three more
+// statements PER ROW (getBelief / listObservations ×2 — ~1,500 statements a tick) to derive four
+// flags. Both draws and the flags now run as three statements in lib/db_worker against the puller
+// file (read-only, its own connection); the main thread receives 500 small rows. The flag semantics
+// mirror monologue._pullerCandidateSnapshotSync exactly: has_email = a beliefs row of type email
+// (any status, as getBelief reads), has_deep = an observation with attr 'social', grounded = no email
+// AND a domain AND (CRM-linked OR an observation with a doc kind / http(s) / docstore source_url).
+const SNAP_COLS = 't.id, t.name, t.company, t.domain, t.crm_id, t.status, t.last_accessed_at, t.created_at';
+const VALUE_SNAP_SQL =
+  `SELECT ${SNAP_COLS} FROM targets t INDEXED BY idx_tgt_value
+    WHERE t.merged_into IS NULL AND t.kind = 'person' AND (t.crm_id IS NOT NULL OR t.status = 'promoted')
+    ORDER BY t.last_accessed_at DESC LIMIT ?`;
+const tailSnapSql = (nBulk) =>
+  `SELECT ${SNAP_COLS} FROM targets t INDEXED BY idx_tgt_recent
+    WHERE t.merged_into IS NULL AND t.kind = 'person' AND t.crm_id IS NULL AND t.status = 'adhoc'
+    ${nBulk ? `AND (t.company IS NULL OR t.company NOT IN (${Array.from({ length: nBulk }, () => '?').join(',')}))` : ''}
+    ORDER BY t.last_accessed_at DESC LIMIT ?`;
+const FACTS_SQL =
+  `SELECT t.id,
+          EXISTS(SELECT 1 FROM beliefs b WHERE b.target_id = t.id AND b.type = 'email') AS has_email,
+          EXISTS(SELECT 1 FROM observations o WHERE o.target_id = t.id AND o.attr = 'social') AS has_deep,
+          EXISTS(SELECT 1 FROM observations o WHERE o.target_id = t.id
+                    AND (o.kind = 'doc' OR o.source_url LIKE 'http://%' OR o.source_url LIKE 'https://%' OR o.source_url LIKE 'docstore:%')) AS grounded_obs
+     FROM targets t WHERE t.id IN (SELECT value FROM json_each(?))`;
+function _workerQuery(sql, params, n) {
+  const p = _dbPath;
+  if (!p || p === ':memory:') throw new Error('puller store has no file — no worker');
+  return require('./db_worker').query(p, sql, params, { limit: n, timeoutMs: 120000 });
+}
+async function bulkCompaniesAsync({ min = BULK_COMPANY_MIN } = {}) {
+  const now = Date.now();
+  if (_bulkCache.set && (now - _bulkCache.at) < BULK_CACHE_MS) return _bulkCache.set;
+  const rows = await _workerQuery(BULK_SQL, [min], 100000);
+  _bulkCache = { at: now, set: new Set((rows || []).map((r) => r.company)) };
+  return _bulkCache.set;
+}
+async function valueScopedSnapshotAsync({ limit = 500, crmShare = 300, bulkMin = BULK_COMPANY_MIN } = {}) {
+  const a = await _workerQuery(VALUE_SNAP_SQL, [Math.max(0, Math.min(crmShare, limit))], limit + 10);
+  const rest = Math.max(0, limit - a.length);
+  let c = [];
+  if (rest > 0) {
+    const bulk = [...(await bulkCompaniesAsync({ min: bulkMin }))];
+    c = await _workerQuery(tailSnapSql(bulk.length), [...bulk, rest], rest + 10);
+  }
+  const rows = a.concat(c);
+  if (!rows.length) return [];
+  const facts = new Map((await _workerQuery(FACTS_SQL, [JSON.stringify(rows.map((r) => r.id))], rows.length + 10)).map((f) => [Number(f.id), f]));
+  return rows.map((t) => {
+    const f = facts.get(Number(t.id)) || {};
+    const hasEmail = !!f.has_email, hasDeep = !!f.has_deep;
+    const grounded = !hasEmail && !!t.domain && (t.crm_id != null || !!f.grounded_obs);
+    return { id: t.id, name: t.name, company: t.company, domain: t.domain, hasEmail, hasDeep, grounded, ts: t.last_accessed_at || t.created_at || 0 };
+  });
+}
 // The two draws' query plans — the smoke pins the cure (an index walk, no temp B-tree), not just "runs".
 function drawPlans() {
   const d = _db();
@@ -799,7 +854,7 @@ function splitTarget(fromId, { obsIds = [], name, company = null, domain = null,
 module.exports = {
   init, close, dbPath, populationReader, POPULATION_SQL, socialCandidates, _preparedCount,
   keyOf, targetKeyMap, warmTargetKeys, _bumpKeys, _targetKeyStats,
-  createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, drawPlans, listOrgTargets, bulkCompanies, eachTargetKey, promoteTarget, normalizeCrmId, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName, backfillOrgKinds,
+  createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, valueScopedSnapshotAsync, bulkCompaniesAsync, drawPlans, listOrgTargets, bulkCompanies, eachTargetKey, promoteTarget, normalizeCrmId, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName, orgShapedName, backfillOrgKinds,
   addObservation, listObservations, observationCounts, failedAddresses,
   upsertBelief, getBelief, beliefValuesByType, listBeliefs, markSendState, listBeliefsBySendState,
   getPatternState, savePatternState,

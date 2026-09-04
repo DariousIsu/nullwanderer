@@ -33,54 +33,91 @@ const META_KEY = 'echo_spend.traj_watermark';
 const MAX_AGE_MS = 26 * 3600 * 1000;   // usage_meter RETAIN_MS — see ring-order note above
 const BATCH = 1000;                    // per-tick cap; a backlog drains over a few ticks
 
+const TIP_SQL = 'SELECT MAX(id) m FROM agent_trajectory';
+const ROWS_SQL =
+  `SELECT id, asserted_at,
+          COALESCE(llm_model_name, 'unknown') AS model,
+          COALESCE(llm_token_count_total,
+                   COALESCE(llm_token_count_prompt, 0) + COALESCE(llm_token_count_completion, 0)) AS tokens
+   FROM agent_trajectory
+   WHERE id > ?
+     AND (llm_token_count_total IS NOT NULL
+          OR llm_token_count_prompt IS NOT NULL
+          OR llm_token_count_completion IS NOT NULL)
+   ORDER BY id LIMIT ?`;
+
+// FAST-FORWARD (2026-08-20, measured live): agent_trajectory holds 3.06M rows, and OLD callers DID
+// populate token columns on a historical slice — so a low watermark crawls months-stale rows at
+// BATCH/tick (~39h of ticks), folding none of them (all outside the 26h ring). Anything >100k rows
+// behind the tip is pre-seam history by construction (Echo's writers are app children — no rows accrue
+// while the app is down), so jump to the tip and fold only the fresh. Returns the result to return, or
+// null to carry on.
+function _fastForward(tip, wm, sm) {
+  if (tip && tip.m && tip.m - wm > 100000) {
+    console.log(`[echo-spend] watermark ${wm} is ${tip.m - wm} rows behind the tip — fast-forwarding past pre-seam history`);
+    sm(META_KEY, String(tip.m));
+    return { folded: 0, watermark: tip.m, why: 'fast-forwarded' };
+  }
+  return null;
+}
+// Replay the fetched rows into the meter and advance the watermark. Shared by both doors, so the
+// worker path and the synchronous path cannot drift.
+function _fold(rows, { now, um, sm, wm }) {
+  if (!rows || !rows.length) return { folded: 0 };
+  let folded = 0, maxId = wm;
+  for (const r of rows) {
+    maxId = Math.max(maxId, r.id);
+    if (!r.tokens || r.tokens <= 0) continue;
+    const ts = (r.asserted_at || 0) * 1000;               // agent_trajectory stamps SECONDS
+    if (!ts || now - ts > MAX_AGE_MS) continue;           // ring-order protection (header note)
+    um.record(r.model, r.tokens, Math.min(ts, now));      // never stamp the future
+    folded++;
+  }
+  sm(META_KEY, String(maxId));                            // advance even when all rows were skipped
+  return { folded, watermark: maxId };
+}
+function _deps({ meter, getMeta, setMeta }) {
+  return {
+    um: meter || require('./usage_meter'),
+    gm: getMeta || ((k) => require('./db').getMeta(k)),
+    sm: setMeta || ((k, v) => require('./db').setMeta(k, v)),
+  };
+}
+
 function foldOnce({ now = Date.now(), dbPath = SAGA_DB, meter, getMeta, setMeta } = {}) {
   try {
-    const um = meter || require('./usage_meter');
-    const gm = getMeta || ((k) => require('./db').getMeta(k));
-    const sm = setMeta || ((k, v) => require('./db').setMeta(k, v));
+    const { um, gm, sm } = _deps({ meter, getMeta, setMeta });
     if (!require('fs').existsSync(dbPath)) return { folded: 0, why: 'saga.db not found' };
-    let wm = parseInt(gm(META_KEY) || '0', 10) || 0;
+    const wm = parseInt(gm(META_KEY) || '0', 10) || 0;
     const Database = require('better-sqlite3');
     let conn, rows = [];
     try {
       conn = new Database(dbPath, { readonly: true });
       conn.pragma('busy_timeout = 3000');
-      // FAST-FORWARD (2026-08-20, measured live): agent_trajectory holds 3.06M rows, and OLD callers
-      // DID populate token columns on a historical slice — so a low watermark crawls months-stale
-      // rows at BATCH/tick (~39h of ticks), folding none of them (all outside the 26h ring). Anything
-      // >100k rows behind the tip is pre-seam history by construction (Echo's writers are app
-      // children — no rows accrue while the app is down), so jump to the tip and fold only the fresh.
-      const tip = conn.prepare('SELECT MAX(id) m FROM agent_trajectory').get();
-      if (tip && tip.m && tip.m - wm > 100000) {
-        console.log(`[echo-spend] watermark ${wm} is ${tip.m - wm} rows behind the tip — fast-forwarding past pre-seam history`);
-        wm = tip.m; sm(META_KEY, String(wm));
-        return { folded: 0, watermark: wm, why: 'fast-forwarded' };
-      }
-      rows = conn.prepare(
-        `SELECT id, asserted_at,
-                COALESCE(llm_model_name, 'unknown') AS model,
-                COALESCE(llm_token_count_total,
-                         COALESCE(llm_token_count_prompt, 0) + COALESCE(llm_token_count_completion, 0)) AS tokens
-         FROM agent_trajectory
-         WHERE id > ?
-           AND (llm_token_count_total IS NOT NULL
-                OR llm_token_count_prompt IS NOT NULL
-                OR llm_token_count_completion IS NOT NULL)
-         ORDER BY id LIMIT ?`).all(wm, BATCH);
+      const ff = _fastForward(conn.prepare(TIP_SQL).get(), wm, sm);
+      if (ff) return ff;
+      rows = conn.prepare(ROWS_SQL).all(wm, BATCH);
     } finally { try { if (conn) conn.close(); } catch {} }
-    if (!rows.length) return { folded: 0 };
-    let folded = 0, maxId = wm;
-    for (const r of rows) {
-      maxId = Math.max(maxId, r.id);
-      if (!r.tokens || r.tokens <= 0) continue;
-      const ts = (r.asserted_at || 0) * 1000;               // agent_trajectory stamps SECONDS
-      if (!ts || now - ts > MAX_AGE_MS) continue;           // ring-order protection (header note)
-      um.record(r.model, r.tokens, Math.min(ts, now));      // never stamp the future
-      folded++;
-    }
-    sm(META_KEY, String(maxId));                            // advance even when all rows were skipped
-    return { folded, watermark: maxId };
+    return _fold(rows, { now, um, sm, wm });
   } catch (e) { return { folded: 0, why: String((e && e.message) || e) }; }
 }
 
-module.exports = { foldOnce, META_KEY, MAX_AGE_MS, SAGA_DB };
+// CUT 18 (09-03): the same fold with its two reads in lib/db_worker — the 60s meter tick was paying
+// 1.2–1.4s of synchronous saga.db scanning on the main thread (the OR-predicates walk every row past the
+// watermark before LIMIT can stop them; agent_trajectory is 3M rows). `query(sql, params)` is injectable
+// so the smoke proves the two doors fold identically from the same rows without a worker.
+async function foldOnceAsync({ now = Date.now(), dbPath = SAGA_DB, meter, getMeta, setMeta, query } = {}) {
+  try {
+    const { um, gm, sm } = _deps({ meter, getMeta, setMeta });
+    if (!require('fs').existsSync(dbPath)) return { folded: 0, why: 'saga.db not found' };
+    const wm = parseInt(gm(META_KEY) || '0', 10) || 0;
+    const q = query || ((sql, params) => require('./db_worker').query(dbPath, sql, params, { limit: BATCH + 10, timeoutMs: 60000 }));
+    const tipRows = await q(TIP_SQL, []);
+    const ff = _fastForward(tipRows && tipRows[0], wm, sm);
+    if (ff) return ff;
+    const rows = await q(ROWS_SQL, [wm, BATCH]);
+    return _fold(rows, { now, um, sm, wm });
+  } catch (e) { return { folded: 0, why: String((e && e.message) || e) }; }
+}
+
+module.exports = { foldOnce, foldOnceAsync, META_KEY, MAX_AGE_MS, SAGA_DB };

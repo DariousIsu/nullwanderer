@@ -71,12 +71,20 @@ function httpTransport({ url, token = null, fetchImpl = (typeof fetch !== 'undef
       // wedging the caller (the attach heartbeat could retry-loop without ever landing; a tool dispatch would
       // hang the turn). Bound it with an AbortController. GENEROUS default (180s, ECHO_HTTP_TIMEOUT_MS-overridable)
       // so legitimately long tool calls still complete — this guards a true connection hang, not a tight SLA.
+      // THE TIMER COVERS THE BODY TOO (cut 18, 2026-09-03): the guard used to be cleared the moment the
+      // response HEADERS arrived, and the body read below (`res.text()` — a streamable-HTTP tool result
+      // arrives as an SSE body that stays open until the tool returns) had no timeout at all. A tool the
+      // engine never finished hung the caller forever — the editor round-trip smoke sat 5 minutes past
+      // its cap with ECHO_HTTP_TIMEOUT_MS=20000 in force. The controller now lives until the body is
+      // consumed; `done()` releases it.
       const _fetchOnce = async () => {
         const _ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
         const _to = _ctrl ? setTimeout(() => { try { _ctrl.abort(); } catch {} }, requestTimeoutMs) : null;
+        const done = () => { if (_to) clearTimeout(_to); };
         try {
-          return await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(message), signal: _ctrl ? _ctrl.signal : undefined });
-        } finally { if (_to) clearTimeout(_to); }
+          const r = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(message), signal: _ctrl ? _ctrl.signal : undefined });
+          return { res: r, done };
+        } catch (e) { done(); throw e; }
       };
       // M2.5 KEEP-ALIVE RACE (transport hardening): after an idle gap (a main-thread stall, a long
       // tool run) the fetch pool reuses a socket Echo's uvicorn already closed (~5s keep-alive) —
@@ -85,26 +93,35 @@ function httpTransport({ url, token = null, fetchImpl = (typeof fetch !== 'undef
       // request was not processed; ONE immediate retry rides a fresh socket. Never retried on
       // abort (that's the hang guard's verdict — a second 180s wait would double the wedge) and
       // never more than once (a hard-down Echo must fail fast into the reconnect path).
-      let res;
+      let got;
       try {
-        res = await _fetchOnce();
+        got = await _fetchOnce();
       } catch (e) {
         if (!isNetFail(e)) throw e;
         try { console.log(`[echo] transport: dead keep-alive socket (${e && e.message}) — one retry on a fresh connection`); } catch {}
-        res = await _fetchOnce();
+        got = await _fetchOnce();
       }
-      const sid = res.headers && res.headers.get && res.headers.get('mcp-session-id');
-      if (sid) sessionId = sid;
-      if (res.status === 202 || res.status === 204) return null;   // notification/ack, no body
-      if (!res.ok) {
-        // 404 = the server no longer knows this session (restart / GC) — drop the latch so the
-        // next handshake starts clean instead of re-presenting the dead id.
-        if (res.status === 404) sessionId = null;
-        const errText = await res.text().catch(() => '');
-        throw new Error(`echo http ${res.status}: ${errText.slice(0, 200) || res.statusText}`);
-      }
-      const ct = (res.headers && res.headers.get && res.headers.get('content-type')) || '';
-      return parseStreamableBody(ct, await res.text());
+      const res = got.res;
+      try {
+        const sid = res.headers && res.headers.get && res.headers.get('mcp-session-id');
+        if (sid) sessionId = sid;
+        if (res.status === 202 || res.status === 204) return null;   // notification/ack, no body
+        if (!res.ok) {
+          // 404 = the server no longer knows this session (restart / GC) — drop the latch so the
+          // next handshake starts clean instead of re-presenting the dead id.
+          if (res.status === 404) sessionId = null;
+          const errText = await res.text().catch(() => '');
+          throw new Error(`echo http ${res.status}: ${errText.slice(0, 200) || res.statusText}`);
+        }
+        const ct = (res.headers && res.headers.get && res.headers.get('content-type')) || '';
+        let text;
+        try { text = await res.text(); }
+        catch (e) {
+          if (e && (e.name === 'AbortError' || /abort/i.test(String(e && e.message)))) throw new Error(`echo http timeout: no complete reply within ${requestTimeoutMs}ms (${message && message.method}${message && message.params && message.params.name ? ' ' + message.params.name : ''})`);
+          throw e;
+        }
+        return parseStreamableBody(ct, text);
+      } finally { got.done(); }
     },
     get sessionId() { return sessionId; }
   };

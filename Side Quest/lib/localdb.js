@@ -173,14 +173,20 @@ async function queryAsync(sql, params = []) {
 // manifest is for) — `inventory({ maxAgeMs: 0 })` forces a fresh walk.
 const INVENTORY_TTL_MS = 5 * 60 * 1000;
 const INDEX_SHADOW_RE = /(_fts|_fts_(?:config|data|docsize|idx|content)|_search|_search_(?:config|data|docsize|idx|content)|_vec|_vec_(?:chunks|info|rowids)|_vec_(?:metadata(?:chunks|text)|vector_chunks)\d*)$/i;
-let _invCache = null;   // { at, key, out }
-function inventory({ maxAgeMs = INVENTORY_TTL_MS } = {}) {
-  const key = ['main'].concat(_attached).join('|');
-  if (_invCache && _invCache.key === key && (Date.now() - _invCache.at) < maxAgeMs) return _invCache.out.map((r) => ({ ...r }));
+// CUT 18 (09-03): the exact walk moved OFF the main thread. Even cached, the 5-minute refresh was a
+// synchronous COUNT(*) over every table in every attached file (7 profiled blocks, 14.7s, plus 7 slow
+// statements post-freeze — 1.3M encounters, 970k puller observations, each counted on the loop). Now:
+// a map that exists is served as it is, stale or not, and its refresh runs as ONE statement in
+// lib/db_worker (read-only, its own connection); a COLD store (first call after boot) answers at once
+// with MAX(rowid) estimates (milliseconds) and the exact counts replace them when the worker lands.
+// `inventory({ maxAgeMs: 0 })` and a store without a file keep the exact synchronous walk.
+let _invCache = null;    // { at, key, out, approx }
+let _invRefresh = null;  // the in-flight worker walk (a Promise) — one at a time
+function _invSchemas() { return ['main'].concat(_attached); }
+function _invKey() { return _invSchemas().join('|'); }
+function _invTables(conn) {
   const out = [];
-  const conn = _readerConn() || dbLib.getDb();
-  const schemas = ['main'].concat(_attached);
-  for (const sch of schemas) {
+  for (const sch of _invSchemas()) {
     let tables = [];
     try {
       tables = conn.prepare(`SELECT name FROM ${sch}.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
@@ -188,14 +194,61 @@ function inventory({ maxAgeMs = INVENTORY_TTL_MS } = {}) {
     } catch { continue; }
     for (const t of tables) {
       if (INDEX_SHADOW_RE.test(t)) continue;   // an index internal, never a store
-      const qualified = sch === 'main' ? t : `${sch}.${t}`;
-      let rows = 0;
-      try { rows = conn.prepare(`SELECT COUNT(*) AS c FROM ${sch}."${t}"`).get().c; } catch {}
-      out.push({ table: qualified, rows, db: sch });
+      out.push({ sch, t, qualified: sch === 'main' ? t : `${sch}.${t}` });
     }
   }
-  _invCache = { at: Date.now(), key, out: out.map((r) => ({ ...r })) };
   return out;
+}
+function _invWalk(conn, { exact }) {
+  const out = [];
+  for (const { sch, t, qualified } of _invTables(conn)) {
+    let rows = 0;
+    try { rows = Number(conn.prepare(exact ? `SELECT COUNT(*) AS c FROM ${sch}."${t}"` : `SELECT MAX(rowid) AS c FROM ${sch}."${t}"`).get().c) || 0; } catch {}
+    out.push({ table: qualified, rows, db: sch });
+  }
+  return out;
+}
+function _invSet(key, out, approx) { _invCache = { at: approx ? 0 : Date.now(), key, out: out.map((r) => ({ ...r })), approx: !!approx }; }
+function _invCopy(out) { return out.map((r) => ({ ...r })); }
+function _invHasFile() { const p = dbLib.DB_PATH; return !!p && p !== ':memory:'; }
+
+// The exact map, computed in the worker. Resolves to the rows (and installs them as the cache); a failed
+// walk keeps whatever map exists. One walk in flight at a time.
+function inventoryAsync() {
+  if (_invRefresh) return _invRefresh;
+  const key = _invKey();
+  const conn = _readerConn() || dbLib.getDb();
+  const tables = _invTables(conn);
+  if (!_invHasFile() || !tables.length) {
+    const out = _invWalk(conn, { exact: true });
+    _invSet(key, out, false);
+    return Promise.resolve(_invCopy(out));
+  }
+  const sql = tables.map(({ sch, t, qualified }) => `SELECT '${qualified.replace(/'/g, "''")}' AS t, (SELECT COUNT(*) FROM ${sch}."${t}") AS c`).join(' UNION ALL ');
+  _invRefresh = require('./db_worker').query(dbLib.DB_PATH, sql, [], { attach: _attachSpecs(), limit: tables.length + 10, timeoutMs: 180000 })
+    .then((rows) => {
+      const by = new Map((rows || []).map((r) => [String(r.t), Number(r.c) || 0]));
+      const out = tables.map(({ sch, qualified }) => ({ table: qualified, rows: by.has(qualified) ? by.get(qualified) : 0, db: sch }));
+      _invSet(key, out, false);
+      return _invCopy(out);
+    })
+    .catch((e) => { try { console.error('[localdb] inventory refresh failed (keeping the last map):', e && e.message); } catch {} return _invCache ? _invCopy(_invCache.out) : []; })
+    .finally(() => { _invRefresh = null; });
+  return _invRefresh;
+}
+
+function inventory({ maxAgeMs = INVENTORY_TTL_MS } = {}) {
+  const key = _invKey();
+  if (_invCache && _invCache.key === key && !_invCache.approx && (Date.now() - _invCache.at) < maxAgeMs) return _invCopy(_invCache.out);
+  const conn = _readerConn() || dbLib.getDb();
+  if (!(maxAgeMs > 0) || !_invHasFile()) {   // a forced fresh walk, or a store with no file: exact and synchronous, as before
+    const out = _invWalk(conn, { exact: true });
+    _invSet(key, out, false);
+    return out;
+  }
+  if (!_invCache || _invCache.key !== key) _invSet(key, _invWalk(conn, { exact: false }), true);   // COLD: rowid estimates now (milliseconds)
+  inventoryAsync().catch(() => {});   // the exact counts land from the worker; the map in hand is served meanwhile
+  return _invCopy(_invCache.out);
 }
 
 // ── WHAT THE MANIFEST SHOULD ACTUALLY LIST ────────────────────────────────────────────────────
@@ -288,4 +341,4 @@ function schema(table) {
 // Which of the other databases are actually live right now (for the tool description / diagnostics).
 function attachedDbs() { _readerConn(); return _attached.slice(); }
 
-module.exports = { query, queryAsync, inventory, manifestTables, schema, attachedDbs, ATTACHED, CURATED, EXHAUST_RE, _reset, _attachSpecs, MAX_ROWS, WRITE_KW_RE, QUERY_TIMEOUT_MS };
+module.exports = { query, queryAsync, inventory, inventoryAsync, manifestTables, schema, attachedDbs, ATTACHED, CURATED, EXHAUST_RE, _reset, _attachSpecs, MAX_ROWS, WRITE_KW_RE, QUERY_TIMEOUT_MS };

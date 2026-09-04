@@ -172,6 +172,56 @@ function retentionSweep({ deps = {}, nowMs = Date.now(), registry = RETENTION, b
   } catch (e) { try { console.error('[db_health] retention sweep failed soft:', e.message); } catch {} return null; }
 }
 
+// CUT 18 (09-03): the same sweep with its COUNT(*)s (and the ring's MAX(id)) in lib/db_worker — the daily
+// dry-run was six synchronous counts over the exhaust tables (1.3M encounters, 1.5M kg_observations…) on
+// the main thread. The DELETE, when armed, still runs on the main connection (the worker is read-only) —
+// batched to RETENTION_BATCH rows, as before. An injected store (the smokes) or a store with no file
+// delegates to the synchronous sweep, so the pins' contract is unchanged.
+async function retentionSweepAsync({ deps = {}, nowMs = Date.now(), registry = RETENTION, batch = RETENTION_BATCH } = {}) {
+  const db = deps.db || require('./db');
+  const dbPath = db.DB_PATH;
+  if (deps.db || !dbPath || dbPath === ':memory:') return retentionSweep({ deps, nowMs, registry, batch });
+  try {
+    if (nowMs - (parseInt(db.getMeta('retention.last_sweep') || '0', 10) || 0) < RETENTION_EVERY_MS) return null;
+    db.setMeta('retention.last_sweep', String(nowMs));
+    const armed = (db.getMeta('retention.armed') || 'off') === 'on';
+    const q = (sql) => require('./db_worker').query(dbPath, sql, [], { limit: 5, timeoutMs: 180000 });
+    const report = [];
+    for (const r of registry) {
+      try {
+        let where = '';
+        if (r.kind === 'ring') {
+          const hi = (await q(`SELECT MAX(id) m FROM ${r.table}`))[0];
+          if (!hi || !hi.m || hi.m <= r.maxRows) { continue; }
+          where = `id <= ${hi.m - r.maxRows}`;
+        } else {
+          where = `${r.tsCol} < ${nowMs - r.maxAgeMs}`;
+        }
+        if (r.guard) where += ` AND ${r.guard}`;
+        const n = Number(((await q(`SELECT COUNT(*) c FROM ${r.table} WHERE ${where}`))[0] || {}).c) || 0;
+        if (!n) continue;
+        if (armed) {
+          const del = db.getDb().prepare(`DELETE FROM ${r.table} WHERE rowid IN (SELECT rowid FROM ${r.table} WHERE ${where} LIMIT ${batch})`).run();
+          report.push(`${r.table}: pruned ${del.changes}${n > del.changes ? ` of ${n} (batched — the rest next pass)` : ''}`);
+        } else {
+          report.push(`${r.table}: WOULD prune ${n} (dry-run)`);
+        }
+      } catch (e) { report.push(`${r.table}: ERR ${String(e.message).slice(0, 60)}`); }
+    }
+    if (report.length) {
+      const mode = armed ? 'ARMED' : 'DRY-RUN';
+      console.log(`[db_health] retention sweep (${mode}, counted off the main thread): ${report.join(' · ')}`);
+      try {
+        ((deps.obsBus) || require('./obs_bus')).emit(
+          { lane: 'db', kind: 'rotation', level: 'info', text: `retention sweep (${mode}): ${report.join(' · ').slice(0, 400)}`, ref: 'retention' },
+          { deps, nowMs }
+        );
+      } catch {}
+    }
+    return { armed, report };
+  } catch (e) { try { console.error('[db_health] retention sweep failed soft:', e.message); } catch {} return null; }
+}
+
 // Census of backup-ish copies in the data dir (name-matched, ≥50MB). REPORT-ONLY by design.
 function backupCensus(dataDir) {
   try {
@@ -196,8 +246,9 @@ function tick({ deps = {}, nowMs = Date.now(), paths = null } = {}) {
   const out = { at: nowMs };
   // rotation FIRST, so the census below reports the post-rotation truth
   try { rotateBackups({ deps, nowMs, dataDir: P.dataDir }); } catch {}
-  // the retention sweep rides the same tick (due-gated daily inside; dry-run until armed)
-  try { retentionSweep({ deps, nowMs }); } catch {}
+  // the retention sweep rides the same tick (due-gated daily inside; dry-run until armed). CUT 18: live,
+  // its COUNTs run in the db worker (retentionSweepAsync); an injected store keeps the synchronous sweep.
+  try { const p = retentionSweepAsync({ deps, nowMs }); if (p && p.catch) p.catch(() => {}); } catch {}
   try {
     out.sq = { sizeMB: _mb(P.sqDb), walMB: _mb(P.sqDb + '-wal') };
     if (out.sq.walMB != null && out.sq.walMB > WAL_WARN_MB) {
@@ -296,4 +347,4 @@ function describe(v) {
   return bits.length ? bits.join(' · ') : null;
 }
 
-module.exports = { tick, maybeQuickCheck, backupCensus, rotateBackups, retentionSweep, describe, RETENTION, RETENTION_BATCH, WAL_WARN_MB, BACKUP_WARN_GB, PRECURATION_KEEP, RING_KEY, QC_KEY, SNAP_KEY };
+module.exports = { tick, maybeQuickCheck, backupCensus, rotateBackups, retentionSweep, retentionSweepAsync, describe, RETENTION, RETENTION_BATCH, WAL_WARN_MB, BACKUP_WARN_GB, PRECURATION_KEEP, RING_KEY, QC_KEY, SNAP_KEY };

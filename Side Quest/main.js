@@ -819,8 +819,13 @@ app.whenReady().then(() => {
   // finally count the Python processes' burn and the tier ladder paces against the TRUE total.
   try { const _um = require('./lib/usage_meter'); const _t = setInterval(() => {
     try { _um.persist(); } catch {}
-    try { const r = require('./lib/echo_spend_bridge').foldOnce(); if (r && r.folded) console.log(`[echo-spend] folded ${r.folded} Echo cloud call(s) into the usage meter (traj id ≤ ${r.watermark})`); } catch {}
+    // CUT 18 (09-03): the fold's saga.db reads run in the db worker; the meter is updated when they land.
+    try { require('./lib/echo_spend_bridge').foldOnceAsync().then((r) => { if (r && r.folded) console.log(`[echo-spend] folded ${r.folded} Echo cloud call(s) into the usage meter (traj id ≤ ${r.watermark})`); }).catch(() => {}); } catch {}
   }, 60000); if (_t.unref) _t.unref(); } catch {}
+  // CUT 18 (09-03): warm the browser driver's module tree while the loop is idle. The first web.ensure()
+  // of a generation paid ~3s of synchronous module loading (the profiler's "readFileUtf8 via ensure",
+  // 3 blocks / 8.4s post-freeze) — inside whatever turn first needed the browser. Kill: ZOE_WEB_WARM=0.
+  try { if (String(process.env.ZOE_WEB_WARM || '1').trim() !== '0') { const _w = setTimeout(() => { try { const t0 = Date.now(); require('patchright'); console.log(`[web] browser driver warmed in ${Date.now() - t0}ms (boot idle)`); } catch {} }, 90000); if (_w.unref) _w.unref(); } } catch {}
   // SELF-WATCH (Lucas 2026-07-30: "can she read her own watchdogs and suggest repairs?"):
   // the log stream gets an INTERNAL reader — every console line is classified onto the obs bus
   // (lib/obs_bus: signal lanes stored, noise counted, anomalies signature-capped), and a
@@ -2086,6 +2091,13 @@ app.whenReady().then(() => {
   // ECHO_PYTHON env still overrides. The adopt path doesn't touch this.
   const ECHO_PYTHON = process.env.ECHO_PYTHON || path.join(ECHO_CWD, '.venv', 'Scripts', 'python.exe');
   echoVenv = { python: ECHO_PYTHON, cwd: ECHO_CWD };   // for the Calendar surface's Google token bridge (lib/gcal)
+  // TWO OPENMP RUNTIMES, ONE PROCESS (found 2026-09-03 by the Echo gate): torch/lib/libiomp5md.dll and
+  // ctranslate2/libiomp5md.dll (faster-whisper) are both Intel OpenMP. The second one to load ABORTS the
+  // process with exit code 3 — no Python traceback, no faulthandler dump, and the "OMP: Error #15" text
+  // goes to the console handle, invisible under captured stderr. The engine and its sidecars (embeddings
+  // on torch, transcription on ctranslate2) can meet exactly that in one process. Every Python child
+  // inherits process.env, so the documented override is set once here. Kill: ZOE_KMP_DUP_OK=0.
+  if (String(process.env.ZOE_KMP_DUP_OK || '1').trim() !== '0' && !process.env.KMP_DUPLICATE_LIB_OK) process.env.KMP_DUPLICATE_LIB_OK = 'TRUE';
   // Inherit Echo's cloud credential (env → OS keychain "nx-echo" → .env) via Echo's own resolver,
   // so Zoe's verification classify leaf can reach the cloud frontier with the SAME key the engine
   // uses. Resolved into memory only — never written or logged (names only).

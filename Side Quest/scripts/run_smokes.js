@@ -605,6 +605,11 @@ const smokes = [
   // embedding JSON per call (the profiler's second live answer); vectors cached, metadata fresh, a
   // changed/cleared/deleted vector rebuilds.
   'smoke_knowledge_vectors.js',
+  // Cut 18 (09-03): the Side Quest siblings from the post-freeze stall ledger — three index cures (plans
+  // pinned), the search's IDS shape + title-only fallback, the head-probe fragment gather, the inventory
+  // and the spend fold off the main thread, the meter's minute buckets, the retention sweep's worker
+  // counts, the spawned (never execSync) profile sweep, the worker-side puller snapshot.
+  'smoke_cut18.js',
   // Run-4 collision guard: the test port tells the REAL user from its own injected turns; a recent
   // or unanswered real turn owns the pipeline (10min / 30min-capped) and the harness yields.
   'smoke_test_port_guard.js',

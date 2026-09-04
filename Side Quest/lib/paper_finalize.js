@@ -43,6 +43,21 @@ const DEFAULT_SECTIONS = ['Executive Summary', 'Background', 'Projects and Facil
 
 function _norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim(); }
 
+// The first HEAD_BYTES of a file as UTF-8 (≥ 800 characters at any width — the probe's window), or null
+// when the file cannot be opened. A multibyte character cut at the boundary decodes as U+FFFD, which
+// _norm discards; the probe never sees it.
+const HEAD_BYTES = 4096;
+function _readHead(p) {
+  let fd = null;
+  try {
+    fd = fs.openSync(p, 'r');
+    const buf = Buffer.alloc(HEAD_BYTES);
+    const n = fs.readSync(fd, buf, 0, HEAD_BYTES, 0);
+    return buf.toString('utf8', 0, n);
+  } catch { return null; }
+  finally { if (fd != null) { try { fs.closeSync(fd); } catch {} } }
+}
+
 /** gatherFragments({tokens, exclude, dir}) → [{file, mtime, text}] — files whose NAME or HEAD
  *  carries every token. `exclude` tokens veto a file (the ENTITY-SCOPE filter, 08-13: the CRM's
  *  near-duplicate accounts — "Applied Digital Solutions, Inc.", the unrelated Florida VeriChip
@@ -55,11 +70,18 @@ function gatherFragments({ tokens, exclude = [], dir = NOTES_DIR } = {}) {
   try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.md')); } catch { return []; }
   const out = [];
   for (const f of names) {
-    let st; try { st = fs.statSync(path.join(dir, f)); } catch { continue; }
-    let text; try { text = fs.readFileSync(path.join(dir, f), 'utf8'); } catch { continue; }
-    const probe = _norm(f + ' ' + text.slice(0, 800));
+    const p = path.join(dir, f);
+    let st; try { st = fs.statSync(p); } catch { continue; }
+    // HEAD PROBE (cut 18, 09-03): the probe only ever looked at the name and the first 800 characters,
+    // but every one of the 2,665 note files was read in FULL to get them — 6 profiled blocks, 32s, on
+    // the main thread per paper. Read the head; read the whole file only for a match.
+    const head = _readHead(p);
+    if (head == null) continue;
+    const probe = _norm(f + ' ' + head.slice(0, 800));
     if (ex.some((t) => probe.includes(t))) continue;
-    if (toks.every((t) => probe.includes(t))) out.push({ file: f, mtime: st.mtimeMs, text });
+    if (!toks.every((t) => probe.includes(t))) continue;
+    let text; try { text = fs.readFileSync(p, 'utf8'); } catch { continue; }
+    out.push({ file: f, mtime: st.mtimeMs, text });
   }
   out.sort((a, b) => b.mtime - a.mtime);
   const capped = out.slice(0, MAX_FRAGMENTS);

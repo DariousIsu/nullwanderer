@@ -32,13 +32,25 @@ function _prune(now) {
 // Record one model call's token cost. `tokens` is the total (prompt + generated). Fail-soft: bad input is
 // ignored, never throws. Prunes anything older than the retention horizon so memory stays bounded, then
 // throttled-persists so the durable ledger tracks live spend without a meta write on every hot call.
+// MINUTE BUCKETS (cut 18, 09-03): the ring held one entry per CALL — 686KB of JSON in the durable
+// ledger, re-serialized on the main thread every 30s persist (and the same bytes parsed back at boot).
+// Every reader works in hour/day windows, so a call joins the ring's TAIL entry when it is the same
+// model and lane inside the same minute; `calls` keeps the count the summary reports. Only the tail
+// merges: the ring stays time-ordered (the fold replays past rows in id order — still tail-merged).
+const BUCKET_MS = 60 * 1000;
 function record(model, tokens, ts = Date.now(), lane = '?') {
   const t = Number(tokens);
   if (!Number.isFinite(t) || t <= 0) return;
   const now = Number(ts) || Date.now();
   // LANE TAG (#115, Lucas-approved): the ring carries which lane spent, so the quota pace can
   // charge background against BACKGROUND spend instead of the all-lane hour. '?' = untagged.
-  _log.push({ model: String(model || 'unknown'), tokens: Math.round(t), ts: now, lane: String(lane || '?') });
+  const m = String(model || 'unknown'), l = String(lane || '?'), tk = Math.round(t);
+  const last = _log.length ? _log[_log.length - 1] : null;
+  if (last && last.model === m && last.lane === l && now >= last.ts && now - last.ts < BUCKET_MS) {
+    last.tokens += tk; last.calls = (last.calls || 1) + 1;
+  } else {
+    _log.push({ model: m, tokens: tk, ts: now, lane: l, calls: 1 });
+  }
   _prune(now);
   _dirty = true;   // main.js drives persist() on its periodic tick + on shutdown (keeps this hot path pure)
 }
@@ -80,7 +92,7 @@ function restore(now = Date.now(), { getMeta } = {}) {
     if (!Array.isArray(arr)) return 0;
     const cutoff = now - RETAIN_MS;
     const kept = arr.filter((e) => e && Number.isFinite(Number(e.ts)) && Number(e.ts) >= cutoff && Number(e.tokens) > 0)
-      .map((e) => ({ model: String(e.model || 'unknown'), tokens: Math.round(Number(e.tokens)), ts: Number(e.ts), lane: String(e.lane || '?') }))
+      .map((e) => ({ model: String(e.model || 'unknown'), tokens: Math.round(Number(e.tokens)), ts: Number(e.ts), lane: String(e.lane || '?'), calls: Math.max(1, Number(e.calls) || 1) }))
       .sort((a, b) => a.ts - b.ts);
     _log.splice(0, _log.length, ...kept);
     return kept.length;
@@ -96,7 +108,7 @@ function summary({ now = Date.now(), windowMs = DAY_MS, rateMs = HOUR_MS } = {})
   const by = {};
   for (const e of _log) {
     if (e.ts < since) continue;
-    total += e.tokens; calls++;
+    total += e.tokens; calls += e.calls || 1;
     by[e.model] = (by[e.model] || 0) + e.tokens;
     if (e.ts >= rateSince) rate += e.tokens;
   }

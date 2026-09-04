@@ -101,6 +101,27 @@ function mockTransport() {
 
     ok('isNetFail: "fetch failed" + socket causes → true', echo.isNetFail(netErr()) && echo.isNetFail(Object.assign(new Error('x'), { cause: { code: 'ECONNRESET' } })));
     ok('isNetFail: AbortError / plain error → false', !echo.isNetFail(Object.assign(new Error('aborted'), { name: 'AbortError' })) && !echo.isNetFail(new Error('boom')));
+
+    // THE BODY IS COVERED TOO (cut 18, 2026-09-03): the headers arrive at once (an SSE stream that
+    // only pings while the tool runs) and the BODY never completes — the guard used to be released
+    // the moment the headers came back, so a tool the engine never finished hung the caller forever
+    // (the editor round-trip smoke, 5 minutes past its cap with ECHO_HTTP_TIMEOUT_MS=20000 in force).
+    {
+      let bodyAborted = false;
+      const pinging = async (url, opts) => ({
+        ok: true, status: 200,
+        headers: { get: (k) => (String(k).toLowerCase() === 'content-type' ? 'text/event-stream' : null) },
+        text: () => new Promise((resolve, reject) => {
+          const sig = opts && opts.signal;
+          if (sig) sig.addEventListener('abort', () => { bodyAborted = true; const e = new Error('This operation was aborted'); e.name = 'AbortError'; reject(e); });
+        }),
+      });
+      const tr4 = echo.httpTransport({ url: 'http://127.0.0.1:9000/mcp/', fetchImpl: pinging, requestTimeoutMs: 60 });
+      const t0 = Date.now(); let msg = '';
+      try { await tr4.send({ jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'slow_tool' } }); } catch (e) { msg = String(e && e.message); }
+      ok('⭐ a body that never completes is ABORTED by the same guard, within the timeout', bodyAborted && /timeout/.test(msg) && (Date.now() - t0) < 2000, msg);
+      ok('…and the error names the call so the log reads (tools/call slow_tool)', /tools\/call slow_tool/.test(msg), msg);
+    }
   }
 
   console.log('\nsession lifecycle (the boot97 reattach poison — 2026-07-29):');

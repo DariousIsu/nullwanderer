@@ -85,45 +85,52 @@ function markAttempted(db, ids = []) {
  *
  * Returns [{ id, title, source, origin_host, chars }]. Never throws.
  */
-function findUndecomposed(db, { limit = 50, sinceId = 0, sources = null, chars = true } = {}) {
+// The walk's statement, built ONCE and run by either door — the synchronous walk (findUndecomposed) or
+// the db worker (_poolWalkAsync, cut 18) — so the two can never drift. Returns { sql, args, attempted }.
+function _undecomposedQuery(db, { limit = 50, sinceId = 0, sources = null, chars = true } = {}) {
   const attempted = attemptedSet(db);
   // Default: every lane EXCEPT the self-keyed ones (see SELF_KEYED_LANES — inverted 2026-07-30).
   // An explicit `sources` still wins, so a caller can deliberately sweep one lane.
+  // SLOW-SCAN CURE (2026-08-27, the probe's 1.96s face): the body predicates used to LEAD the
+  // WHERE, so every scanned row — including the already-decomposed ones the anti-join rejects —
+  // paid to load its body overflow pages and run TRIM over it (1.35GB corpus). Cheap predicates
+  // (id, source, the indexed anti-join probe) now run FIRST and LENGTH replaces TRIM (no string
+  // allocation; a whitespace-only body slipping through just decomposes to nothing and marks
+  // attempted — harmless). Rows that fail the cheap filters never touch the body column at all.
+  const where = ['d.id > ?'];
+  const args = [Number(sinceId) || 0];
+  if (Array.isArray(sources) && sources.length) {
+    where.push(`d.source IN (${sources.map(() => '?').join(',')})`);
+    args.push(...sources);
+  } else {
+    where.push(`(d.source IS NULL OR d.source NOT IN (${SELF_KEYED_LANES.map(() => '?').join(',')}))`);
+    args.push(...SELF_KEYED_LANES);
+  }
+  // THE ATTEMPTED SET IS FILTERED IN SQL (freeze cut 5, 2026-09-03): it used to be applied in JS
+  // AFTER the query, so the LIMIT window (4× the batch) filled with already-attempted rows — 972 of
+  // 1,207 on boot_p256 — and every one of them paid the LENGTH(body) read before being thrown away.
+  // json_each turns the marker into an ephemeral index the planner probes BEFORE the body is touched.
+  if (attempted.size) { where.push('d.id NOT IN (SELECT value FROM json_each(?))'); args.push(JSON.stringify([...attempted])); }
+  // chars:false — the walk WITHOUT the body: LENGTH(body) is what turns a 0.8s walk into a 2–7s one
+  // (the pool's refresh keeps the lengths it already knows and measures only new ids — see _charsOf).
+  // A row then carries chars:null, and an empty body is the caller's to drop (its length is 0).
+  const sql =
+    `SELECT d.id, d.title, d.source, d.origin_host, ${chars ? 'LENGTH(d.body)' : 'NULL'} AS chars
+       FROM documents d
+      WHERE ${where.join(' AND ')}
+        AND NOT EXISTS (SELECT 1 FROM encounters e WHERE e.source_ref = 'doc:' || d.id)
+        AND d.body IS NOT NULL${chars ? ' AND LENGTH(d.body) > 0' : ''}
+      ORDER BY d.id DESC
+      LIMIT ?`;
+  return { sql, args: args.concat([Math.max(1, Number(limit) || 50)]), attempted };
+}
+function findUndecomposed(db, opts = {}) {
+  const limit = Math.max(1, Number(opts && opts.limit) || 50);
+  let q;
+  try { q = _undecomposedQuery(db, opts); } catch { return []; }
   let rows = [];
-  try {
-    // SLOW-SCAN CURE (2026-08-27, the probe's 1.96s face): the body predicates used to LEAD the
-    // WHERE, so every scanned row — including the already-decomposed ones the anti-join rejects —
-    // paid to load its body overflow pages and run TRIM over it (1.35GB corpus). Cheap predicates
-    // (id, source, the indexed anti-join probe) now run FIRST and LENGTH replaces TRIM (no string
-    // allocation; a whitespace-only body slipping through just decomposes to nothing and marks
-    // attempted — harmless). Rows that fail the cheap filters never touch the body column at all.
-    const where = ['d.id > ?'];
-    const args = [Number(sinceId) || 0];
-    if (Array.isArray(sources) && sources.length) {
-      where.push(`d.source IN (${sources.map(() => '?').join(',')})`);
-      args.push(...sources);
-    } else {
-      where.push(`(d.source IS NULL OR d.source NOT IN (${SELF_KEYED_LANES.map(() => '?').join(',')}))`);
-      args.push(...SELF_KEYED_LANES);
-    }
-    // THE ATTEMPTED SET IS FILTERED IN SQL (freeze cut 5, 2026-09-03): it used to be applied in JS
-    // AFTER the query, so the LIMIT window (4× the batch) filled with already-attempted rows — 972 of
-    // 1,207 on boot_p256 — and every one of them paid the LENGTH(body) read before being thrown away.
-    // json_each turns the marker into an ephemeral index the planner probes BEFORE the body is touched.
-    if (attempted.size) { where.push('d.id NOT IN (SELECT value FROM json_each(?))'); args.push(JSON.stringify([...attempted])); }
-    // chars:false — the walk WITHOUT the body: LENGTH(body) is what turns a 0.8s walk into a 2–7s one
-    // (the pool's refresh keeps the lengths it already knows and measures only new ids — see _charsOf).
-    // A row then carries chars:null, and an empty body is the caller's to drop (its length is 0).
-    rows = db.getDb().prepare(
-      `SELECT d.id, d.title, d.source, d.origin_host, ${chars ? 'LENGTH(d.body)' : 'NULL'} AS chars
-         FROM documents d
-        WHERE ${where.join(' AND ')}
-          AND NOT EXISTS (SELECT 1 FROM encounters e WHERE e.source_ref = 'doc:' || d.id)
-          AND d.body IS NOT NULL${chars ? ' AND LENGTH(d.body) > 0' : ''}
-        ORDER BY d.id DESC
-        LIMIT ?`).all(...args, Math.max(1, Number(limit) || 50));
-  } catch { return []; }
-  return rows.filter((r) => !attempted.has(Number(r.id))).slice(0, Math.max(1, Number(limit) || 50));
+  try { rows = db.getDb().prepare(q.sql).all(...q.args); } catch { return []; }
+  return rows.filter((r) => !q.attempted.has(Number(r.id))).slice(0, limit);
 }
 // Body lengths for a set of ids in ONE statement (the only body reads a pool refresh pays).
 function _charsOf(db, ids) {
@@ -191,8 +198,39 @@ function _stillUnread(db, id) {
   catch { return true; }
 }
 
+// The full walk in the worker (cut 18). Returns true when a refresh is running or was just started —
+// the caller serves the pool it has; false when the store has no file (the caller walks synchronously).
+// One walk in flight at a time; a failed walk keeps the pool it had and logs once.
+let _poolRefresh = null;
+function poolRefreshPromise() { return _poolRefresh; }
+function _poolWalkAsync(db, pool, { limit = POOL_LIMIT } = {}) {
+  const dbPath = db.DB_PATH;
+  if (!dbPath || dbPath === ':memory:') return false;
+  if (_poolRefresh) return true;
+  let q;
+  try { q = _undecomposedQuery(db, { limit, chars: false }); } catch { return false; }
+  const worker = require('./db_worker');
+  _poolRefresh = worker.query(dbPath, q.sql, q.args, { limit: limit + 10, timeoutMs: 180000 })
+    .then(async (found) => {
+      found = (found || []).filter((r) => !q.attempted.has(Number(r.id))).slice(0, limit);
+      const known = new Map((pool.rows || []).map((r) => [Number(r.id), r]));
+      const need = found.filter((r) => !known.has(Number(r.id))).map((r) => Number(r.id));
+      const lengths = new Map();
+      if (need.length) {
+        const lr = await worker.query(dbPath, 'SELECT id, LENGTH(body) AS chars FROM documents WHERE id IN (SELECT value FROM json_each(?))', [JSON.stringify(need)], { limit: need.length + 10, timeoutMs: 180000 });
+        for (const r of lr || []) lengths.set(Number(r.id), Number(r.chars) || 0);
+      }
+      const rows = found.map((r) => known.get(Number(r.id)) || { ...r, chars: lengths.get(Number(r.id)) || 0 }).filter((r) => r.chars > 0);
+      _savePool(db, { at: Date.now(), maxId: _maxDocId(db), full: found.length >= limit, rows });
+      console.log(`[decomp-sweep] pool refreshed off the main thread — ${rows.length} candidate(s)${need.length ? `, ${need.length} newly measured` : ''}`);
+    })
+    .catch((e) => { try { console.error('[decomp-sweep] pool refresh failed (the pool in hand is kept):', e && e.message); } catch {} })
+    .finally(() => { _poolRefresh = null; });
+  return true;
+}
+
 /**
- * The pooled candidates, refreshed for this tick. Returns { rows, mode: 'full'|'incremental', fresh }.
+ * The pooled candidates, refreshed for this tick. Returns { rows, mode: 'full'|'incremental'|'stale', fresh }.
  * `fullTtlMs: 0` forces a full walk (a deliberate run that wants the store's current truth).
  */
 function candidatePool(db, { now = Date.now(), fullTtlMs = POOL_FULL_TTL_MS, limit = POOL_LIMIT } = {}) {
@@ -202,6 +240,12 @@ function candidatePool(db, { now = Date.now(), fullTtlMs = POOL_FULL_TTL_MS, lim
   // window) refills early — the drain must reach them, not wait out the TTL on an empty pool.
   const drained = pool && !pool.rows.length && pool.full;
   if (!pool || drained || !(fullTtlMs > 0) || now - pool.at >= fullTtlMs) {
+    // CUT 18 (09-03): a pool that EXISTS is refreshed OFF the main thread. The full walk — the anti-join
+    // over 51k documents, 4–10s under load, 59 × ≥1s post-freeze (the ledger's largest single carrier)
+    // — runs in lib/db_worker, and the pool it feeds is served as it stands until the walk lands. Only
+    // a store with no pool at all (the first boot ever), a deliberate fullTtlMs:0 run, or a store with
+    // no file walks synchronously here.
+    if (pool && fullTtlMs > 0 && _poolWalkAsync(db, pool, { limit })) return { rows: pool.rows, mode: 'stale', fresh: 0 };
     // The refresh KEEPS the lengths it already knows (boot_p257: the first full walk was 7.1s under boot
     // load — the body reads of 233 giants). The walk itself runs without the body; only ids the pool
     // has never measured pay for LENGTH, in one statement.
@@ -357,6 +401,6 @@ function nextBatch(db, { limit = 3, dailyChunks = DEFAULT_DAILY_CHUNKS, maxChars
 
 module.exports = {
   findUndecomposed, attemptedSet, markAttempted, META_KEY, DECOMPOSE_LANES,
-  candidatePool, POOL_KEY, POOL_FULL_TTL_MS,
+  candidatePool, poolRefreshPromise, POOL_KEY, POOL_FULL_TTL_MS,
   nextBatch, budgetState, spendBudget, estChunks, BUDGET_KEY, DEFAULT_DAILY_CHUNKS,
 };

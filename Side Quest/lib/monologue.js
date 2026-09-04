@@ -2394,7 +2394,20 @@ async function runPullerMove(_recentTurns, { mode = 'both', candidatesOverride =
 // social/OSINT observation, the maigret marker). Bounded scan — cheap, and deep enough to reach the
 // backpressure cap. Mirrors runPullerMove's internal candidates() shape (+ hasDeep) so the contact queue
 // can be handed straight to pullerWalk.pickTarget as candidatesOverride.
-function _pullerCandidateSnapshot({ limit = 500 } = {}) {
+// CUT 18 (09-03): the snapshot runs in the db worker (puller_db.valueScopedSnapshotAsync — the two draws
+// and the per-row flags as three statements off the main thread); the synchronous draw below stays as
+// the fallback (no worker, the legacy ZOE_PULLER_VALUESCOPE=0 draw, a store with no file).
+async function _pullerCandidateSnapshot({ limit = 500 } = {}) {
+  const pdb = require('./puller_db');
+  const scoped = String(process.env.ZOE_PULLER_VALUESCOPE || '1').trim() !== '0';
+  if (scoped && typeof pdb.valueScopedSnapshotAsync === 'function') {
+    try { return await pdb.valueScopedSnapshotAsync({ limit }); }
+    catch (e) { try { console.error('[pipeline] worker snapshot failed — synchronous draw this tick:', e && e.message); } catch {} }
+  }
+  try { _markActivity('pipeline-snapshot'); return _pullerCandidateSnapshotSync({ limit }); }
+  finally { try { _markActivity('idle'); } catch {} }
+}
+function _pullerCandidateSnapshotSync({ limit = 500 } = {}) {
   const pdb = require('./puller_db');
   const out = [];
   try {
@@ -2444,9 +2457,8 @@ function setActivityMarker(fn) { _markActivity = typeof fn === 'function' ? fn :
 async function runPipelineTick(recentTurns) {
   const cfg = require('./config');
   const pipeline = require('./pipeline');
-  let snapshot;
-  try { _markActivity('pipeline-snapshot'); snapshot = _pullerCandidateSnapshot(); }
-  finally { try { _markActivity('idle'); } catch {} }
+  let snapshot = [];
+  try { snapshot = await _pullerCandidateSnapshot(); } catch (e) { try { console.error('[pipeline] snapshot failed:', e && e.message); } catch {} }
   const activeKeys = new Set((activeSetNames() || []).map((n) => pullerWalk.norm(n)));
   const { contact, enrich } = pipeline.partition(snapshot, { activeKeys, norm: pullerWalk.norm });
   const cap = cfg.pipelineContactBacklogCap();

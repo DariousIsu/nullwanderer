@@ -662,6 +662,17 @@ const MIGRATIONS = [
   // Freeze cut 5: the memory map's documents bridge (MAX(updated_ts) WHERE promoted = 1) read all 13k
   // promoted rows through idx_documents_promoted every 15 minutes (357ms idle / 1–1.7s under load).
   `CREATE INDEX IF NOT EXISTS idx_documents_promoted_updated ON documents(promoted, updated_ts)`,
+  // CUT 18 (09-03, the post-freeze stall ledger): three main-thread statements cured by their index alone.
+  //   getRecentMonologueByType — "type = ? ORDER BY id DESC" walked idx_monologue_type_ts and then sorted in
+  //   a temp B-tree (16 × ≥1s since 09-02, max 10.4s). (type, id) answers it as a reverse range scan.
+  `CREATE INDEX IF NOT EXISTS idx_monologue_type_id ON monologue(type, id)`,
+  //   getKnowledgeVectorRows — "WHERE embedding IS NOT NULL" was a full SCAN of knowledge, reading every
+  //   row's embedding blob pages just to test them (1.2–1.6s per recall). A COVERING partial index answers
+  //   the whole statement without touching a row page.
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_vec_meta ON knowledge(id, kind, source, importance, created_ts, last_used_ts, level, parent_id) WHERE embedding IS NOT NULL`,
+  //   promoteDocsBacklog — three COUNTs over the ~38k unpromoted rows read row pages for superseded_by and
+  //   promote_error (2.4–6s, every 15-min beat + the memory map). One partial index covers all three.
+  `CREATE INDEX IF NOT EXISTS idx_documents_backlog ON documents(superseded_by, promote_attempts, promote_last_ts, promote_error) WHERE promoted = 0`,
 
   // KNOWN-INCORRECT (§7) — the inoculation record. A claim that has been DISPROVEN is kept, forever,
   // marked. Two reasons, and the second is the one that pays:
@@ -2196,11 +2207,14 @@ function notePromoteFailure(id, error, { now = Date.now() } = {}) {
   return true;
 }
 // The documents backlog's shape for the tee: how many wait, how many are eligible now, the top errors.
+// CUT 18 (09-03): the three statements are PINNED to idx_documents_backlog (a partial covering index —
+// see the schema list). Without stats the planner took idx_documents_promoted for the histogram and
+// read 38k row pages plus two temp B-trees (2.4–6s, every 15-min beat + the memory map).
 function promoteDocsBacklog({ now = Date.now() } = {}) {
   const d = getDb();
-  const pending = d.prepare(`SELECT COUNT(*) n FROM documents WHERE promoted = 0 AND ${LIVE}`).get().n;
-  const eligible = d.prepare(`SELECT COUNT(*) n FROM documents WHERE promoted = 0 AND ${LIVE} AND ${_DOC_PROMOTE_ELIGIBLE}`).get({ day: DOC_PROMOTE_BACKOFF_DAY_MS, now }).n;
-  const errors = d.prepare(`SELECT substr(promote_error, 1, 60) error, COUNT(*) n FROM documents WHERE promoted = 0 AND ${LIVE} AND promote_error IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 4`).all();
+  const pending = d.prepare(`SELECT COUNT(*) n FROM documents INDEXED BY idx_documents_backlog WHERE promoted = 0 AND ${LIVE}`).get().n;
+  const eligible = d.prepare(`SELECT COUNT(*) n FROM documents INDEXED BY idx_documents_backlog WHERE promoted = 0 AND ${LIVE} AND ${_DOC_PROMOTE_ELIGIBLE}`).get({ day: DOC_PROMOTE_BACKOFF_DAY_MS, now }).n;
+  const errors = d.prepare(`SELECT substr(promote_error, 1, 60) error, COUNT(*) n FROM documents INDEXED BY idx_documents_backlog WHERE promoted = 0 AND ${LIVE} AND promote_error IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 4`).all();
   return { pending, eligible, backingOff: pending - eligible, errors };
 }
 
@@ -2219,14 +2233,28 @@ function searchDocuments(queryLike, n = 10) {
     try {
       const match = (raw.match(/[^\s]+/g) || []).map((t) => `"${t.replace(/"/g, '""')}"`).join(' ');
       if (match) {
-        const rows = getDb().prepare(
-          `SELECT d.* FROM documents_fts f JOIN documents d ON d.id = f.rowid
-            WHERE documents_fts MATCH ? AND d.${LIVE} ORDER BY d.id DESC LIMIT ?`).all(match, lim);
-        if (rows.length) return rows;
+        // THE IDS SHAPE (cut 18, 09-03): the JOIN read every matching document's FULL row — the body —
+        // before "ORDER BY d.id DESC LIMIT n" could keep the newest ten; a common token meant thousands
+        // of body pages for ten rows (7 × ≥1s post-freeze, max 4.2s, and a 16s profiled block). Ask the
+        // index for the newest rowids only, then fetch just the rows that survive the LIVE filter.
+        const ids = getDb().prepare(`SELECT rowid FROM documents_fts WHERE documents_fts MATCH ? ORDER BY rowid DESC LIMIT ?`)
+          .all(match, Math.max(40, lim * 4)).map((r) => r.rowid);
+        if (ids.length) {
+          const rows = getDb().prepare(`SELECT * FROM documents WHERE id IN (SELECT value FROM json_each(?)) AND ${LIVE} ORDER BY id DESC LIMIT ?`)
+            .all(JSON.stringify(ids), lim);
+          if (rows.length) return rows;
+        }
       }
     } catch (e) { try { console.error('[documents_fts] search fell back to LIKE:', e && e.message); } catch {} }
   }
+  // The fallback is TITLE-only once FTS is built (cut 18). "body LIKE '%q%'" walked the 1.35GB corpus on
+  // the main thread whenever FTS had no hit — a word not in the corpus cost 16s to learn it was not
+  // there. A built index already answers every body word at a word boundary (the wanted semantics), so
+  // a zero-hit means the word is absent; a title substring keeps the legacy door for a fragment of a
+  // name. A store whose index is NOT built yet (a fresh install before the first sync — small by
+  // construction) keeps the body LIKE so body search never goes dark.
   const q = `%${raw}%`;
+  if (documentsFtsReady()) return getDb().prepare(`SELECT * FROM documents WHERE title LIKE ? AND ${LIVE} ORDER BY id DESC LIMIT ?`).all(q, lim);
   return getDb().prepare(`SELECT * FROM documents WHERE (title LIKE ? OR body LIKE ?) AND ${LIVE} ORDER BY id DESC LIMIT ?`).all(q, q, lim);
 }
 
