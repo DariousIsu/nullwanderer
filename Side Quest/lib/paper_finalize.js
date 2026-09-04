@@ -160,7 +160,7 @@ function assemble({ title, goal, sections, sources, dateStr }) {
  * finalize({topic, title, goal, tokens, write, dir, outDir}) → { ok, path, sections, sourceCount }
  * `write(prompt)` is the injected model pass (async → section body text). ONE canonical output file.
  */
-async function finalize({ topic, title, goal, tokens, exclude, write, frozenOutline = null, dir = NOTES_DIR, outDir = NOTES_DIR, land = true, challenge = null, maxIterations = 3 } = {}) {
+async function finalize({ topic, title, goal, tokens, exclude, write, frozenOutline = null, dir = NOTES_DIR, outDir = NOTES_DIR, land = true, challenge = null, maxIterations = 3, verifyCitations = null, citationAttempts = 3 } = {}) {
   const toks = tokens && tokens.length ? tokens : _norm(topic).split(' ').filter(Boolean);
   const fragments = await gatherFragmentsAsync({ tokens: toks, exclude, dir });
   if (!fragments.length) return { ok: false, reason: `no fragments for "${topic}"` };
@@ -175,9 +175,9 @@ async function finalize({ topic, title, goal, tokens, exclude, write, frozenOutl
   // text. Deliberation about the task is never the paper; reject it and let the section drop
   // (an honest thin paper beats a poisoned one; the caller sees the section count).
   const COT_RE = /^\s*(?:We (?:need|must|should|have to)|Let'?s|The (?:instruction|user|task) (?:says|asks|wants))\b|\bthe numbered source list\b/i;
-  // PRODUCE: write every section and assemble the document. `corrText` is null on the first pass and
-  // the adversarial reviewer's corrections on a re-run (stage 4.5). The outline stays frozen either way.
-  async function produce(corrText) {
+  // WRITE + ASSEMBLE: the atom both gates re-run. `corrText` folds the reviewers' corrections into
+  // every section's prompt on a re-run; the outline stays frozen so scope never grows (2026-08-14).
+  async function writeAndAssemble(corrText) {
     const sections = [];
     for (const heading of heads) {
       const covered = sections.map((s) => ({ heading: s.heading, gist: s.body.trim().replace(/\s+/g, ' ').slice(0, 220) }));
@@ -189,10 +189,38 @@ async function finalize({ topic, title, goal, tokens, exclude, write, frozenOutl
     return { output: assemble({ title: docTitle, goal: goal || topic, sections, sources }), sections };
   }
 
+  // THE ADVERSARIAL STEPS, at their Alpha stages and composed (stage 4.5): the CITATION GATE wraps the
+  // writer (inner — every inline [n] must be supported by source [n], held sources first, three
+  // attempts, pass-with-caveats); the CHALLENGER wraps the citation-clean result (outer — a different
+  // model family reviews the assembled whole). Sequential re-runs of the same atom, not a 9× nest:
+  // the citation loop settles before the challenger sees the draft. Both are optional deps — absent,
+  // finalize behaves exactly as before.
+  let citationGate = null;
+  // Held source text for citation [n]: the gathered fragment whose harvested source is [n] — the
+  // citation gate reads THIS first, the web only when a source isn't held (Alpha: held sources first).
+  const _heldForSource = (n) => {
+    const src = sources.find((s) => Number(s.n) === Number(n));
+    if (!src) return null;
+    const frag = fragments.find((f) => src.url && String(f.text || '').includes(src.url));
+    return frag ? frag.text : material.slice(0, 4000);
+  };
+  async function produce(challengeCorr) {
+    if (typeof verifyCitations !== 'function') return writeAndAssemble(challengeCorr);
+    const cig = require('./citation_gate');
+    // the model check: finalize owns the held sources, so it builds the verifier prompt and hands the
+    // injected dispatch a ready prompt (the dangling-citation check inside runGate needs no model).
+    const check = async (citations) => verifyCitations(cig.buildCheckPrompt(citations, _heldForSource));
+    const r = await cig.runGate({
+      produce: (citCorr) => writeAndAssemble([challengeCorr, citCorr].filter(Boolean).join('\n\n') || null),
+      check, sources, maxAttempts: citationAttempts,
+    });
+    citationGate = { outcome: r.outcome, attempts: r.attempts, caveats: (r.caveats || []).length, failed: r.result ? (r.result.failed_count || 0) : 0 };
+    return r.produced || { output: r.output, sections: [] };
+  }
+
   let doc, sectionCount, gate = null;
   if (typeof challenge === 'function') {
-    // THE ADVERSARIAL STEP (stage 4.5): the assembled deliverable ends in the challenger — a different
-    // model family — which approves, requests a bounded re-run, or passes with caveats (lib/challenge_gate).
+    // the challenger — a different model family — approves, requests a bounded re-run, or passes with caveats (lib/challenge_gate).
     const cg = require('./challenge_gate');
     const r = await cg.runGate({ task: goal || topic, produce, challenge, maxIterations });
     if (!r.produced || (r.produced.sections || []).length < 2) return { ok: false, reason: `only ${(r.produced && (r.produced.sections || []).length) || 0} section(s) produced` };
@@ -207,7 +235,7 @@ async function finalize({ topic, title, goal, tokens, exclude, write, frozenOutl
   const outPath = path.join(outDir, `${slug}_FINAL.md`);
   fs.writeFileSync(outPath, doc, 'utf8');   // ONE canonical file — overwrites, never siblings
   if (land) { try { require('./doc_store').land({ title: docTitle, body: doc, source: 'paper_finalize', ref: outPath }); } catch {} }
-  return { ok: true, path: outPath, sections: sectionCount, sourceCount: sources.length, fragments: fragments.length, outline: heads, gate, fragmentStats: fragments.map((f) => ({ file: f.file, len: f.text.length })) };
+  return { ok: true, path: outPath, sections: sectionCount, sourceCount: sources.length, fragments: fragments.length, outline: heads, gate, citationGate, fragmentStats: fragments.map((f) => ({ file: f.file, len: f.text.length })) };
 }
 
 // A FINISHED PAPER RESOLVES ITS OWN ORDER-THREADS (Block 3, 2026-08-14). Measured: stale

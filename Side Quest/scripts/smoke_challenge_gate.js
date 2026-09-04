@@ -91,7 +91,7 @@ ok(G.corrections({ correction_notes: [] }) === '' && G.corrections(null) === '',
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/swarm\.challenge_deliverables/.test(main) && /require\('\.\/lib\/role_registry'\)\.byName\('challenger'\)/.test(main), 'the finalize verb gates the challenger on a kill switch and the role being registered');
   ok(/name: 'challenger', prompt, lane: 'directed'/.test(main) && /spendTier: 'directed'/.test(main), "the challenger is dispatched (blocking) on the deliverable's directed lane");
-  ok(/frozenOutline: _contract && _contract\.outline, challenge \}\)/.test(main) && /L\.start\(\{ role: 'challenger', executor: 'echo'/.test(main) && /echo_run_id: echoRunId/.test(main), 'the challenge is passed into finalize and each challenge is recorded in the run ledger, keyed on the engine run id');
+  ok(/frozenOutline: _contract && _contract\.outline, challenge, verifyCitations \}\)/.test(main) && /L\.start\(\{ role: 'challenger', executor: 'echo'/.test(main) && /echo_run_id: echoRunId/.test(main), 'the challenge is passed into finalize and each challenge is recorded in the run ledger, keyed on the engine run id');
   ok(/passed_with_caveats[\s\S]{0,200}landed with caveats/.test(main), 'a paper that passed with caveats says so in the announce (never claims a clean bill the challenger withheld)');
   const pfSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'paper_finalize.js'), 'utf8');
   ok(/require\('\.\/challenge_gate'\)/.test(pfSrc) && /cg\.runGate\(\{ task: goal \|\| topic, produce, challenge, maxIterations \}\)/.test(pfSrc), 'finalize runs the assembled deliverable through challenge_gate.runGate');

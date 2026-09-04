@@ -7456,7 +7456,24 @@ async function runPaperFinalize({ sessionId, topic, focusId }) {
     } catch {}
     return text;
   } : null;
-  const r = await pf.finalize({ topic, goal: `A complete, sourced research paper on ${topic}.`, write, exclude, frozenOutline: _contract && _contract.outline, challenge });
+  // THE CITATION GATE (stage 4.5, 2026-09-04): between the writer and the challenger, every inline [n]
+  // must be supported by source [n] — held sources first. The deterministic dangling-citation check
+  // runs with no model; the model check dispatches the citation-verifier role (blocking) when the
+  // engine has one, behind the same kill switch. finalize owns the held sources and hands the verifier
+  // a ready prompt (lib/citation_gate.buildCheckPrompt).
+  const _verifierRole = _challengeOn && echoSuit && echoSuit.connected
+    && (() => { try { const rr = require('./lib/role_registry'); return (rr.byName('citation-verifier') && 'citation-verifier') || (rr.byName('rainey-citation-verifier') && 'rainey-citation-verifier') || null; } catch { return null; } })();
+  const verifyCitations = _verifierRole ? async (prompt) => {
+    try {
+      const res = await require('./lib/lane').run({ autonomous: false, spendTier: 'directed' }, () =>
+        echoSuit.dispatch({ kind: 'do', name: 'spawn_agent', args: { name: _verifierRole, prompt, lane: 'directed' } }, { autonomous: false }));
+      const text = require('./lib/review_fanout').parseRunOutput(res && res.text) || (res && res.text) || null;
+      try { const L = require('./lib/run_ledger'); const rid = L.start({ role: _verifierRole, executor: 'echo', trigger_kind: 'directed', lane: 'directed', echo_run_id: require('./lib/review_fanout').parseRunId(res && res.text), state: 'succeeded', input_preview: `citation check: ${String(topic).slice(0, 120)}` }); L.finish(rid, { state: 'succeeded', output: text }); } catch {}
+      return text;
+    } catch (e) { console.error('[paper] citation verifier dispatch failed:', e && e.message); return null; }
+  } : null;
+  const r = await pf.finalize({ topic, goal: `A complete, sourced research paper on ${topic}.`, write, exclude, frozenOutline: _contract && _contract.outline, challenge, verifyCitations });
+  if (r && r.citationGate) console.log(`[paper] citation gate: ${r.citationGate.outcome} after ${r.citationGate.attempts} attempt(s)${r.citationGate.failed ? `, ${r.citationGate.failed} unsupported` : ''}${r.citationGate.caveats ? `, ${r.citationGate.caveats} caveat(s)` : ''}`);
   if (r && r.gate) console.log(`[paper] adversarial gate: ${r.gate.outcome} after ${r.gate.iterations} iteration(s)${r.gate.score != null ? ` (score ${r.gate.score}, ${r.gate.label})` : ''}${r.gate.corrections ? `, ${r.gate.corrections} correction(s) folded` : ''}`);
   const _say = (msg) => {
     try {
