@@ -1389,22 +1389,11 @@ app.whenReady().then(() => {
     if (Date.now() - parseInt(db.getMeta('last_security_scan_at') || '0', 10) < SECSCAN_MIN_MS) return;
     secScanRunning = true; markActivity('security-scan');
     db.setMeta('last_security_scan_at', String(Date.now()));
-    let runId = null;
     try {
-      const roots = require('./lib/security_scope').describe().roots;
-      const secfind = require('./lib/security_findings');
-      try { runId = require('./lib/run_ledger').start({ role: 'security-audit', executor: 'sq', trigger_kind: 'scheduled', lane: 'development', input_preview: `secret scan of ${roots.length} owned repo(s)` }); } catch {}
-      const out = await require('./lib/fs_worker').securityScan({ roots }, { timeoutMs: 180000 }).catch((e) => { console.error('[security] scan worker failed:', e.message); return []; });
-      let scanned = 0, recorded = 0;
-      for (const r of (out || [])) {
-        scanned += r.scanned || 0;
-        for (const f of (r.findings || [])) { const rr = secfind.record({ ...f, run_id: runId }); if (rr && rr.id != null && !rr.deduped) recorded++; }
-      }
-      const sum = secfind.summary();
-      try { if (runId) require('./lib/run_ledger').finish(runId, { state: 'succeeded', output: `scanned ${scanned} files; ${recorded} new; ${sum.open} open` }); } catch {}
-      console.log(`[security] secret scan: ${scanned} files, ${recorded} new finding(s), ${sum.open} open ${JSON.stringify(sum.bySeverity)}`);
-      if (recorded > 0) { try { require('./lib/obs_bus').emit({ lane: 'security', kind: 'findings', level: 'warn', text: `secret scan: ${recorded} new issue(s), ${sum.open} open`, data: sum.bySeverity }); } catch {} }
-    } catch (e) { console.error('[security] scan organ failed:', e.message); try { if (runId) require('./lib/run_ledger').finish(runId, { state: 'failed', error: e.message }); } catch {} }
+      const r = await require('./lib/security_scan').runScanOnce({ deps: { trigger_kind: 'scheduled' } });
+      console.log(`[security] secret scan: ${r.scanned} files, ${r.recorded} new finding(s), ${r.summary.open} open ${JSON.stringify(r.summary.bySeverity)}`);
+      if (r.recorded > 0) { try { require('./lib/obs_bus').emit({ lane: 'security', kind: 'findings', level: 'warn', text: `secret scan: ${r.recorded} new issue(s), ${r.summary.open} open`, data: r.summary.bySeverity }); } catch {} }
+    } catch (e) { console.error('[security] scan organ failed:', e.message); }
     finally { markActivity('idle'); secScanRunning = false; }
   };
   setInterval(() => { maybeSecurityScan().catch(() => {}); }, SECSCAN_CHECK_MS).unref?.();

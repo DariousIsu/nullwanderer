@@ -238,6 +238,15 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
         const sf = require('./security_findings');
         return send(200, { ok: true, boundary: require('./security_scope').describe(), ...sf.summary(), open: sf.list({ status: 'open', limit: 20 }), at: Date.now() });
       }
+      // POST /security/scan → run an audit pass ON DEMAND (the universal tool surface: the nightly organ owns
+      // the cadence, this is the on-demand trigger an operator, an agent, or an MCP tool calls). Bypasses the
+      // cooldown; scope-gated inside runScanOnce. Non-GET, so it already passed the token/loopback gate above.
+      if (req.method === 'POST' && req.url.startsWith('/security/scan')) {
+        require('./security_scan').runScanOnce({ deps: { trigger_kind: 'directed' } })
+          .then((r) => send(200, { ok: r.ok, scanned: r.scanned, recorded: r.recorded, ...r.summary, run_id: r.run_id, at: Date.now() }))
+          .catch((e) => send(500, { ok: false, error: (e && e.message) || String(e) }));
+        return;
+      }
       // ── THE PARLOR doors (09-01): outside seats post attributed turns; zoe's seat posts only
       // from inside the process (a port caller may not speak AS her). Loopback-only server.
       if (req.method === 'POST' && req.url === '/parlor/say') {

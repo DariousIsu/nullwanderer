@@ -50,27 +50,43 @@ ok(/require\('\.\/security_scope'\)/.test(src) && /scope\.pathInScope/.test(src)
 ok(/security_findings.*maskSecret|secfind\.maskSecret/.test(src), 'masks through lib/security_findings.maskSecret');
 ok(/node_modules/.test(String(SC.SKIP_DIRS.has('node_modules'))) || SC.SKIP_DIRS.has('node_modules'), 'skips vendored trees by construction');
 
-// ── increment 3: the OFF-THREAD organ + the read door ───────────────────────────────────────────
+// ── increment 3: the OFF-THREAD organ, the shared op, and the doors ─────────────────────────────
 {
   const fw = require('../lib/fs_worker');
   ok(typeof fw.securityScan === 'function' && typeof fw.securityScanSync === 'function', 'fs_worker exposes the security-scan job (off-thread) + its sync predicate');
-  // securityScanSync uses the REAL scope gate, so an off-scope fixture root is SKIPPED, not scanned —
-  // the boundary holds inside the worker just as at the door.
+  // securityScanSync uses the REAL scope gate, so an off-scope fixture root is SKIPPED, not scanned.
   const res3 = fw.securityScanSync({ roots: [dir] });
   ok(Array.isArray(res3) && res3[0] && res3[0].skipped && (res3[0].scanned || 0) === 0, 'securityScanSync refuses an off-scope root (the boundary holds in the worker)');
 
   const fwsrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'fs_worker.js'), 'utf8');
   ok(/kind === 'security-scan'/.test(fwsrc) && /require\('\.\/security_scan'\)/.test(fwsrc), 'the worker handles the security-scan job, requiring the scanner lazily');
 
+  ok(typeof SC.runScanOnce === 'function', 'runScanOnce is the reusable on-demand scan op');
+  const scanSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'security_scan.js'), 'utf8');
+  ok(/fw\.securityScan\(/.test(scanSrc) && /find\.record\(/.test(scanSrc), 'runScanOnce dispatches OFF-THREAD and records the findings');
+
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/maybeSecurityScan = async/.test(main) && /ZOE_SECURITY_SCAN\b/.test(main), 'main.js runs the scan organ behind the ZOE_SECURITY_SCAN kill switch');
-  ok(/fs_worker'\)\.securityScan\(/.test(main) && /secfind\.record\(/.test(main), 'the organ dispatches OFF-THREAD and records the findings on the main thread');
+  ok(/security_scan'\)\.runScanOnce\(/.test(main), 'the organ delegates to the shared runScanOnce op (one scan path, autonomous OR on-demand)');
   ok(/last_security_scan_at/.test(main), 'the organ is cooldown-gated (nightly)');
 
   const tp = fs.readFileSync(path.join(__dirname, '..', 'lib', 'test_port.js'), 'utf8');
-  ok(/req\.url\.startsWith\('\/security'\)/.test(tp), 'GET /security serves the boundary + the findings');
+  ok(/req\.method === 'GET' && req\.url\.startsWith\('\/security'\)/.test(tp), 'GET /security serves the boundary + the findings');
+  ok(/\/security\/scan/.test(tp) && /runScanOnce/.test(tp), 'POST /security/scan triggers a scan on demand (the universal tool surface)');
 }
 
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
-console.log(`\nsmoke_security_scan: ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+
+// ── runScanOnce end-to-end, offline with injected collaborators ─────────────────────────────────
+SC.runScanOnce({ deps: {
+  scope: { describe: () => ({ roots: ['X'] }) },
+  fsWorker: { securityScan: async () => [{ root: 'X', scanned: 42, found: 2, findings: [
+    { asset: 'a', class: 'secret', severity: 'high', title: 't', evidence: 'e' },
+    { asset: 'b', class: 'secret', severity: 'medium', title: 'u', evidence: 'e' }] }] },
+  findings: { record: () => ({ id: 1, deduped: false }), summary: () => ({ open: 2, bySeverity: { high: 1, medium: 1 } }) },
+  ledger: null,
+} }).then((r) => {
+  ok(r.ok && r.scanned === 42 && r.recorded === 2 && r.summary.open === 2, `runScanOnce dispatches off-thread, records, summarizes (${JSON.stringify({ scanned: r.scanned, recorded: r.recorded })})`);
+  console.log(`\nsmoke_security_scan: ${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+}).catch((e) => { console.error('runScanOnce test threw:', e); process.exit(1); });
