@@ -45,6 +45,10 @@ function assemble({ deps = {}, nowMs = Date.now() } = {}) {
     v.pen = { queue: pen.workQueue().length, proposals: rows.map((r) => ({ id: r.id, title: String(r.title).slice(0, 60), status: r.status })) };
   } catch {}
 
+  // THE RUN LEDGER (stage 4.5 C): live runs (parents/children/engine-executed, by lane) and the last
+  // hour's outcomes — SELECTed from lib/run_ledger, the one record both swarm doors and every delegate write.
+  try { v.runs = require('./run_ledger').summary({ now: nowMs }); } catch {}
+
   // organs — connection truths
   v.organs = {};
   try { v.organs.echo = deps.echoConnected !== undefined ? !!deps.echoConnected : null; } catch {}

@@ -16156,6 +16156,7 @@ async function _agentConsumeTick() {
     if (now - (e.at || 0) < 15 * 1000) continue;   // let a fresh spawn actually start
     if (now - (e.at || 0) > ac.GIVE_UP_MS || (e.attempts || 0) >= ac.MAX_ATTEMPTS) {
       console.log(`[agent-consume] giving up on run ${e.runId} (${e.tool}) — no terminal state after ${Math.round((now - (e.at || 0)) / 60000)}m`);
+      try { require('./lib/run_ledger').finishByEcho(e.runId, { state: 'failed', error: `no terminal state after ${Math.round((now - (e.at || 0)) / 60000)}m — consume gave up` }); } catch {}
       entries = entries.filter((x) => x !== e); dirty = true; continue;
     }
     if (checked >= 3) break;
@@ -16165,12 +16166,14 @@ async function _agentConsumeTick() {
     if (!state || !rf.isTerminal(state)) continue;
     if (state !== 'succeeded') {
       console.log(`[agent-consume] run ${e.runId} (${e.tool}) ended ${state} — dropped without a followup`);
+      try { require('./lib/run_ledger').finishByEcho(e.runId, { state: state === 'cancelled' ? 'cancelled' : 'failed', error: `engine reported ${state}` }); } catch {}
       entries = entries.filter((x) => x !== e); dirty = true; continue;
     }
     let output = '';
     try { const r = await echoSuit.dispatch({ kind: 'do', name: 'get_agent_output', args: { run_id: e.runId } }, { autonomous: false }); output = rf.parseRunOutput(r && r.text); } catch {}
     entries = entries.filter((x) => x !== e); dirty = true;
     ac.markDone(e, store);   // done-ledger first, so the dedupe gate can read-through it from now on
+    try { require('./lib/run_ledger').finishByEcho(e.runId, { state: 'succeeded', output: output || null }); } catch {}   // the run ledger (stage 4.5 C): the delegate's record closes with its output
     if (!output || output.length < 40) { console.log(`[agent-consume] run ${e.runId} succeeded but returned no readable output — inbox path will surface the summary`); continue; }
     const sid = currentSessionId;
     if (!sid) continue;   // no session yet — the entry is consumed to done; dedupe still serves it
@@ -18233,9 +18236,17 @@ async function startSwarm({ target, requestedK = null, requestedBy = 'chat' } = 
   if (swarmWorkers < 1) return { ok: false, reason: `no background workers free to swarm (research.workers=${total}); raise research.workers first` };
   const parts = swarmLib.partitionRoster(targets, swarmWorkers);
   state.swarm = { beatId: beat.id, mode: 'roster', startedAt: Date.now(), requestedBy, parts: {} };
+  // THE RUN LEDGER (stage 4.5 C): a swarm is a PARENT run; each partition is a CHILD run on its thread,
+  // in Echo's agent_runs shape (lib/run_ledger). The ledger never breaks a swarm — every write is try'd.
+  const _swarmLane = requestedBy === 'chat' ? 'directed' : 'research';
+  try { state.swarm.run_id = require('./lib/run_ledger').start({ role: 'swarm', executor: 'sq', trigger_kind: requestedBy === 'chat' ? 'swarm_chat' : 'scheduled', trigger_meta: { beatId: beat.id, mode: 'roster', requestedBy, targets: targets.length }, lane: _swarmLane, input_preview: `swarm on ${beat.id} (${targets.length} targets)` }); } catch {}
   for (let i = 0; i < parts.length; i++) {
     const r = await seedBeatRun(beat, { background: true, targetsOverride: parts[i] });
-    if (r && r.ok) { state.swarm.parts[i + 1] = { thread: r.focusId, n: parts[i].length, done: false }; try { db.setMeta(`focus.${r.focusId}.swarm`, '1'); db.setMeta(`focus.${r.focusId}.swarm_by`, String(requestedBy || 'chat')); } catch {} }   // tag so it surfaces while breadth is quieted; swarm_by = whose word (a chat swarm's partitions bill directed)
+    if (r && r.ok) {
+      state.swarm.parts[i + 1] = { thread: r.focusId, n: parts[i].length, done: false };
+      try { db.setMeta(`focus.${r.focusId}.swarm`, '1'); db.setMeta(`focus.${r.focusId}.swarm_by`, String(requestedBy || 'chat')); } catch {}   // tag so it surfaces while breadth is quieted; swarm_by = whose word (a chat swarm's partitions bill directed)
+      try { state.swarm.parts[i + 1].run_id = require('./lib/run_ledger').start({ role: 'swarm-worker', executor: 'sq', trigger_kind: requestedBy === 'chat' ? 'swarm_chat' : 'scheduled', trigger_meta: { beatId: beat.id, partition: i + 1, of: parts.length }, lane: _swarmLane, parent_run_id: state.swarm.run_id || null, thread_id: r.focusId, model: _laneModelFor(r.focusId), input_preview: `${beat.id} partition ${i + 1}/${parts.length} (${parts[i].length} targets)` }); } catch {}
+    }
   }
   const seeded = Object.keys(state.swarm.parts).length;
   if (!seeded) { delete state.swarm; return { ok: false, reason: 'failed to seed any swarm worker' }; }
@@ -18279,18 +18290,23 @@ function _maintainSwarm(state) {
     for (const p of Object.values(state.swarm.parts)) {
       if (!p || p.done) continue;
       let t = null; try { t = db.getOpenThread(p.thread); } catch {}
-      if (!t || !['pending', 'active'].includes(t.status)) { p.done = true; continue; }   // resolved/gone → this partition converged
-      const touched = t.last_touched_ts || t.created_ts || 0;
-      if (touched && (now - touched) > SWARM_STALE_MS) {
-        p.done = true; p.stalled = true;
-        console.warn(`[swarm] partition thread ${p.thread} stalled ${Math.round((now - touched) / 3600000)}h — expiring it so the swarm can release (thread left open for the normal rotation)`);
+      if (!t || !['pending', 'active'].includes(t.status)) { p.done = true; }   // resolved/gone → this partition converged
+      else {
+        const touched = t.last_touched_ts || t.created_ts || 0;
+        if (touched && (now - touched) > SWARM_STALE_MS) {
+          p.done = true; p.stalled = true;
+          console.warn(`[swarm] partition thread ${p.thread} stalled ${Math.round((now - touched) / 3600000)}h — expiring it so the swarm can release (thread left open for the normal rotation)`);
+        }
       }
+      // the ledger (stage 4.5 C): a converged partition's run finishes succeeded; a stalled one failed, with the reason
+      if (p.done && p.run_id) { try { require('./lib/run_ledger').finish(p.run_id, { state: p.stalled ? 'failed' : 'succeeded', error: p.stalled ? `stalled ${Math.round(SWARM_STALE_MS / 3600000)}h — expired at release` : null, output: p.stalled ? null : `partition converged (${p.n} targets)` }); } catch {} }
     }
     if (swarmLib.shouldReleaseRoster({ parts: state.swarm.parts })) {
       const b = state.swarm.beatId, n = Object.keys(state.swarm.parts).length;
       const stalled = Object.values(state.swarm.parts).filter((p) => p && p.stalled).length;
       _closeSwarmParts(state.swarm.parts, { abandon: false });   // threads already resolved on convergence; just clear the surfacing tags
       console.log(`[swarm] RELEASE ${b} — ${n} partition(s)${stalled ? `, ${stalled} expired as stalled` : ' converged'} → workers back to normal rotation`);
+      if (state.swarm.run_id) { try { require('./lib/run_ledger').finish(state.swarm.run_id, { state: stalled ? 'failed' : 'succeeded', output: `${n} partition(s)${stalled ? `, ${stalled} expired as stalled` : ' converged'}`, error: stalled ? `${stalled} partition(s) stalled` : null }); } catch {} }
       delete state.swarm;
       setTimeout(_pushSwarmChip, 0);   // after the caller's _saveSchedState persists the delete
       return 0;
@@ -18306,6 +18322,8 @@ function releaseSwarm(reason = 'manual') {
   if (!state.swarm) return { ok: false, reason: 'no active swarm' };
   const b = state.swarm.beatId, parts = state.swarm.parts || {};
   const closed = _closeSwarmParts(parts, { abandon: true, reason: `swarm-release:${reason}` });   // STOP in-flight partitions — no orphan pileup
+  // the ledger (stage 4.5 C): a manual release CANCELS the parent and every partition still open
+  try { const L = require('./lib/run_ledger'); for (const p of Object.values(parts)) if (p && p.run_id && !p.done) L.finish(p.run_id, { state: 'cancelled', error: `swarm-release:${reason}` }); if (state.swarm.run_id) L.finish(state.swarm.run_id, { state: 'cancelled', error: `released: ${reason} (${closed} partition(s) stopped)` }); } catch {}
   delete state.swarm; _saveSchedState(state);
   _pushSwarmChip();
   console.log(`[swarm] RELEASE ${b} (${reason}) — stopped ${closed} in-flight partition(s)`);
@@ -18327,6 +18345,7 @@ function _pushSwarmChip() {
       target: parts.reduce((a, p) => a + ((p && p.n) || 0), 0),
       done: parts.filter((p) => p && p.done).length,
       state: s.beatId,
+      run_id: s.run_id || null,   // the ledger's parent run (stage 4.5 C) — the chip reads the record
     });
   } catch {}
 }
@@ -18374,6 +18393,10 @@ async function startFocusSwarm(focus, { requestedK = null, requestedBy = 'auto' 
   const depth = (() => { try { return (db.getMeta(`focus.${fid}.depth`) || '').trim() || null; } catch { return null; } })();
   const goal = String(focus.content || '');
   state.swarm = { beatId, mode: 'focus', parentFocus: fid, startedAt: Date.now(), requestedBy, parts: {} };
+  // THE RUN LEDGER (stage 4.5 C): the focus swarm is a parent run on the FOCUS's own tier (a chat-driven
+  // focus bills directed, a beat-born one research); its partitions are child runs on their threads.
+  const _focusLane = (() => { try { return _focusSpendTier(focus) || (requestedBy === 'chat' ? 'directed' : 'research'); } catch { return requestedBy === 'chat' ? 'directed' : 'research'; } })();   // _focusSpendTier takes the focus OBJECT
+  try { state.swarm.run_id = require('./lib/run_ledger').start({ role: 'swarm', executor: 'sq', trigger_kind: requestedBy === 'chat' ? 'swarm_chat' : 'scheduled', trigger_meta: { beatId, mode: 'focus', parentFocus: fid, requestedBy, targets: remaining.length }, lane: _focusLane, thread_id: fid, input_preview: `auto-swarm focus #${fid}: ${goal.slice(0, 120)}` }); } catch {}
   const childIds = [];
   for (let i = 0; i < parts.length; i++) {
     // distinct per-partition goal — the churn guard reuses threads on IDENTICAL content, and the
@@ -18385,6 +18408,7 @@ async function startFocusSwarm(focus, { requestedK = null, requestedBy = 'auto' 
       state.swarm.parts[i + 1] = { thread: r.focusId, n: parts[i].length, done: false };
       childIds.push(r.focusId);
       try { db.setMeta(`focus.${r.focusId}.swarm`, '1'); } catch {}
+      try { state.swarm.parts[i + 1].run_id = require('./lib/run_ledger').start({ role: 'swarm-worker', executor: 'sq', trigger_kind: requestedBy === 'chat' ? 'swarm_chat' : 'scheduled', trigger_meta: { beatId, partition: i + 1, of: parts.length, parentFocus: fid }, lane: _focusLane, parent_run_id: state.swarm.run_id || null, thread_id: r.focusId, model: _laneModelFor(r.focusId), input_preview: partGoal }); } catch {}
     }
   }
   const seeded = Object.keys(state.swarm.parts).length;

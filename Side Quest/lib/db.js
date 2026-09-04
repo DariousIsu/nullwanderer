@@ -269,6 +269,38 @@ const MIGRATIONS = [
   // Freeze cut 7: the user-assigned-threads reads walk newest-first and stop at their LIMIT (was a full
   // scan + a temp B-tree, 2.3s cold on every directed brief).
   `CREATE INDEX IF NOT EXISTS idx_open_threads_touched ON open_threads(last_touched_ts DESC)`,
+  // THE RUN LEDGER (stage 4.5 C, 2026-09-04; merge map contract part 3): one row per run on THIS
+  // side in the same shape as Echo's agent_runs (run_id, trigger, state, timing, model, preview,
+  // output, error, tool_calls, tokens, parent_run_id) plus the seam columns — executor (sq | echo),
+  // the usage-law lane, the partition thread, the engine's run id when the executor is Echo, and
+  // P5's JSON envelope as the artifact record. A swarm is a parent run; its partitions are child
+  // runs. Readers: the status vector, the swarm chip, the consume watcher. lib/run_ledger.js.
+  `CREATE TABLE IF NOT EXISTS runs (
+    run_id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    executor TEXT NOT NULL DEFAULT 'sq',
+    trigger_kind TEXT NOT NULL,
+    trigger_meta TEXT,
+    lane TEXT,
+    state TEXT NOT NULL DEFAULT 'running',
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    model TEXT,
+    input_preview TEXT,
+    output TEXT,
+    error TEXT,
+    tool_calls TEXT,
+    tokens_in INTEGER,
+    tokens_out INTEGER,
+    parent_run_id TEXT,
+    thread_id INTEGER,
+    echo_run_id TEXT,
+    envelope TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_runs_parent ON runs(parent_run_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_runs_state_started ON runs(state, started_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_runs_echo ON runs(echo_run_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_runs_thread ON runs(thread_id)`,
   // open_questions — questions ZOE asked Lucas that await an answer (the QUD/grounding
   // stack). Distinct from open_threads (her goals) and commitments (her beliefs): this is
   // live CONVERSATIONAL state — "I asked, he hasn't answered." Surfaced on his next turn so

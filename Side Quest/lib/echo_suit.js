@@ -897,6 +897,15 @@ class EchoSuit {
           } catch { /* fail open — run the real call */ }
         }
         const r = normalizeToolResult(await c.callTool(tag.name, callArgs));
+        // THE RUN LEDGER (stage 4.5 C): EVERY spawn/delegate — chat or autonomous — is a run row with
+        // executor 'echo', keyed on the engine's run id, on the lane it dispatched; the consume watcher
+        // closes it when the engine reports a terminal state. Fail-soft, never on the dispatch path.
+        if (!r.isError && /^(delegate_to_|spawn_agent)/.test(tag.name)) {
+          try {
+            const runId = require('./review_fanout').parseRunId(r.text);
+            if (runId) require('./run_ledger').start({ role: tag.name === 'spawn_agent_async' || tag.name === 'spawn_agent' ? String(callArgs.name || tag.name) : tag.name.replace(/^delegate_to_/, ''), executor: 'echo', trigger_kind: 'chat', trigger_meta: { tool: tag.name, autonomous: !!_auto }, lane: callArgs.lane || null, echo_run_id: runId, state: 'queued', input_preview: String(callArgs.prompt || '').slice(0, 200) });
+          } catch { /* the ledger never breaks a dispatch */ }
+        }
         // B1 REGISTER (chat-triggered spawns only): capture the run_id so the consume watcher can
         // bring the OUTPUT back to the conversation — agent_inbox only ever carried title/summary
         // to the monologue, which is why run-2's finished briefs were never read. Fail-soft.
@@ -972,6 +981,13 @@ class EchoSuit {
         if (tag.agent) args.name = tag.agent;
         try { args.lane = require('./lane').delegateLane(opts.autonomous); } catch { /* the engine falls to the law's default */ }   // item 3b: the caller's tier rides the spawn
         const r = normalizeToolResult(await c.callTool('spawn_agent_async', args));
+        // THE RUN LEDGER (stage 4.5 C): the delegate is a run row keyed on the engine's run id (see the do-branch note)
+        if (r.ok && !r.isError) {
+          try {
+            const runId = require('./review_fanout').parseRunId(r.text);
+            if (runId) require('./run_ledger').start({ role: String(args.name || tag.agent || 'spawn_agent_async'), executor: 'echo', trigger_kind: 'chat', trigger_meta: { tool: 'spawn_agent_async', via: 'echo-delegate', autonomous: !!_auto }, lane: args.lane || null, echo_run_id: runId, state: 'queued', input_preview: String(tag.task || '').slice(0, 200) });
+          } catch { /* the ledger never breaks a dispatch */ }
+        }
         // B1 REGISTER (chat-triggered delegates): same consume bookkeeping as the do-branch spawns —
         // hash on the RAW task (hashInput strips our envelope), so a repeat of the same delegation
         // dedupes and the watcher brings the finished output back to the conversation. Fail-soft.
