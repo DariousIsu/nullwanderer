@@ -54,6 +54,52 @@ function detect(text) {
   return out;
 }
 
+// ── LEG D: the CORRECTION-path gap detector (2026-09-04) ────────────────────────────────────────
+// The detector above reads text a RUN produced (first person: "I need a tool…"). This one reads a
+// CORRECTION Lucas gives in conversation, where HE tells her she LACKS a capability ("you should be
+// able to read my calendar", "you can't even check my email"). It routes that to the same need card —
+// the correction router's capability arm, beside the directive arm (a rule) and, later, the
+// known_incorrect arm (a fact). A bare REQUEST ("can you check my email?") is NOT a gap: she should
+// just do it. Only an ASSERTION that the ability is MISSING lands a need. Pure regex; the card
+// decider + Lucas's yes/no is the backstop for anything that slips the guards.
+const _GAP_RES = [
+  /\byou\s+(?:should|ought to|really should|need to|have to)\s+be\s+able\s+to\s+([^.!?\n]{4,140})/i,
+  /\byou\s+need\s+(?:the\s+ability|a\s+way|a\s+tool|the\s+capability)\s+to\s+([^.!?\n]{4,140})/i,
+  /\byou\s+(?:can'?t|cannot|are\s+not\s+able\s+to|aren'?t\s+able\s+to|have\s+no\s+way\s+to|don'?t\s+have\s+(?:a\s+way|the\s+ability)\s+to)\s+([^.!?\n]{4,140})/i,
+  /\bwhy\s+can'?t\s+you\s+(?:even\s+)?([^.!?\n]{4,140})/i,
+  /\b(?:i\s+wish|it\s+would\s+be\s+(?:good|great|nice|helpful|useful)\s+if)\s+you\s+could\s+([^.!?\n]{4,140})/i,
+];
+const _NOT_A_GAP = [
+  /\bno need\b/i,
+  /^\s*(?:can|could|would|will)\s+you\b/i,          // a bare request opener — she should just do it, not file a need
+];
+// a captured phrase that is only a pronoun / filler is not a capability ("you can't do that")
+const _VAGUE_CAP = /^(?:do\s+)?(?:that|it|this|anything|much|so|any(?:thing)?\s+of\s+it)\b|^(?:be|do)\s+\w+$/i;
+
+/**
+ * A correction naming a capability she LACKS → the need phrase ("the ability to <X>"), or null. Second
+ * person, from Lucas. Pure — no DB, no model — so it runs on every turn beside the directive nets.
+ */
+function detectCapabilityGap(text) {
+  const t = str(text);
+  if (!t.trim()) return null;
+  for (const span of t.split(/(?<=[.!?])\s+|\n+/)) {
+    const s = span.trim();
+    if (s.length < 10 || s.length > 400) continue;
+    if (_NOT_A_GAP.some((re) => re.test(s))) continue;
+    for (const re of _GAP_RES) {
+      const m = s.match(re);
+      if (!m || !m[1]) continue;
+      const cap = m[1].trim().replace(/\s+/g, ' ').replace(/[,.;:]+$/, '').replace(/\?+$/, '')
+        .replace(/^(?:even|really|actually|just|still|simply)\s+/i, '').trim();   // strip a leading filler adverb ("can't even search…")
+      // a capability names an action on something — a bare short verb ("relax") is not one
+      if (cap.length < 4 || _VAGUE_CAP.test(cap) || (cap.split(/\s+/).length < 2 && cap.length < 12)) continue;
+      return `the ability to ${cap}`.slice(0, 200);
+    }
+  }
+  return null;
+}
+
 // ── the store ─────────────────────────────────────────────────────────────────────────────────
 const _tokens = (s) => new Set((str(s).toLowerCase().match(/[a-z]{3,}/g) || []).filter((w) => !['the', 'and', 'that', 'can', 'with', 'for', 'need', 'needs', 'tool', 'this', 'would', 'requires', 'require'].includes(w)));
 function _similar(a, b) {
@@ -222,4 +268,4 @@ function slugFor(id, needText) {
   return base.slice(0, 40).replace(/-+$/, '') || `need-${id}`;
 }
 
-module.exports = { detect, record, listOpen, get, setStatus, setDiagnosis, setVerdict, getVerdict, decide, harvest, suiteFor, slugFor, manifestLines };
+module.exports = { detect, detectCapabilityGap, record, listOpen, get, setStatus, setDiagnosis, setVerdict, getVerdict, decide, harvest, suiteFor, slugFor, manifestLines };

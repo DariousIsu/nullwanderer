@@ -137,5 +137,46 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
   ok(/getSessionUserTurns\(sessionId/.test(m2), 'and fetches the previous user turn to promote it');
 }
 
+// ── LEG D: the correction router's CAPABILITY arm — a correction that names a gap becomes a NEED ──
+{
+  const G = require('../lib/capability_need');
+  // captured: Lucas telling her she LACKS a capability (second person, an assertion of absence)
+  const gaps = [
+    ['You should be able to read my calendar.', 'read my calendar'],
+    ['you need the ability to check my email', 'check my email'],
+    ["You can't even search my drive.", 'search my drive'],
+    ['why can\'t you send a calendar invite?', 'send a calendar invite'],
+    ['It would be helpful if you could export the roster to a spreadsheet.', 'export the roster to a spreadsheet'],
+    ['you have no way to watch a live meeting', 'watch a live meeting'],
+  ];
+  for (const [s, cap] of gaps) {
+    const g = G.detectCapabilityGap(s);
+    ok(g === `the ability to ${cap}`, `gap captured: "${s.slice(0, 44)}" → "${g}"`);
+  }
+  // NOT a gap: a bare request (she should just do it), a question about the world, a vague refusal echo,
+  // acknowledgments — the over-capture the directive net also guards against.
+  const notGaps = [
+    'Can you check my email?',                 // a request — do it, don't file a need
+    'Could you read my calendar for me?',      // a request
+    'What can you do?',                          // a question
+    "you can't do that",                        // vague — no capability named
+    'you should be able to relax',              // "be <adj>" — not a capability
+    'I need a coffee before the huddle.',       // about HIM
+    'ok got it',
+  ];
+  for (const s of notGaps) ok(G.detectCapabilityGap(s) === null, `NOT a gap: "${s.slice(0, 40)}"`);
+  ok(G.detectCapabilityGap('') === null && G.detectCapabilityGap(null) === null, 'junk is ignored');
+  // a rule and a gap are different shapes — a rule must NOT be filed as a need
+  ok(D.detect('Always use Eastern time.') && G.detectCapabilityGap('Always use Eastern time.') === null,
+    'a standing rule is a directive, never a capability need');
+
+  const capsrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'capability_need.js'), 'utf8');
+  const gapPatterns = capsrc.match(/^\s*\/\\byou.*\$/gm) || (capsrc.match(/_GAP_RES = \[([\s\S]*?)\];/) || [])[1] || '';
+  ok(!/[^\x00-\x7F]/.test(String(gapPatterns)), 'no stray non-ASCII inside the gap regex literals');
+  const m3 = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/detectCapabilityGap\(userMessage\)/.test(m3), 'the chat door routes a capability-gap correction to a need');
+  ok(/bornFrom: `correction:\$\{sessionId\}`/.test(m3), 'the need is born from the correction, dedup-scoped, feeding the same card pipeline');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

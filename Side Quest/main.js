@@ -9461,6 +9461,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (_rule) {
       const _r = require('./lib/directives').record(_rule, { turnId: null });
       if (_r) console.log(`[directive] ${_r.duplicate ? 'reinforced' : 'RECORDED'} (${_via}): "${_rule.slice(0, 90)}"`);
+    } else {
+      // LEG D — the correction router's CAPABILITY arm: a correction that names a capability she LACKS
+      // ("you should be able to read my calendar") is not a rule — it becomes a NEED, the same card the
+      // self-watch organ files, surfaced to Lucas for his yes/no. Only when the directive nets missed (a
+      // rule and a capability gap are different shapes). The fact-correction arm (→ known_incorrect) needs
+      // entity resolution and lands separately.
+      const _gap = require('./lib/capability_need').detectCapabilityGap(userMessage);
+      if (_gap) {
+        const _n = require('./lib/capability_need').record(_gap, { bornFrom: `correction:${sessionId}` });
+        if (_n && _n.id) console.log(`[directive] capability gap → need #${_n.id}${_n.deduped ? ' (reinforced)' : ''}: "${_gap.slice(0, 80)}"`);
+      }
     }
   } catch (e) { console.error('[directive] capture failed:', e.message); }
   const pendingInbounds = db.getPendingInbounds(6);
