@@ -168,16 +168,45 @@ function searchProducts({ db, query, notesDir = null, limit = 3, now = Date.now(
   const hits = [];
   const decay = (ts) => { const days = Math.max(0, (now - (ts || 0)) / 86400000); return Math.max(0.25, 1.4 - 0.15 * days); };
   try {
-    const like = toks.map(() => `(title LIKE ? OR body LIKE ?)`).join(' OR ');
-    const params = []; for (const w of toks) { params.push(`%${w}%`, `%${w}%`); }
-    const rows = db.getDb().prepare(
-      `SELECT id, title, source, created_ts, substr(COALESCE(body,''),1,4000) body FROM documents
-       WHERE COALESCE(source,'') NOT IN ('news', 'web_page')
-         AND COALESCE(title,'') NOT LIKE 'Conversation —%'
-         AND created_ts > ?
-         AND (${like})
-       ORDER BY created_ts DESC LIMIT 200`
-    ).all(now - 45 * 86400000, ...params);
+    const since = now - 45 * 86400000;
+    let rows = null;
+    // CUT 21 (2026-09-04, boot_p279's first three minutes): `body LIKE '%w%'` per token walked the 1.35 GB
+    // body corpus on the MAIN thread inside his chat turn — 8.8 s, 5.5 s and 2.4 s profiled blocks, the
+    // same disease cut 18 cured in db.searchDocuments. FTS-first, the IDS shape: the index answers "which
+    // documents carry any of these tokens" at word boundaries, newest rowids first; only those rows are
+    // read (the 45-day, non-news, non-conversation filters and the 4 KB body head apply as before). The
+    // scoring below is untouched. A store whose index is not built yet keeps the LIKE.
+    let ftsReady = false;
+    try { ftsReady = typeof db.documentsFtsReady === 'function' && db.documentsFtsReady(); } catch { ftsReady = false; }
+    if (ftsReady) {
+      try {
+        const match = toks.map((w) => `"${String(w).replace(/"/g, '""')}"`).join(' OR ');
+        const ids = db.getDb().prepare(`SELECT rowid FROM documents_fts WHERE documents_fts MATCH ? ORDER BY rowid DESC LIMIT 600`)
+          .all(match).map((r) => r.rowid);
+        rows = ids.length
+          ? db.getDb().prepare(
+            `SELECT id, title, source, created_ts, substr(COALESCE(body,''),1,4000) body FROM documents
+             WHERE id IN (SELECT value FROM json_each(?))
+               AND COALESCE(source,'') NOT IN ('news', 'web_page')
+               AND COALESCE(title,'') NOT LIKE 'Conversation —%'
+               AND created_ts > ?
+             ORDER BY created_ts DESC LIMIT 200`
+          ).all(JSON.stringify(ids), since)
+          : [];
+      } catch (e) { rows = null; try { console.error('[product-ledger] FTS search fell back to LIKE:', e && e.message); } catch {} }
+    }
+    if (rows === null) {
+      const like = toks.map(() => `(title LIKE ? OR body LIKE ?)`).join(' OR ');
+      const params = []; for (const w of toks) { params.push(`%${w}%`, `%${w}%`); }
+      rows = db.getDb().prepare(
+        `SELECT id, title, source, created_ts, substr(COALESCE(body,''),1,4000) body FROM documents
+         WHERE COALESCE(source,'') NOT IN ('news', 'web_page')
+           AND COALESCE(title,'') NOT LIKE 'Conversation —%'
+           AND created_ts > ?
+           AND (${like})
+         ORDER BY created_ts DESC LIMIT 200`
+      ).all(since, ...params);
+    }
     for (const r of rows) {
       const title = str(r.title).toLowerCase(), body = str(r.body).toLowerCase();
       // A FAILURE RECORD is not a product (08-08 audit, defect 4: doc #14529 — an inquiry closure

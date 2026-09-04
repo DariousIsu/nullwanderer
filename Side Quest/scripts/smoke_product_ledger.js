@@ -105,6 +105,31 @@ ok('"that thing we made for you" is all-generic → no tokens', pl.tokensOf('tha
     t.includes('louisiana') && t.includes('contact') && !t.includes('put') && !t.includes('together'));
 }
 
+// ── CUT 21 (2026-09-04): the FTS-first path — the same answers as the LIKE path, never a body walk ──
+// boot_p279's first three minutes profiled searchProducts at 8.8 s / 5.5 s / 2.4 s on the main thread inside
+// his chat turn: `body LIKE '%w%'` per token over the 1.35 GB corpus. Everything above ran on the LIKE path
+// (the index unbuilt); the index is built here and the same asks must rank the same way.
+{
+  ok('the index is not built yet (the pins above exercised the LIKE fallback)', db.documentsFtsReady() === false);
+  for (let i = 0; i < 50; i++) { const r = db.syncDocumentsFts({ batch: 100 }); if (r && r.caughtUp) break; }
+  ok('the index is built', db.documentsFtsReady() === true);
+  const fh = pl.searchProducts({ db, query: live.subject, notesDir, limit: 3, now });
+  ok('⭐ FTS path: the inquiry product still ranks first', fh.length && fh[0].kind === 'doc' && fh[0].id === idProduct);
+  ok('FTS path: news and transcripts still excluded', !fh.some((h) => /News —|Conversation/.test(h.title)));
+  ok('FTS path: recency still outranks the stale near-match', !fh.length || fh.findIndex((h) => h.id === idOld) !== 0);
+  ok('FTS path: the inquiry FAILURE record still never ranks', !pl.searchProducts({ db, query: 'Gulf pipeline operators contact list', notesDir, limit: 3, now }).some((h) => /Gulf pipeline/.test(h.title)));
+  ok('FTS path: notes are still found', pl.searchProducts({ db, query: 'report hartfield foundation', notesDir, limit: 3, now }).some((h) => h.kind === 'note' && /hartfield/.test(h.path)));
+  // the index's semantics: a body WORD is found; a substring inside a word is not (no body walk can find it)
+  const idBody = db.insertDocument({ title: 'Field notes, batch nine', body: 'The quorum roster for Terrebonne was confirmed with the clerk today.', source: 'autonomy' }).id;
+  for (let i = 0; i < 50; i++) { const r = db.syncDocumentsFts({ batch: 100 }); if (r && r.caughtUp) break; }
+  // ('roster' is a stopped product noun; a body-only match needs THREE scoring tokens — the rule on both paths)
+  ok('FTS path: body words find the product (quorum terrebonne clerk confirmed)', pl.searchProducts({ db, query: 'quorum terrebonne clerk confirmed', notesDir, limit: 3, now }).some((h) => h.id === idBody));
+  ok('⭐ FTS path: a substring inside a body word is NOT found — the body walk is gone', !pl.searchProducts({ db, query: 'uoru errebon', notesDir, limit: 3, now }).some((h) => h.id === idBody));
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'product_ledger.js'), 'utf8');
+  ok('the FTS ask is rowids only, newest first (the IDS shape)', /SELECT rowid FROM documents_fts WHERE documents_fts MATCH \? ORDER BY rowid DESC LIMIT 600/.test(src));
+  ok('the body LIKE survives only as the unbuilt-index fallback', (src.match(/body LIKE \?/g) || []).length === 1 && /if \(rows === null\)/.test(src));
+}
+
 console.log(`smoke_product_ledger: ${pass} passed, ${fail} failed`);
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 process.exit(fail ? 1 : 0);
