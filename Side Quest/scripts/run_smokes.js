@@ -614,6 +614,13 @@ const smokes = [
   // into lib/fs_worker's thread (one predicate for thread, fallback and gate), and the console tee's
   // companion write to the launcher's stdout file made async (lib/console_tee).
   'smoke_cut22.js',
+  // THE LIVE GUARD (09-04): scripts/boot_cycle.py reads the app's /status before any kill — a real turn of
+  // his younger than three minutes, a reply in flight, or an unanswered turn REFUSES the cycle (exit 2);
+  // --force is an operator's logged decision. The 02:30 cycle killed p282 13 s after his message landed.
+  'smoke_boot_cycle_guard.js',
+  // THE ORPHANED TURN (cut 24, 09-04): a message of his that the previous generation died on is found
+  // at boot (lib/orphan_turn) and served through the one chat door — the same row, its own session.
+  'smoke_orphan_turn.js',
   // Run-4 collision guard: the test port tells the REAL user from its own injected turns; a recent
   // or unanswered real turn owns the pipeline (10min / 30min-capped) and the harness yields.
   'smoke_test_port_guard.js',

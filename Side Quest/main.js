@@ -2232,6 +2232,10 @@ app.whenReady().then(() => {
   try { startDownloadsIngestWatcher(); } catch (e) { console.error('[dl-ingest] start failed:', e && e.message); }
   currentSessionId = db.startSession();
   currentSessionStartedAt = Date.now();
+  // THE ORPHANED TURN (cut 24): a message of his the previous generation died on is answered at boot —
+  // at +20 s, and again at +90 s if the window was not up yet. His answer outranks the boot grace.
+  setTimeout(() => _answerOrphanedTurn('boot+20s'), 20000).unref?.();
+  setTimeout(() => _answerOrphanedTurn('boot+90s'), 90000).unref?.();
   // Downtime marker (her request): record how long she was offline, then start the
   // keep-alive heartbeat. recordBoot drops a first-person "back online" reading + an
   // awareness line; the heartbeat keeps last_alive_at fresh so a HARD restart is still
@@ -8363,8 +8367,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // no wait to apologize for. The genuine long-wait placeholder lives on the operator path only.
   }
 
-  const sessionId = currentSessionId;
-  const userTurnRow = db.insertTurn({ sessionId, speaker: 'user', content: userMessage });
+  // THE ORPHANED TURN (cut 24, 2026-09-04): a generation that dies mid-reply leaves his message in the
+  // store with no answer, and nothing answered it after a restart — measured twice tonight (00:26 he
+  // retyped it himself; 02:30 it sat dead). A boot re-drive (_answerOrphanedTurn) serves the SAME row
+  // (reuseTurnId: never a duplicate of his words) under ITS session (sessionIdOverride: the reply lands
+  // where the unanswered check looks), through this one turn path.
+  const sessionId = (io && io.sessionIdOverride) || currentSessionId;
+  const userTurnRow = (io && io.reuseTurnId)
+    ? (db.getDb().prepare('SELECT * FROM turns WHERE id = ?').get(io.reuseTurnId) || db.insertTurn({ sessionId, speaker: 'user', content: userMessage }))
+    : db.insertTurn({ sessionId, speaker: 'user', content: userMessage });
   lastUserTurnStartTs = (userTurnRow && userTurnRow.ts) || Date.now();   // followup antifab anchor (F6)
   // CONVERSATION AS AN ENCOUNTER STREAM (C1) — the objects Lucas names become encounters, so the one
   // input stream that never decomposed into objects finally does. Written with authority 'stated',
@@ -14806,7 +14817,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
 // finish in seconds; deep-dives ACK fast and run on a separate lane. 2.5 min.
 const CHAT_TURN_WATCHDOG_MS = 150000;
 
-ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
+// THE ONE CHAT DOOR: the renderer's chat:send and the boot re-drive of an orphaned turn (cut 24) both
+// serve a turn through here. `sender` = anything with .send(channel, payload) — the ipc event's sender,
+// or the main window's webContents. `extra` rides into runChatTurn's io (reuseTurnId, sessionIdOverride).
+async function serveChatTurn(sender, userMessage, attachments = [], extra = {}) {
   let sayBuf = '';   // accumulate her spoken tokens (voice streams sentence-by-sentence as they arrive)
   let spokenIdx = 0;   // how much of the cleaned reply has already been queued to the global speech manager
   // Safety net for a stalled turn: force-resume the background loops (idempotent — a normal turn has
@@ -14816,7 +14830,7 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
   const _watchdog = setTimeout(() => {
     _forceResume();
     console.error(`[chat] turn watchdog (${CHAT_TURN_WATCHDOG_MS}ms) fired — force-resumed background loops after a stalled turn`);
-    try { event.sender.send('chat:error', "That turn stalled on my end — I've reset and I'm listening again."); } catch {}
+    try { sender.send('chat:error', "That turn stalled on my end — I've reset and I'm listening again."); } catch {}
   }, CHAT_TURN_WATCHDOG_MS);
   // THE REPLY LANE IS SINGLE-VOICE (Phase 0, doc-plan #7): a stale async followup still streaming
   // when this turn begins is muted NOW (quiet thinking-dots window), and this turn's own stream
@@ -14829,7 +14843,7 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
   // never speaks and never renders — arbitration lives in exactly one place.
   const _rawSend = (t) => {
     sayBuf += t;
-    try { event.sender.send('chat:say-token', { t, s: 'reply' }); } catch {}
+    try { sender.send('chat:say-token', { t, s: 'reply' }); } catch {}
     // STREAMING voice: speak each complete sentence the moment it lands, so she starts talking almost
     // immediately instead of after the whole reply. Only <say> reaches here — never her <think>.
     try {
@@ -14840,6 +14854,7 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
   };
   try {
     return await runChatTurn(userMessage, attachments, {
+      ...(extra || {}),
       // STREAM DISCRIMINATOR (2026-07-30, reply-delivery-path root fix): every say-token now names
       // its stream — the renderer routes by FACT, not by the promptedReplyPending/latch heuristics
       // that misfiled real answers into the sheep rail when a suppressed autonomous stream leaked.
@@ -14850,10 +14865,10 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
         // to a newer turn) must NOT close the newer turn's bubble — the finished say goes through
         // the unprompted door so nothing is lost, and it can never garble the live stream.
         if (_laneClaim.complete() === 'live') {
-          try { event.sender.send('chat:complete', { ...(info || {}), s: 'reply' }); } catch {}
+          try { sender.send('chat:complete', { ...(info || {}), s: 'reply' }); } catch {}
         } else {
           console.warn('[reply-lane] turn stream demoted at completion — say routed to the unprompted rail');
-          try { event.sender.send('chat:complete', { ...(info || {}), s: 'preempted', unprompted: true, say: (info && info.say) || sayBuf.trim() }); } catch {}
+          try { sender.send('chat:complete', { ...(info || {}), s: 'preempted', unprompted: true, say: (info && info.say) || sayBuf.trim() }); } catch {}
         }
         // speak any trailing partial sentence (the global queue releases voice:speaking when it drains).
         try {
@@ -14862,8 +14877,8 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
         } catch {}
         sayBuf = ''; spokenIdx = 0;
       },
-      onError: (e) => { try { event.sender.send('chat:error', e); } catch {} },
-      busy: (text) => { try { event.sender.send('chat:busy', text); } catch {} }
+      onError: (e) => { try { sender.send('chat:error', e); } catch {} },
+      busy: (text) => { try { sender.send('chat:busy', text); } catch {} }
     });
   } catch (e) {
     _forceResume();   // an outright throw must also recover the loops
@@ -14871,7 +14886,27 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
   } finally {
     clearTimeout(_watchdog);
   }
-});
+}
+ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => serveChatTurn(event.sender, userMessage, attachments));
+
+// THE ORPHANED TURN, ANSWERED (cut 24, 2026-09-04): when a generation dies mid-reply, his newest message
+// sits in the store with no ai_said after it in its session, and the next generation never looked. At
+// boot (+20 s, again at +90 s if the window was not up yet) the orphan finder (lib/orphan_turn) names it
+// and this serves it through the ONE chat door: the same row, its own session, streamed to the window
+// and voiced like any reply. Never a duplicate of his words; never a turn older than the finder's window.
+let _orphanServed = false;
+async function _answerOrphanedTurn(tag) {
+  if (_orphanServed) return;
+  try {
+    const orphan = require('./lib/orphan_turn');
+    const t = orphan.findOrphanedTurn(db, { now: Date.now() });
+    if (!t) { console.log(`[boot] no orphaned turn of his (${tag})`); _orphanServed = true; return; }
+    if (!(mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents)) { console.log(`[boot] orphaned turn #${t.id} waits — the window is not up yet (${tag})`); return; }
+    _orphanServed = true;
+    console.log(`[boot] answering his orphaned turn #${t.id} (${orphan.describe(t, Date.now())}) — the previous generation died before replying`);
+    await serveChatTurn(mainWindow.webContents, String(t.content || ''), [], { reuseTurnId: t.id, sessionIdOverride: t.session_id });
+  } catch (e) { console.error('[boot] orphaned-turn re-drive failed:', e && e.message); }
+}
 
 // Auto-continuation: a chat-initiated tool (observe-screen / browse-read / file-read /
 // file-list) returns its result AFTER the turn that emitted the tag — so without this,

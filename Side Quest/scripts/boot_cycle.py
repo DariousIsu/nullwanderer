@@ -152,12 +152,62 @@ def status_ok(timeout_s):
     return None
 
 
+MIN_QUIET_S = 180
+
+
+def live_guard(status_json, min_quiet_s=MIN_QUIET_S):
+    """THE LIVE GUARD (2026-09-04): the law said "live-guard before ANY kill -- user-turn age > 3 min,
+    never over his conversation, never mid-flight" and this script never carried it: the cycle at
+    02:30:00 on 09-04 killed boot_p282 thirteen seconds after his message ("I'll review the florida
+    list in the morning...") landed, unanswered. The guard reads the app's own /status and REFUSES
+    when a real turn of his is younger than min_quiet_s, when a reply is in flight, or when a real
+    turn is still unanswered. Pure: takes the status JSON text, returns (ok, reason). An unreadable
+    status refuses too -- a kill must never proceed on a guess."""
+    import json
+    try:
+        st = json.loads(status_json or '')
+    except (TypeError, ValueError):
+        return False, 'status unreadable -- refusing to kill on a guess'
+    if not isinstance(st, dict):
+        return False, 'status malformed -- refusing to kill on a guess'
+    if st.get('inFlight'):
+        return False, 'a reply is in flight'
+    if st.get('realUnanswered'):
+        return False, 'a real turn of his is unanswered'
+    age = st.get('lastRealUserTurnAgoMs')
+    if age is None:
+        age = st.get('lastUserTurnAgoMs')
+    try:
+        age = float(age)
+    except (TypeError, ValueError):
+        return False, 'the turn age is unreadable -- refusing to kill on a guess'
+    if age < min_quiet_s * 1000:
+        return False, f'his last turn was {age / 1000:.0f}s ago (< {min_quiet_s}s) -- never over his conversation'
+    return True, f'quiet for {age / 3600000:.1f}h, nothing in flight, nothing unanswered'
+
+
+def read_status():
+    try:
+        with urllib.request.urlopen(STATUS_URL, timeout=5) as r:
+            return r.read().decode('utf-8', 'replace')
+    except OSError:
+        return None
+
+
 def main():
     ap = argparse.ArgumentParser(description='Outside boot-cycler for the Side Quest app.')
     ap.add_argument('--root-pid', type=int, required=True, help='pid of the current electron ROOT (0 = already down)')
     ap.add_argument('--grace', type=int, default=25, help='seconds to wait for a clean self-exit before taskkill')
     ap.add_argument('--why', default='cycle', help='reason, for the log')
+    ap.add_argument('--force', action='store_true', help='skip the live guard (an operator who has decided; logged as such)')
+    ap.add_argument('--min-quiet', type=int, default=MIN_QUIET_S, help='seconds his last real turn must be older than')
+    ap.add_argument('--check-guard', action='store_true', help='read a status JSON from stdin, print the guard verdict, exit 0 (ok) / 2 (refused); no cycle')
     args = ap.parse_args()
+
+    if args.check_guard:
+        ok, why = live_guard(sys.stdin.read(), args.min_quiet)
+        print(('OK ' if ok else 'REFUSED ') + why)
+        return 0 if ok else 2
 
     if not os.path.isfile(ELECTRON):
         log(f'FATAL: electron binary missing at {ELECTRON}')
@@ -166,6 +216,23 @@ def main():
         return 1
     try:
         log(f'cycle begins ({args.why}) -- old root pid {args.root_pid}, grace {args.grace}s')
+
+        # 0) THE LIVE GUARD -- before any kill. The app's own /status says whether he is in
+        #    conversation, whether a reply is in flight, whether a real turn waits unanswered.
+        #    A refusal is the cycle's outcome, logged; --force is an operator's decision, logged.
+        if args.root_pid and pid_alive(args.root_pid):
+            body = read_status()
+            if body is None:
+                if not args.force:
+                    log('REFUSED: the app does not answer /status -- a kill must not proceed on a guess (use --force if she is wedged)')
+                    return 2
+                log('--force: /status unreachable, proceeding on the operator\'s word')
+            else:
+                ok, why = live_guard(body, args.min_quiet)
+                if not ok and not args.force:
+                    log(f'REFUSED by the live guard: {why}')
+                    return 2
+                log(('--force over the live guard: ' if not ok else 'live guard passed: ') + why)
 
         # 1) Let the old generation die on its own terms; enforce if it lingers.
         if args.root_pid and pid_alive(args.root_pid):
