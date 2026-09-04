@@ -132,7 +132,7 @@ function queuedAbove(now = Date.now()) {
     val = parts.length > 0;
     why = parts.length ? parts.join(', ') : 'nothing above';
   } catch (e) { val = true; why = `unreadable (${e && e.message})`; }
-  if (_queueVal !== null && val !== _queueVal) {
+  if (_queueVal === null || val !== _queueVal) {   // the first read of a generation says the state too, so a read of the tee never has to infer it
     console.log(val ? `[quota] expansion PACED — queued above it: ${why}` : '[quota] expansion UNPACED — nothing queued above it; the whole sustainable rate is hers');
   }
   _queueAt = now; _queueVal = val; _queueWhy = why;

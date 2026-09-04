@@ -37,6 +37,16 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const focusSet = sets.find((s) => s.key === 'focus:31');
   ok(!!focusSet && focusSet.keys && focusSet.keys.size === 2 && /think tank research run/.test(focusSet.label), 'sets: focus covered index present, labeled from its thread');
   ok(sets.some((s) => s.kind === 'interest'), 'sets: active interest present');
+  // CUT 23 (2026-09-04, boot_p282: a 5.2 s statement, a 6.0 s block): the focus source read EVERY focus.* row
+  // (9,606 rows / 5.3 MB) to keep the 591 `.covered` rows. The key filter rides inside the range now; the
+  // other focus.* rows — plans, intended targets, visited lists — are never materialized.
+  dbm.setMeta('focus.31.plan', JSON.stringify({ objective: 'x'.repeat(200000) }));
+  dbm.setMeta('focus.32.intended_targets', JSON.stringify(['Cato Institute']));
+  dbm.setMeta('focus.32.visited', JSON.stringify(['Cato Institute']));
+  const sets2 = iw.conceptSets({ db: dbm, deps: { inquiry: fakeInquiry, openThreads: { isAutonomousMapping: () => false } } });
+  const f31 = sets2.find((s) => s.key === 'focus:31');
+  ok(!!f31 && f31.keys.size === 2 && !sets2.some((s) => s.key === 'focus:32'), 'sets: only `.covered` rows make a focus set — a plan, intended_targets or visited row never does (the selection is unchanged)');
+  ok(/AND key LIKE 'focus\.%\.covered'"\)\.all\(\)/.test(fs.readFileSync(path.join(__dirname, '..', 'lib', 'interweave.js'), 'utf8')), '⭐ the focus source selects the `.covered` keys INSIDE the range — 591 rows, not 9,606 (cut 23)');
 
   // ---- fresh touchpoints: a meeting touched Rainey Center + Cato Institute + a generic hub ----
   tp.record({ name: 'Rainey Center', type: 'organization', stream: { kind: 'meeting', key: 'doc:9', label: 'Meeting — LAMP' }, ref: '9', now: NOW - 1000 });

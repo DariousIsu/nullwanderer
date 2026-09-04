@@ -55,7 +55,11 @@ function conceptSets({ db = null, deps = {} } = {}) {
     // a KEY RANGE, not LIKE (freeze cut 7): the case-insensitive LIKE scanned all 10.7k meta rows with
     // their values (137ms, inside the manifest's 0.8s interweave section); the range rides the key index
     // and the regex below keeps the exact `.covered` selection.
-    for (const r of d.prepare("SELECT key, value FROM meta WHERE key >= 'focus.' AND key < 'focus/'").all()) {
+    // CUT 23 (2026-09-04, boot_p282: a 5.2 s statement, a 6.0 s main-thread block): the range returned
+    // every focus.* row — 9,606 rows, 5.3 MB of plans, intended_targets, visited, clarifications — to
+    // keep the 591 `.covered` rows (230 KB). The key filter rides INSIDE the range (still the index), so
+    // only the covered rows are materialized; the regex below stays the exact selection.
+    for (const r of d.prepare("SELECT key, value FROM meta WHERE key >= 'focus.' AND key < 'focus/' AND key LIKE 'focus.%.covered'").all()) {
       const id = (String(r.key).match(/^focus\.(\d+)\.covered$/) || [])[1];
       if (!id) continue;
       let covered = []; try { covered = JSON.parse(r.value) || []; } catch {}

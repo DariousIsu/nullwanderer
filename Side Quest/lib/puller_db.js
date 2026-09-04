@@ -238,23 +238,33 @@ function _keysFor(d) {
   return _keys;
 }
 // Walk the rows above the high-water into the map; `limit` bounds one slice (a warm-up), 0 = all.
-function _advanceKeys(k, limit) {
+// `budgetMs` (cut 23, 2026-09-04): a slice is bounded by TIME as well as rows. The 50k-row slice was
+// sized on a warm cache (~35 ms measured); on boot_p282, booted onto a page cache the gates had just
+// churned, the same slice took 2.0 s and 2.3 s on the main thread. Past the budget the iterator is
+// closed (the memoized statement is reset, never left mid-walk) and the caller's next beat continues
+// from the high-water. Returns { n, cut } — cut = stopped on the budget with rows possibly remaining.
+function _advanceKeys(k, limit, { budgetMs = 0 } = {}) {
   const stmt = _P(limit ? `${KEYS_SQL} LIMIT ?` : KEYS_SQL);
   const it = limit ? stmt.iterate(k.maxId, limit) : stmt.iterate(k.maxId);
-  let n = 0;
-  for (const r of it) { k.map.set(keyOf(r.name, r.company), r.id); k.maxId = r.id; n++; }
+  const t0 = budgetMs > 0 ? Date.now() : 0;
+  let n = 0, cut = false;
+  for (const r of it) {
+    k.map.set(keyOf(r.name, r.company), r.id); k.maxId = r.id; n++;
+    if (budgetMs > 0 && Date.now() - t0 >= budgetMs) { cut = true; try { it.return(); } catch {} break; }
+  }
   if (n) { k.refreshes++; k.rows += n; }
-  return n;
+  return { n, cut };
 }
 /** The complete (name|company → id) map of live targets, current as of this call. Shared: a caller
  *  that creates a target may set its key directly; the next call would find the row anyway. */
 function targetKeyMap() { const k = _keysFor(_db()); _advanceKeys(k, 0); return k.map; }
-/** One bounded slice of the build (a post-boot beat). Returns { done, size, maxId }. */
-function warmTargetKeys({ rows = 50000 } = {}) {
+/** One bounded slice of the build (a post-boot beat): at most `rows` rows AND at most `budgetMs` of
+ *  the main thread. Returns { done, size, maxId, rows, cut }. */
+function warmTargetKeys({ rows = 50000, budgetMs = 40 } = {}) {
   const lim = Math.max(1, rows | 0);
   const k = _keysFor(_db());
-  const n = _advanceKeys(k, lim);
-  return { done: n < lim, size: k.map.size, maxId: k.maxId };
+  const { n, cut } = _advanceKeys(k, lim, { budgetMs });
+  return { done: !cut && n < lim, size: k.map.size, maxId: k.maxId, rows: n, cut };
 }
 /** Forget the map: the next call rebuilds from scratch (an outside writer touched liveness). */
 function _bumpKeys() { _keys = { db: null, map: null, maxId: 0, builds: _keys.builds, refreshes: 0, rows: 0 }; }

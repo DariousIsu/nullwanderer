@@ -135,9 +135,21 @@ ok('bridged verified contact credits the newco.io first.last pattern', s3.target
   const full = DB.targetKeyMap();
   ok('warm-up: the ingest-time call finishes the walk (all 7) on the same map', full.size === 7 && DB._targetKeyStats().live);
   ok('warm-up: a further slice reports done', DB.warmTargetKeys({ rows: 3 }).done === true);
+  // CUT 23 (2026-09-04): a slice is bounded by TIME too — the 50k-row slice, sized on a warm cache (~35 ms),
+  // took 2.0 s and 2.3 s on the main thread on boot_p282's cold cache. Past the budget the iterator is
+  // closed (the statement reset, never left busy) and the next beat continues from the high-water.
+  DB._bumpKeys();
+  for (let i = 0; i < 3000; i++) DB.createTarget({ name: `Cold ${i}`, company: 'ColdCo' });
+  const wCut = DB.warmTargetKeys({ rows: 100000, budgetMs: 1 });
+  ok('⭐ warm-up: a 1 ms budget cuts a 100k-row slice with rows remaining (done=false, cut=true)', wCut.cut === true && wCut.done === false && wCut.rows > 0 && wCut.rows < 3007);
+  let wNext = null; try { wNext = DB.warmTargetKeys({ rows: 100000, budgetMs: 1 }); } catch (e) { wNext = { err: e.message }; }
+  ok('warm-up: the cut iterator was CLOSED — the next slice runs on the same statement (no "statement is busy")', wNext && !wNext.err && wNext.rows >= 0);
+  let guard = 0, last = wNext; while (last && !last.done && guard++ < 10000) last = DB.warmTargetKeys({ rows: 100000, budgetMs: 1 });
+  ok('warm-up: repeated budgeted slices converge (done=true) with the full map', last && last.done === true && last.size === 3007 && DB.targetKeyMap().size === 3007);
+  ok('warm-up: the default budget is 40 ms of the main thread per beat', /budgetMs = 40/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'puller_db.js'), 'utf8')));
   DB._bumpKeys();
   const rebuilt = DB.targetKeyMap();
-  ok('_bumpKeys: the next call rebuilds from scratch (a fresh Map, the same 7 keys)', rebuilt !== full && rebuilt.size === 7);
+  ok('_bumpKeys: the next call rebuilds from scratch (a fresh Map, the same 3,007 keys — 7 warm + 3,000 cold)', rebuilt !== full && rebuilt.size === 3007);
 }
 
 DB.close();
