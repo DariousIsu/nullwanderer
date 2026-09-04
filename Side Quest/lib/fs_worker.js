@@ -104,6 +104,27 @@ function fileSearchSync({ root, needle, maxFiles = 2000, maxMatches = 60, maxFil
   return { matches, scanned };
 }
 
+/**
+ * securityScanSync({ roots }) → [{ root, scanned, found, findings }] — the READ-ONLY secret scanner
+ * (lib/security_scan) over each IN-SCOPE root, OFF the main thread (a full-repo walk would stall). The
+ * scope gate clears every path; findings carry MASKED evidence and need no db in the worker (maskSecret
+ * is pure), so the main thread records them. Security modules are required LAZILY so a plain fs job
+ * never loads them.
+ */
+function securityScanSync({ roots = [] } = {}) {
+  const sc = require('./security_scan');
+  const scope = require('./security_scope');
+  const out = [];
+  for (const root of (roots || [])) {
+    try {
+      const r = sc.scanSecrets(root, { deps: { gate: scope.pathInScope } });
+      if (r && r.ok) out.push({ root, scanned: r.scanned, found: r.found, findings: r.findings });
+      else out.push({ root, scanned: 0, found: 0, findings: [], skipped: (r && r.why) || 'off-scope' });
+    } catch (e) { out.push({ root, error: (e && e.message) || String(e), findings: [] }); }
+  }
+  return out;
+}
+
 // ── the worker door (main thread side) ─────────────────────────────────────────────────────────
 let _entry = null;   // { w, pending: Map<id, {resolve, reject, timer}>, seq }
 
@@ -156,11 +177,13 @@ function _job(kind, opts = {}, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
 function probeFragments(opts = {}, o = {}) { return _job('fragments', { ...opts, toks: [...(opts.toks || [])], ex: [...(opts.ex || [])] }, o); }
 /** The workspace search in the worker thread (cut 25). */
 function probeSearch(opts = {}, o = {}) { return _job('search', opts, o); }
+/** The security secret scan in the worker thread (security self-audit, increment 3). */
+function securityScan(opts = {}, o = {}) { return _job('security-scan', opts, o); }
 
 async function close() { const e = _entry; const w = e && e.w; _drop(new Error('fs worker closed')); if (w) { try { await w.terminate(); } catch {} } }
 function _live() { return !!(_entry && _entry.w); }
 
-module.exports = { probeFragments, probeFragmentsSync, probeSearch, fileSearchSync, readHead, norm, close, HEAD_BYTES, DEFAULT_TIMEOUT_MS, _live };
+module.exports = { probeFragments, probeFragmentsSync, probeSearch, fileSearchSync, securityScan, securityScanSync, readHead, norm, close, HEAD_BYTES, DEFAULT_TIMEOUT_MS, _live };
 
 // ── worker entry: this module re-runs in the thread with workerData set ─────────────────────────
 try {
@@ -169,6 +192,7 @@ try {
       try {
         if (m.kind === 'fragments') parentPort.postMessage({ id: m.id, rows: probeFragmentsSync(m.opts || {}) });
         else if (m.kind === 'search') parentPort.postMessage({ id: m.id, rows: fileSearchSync(m.opts || {}) });
+        else if (m.kind === 'security-scan') parentPort.postMessage({ id: m.id, rows: securityScanSync(m.opts || {}) });
         else throw new Error(`unknown fs job: ${m.kind}`);
       } catch (e) { parentPort.postMessage({ id: m.id, error: (e && e.message) || String(e) }); }
     });

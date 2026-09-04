@@ -1376,6 +1376,39 @@ app.whenReady().then(() => {
   };
   setInterval(() => { maybeMineTrajectory().catch(() => {}); }, TRAJ_CHECK_MS).unref?.();
   setTimeout(() => { maybeMineTrajectory().catch(() => {}); }, 180000).unref?.();   // catch-up kick ~3min after boot
+  // ── SECURITY SELF-AUDIT ORGAN (increment 3, 2026-09-04): run the read-only secret scanner OFF-THREAD
+  // (lib/fs_worker — a full-repo walk on the main thread would stall, the freeze-cut law) over the IN-SCOPE
+  // repos on a nightly cadence, record MASKED findings, surface a summary. Scope-gated to owned assets only;
+  // kill switch ZOE_SECURITY_SCAN=0. Findings become pen proposals / cards downstream (leg D remediation).
+  const SECSCAN_CHECK_MS = (parseFloat(process.env.ZOE_SECURITY_CHECK_MIN) || 60) * 60 * 1000;
+  const SECSCAN_MIN_MS = (parseFloat(process.env.ZOE_SECURITY_SCAN_MIN) || 1440) * 60 * 1000;   // nightly
+  let secScanRunning = false;
+  const maybeSecurityScan = async () => {
+    if (/^(0|false|no|off)$/i.test(String(process.env.ZOE_SECURITY_SCAN || '').trim())) return;   // kill switch
+    if (secScanRunning) return;
+    if (Date.now() - parseInt(db.getMeta('last_security_scan_at') || '0', 10) < SECSCAN_MIN_MS) return;
+    secScanRunning = true; markActivity('security-scan');
+    db.setMeta('last_security_scan_at', String(Date.now()));
+    let runId = null;
+    try {
+      const roots = require('./lib/security_scope').describe().roots;
+      const secfind = require('./lib/security_findings');
+      try { runId = require('./lib/run_ledger').start({ role: 'security-audit', executor: 'sq', trigger_kind: 'scheduled', lane: 'development', input_preview: `secret scan of ${roots.length} owned repo(s)` }); } catch {}
+      const out = await require('./lib/fs_worker').securityScan({ roots }, { timeoutMs: 180000 }).catch((e) => { console.error('[security] scan worker failed:', e.message); return []; });
+      let scanned = 0, recorded = 0;
+      for (const r of (out || [])) {
+        scanned += r.scanned || 0;
+        for (const f of (r.findings || [])) { const rr = secfind.record({ ...f, run_id: runId }); if (rr && rr.id != null && !rr.deduped) recorded++; }
+      }
+      const sum = secfind.summary();
+      try { if (runId) require('./lib/run_ledger').finish(runId, { state: 'succeeded', output: `scanned ${scanned} files; ${recorded} new; ${sum.open} open` }); } catch {}
+      console.log(`[security] secret scan: ${scanned} files, ${recorded} new finding(s), ${sum.open} open ${JSON.stringify(sum.bySeverity)}`);
+      if (recorded > 0) { try { require('./lib/obs_bus').emit({ lane: 'security', kind: 'findings', level: 'warn', text: `secret scan: ${recorded} new issue(s), ${sum.open} open`, data: sum.bySeverity }); } catch {} }
+    } catch (e) { console.error('[security] scan organ failed:', e.message); try { if (runId) require('./lib/run_ledger').finish(runId, { state: 'failed', error: e.message }); } catch {} }
+    finally { markActivity('idle'); secScanRunning = false; }
+  };
+  setInterval(() => { maybeSecurityScan().catch(() => {}); }, SECSCAN_CHECK_MS).unref?.();
+  setTimeout(() => { maybeSecurityScan().catch(() => {}); }, 240000).unref?.();   // catch-up kick ~4min after boot
   // F2 GATE-LESS GROUNDED AUTO-PROMOTE LANE — the landing gap closed. Staged proposals used to sit
   // unpromoted (operator-gated); this drains the GROUNDED promote-band (calibrated conf >= floor + a real
   // citation) into civic_graph autonomously, in bounded chunks until the queue empties. Every promotion is

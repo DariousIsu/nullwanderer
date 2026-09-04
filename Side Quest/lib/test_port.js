@@ -232,6 +232,12 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
         const days = Math.max(1, Math.min(90, parseFloat(u.searchParams.get('days')) || tm.DEFAULT_WINDOW_DAYS));
         return send(200, { ok: true, ...tm.brief({ windowDays: days }), at: Date.now() });
       }
+      // ── SECURITY SELF-AUDIT read door (increment 3, 09-04): GET /security → the boundary + the findings
+      // the scan organ recorded (masked), summarized and the open ones listed. Read-only, beside /trajectory.
+      if (req.method === 'GET' && req.url.startsWith('/security')) {
+        const sf = require('./security_findings');
+        return send(200, { ok: true, boundary: require('./security_scope').describe(), ...sf.summary(), open: sf.list({ status: 'open', limit: 20 }), at: Date.now() });
+      }
       // ── THE PARLOR doors (09-01): outside seats post attributed turns; zoe's seat posts only
       // from inside the process (a port caller may not speak AS her). Loopback-only server.
       if (req.method === 'POST' && req.url === '/parlor/say') {
