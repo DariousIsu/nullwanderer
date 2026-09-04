@@ -203,8 +203,8 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
 {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/\^pen-\(\\d\+\)\$/.test(main) && /_applyPenProposal\(r\.id\)/.test(main), 'wiring: pen-N card decisions route to the enforce pipeline on his ✓');
-  ok(/'apply', '--check'/.test(main) && /'npm', \['test'\]/.test(main) && /'checkout', '--'/.test(main) && /revertScope\(\)/.test(main),
-    'wiring: apply-check → full gate → revert-on-red all present (audit F21: the old pin was vacuous by operator precedence)');
+  ok(/'apply', '--check'/.test(main) && /runGate\(\{ sides: \[repo\] \}\)/.test(main) && /'checkout', '--'/.test(main) && /revertScope\(\)/.test(main),
+    'wiring: apply-check → the unified gate (per-side) → revert-on-red all present (stage 5.2: npm test became the side-scoped unified gate)');
   ok(/uncommitted local changes on/.test(main), 'wiring: a dirty tree BLOCKS the apply — my in-flight work is never clobbered');
   ok(/const penBlock = require\('\.\/lib\/code_pen'\)\.buildPromptBlock\(\)/.test(main) && /penLib\.stripTags/.test(main), 'wiring: the pen block rides her prompt; leaked tags are stripped from thought AND say');
   const chat = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'chat.js'), 'utf8');
@@ -221,7 +221,7 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
     '⭐ v1.2 wiring: his ✓ is acknowledged IMMEDIATELY in her voice (deterministic pipeline line, never model-authored)');
   ok((main.match(/if \(_penGateQuiet\(\)\)/g) || []).length >= 9 && /pen\.gate_until/.test(main),
     '⭐ v1.2 wiring: the QUIET WINDOW — 9 guarded CALL SITES (audit F32: the old count included the definition; audit F6 added the metabolism as the 9th lane)');
-  ok(/pen\.stage\(id, 'stage: diff applied/.test(main) && /_pushApprovalsBar\(\)/.test(main) && /pipelineItems\(\)/.test(main),
+  ok(/pen\.stage\(id, `stage: diff applied/.test(main) && /_pushApprovalsBar\(\)/.test(main) && /pipelineItems\(\)/.test(main),
     'v1.2 wiring: stage notes ride the row, the bar refreshes live, and pen-run cards join the payload');
   ok(/`Proposal #\$\{id\} landed — gate green/.test(main) && /_penSay\(`Proposal #\$\{id\} went RED/.test(main),
     'v1.2 wiring: both gate verdicts are VOICED, not just logged');
@@ -291,6 +291,62 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
     const pyc = require('child_process').spawnSync('python', ['-m', 'py_compile', path.join(__dirname, '..', 'scripts', 'boot_cycle.py')], { encoding: 'utf8' });
     ok(pyc.error ? true : pyc.status === 0, pyc.error ? 'cycler py_compile SKIPPED (no python on PATH)' : 'the cycler COMPILES (py_compile clean)');
   }
+}
+
+// ── STAGE 5.2: the widened jail (Echo) + the constitutional boundary ─────────────────────────────
+{
+  // Echo source is now inside the jail; Echo stores/secrets are sealed by Echo's own denylist.
+  ok(pen.pathAllowed('echo/saga/deliverables/op_ed.py', { repo: 'echo' }).ok === true, 'ECHO source is inside the pen — she can cure Echo herself');
+  const es = pen.pathAllowed('echo/nl/tool_loop.py', { repo: 'echo' });
+  ok(es.ok === true && /nx-echo/.test(es.abs.replace(/\\/g, '/')), 'an Echo path resolves under the Echo root, not the SQ root');
+  ok(pen.pathAllowed('data/civic_graph.db', { repo: 'echo' }).ok === false, '⭐ Echo data/ (the 9-32GB foundations) is SEALED');
+  ok(pen.pathAllowed('config.toml', { repo: 'echo' }).ok === false, '⭐ Echo config.toml (the tokens) is SEALED');
+  ok(pen.pathAllowed('.venv/Scripts/python.exe', { repo: 'echo' }).ok === false, 'the Echo venv is sealed');
+  ok(pen.pathAllowed('uv.lock', { repo: 'echo' }).ok === false, 'the Echo dependency lock is sealed — a pin bump is deliberate, not a pen edit');
+  ok(pen.pathAllowed('../nx-echo-secrets', { repo: 'echo' }).ok === false, 'the Echo jail holds — no climbing out of the Echo root');
+
+  // The CONSTITUTIONAL set: allowed to read/propose, but FLAGGED so it can't land on the reflexive ✓.
+  for (const f of ['lib/security_scope.js', 'lib/code_pen.js', 'lib/self_source.js', 'lib/unified_gate.js', 'scripts/boot_cycle.py']) {
+    const g = pen.pathAllowed(f);
+    ok(g.ok === true && g.constitutional === true, `constitutional: ${f} is readable but FLAGGED (never a silent self-widen)`);
+  }
+  ok(pen.pathAllowed('lib/scheduler.js').constitutional === false, 'an ordinary file is NOT constitutional');
+
+  // auditDiff carries the repo + the constitutional verdict across the whole touched set.
+  const echoDiff = 'diff --git a/echo/x.py b/echo/x.py\n--- a/echo/x.py\n+++ b/echo/x.py\n@@ -1 +1 @@\n-a\n+b\n';
+  const ea = pen.auditDiff(echoDiff, { repo: 'echo' });
+  ok(ea.ok === true && ea.repo === 'echo' && ea.constitutional === false, 'auditDiff({repo:echo}) accepts an Echo diff, marks the repo');
+  ok(pen.auditDiff('diff --git a/config.toml b/config.toml\n--- a/config.toml\n+++ b/config.toml\n@@ -1 +1 @@\n-a\n+b\n', { repo: 'echo' }).ok === false, 'auditDiff refuses an Echo diff that touches config.toml');
+  const consDiff = 'diff --git a/lib/code_pen.js b/lib/code_pen.js\n--- a/lib/code_pen.js\n+++ b/lib/code_pen.js\n@@ -1 +1 @@\n-a\n+b\n';
+  ok(pen.auditDiff(consDiff).constitutional === true, 'auditDiff flags a diff that touches a constitutional file');
+  // a path is always resolved against ITS declared repo — an echo/… path under repo:sq points inside the
+  // SQ tree (contained, harmless: apply would just miss a nonexistent SQ file), NOT at the Echo repo.
+  const sqResolve = pen.auditDiff(echoDiff, { repo: 'sq' });
+  ok(sqResolve.ok === true && sqResolve.repo === 'sq' && sqResolve.files[0] === 'echo/x.py', 'an echo path under repo:sq resolves inside SQ (the repo declares the root; the jail still contains it)');
+
+  // propose() records the repo + the constitutional flag on the row.
+  const rp = pen.propose({ title: 'echo cure', rationale: 'x', diff: echoDiff, repo: 'echo', bornFrom: 'test' });
+  ok(rp.ok && rp.repo === 'echo' && rp.constitutional === false, 'propose({repo:echo}) files an Echo proposal');
+  ok(pen.get(rp.id).repo === 'echo', 'the row carries repo=echo');
+  const rc = pen.propose({ title: 'boundary change', rationale: 'x', diff: consDiff, repo: 'sq', bornFrom: 'test' });
+  ok(rc.ok && rc.constitutional === true && pen.get(rc.id).constitutional === 1, 'a boundary-touching proposal is filed constitutional=1');
+  // the card shows the repo tag + the BOUNDARY mark
+  const pend = pen.pending();
+  ok(pend.some((c) => /\[echo\]/.test(c.text)) && pend.some((c) => /BOUNDARY/.test(c.text)), 'the card bar tags [echo] and marks ⚠BOUNDARY');
+
+  // dispatch threads the repo attribute; the prompt names the Echo door + the boundary rule.
+  const dr = pen.dispatch({ tag: 'source-read', attrs: { path: 'echo/saga/deliverables/op_ed.py', repo: 'echo' } });
+  ok(dr.ok === true && dr.repo === 'echo', 'dispatch(<source-read repo="echo">) reads the Echo file');
+  const blk = pen.buildPromptBlock();
+  ok(/repo="echo"/.test(blk) && /BOUNDARY/.test(blk) && /LOCAL — never pushed/.test(blk), 'the prompt block teaches the Echo door + the boundary rule + the Echo-local law');
+
+  // main.js: the apply pipeline is repo-aware + honors the constitutional one-shot; the door arms it.
+  const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/const repo = \(p\.repo === 'echo'\) \? 'echo' : 'sq'/.test(mainSrc) && /baseDir = repo === 'echo' \? ug\.ECHO_ROOT/.test(mainSrc), 'apply pipeline resolves the target repo + its root');
+  ok(/runGate\(\{ sides: \[repo\] \}\)/.test(mainSrc), 'apply gates the SIDE the change touched (the unified gate)');
+  ok(/pen\.allow_constitutional/.test(mainSrc) && /p\.constitutional/.test(mainSrc), 'apply holds a boundary change behind the explicit one-shot');
+  const tpSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'test_port.js'), 'utf8');
+  ok(/\/pen\/allow-constitutional/.test(tpSrc) && /setMeta\('pen\.allow_constitutional', '1'\)/.test(tpSrc), 'the /pen/allow-constitutional door arms the one-shot (out-of-band)');
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);

@@ -258,6 +258,14 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
           .catch((e) => send(500, { ok: false, error: (e && e.message) || String(e) }));
         return;
       }
+      // POST /pen/allow-constitutional → Lucas's EXPLICIT out-of-band go for a boundary change (stage 5.2).
+      // Arms a ONE-SHOT (meta pen.allow_constitutional) that the next approved constitutional proposal
+      // consumes at apply. Loopback + non-GET, so it already cleared the token/cross-origin gate above; a
+      // boundary the agent can quietly widen is not a boundary, so this can never be reached from her code.
+      if (req.method === 'POST' && req.url.startsWith('/pen/allow-constitutional')) {
+        try { require('./db').setMeta('pen.allow_constitutional', '1'); } catch (e) { return send(500, { ok: false, error: (e && e.message) || String(e) }); }
+        return send(200, { ok: true, armed: true, note: 'the next approved boundary change may land; consumed on use' });
+      }
       // ── THE PARLOR doors (09-01): outside seats post attributed turns; zoe's seat posts only
       // from inside the process (a port caller may not speak AS her). Loopback-only server.
       if (req.method === 'POST' && req.url === '/parlor/say') {

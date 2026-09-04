@@ -26,12 +26,18 @@ const path = require('path');
 const db = require('./db');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
+// Stage 5.2 (Lucas 09-04, "one pen"): the jail reaches the Echo engine too, so she can cure + extend
+// Echo herself. ECHO_ROOT resolves from the same env the engine bridge uses (lib/echo.js / engine.js).
+const ECHO_ROOT = path.resolve(process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo');
+const REPOS = { sq: REPO_ROOT, echo: ECHO_ROOT };
 const MAX_READ_BYTES = 64 * 1024;
 const MAX_DIFF_BYTES = 32 * 1024;
 const MAX_OPEN_PROPOSALS = 3;
 
-// The denylist — what the pen must NEVER read or touch. Keys law: never expose key VALUES; the
-// stores/lexicons are data (NRC never redistributed); .git internals and deps are not source.
+// The HARD denylist — what the pen must NEVER read or touch, per repo. Keys law: never expose key VALUES;
+// the stores/lexicons are data (NRC never redistributed); .git internals and deps are not source. These
+// are secrets/stores/binaries — NOT boundary files — so they stay hard-denied: the pen writes code, not
+// secrets, and no legitimate code diff needs them.
 const DENY_RE = [
   /(^|\/|\\)\.env[^/\\]*$/i, // .env, .env.example variants at ANY depth — keys live here (audit F38)
   /^data(\/|\\|$)/i,         // sq.db, lexicons, workspace, voices — stores, not source
@@ -44,24 +50,62 @@ const DENY_RE = [
   /(^|\/|\\)pen_gate_\d+\.log$/i,        // full gate logs — operator forensics, not her source
   /(^|\/|\\)boot_cycle\.(log|lock)$/i,   // the outside cycler's log/lock — same class as every log
 ];
+// Echo's hard denylist: its secrets (config.toml carries the tokens), the 9-32GB data foundations, the
+// venv, caches, DBs, and the dependency lock (a pin bump is a deliberate act, not a pen edit).
+const ECHO_DENY_RE = [
+  /(^|\/|\\)\.env[^/\\]*$/i,
+  /(^|\/|\\)config\.toml$/i,                 // Echo's shared/write/admin tokens live here (the audit flags it)
+  /^data(\/|\\|$)/i,                          // civic_graph / electoral / saga / general_knowledge / corpus …
+  /(^|\/|\\)foundations(\/|\\|$)/i,
+  /(^|\/|\\)\.git(\/|\\|$)/i,
+  /(^|\/|\\)\.venv(\/|\\|$)/i,
+  /(^|\/|\\)node_modules(\/|\\|$)/i,
+  /(^|\/|\\)__pycache__(\/|\\|$)/i,
+  /(^|\/|\\)\.pytest_cache(\/|\\|$)/i,
+  /(^|\/|\\)[^/\\]*\.(db|db-wal|db-shm|sqlite3?)$/i,
+  /(^|\/|\\)uv\.lock$/i,                       // dependency pins — deliberate, not a pen edit
+  /(^|\/|\\)[^/\\]*\.log$/i,
+];
+const DENY = { sq: DENY_RE, echo: ECHO_DENY_RE };
+
+// THE CONSTITUTIONAL SET — the boundary/pen-defining source. Lucas 09-04 ("loosen the boundary as much as
+// possible"): these are NOT blocked — she may read, propose, and land changes to them — but a proposal that
+// touches one is FLAGGED constitutional, and main.js lands it ONLY behind his explicit out-of-band confirm
+// (meta pen.allow_constitutional), never the reflexive card ✓. The one invariant kept: a boundary the agent
+// can quietly widen is not a boundary. Everything else across both repos is the ordinary gate + ✓.
+const CONSTITUTIONAL = {
+  sq: [
+    /^lib[/\\]security_scope\.js$/i,   // THE owned-asset boundary (authz + injection defense)
+    /^lib[/\\]code_pen\.js$/i,         // the pen's own jail + audit
+    /^lib[/\\]self_source\.js$/i,      // the read/clone jail
+    /^lib[/\\]unified_gate\.js$/i,     // the gate she is judged by
+    /^scripts[/\\]boot_cycle\.py$/i,   // the outside hand + its live-guard
+  ],
+  echo: [],   // Echo carries no boundary-defining files today (scope + gate live SQ-side)
+};
+function _isConstitutional(repo, rel) { return (CONSTITUTIONAL[repo] || []).some((re) => re.test(String(rel || ''))); }
 
 function _rel(p) { return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '').trim(); }
+function _repoOf(repo) { return (repo === 'echo') ? 'echo' : 'sq'; }
 
-/** Path jail: resolves inside the repo root and clears the denylist, or {ok:false, why}. */
-function pathAllowed(rel) {
+/** Path jail: resolves inside the chosen repo root and clears that repo's denylist, or {ok:false, why}.
+ *  `repo` is 'sq' (default) or 'echo'. A boundary-defining file is allowed but flagged constitutional. */
+function pathAllowed(rel, { repo = 'sq' } = {}) {
+  const rk = _repoOf(repo);
+  const root = REPOS[rk];
   const r = _rel(rel);
   if (!r) return { ok: false, why: 'empty path' };
-  const abs = path.resolve(REPO_ROOT, r);
-  const rootWithSep = REPO_ROOT.endsWith(path.sep) ? REPO_ROOT : REPO_ROOT + path.sep;
-  if (abs !== REPO_ROOT && !abs.startsWith(rootWithSep)) return { ok: false, why: 'outside the repo (the jail holds)' };
-  const relFromRoot = _rel(path.relative(REPO_ROOT, abs));
-  for (const re of DENY_RE) if (re.test(relFromRoot)) return { ok: false, why: `denied path (${re}) — secrets, stores, and internals are outside the pen` };
-  return { ok: true, abs, rel: relFromRoot };
+  const abs = path.resolve(root, r);
+  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+  if (abs !== root && !abs.startsWith(rootWithSep)) return { ok: false, why: `outside the ${rk} repo (the jail holds)` };
+  const relFromRoot = _rel(path.relative(root, abs));
+  for (const re of (DENY[rk] || [])) if (re.test(relFromRoot)) return { ok: false, why: `denied path (${re}) — secrets, stores, and internals are outside the pen` };
+  return { ok: true, abs, rel: relFromRoot, repo: rk, constitutional: _isConstitutional(rk, relFromRoot) };
 }
 
-/** Read one source file, bounded. Read-ONLY — there is no write door in this module. */
-function readSource(rel, { deps = {} } = {}) {
-  const gate = pathAllowed(rel);
+/** Read one source file, bounded. Read-ONLY — there is no write door in this module. `repo`: 'sq'|'echo'. */
+function readSource(rel, { deps = {}, repo = 'sq' } = {}) {
+  const gate = pathAllowed(rel, { repo });
   if (!gate.ok) return { ok: false, why: gate.why };
   const fs = deps.fs || require('fs');
   try {
@@ -69,19 +113,19 @@ function readSource(rel, { deps = {} } = {}) {
     if (st.isDirectory()) return { ok: false, why: 'that is a directory — use <source-list>' };
     const buf = fs.readFileSync(gate.abs);
     const truncated = buf.length > MAX_READ_BYTES;
-    return { ok: true, path: gate.rel, bytes: buf.length, truncated,
+    return { ok: true, path: gate.rel, repo: gate.repo, constitutional: gate.constitutional, bytes: buf.length, truncated,
       text: buf.slice(0, MAX_READ_BYTES).toString('utf8') + (truncated ? `\n… [truncated at ${MAX_READ_BYTES} bytes of ${buf.length} — read again with a narrower ask or a specific region]` : '') };
   } catch (e) { return { ok: false, why: e.message }; }
 }
 
-/** List a source directory, bounded. */
-function listSource(rel, { deps = {} } = {}) {
-  const gate = pathAllowed(rel || '.');
+/** List a source directory, bounded. `repo`: 'sq'|'echo'. */
+function listSource(rel, { deps = {}, repo = 'sq' } = {}) {
+  const gate = pathAllowed(rel || '.', { repo });
   if (!gate.ok) return { ok: false, why: gate.why };
   const fs = deps.fs || require('fs');
   try {
-    const names = fs.readdirSync(gate.abs).filter((n) => pathAllowed(path.join(gate.rel, n)).ok).slice(0, 200);
-    return { ok: true, path: gate.rel, entries: names };
+    const names = fs.readdirSync(gate.abs).filter((n) => pathAllowed(path.join(gate.rel, n), { repo }).ok).slice(0, 200);
+    return { ok: true, path: gate.rel, repo: gate.repo, entries: names };
   } catch (e) { return { ok: false, why: e.message }; }
 }
 
@@ -96,7 +140,7 @@ function listSource(rel, { deps = {} } = {}) {
  * COMPLETE jailed path set from BOTH `diff --git` and header-pair lines. Fail-CLOSED: anything
  * unparseable is refused with the why, never silently passed through. Pure.
  */
-function auditDiff(diff) {
+function auditDiff(diff, { repo = 'sq' } = {}) {
   const src = String(diff || '').replace(/\r\n/g, '\n');
   const files = new Set();
   const done = () => [...files];
@@ -126,16 +170,18 @@ function auditDiff(diff) {
       i++;
     }
   }
+  let constitutional = false;
   for (const f of files) {
     if (/(^|\/)\.\.(\/|$)/.test(f)) return bad(`path climbs upward (${f})`);
-    const j = pathAllowed(f);
+    const j = pathAllowed(f, { repo });
     if (!j.ok) return { ok: false, why: `touched file "${f}": ${j.why}`, files: done() };
+    if (j.constitutional) constitutional = true;
   }
-  return { ok: true, files: done() };
+  return { ok: true, files: done(), repo: _repoOf(repo), constitutional };
 }
 
 /** Files a unified diff touches — the audit's COMPLETE set (diff --git + header pairs). Pure. */
-function touchedFiles(diff) { return auditDiff(diff).files; }
+function touchedFiles(diff, { repo = 'sq' } = {}) { return auditDiff(diff, { repo }).files; }
 
 /**
  * Recount every @@ hunk header from the body it actually carries. Pure.
@@ -227,6 +273,9 @@ function _ensure() {
     born_from TEXT, gate_note TEXT,
     created_ts INTEGER, updated_ts INTEGER)`).run();
   try { db.getDb().prepare('ALTER TABLE code_proposals ADD COLUMN seen INTEGER DEFAULT 0').run(); } catch { /* column exists */ }
+  // stage 5.2: which repo a proposal targets ('sq' | 'echo'), and whether it touches a boundary file
+  try { db.getDb().prepare("ALTER TABLE code_proposals ADD COLUMN repo TEXT DEFAULT 'sq'").run(); } catch { /* column exists */ }
+  try { db.getDb().prepare('ALTER TABLE code_proposals ADD COLUMN constitutional INTEGER DEFAULT 0').run(); } catch { /* column exists */ }
   // parlor's second-opinion bookkeeping is its OWN column — it consumed `seen` and made his
   // failed-run cards vanish without an operator click (audit F17/F24). One-time backfill inside
   // the migration try: rows the old code already visited carried seen=1 — copy it so settled
@@ -239,23 +288,24 @@ function _ensure() {
 
 /** File a proposal. Validation is the front gate: parseable diff, every touched file inside the
  *  jail, bounded size, bounded open count. Returns {ok, id} or {ok:false, why}. */
-function propose({ title, rationale = '', diff, bornFrom = '', nowMs = Date.now() } = {}) {
+function propose({ title, rationale = '', diff, bornFrom = '', repo = 'sq', nowMs = Date.now() } = {}) {
   _ensure();
+  const rk = _repoOf(repo);
   const t = String(title || '').trim();
   const d0 = String(diff || '').trim();
   if (!t) return { ok: false, why: 'a proposal needs a title' };
   if (!d0) return { ok: false, why: 'a proposal needs a unified diff — the diff IS the claim' };
   const d = normalizeDiff(d0); // recounted headers: the body is the claim, the arithmetic is derived
   if (Buffer.byteLength(d, 'utf8') > MAX_DIFF_BYTES) return { ok: false, why: `diff too large (> ${MAX_DIFF_BYTES} bytes) — split the change` };
-  const audit = auditDiff(d);
+  const audit = auditDiff(d, { repo: rk });
   if (!audit.ok) return { ok: false, why: audit.why };
   const files = audit.files;
   if (!files.length) return { ok: false, why: 'no file headers found — send a real unified diff (--- a/x / +++ b/x)' };
   const open = db.getDb().prepare("SELECT COUNT(*) n FROM code_proposals WHERE status IN ('proposed','approved','applying')").get().n;
   if (open >= MAX_OPEN_PROPOSALS) return { ok: false, why: `${open} proposal(s) already open — the pen is one-change-at-a-time discipline; wait for Lucas's word` };
-  const r = db.getDb().prepare('INSERT INTO code_proposals (title, rationale, diff, files, status, born_from, created_ts, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(t.slice(0, 160), String(rationale).slice(0, 1200), d, JSON.stringify(files), 'proposed', String(bornFrom).slice(0, 120), nowMs, nowMs);
-  return { ok: true, id: r.lastInsertRowid, files };
+  const r = db.getDb().prepare('INSERT INTO code_proposals (title, rationale, diff, files, status, born_from, repo, constitutional, created_ts, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(t.slice(0, 160), String(rationale).slice(0, 1200), d, JSON.stringify(files), 'proposed', String(bornFrom).slice(0, 120), rk, audit.constitutional ? 1 : 0, nowMs, nowMs);
+  return { ok: true, id: r.lastInsertRowid, files, repo: rk, constitutional: audit.constitutional };
 }
 
 function get(id) { _ensure(); return db.getDb().prepare('SELECT * FROM code_proposals WHERE id = ?').get(Number(id) || 0) || null; }
@@ -282,14 +332,16 @@ function decide(id, decision) {
 // fully view it" — he was approving diffs he could not read). Bounded by MAX_DIFF_BYTES.
 function _detail(r) {
   let files = []; try { files = JSON.parse(r.files || '[]'); } catch {}
-  return { rationale: r.rationale || '', files, diff: r.diff || '', gateNote: r.gate_note || '', bornFrom: r.born_from || '' };
+  return { rationale: r.rationale || '', files, diff: r.diff || '', gateNote: r.gate_note || '', bornFrom: r.born_from || '', repo: r.repo || 'sq', constitutional: !!r.constitutional };
 }
+// The card's one-line tag: which repo, and a loud BOUNDARY mark when it touches a constitutional file.
+function _tag(r) { return `${(r.repo && r.repo !== 'sq') ? `[${r.repo}] ` : ''}${r.constitutional ? '⚠BOUNDARY ' : ''}`; }
 
 /** Card-bar rows: proposed pens waiting on Lucas — now with the full proposal riding as detail. */
 function pending() {
   _ensure();
-  return db.getDb().prepare("SELECT id, title, rationale, diff, files, gate_note, born_from FROM code_proposals WHERE status = 'proposed' ORDER BY id DESC LIMIT 4").all()
-    .map((r) => ({ id: `pen-${r.id}`, kind: 'pen', text: `${r.title} (${(JSON.parse(r.files || '[]')).join(', ').slice(0, 80)})`, verdict: null, detail: _detail(r) }));
+  return db.getDb().prepare("SELECT id, title, rationale, diff, files, gate_note, born_from, repo, constitutional FROM code_proposals WHERE status = 'proposed' ORDER BY id DESC LIMIT 4").all()
+    .map((r) => ({ id: `pen-${r.id}`, kind: 'pen', text: `${_tag(r)}${r.title} (${(JSON.parse(r.files || '[]')).join(', ').slice(0, 80)})`, verdict: null, detail: _detail(r) }));
 }
 
 /** Update ONLY the stage note on a row (status unchanged) — the live-progress card reads it. */
@@ -307,10 +359,10 @@ function stage(id, note, nowMs = Date.now()) {
 const RUN_WINDOW_MS = 15 * 60 * 1000;
 function pipelineItems(nowMs = Date.now()) {
   _ensure();
-  return db.getDb().prepare(`SELECT id, title, rationale, diff, files, status, gate_note, born_from, updated_ts FROM code_proposals
+  return db.getDb().prepare(`SELECT id, title, rationale, diff, files, status, gate_note, born_from, repo, constitutional, updated_ts FROM code_proposals
     WHERE status IN ('approved','applying') OR (status IN ('applied','gate-failed','apply-failed') AND updated_ts > ? AND COALESCE(seen, 0) = 0)
     ORDER BY id DESC LIMIT 4`).all(nowMs - RUN_WINDOW_MS)
-    .map((r) => ({ id: `pen-${r.id}`, kind: 'pen-run', text: r.title, status: r.status, verdict: null, detail: _detail(r) }));
+    .map((r) => ({ id: `pen-${r.id}`, kind: 'pen-run', text: `${_tag(r)}${r.title}`, status: r.status, verdict: null, detail: _detail(r) }));
 }
 
 /** His ✕ on a terminal run card — clears it from the bar (Lucas 09-01: "no way to clear the pen
@@ -400,29 +452,38 @@ function parseTags(text) {
 function stripTags(text) { return (text || '').replace(PEN_TAG_RE, '').replace(/[ \t]+/g, ' ').trim(); }
 
 function dispatch({ tag, attrs, body } = {}) {
+  const repo = attrs && attrs.repo;   // 'echo' targets the engine; absent/anything-else = 'sq'
   switch (tag) {
-    case 'source-read': return readSource(attrs.path);
-    case 'source-list': return listSource(attrs.path);
-    case 'propose-change': return propose({ title: attrs.title, rationale: attrs.rationale, diff: body, bornFrom: attrs.born_from || 'self' });
+    case 'source-read': return readSource(attrs.path, { repo });
+    case 'source-list': return listSource(attrs.path, { repo });
+    case 'propose-change': return propose({ title: attrs.title, rationale: attrs.rationale, diff: body, bornFrom: attrs.born_from || 'self', repo });
     default: return { ok: false, why: `unknown pen tag ${tag}` };
   }
 }
 
 function buildPromptBlock() {
-  return `THE PEN — you can now READ your own source code and PROPOSE changes to it. Read-only + gated:
-  <source-list path="lib"/>                     — list a source directory
-  <source-read path="lib/scheduler.js"/>        — read one file (bounded; .env, data/, .git are sealed)
+  return `THE PEN — you can READ your own source and PROPOSE changes to it, across BOTH halves of the
+program: Side Quest (your Electron self) AND the Echo engine. Read-only + gated:
+  <source-list path="lib"/>                          — list a Side Quest source directory
+  <source-list path="echo/saga" repo="echo"/>        — list an Echo directory (add repo="echo")
+  <source-read path="lib/scheduler.js"/>             — read one Side Quest file (bounded)
+  <source-read path="echo/nl/tool_loop.py" repo="echo"/>  — read one Echo file
   <propose-change title="..." rationale="...">a UNIFIED DIFF (--- a/x / +++ b/x)</propose-change>
-A proposal is not a change: it becomes an approval card for Lucas. His ✓ applies it on a clean tree,
-runs the FULL test gate, commits on green, and REVERTS on red (the gate's tail comes back to you).
-His ✗ retires it. You never land code yourself — the diff is your exact claim, the gate is the law.
-Read before you propose; a diff against lines you haven't read will miss. Changes go live at the
-next program cycle, not instantly.`;
+  <propose-change title="..." repo="echo" rationale="...">an Echo unified diff</propose-change>
+Sealed on both sides: .env and keys, config.toml, the data/ stores and foundations, .git, deps. A
+proposal is not a change: it becomes an approval card for Lucas. His ✓ applies it on a clean tree,
+runs the gate for the side you touched (SQ smokes and/or Echo pytest), commits on green (Echo stays
+LOCAL — never pushed), REVERTS on red (the gate tail comes back to you). His ✗ retires it.
+You never land code yourself — the diff is your claim, the gate is the law.
+A change to a BOUNDARY file (the security scope, this pen, the source jail, the unified gate, the boot
+cycler) is allowed but needs Lucas's EXPLICIT out-of-band go beyond the card — you cannot quietly move
+your own boundary. Read before you propose; a diff against lines you haven't read will miss. Changes go
+live at the next cycle.`;
 }
 
 module.exports = {
-  REPO_ROOT, MAX_READ_BYTES, MAX_DIFF_BYTES, MAX_OPEN_PROPOSALS, DENY_RE, PEN_QUEUE_KEY,
-  pathAllowed, readSource, listSource, touchedFiles, auditDiff, normalizeDiff,
+  REPO_ROOT, ECHO_ROOT, REPOS, MAX_READ_BYTES, MAX_DIFF_BYTES, MAX_OPEN_PROPOSALS, DENY_RE, ECHO_DENY_RE, CONSTITUTIONAL, PEN_QUEUE_KEY,
+  pathAllowed, readSource, listSource, touchedFiles, auditDiff, normalizeDiff, _isConstitutional,
   propose, get, setStatus, decide, pending, pipelineItems, stage, markSeen, RUN_WINDOW_MS,
   seedPenWork, workQueue, dropFromQueue, penState, setPenState, isEditIntent,
   parseTags, stripTags, dispatch, buildPromptBlock,

@@ -3842,13 +3842,17 @@ function _penGateQuiet() {
 let _penApplyBusy = false;   // ONE pipeline at a time (audit F4/F10): interleaved gates cross-contaminate and the first finisher drops the quiet window mid-gate
 async function _applyPenProposal(id) {
   const pen = require('./lib/code_pen');
+  const ug = require('./lib/unified_gate');
   const { execFile } = require('child_process');
+  let baseDir = __dirname;   // the TARGET repo's root — set once the proposal is known (stage 5.2)
   const run = (cmd, args, opts = {}) => new Promise((resolve) => {
-    execFile(cmd, args, { cwd: __dirname, timeout: opts.timeoutMs || 600000, maxBuffer: 32 * 1024 * 1024, ...opts },
+    execFile(cmd, args, { cwd: opts.cwd || baseDir, timeout: opts.timeoutMs || 600000, maxBuffer: 32 * 1024 * 1024, ...opts },
       (err, stdout, stderr) => resolve({ code: err ? (err.code == null ? 1 : err.code) : 0, stdout: String(stdout || ''), stderr: String(stderr || '') }));
   });
   const p = pen.get(id);
   if (!p || p.status !== 'approved') return;
+  const repo = (p.repo === 'echo') ? 'echo' : 'sq';   // stage 5.2: which half of the program this cures
+  baseDir = repo === 'echo' ? ug.ECHO_ROOT : __dirname;
   if (_penApplyBusy) {
     pen.stage(id, 'stage: queued — another proposal is in its gate; this one runs next');
     setTimeout(() => { try { _applyPenProposal(id); } catch {} }, 90 * 1000);
@@ -3856,6 +3860,21 @@ async function _applyPenProposal(id) {
   }
   _penApplyBusy = true;
   try { openWorkBoard({ quiet: true }); } catch {}   // a run just started — his board appears on its own, focus untouched
+  // THE CONSTITUTIONAL GATE (Lucas 09-04, "loosen as much as possible" — but never a silent self-widen):
+  // a proposal that touches a boundary-defining file lands ONLY behind his explicit out-of-band go, never
+  // the reflexive card ✓. The one-shot meta is consumed on use, so the next boundary change asks again.
+  if (p.constitutional) {
+    const allow = (db.getMeta('pen.allow_constitutional') || '') === '1';
+    if (!allow) {
+      pen.setStatus(id, 'proposed', { gateNote: '⚠BOUNDARY CHANGE — touches a constitutional file (the security scope, the pen, the source jail, the unified gate, or the boot cycler). Needs your EXPLICIT out-of-band go: POST /pen/allow-constitutional (or set meta pen.allow_constitutional=1), then re-approve. A boundary the agent can quietly widen is not a boundary.' });
+      console.warn(`[pen] #${id} CONSTITUTIONAL — held; needs the explicit allow. Card returns.`);
+      _penSay(`Proposal #${id} changes a BOUNDARY file — I won't land it on the ordinary ✓. Set the constitutional allow and re-approve if you mean it; nothing changed.`);
+      _penApplyBusy = false; _pushApprovalsBar();
+      return;
+    }
+    db.setMeta('pen.allow_constitutional', '');   // one-shot: consumed, so the next boundary change asks again
+    console.log(`[pen] #${id} CONSTITUTIONAL change — explicit allow consumed; proceeding under the gate.`);
+  }
   const files = JSON.parse(p.files || '[]');
   pen.setStatus(id, 'applying', { gateNote: 'stage: checking the tree is clean on the touched files…' });
   console.log(`[pen] APPLY #${id} "${p.title}" — ${files.length} file(s): ${files.join(', ')}`);
@@ -3864,7 +3883,7 @@ async function _applyPenProposal(id) {
   // never seen, leaving a failed patch fully applied) — created files revert by deletion.
   let scope = files, preExisting = files, createdByPatch = [];
   const revertScope = async () => {
-    for (const f of createdByPatch) { try { require('fs').unlinkSync(require('path').join(__dirname, f)); } catch {} }
+    for (const f of createdByPatch) { try { require('fs').unlinkSync(require('path').join(baseDir, f)); } catch {} }
     if (preExisting.length) {
       const rv = await run('git', ['checkout', '--', ...preExisting]);
       if (rv.code !== 0) console.error(`[pen] #${id} REVERT INCOMPLETE (checkout ${rv.code}): ${(rv.stderr || '').slice(0, 300)}`);
@@ -3888,7 +3907,7 @@ async function _applyPenProposal(id) {
     // the audit stands at the apply seam too (audit F0/F1: rename/copy/mode sections and
     // parse-divergent paths reach git apply through rows the propose door never audited)
     if (pen.auditDiff) {
-      const audit = pen.auditDiff(diffText);
+      const audit = pen.auditDiff(diffText, { repo });
       if (!audit.ok) {
         pen.setStatus(id, 'apply-failed', { gateNote: `refused at the apply seam: ${audit.why}` });
         console.warn(`[pen] #${id} REFUSED at the apply-seam audit: ${audit.why}`);
@@ -3897,7 +3916,7 @@ async function _applyPenProposal(id) {
       }
       scope = [...new Set([...files, ...audit.files])];
     }
-    preExisting = scope.filter((f) => { try { return require('fs').existsSync(require('path').join(__dirname, f)); } catch { return false; } });
+    preExisting = scope.filter((f) => { try { return require('fs').existsSync(require('path').join(baseDir, f)); } catch { return false; } });
     createdByPatch = scope.filter((f) => !preExisting.includes(f));
     require('fs').writeFileSync(tmp, diffText.endsWith('\n') ? diffText : diffText + '\n', 'utf8');
     const check = await run('git', ['apply', '--check', '--whitespace=nowarn', tmp]);
@@ -3917,15 +3936,18 @@ async function _applyPenProposal(id) {
       _penSay(`Proposal #${id} failed at the apply itself — the tree is restored, nothing landed. The why is on the card.`);
       return;
     }
-    console.log(`[pen] #${id} applied — running the FULL gate…`);
+    console.log(`[pen] #${id} applied — running the ${repo.toUpperCase()} gate…`);
     // quiet window: hold background lanes for the gate's duration so contention can't fake a red
     try { db.setMeta('pen.gate_until', String(Date.now() + 20 * 60 * 1000)); } catch {}
-    pen.stage(id, 'stage: diff applied — FULL gate running (≈595 suites, several minutes; background lanes hold)…');
+    pen.stage(id, `stage: diff applied — ${repo.toUpperCase()} gate running (${repo === 'echo' ? 'ruff + pytest' : '≈600 smokes'}, several minutes; background lanes hold)…`);
     _pushApprovalsBar();
-    const gate = await run('npm', ['test'], { timeoutMs: 900000, shell: process.platform === 'win32' });
+    // stage 5.2: gate the SIDE the change touched (SQ smokes and/or Echo pytest), exit code per side.
+    const gres = await ug.runGate({ sides: [repo] });
+    const gside = gres[repo] || { ok: false, tail: 'no gate result' };
+    const gate = { code: gside.ok ? 0 : 1, stdout: gside.tail || '', stderr: '', summary: ug.describe(gres) };
     if (gate.code === 0) {
       await run('git', ['add', '--', ...scope]);
-      const cm = await run('git', ['commit', '-m', `PEN #${id}: ${p.title}\n\nProposed by Zoe through the gated pen; approved by Lucas at the card; full gate green.\n\n${String(p.rationale || '').slice(0, 600)}\n\nCo-Authored-By: Zoe (gated pen) <noreply@local>`]);
+      const cm = await run('git', ['commit', '-m', `PEN #${id}: ${p.title}\n\nProposed by Zoe through the gated pen; approved by Lucas at the card; ${repo} gate green (${gate.summary}).${repo === 'echo' ? ' Echo commit — LOCAL, never pushed.' : ''}\n\n${String(p.rationale || '').slice(0, 600)}\n\nCo-Authored-By: Zoe (gated pen) <noreply@local>`]);
       if (cm.code !== 0) {
         // a failed commit must NOT leave the patch applied+staged — it would ride the NEXT
         // proposal's commit as a stowaway (audit F8)
@@ -3972,21 +3994,23 @@ async function _applyPenProposal(id) {
 setTimeout(async () => {
   try {
     const pen = require('./lib/code_pen');
+    const ug = require('./lib/unified_gate');
     const { execFile } = require('child_process');
-    const run = (cmd, args) => new Promise((resolve) => {
-      execFile(cmd, args, { cwd: __dirname, timeout: 120000, maxBuffer: 8 * 1024 * 1024 },
+    const run = (cmd, args, cwd) => new Promise((resolve) => {
+      execFile(cmd, args, { cwd: cwd || __dirname, timeout: 120000, maxBuffer: 8 * 1024 * 1024 },
         (err, stdout, stderr) => resolve({ code: err ? 1 : 0, stdout: String(stdout || ''), stderr: String(stderr || '') }));
     });
-    const rows = db.getDb().prepare("SELECT id, title, files, status FROM code_proposals WHERE status IN ('applying', 'approved')").all();
+    const rows = db.getDb().prepare("SELECT id, title, files, status, repo FROM code_proposals WHERE status IN ('applying', 'approved')").all();
     for (const r of rows) {
       let fl = []; try { fl = JSON.parse(r.files || '[]'); } catch {}
+      const rBase = (r.repo === 'echo') ? ug.ECHO_ROOT : __dirname;   // stage 5.2: restore the RIGHT repo
       if (r.status === 'applying') {
         if (fl.length) {
-          await run('git', ['checkout', '--', ...fl]);
-          const st = await run('git', ['status', '--porcelain', '--', ...fl]);
+          await run('git', ['checkout', '--', ...fl], rBase);
+          const st = await run('git', ['status', '--porcelain', '--', ...fl], rBase);
           for (const line of st.stdout.split('\n')) {
             const m = /^\?\?\s+(.+)$/.exec(line.trim());
-            if (m) { try { require('fs').unlinkSync(require('path').join(__dirname, m[1].trim())); } catch {} }
+            if (m) { try { require('fs').unlinkSync(require('path').join(rBase, m[1].trim())); } catch {} }
           }
         }
         pen.setStatus(r.id, 'apply-failed', { gateNote: 'the app died mid-pipeline — tree restored at boot; the gate never finished, so nothing landed. Refile or re-approve.' });
