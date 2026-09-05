@@ -95,6 +95,16 @@ function manifestLines({ limit = 5, deps = {} } = {}) {
   } catch { return []; }
 }
 
+// A guide body may live in the knowledge store: body_ref "fact:<id>" → that row's content. The shelf's
+// body_ref is a 300-char REFERENCE (one cheap permanent line), so a guide longer than that (the Cowork
+// prompt templates, port P2 — 480–850 chars in his words) keeps its body as a knowledge row with Cowork
+// provenance and the shelf row points at it. Any other ref answers null → the ref text itself, as before.
+function _defaultGuide(ref, deps) {
+  const m = /^fact:(\d+)$/.exec(str(ref));
+  if (!m) return null;
+  try { const r = _db(deps).getDb().prepare('SELECT content FROM knowledge WHERE id = ?').get(Number(m[1])); return r ? r.content : null; } catch { return null; }
+}
+
 // Dereference the body — the pull. Loads by KIND from the system that owns it; readers are
 // injectable (readFile/procRow/guide) so the resolve is offline-testable. Records the use.
 function resolveBody(name, { deps = {}, nowMs = Date.now() } = {}) {
@@ -118,7 +128,7 @@ function resolveBody(name, { deps = {}, nowMs = Date.now() } = {}) {
         ? `PROVEN PROCEDURE "${p.name}" (met ${p.met}/${p.met + p.unmet})\nWHEN: ${str(p.trigger_text)}\nSTEPS: ${str(p.steps)}\nCHECK: ${str(p.check_text)}${p.applicability ? `\nAPPLIES: ${p.applicability}` : ''}`
         : `The procedure behind this skill (#${row.body_ref}) is gone — retire the shelf row if this repeats.`;
     } else if (row.kind === 'guide') {
-      const guide = deps.guide || (() => null);
+      const guide = deps.guide || ((ref) => _defaultGuide(ref, deps));
       text = str(guide(row.body_ref)) || str(row.body_ref);
     } else {
       text = str(row.body_ref);   // 'shape' — the body text lives on the row

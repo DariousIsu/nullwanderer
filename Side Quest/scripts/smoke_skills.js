@@ -62,6 +62,17 @@ const proc = skills.resolveBody('chase-the-official-roster', { deps, nowMs: 3000
 ok(proc.ok && /met 4\/5/.test(proc.text) && /minutes PDFs/.test(proc.text), "kind 'procedure': the body carries the steps + the honest track record");
 ok(!skills.resolveBody('never-registered', { deps }).ok, 'a miss is honest, never invented');
 
+// --- a guide body in the knowledge store: body_ref fact:<id> (the Cowork prompt templates, port P2) ---
+mem.exec('CREATE TABLE knowledge (id INTEGER PRIMARY KEY, content TEXT)');
+mem.prepare("INSERT INTO knowledge (id, content) VALUES (42, 'Op-Ed Writing — prompt template\n\nYou help research, analyze, write and proof op-eds.')").run();
+skills.register({ name: 'cowork-op-ed-writing', triggerDesc: 'Op-Ed Writing: research, write and proof op-eds', kind: 'guide', bodyRef: 'fact:42', provenance: 'cowork-import', deps, nowMs: 1000 });
+const g = skills.resolveBody('cowork-op-ed-writing', { deps, nowMs: 3000 });
+ok(g.ok && /proof op-eds/.test(g.text) && !/^fact:/.test(g.text), "kind 'guide' with body_ref fact:<id>: the body is read from the knowledge row (a template longer than the 300-char ref column)");
+skills.register({ name: 'plain-guide', triggerDesc: 'a plain guide', kind: 'guide', bodyRef: 'Just the ref text.', deps, nowMs: 1000 });
+ok(/Just the ref text/.test(skills.resolveBody('plain-guide', { deps, nowMs: 3000 }).text), 'a guide with a plain ref still answers the ref text');
+ok(skills.resolveBody('cowork-op-ed-writing', { deps: { ...deps, guide: () => 'injected' }, nowMs: 3000 }).text === 'injected', 'an injected guide reader still wins');
+ok(/^fact:42$/.test(skills.resolveBody('cowork-op-ed-writing', { deps: { db: { getDb: () => { const d = new Database(':memory:'); d.exec("CREATE TABLE skills (name TEXT PRIMARY KEY, trigger_desc TEXT, kind TEXT, body_ref TEXT, applies TEXT, provenance TEXT, uses INTEGER DEFAULT 0, last_used_ts INTEGER, created_ts INTEGER)"); d.prepare("INSERT INTO skills (name,trigger_desc,kind,body_ref,created_ts) VALUES ('cowork-op-ed-writing','t','guide','fact:42',1)").run(); return d; } } }, nowMs: 3000 }).text), 'a missing knowledge row degrades to the ref text — never invents a body');
+
 // --- births: proven procedures self-promote; syncFlows registers the disk ---
 ok(!skills.promoteFromProcedures({ id: 9, name: 'young', trigger_text: 'x', met: 2 }, { deps }).ok, 'met<3 does not promote — the shelf holds PROVEN competence');
 mem.prepare("INSERT INTO procedures (id,kind,name,trigger_text,met,unmet,status,created_ts) VALUES (11,'procedure','Corroborate via state registries','corroborating single-source org claims',2,0,'active',1000)").run();

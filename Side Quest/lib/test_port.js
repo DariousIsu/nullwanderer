@@ -264,6 +264,34 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
         try { const r = require('./security_remediate').routeOpenFindings({}); return send(200, { ok: true, ...r, at: Date.now() }); }
         catch (e) { return send(500, { ok: false, error: (e && e.message) || String(e) }); }
       }
+      // POST /cowork/import-files → the Cowork ports P2 + P3 (2026-09-05): the 3 synced claude.ai Projects +
+      // the 10 project folders (122 files) → documents through Echo's ingest_file with the project as origin;
+      // the two prompt templates → writer guides on the shelf. {apply:false} (default) = the DRY RUN (reads,
+      // writes nothing); {apply:true, limit:25} = ONE bounded batch — re-invoke until `remaining` is 0. Sits
+      // BEFORE /cowork/import (startsWith). Loopback, non-GET; filing his corpus is deliberate, never scheduled.
+      if (req.method === 'POST' && req.url.startsWith('/cowork/import-files')) {
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
+        req.on('end', async () => {
+          try {
+            const { apply = false, limit = 25, timeBudgetMs = 600000 } = JSON.parse(body || '{}');
+            const CI = require('./cowork_import');
+            const db = require('./db');
+            const spaces = CI.readCoworkSpaces(null, {});
+            const cache = CI.readProjectCache(null, {});
+            const folders = CI.readProjectFolders(null, {});
+            // one READ of Echo's projects so the dry run names each claude.ai Project's binding (exact name) or create
+            let projects = null;
+            try { const lp = await require('./echo_suit').dispatch({ kind: 'do', name: 'list_projects', args: {} }); if (lp && lp.ok) { const d = JSON.parse(lp.text); projects = Array.isArray(d && d.result) ? d.result : (Array.isArray(d) ? d : null); } } catch {}
+            const plan = CI.buildFilePlan({ cache: cache.projects, folders: folders.folders, spaces: spaces.spaces, spacesMarker: CI.readMarker(db), filesMarker: CI.readFilesMarker(db), templatesMarker: CI.readTemplatesMarker(db), projects });
+            const notes = [spaces.ok ? null : spaces.why, cache.ok ? null : cache.why, folders.ok ? null : folders.why, projects ? null : 'Echo suit not read — bindings decided at apply'].filter(Boolean);
+            if (!apply) return send(200, { ok: true, dryRun: true, totals: plan.totals, bindings: plan.bindings, unboundSpaces: plan.unboundSpaces, summary: CI.summarizeFiles(plan), notes, at: Date.now() });
+            const r = await CI.applyFilePlan(plan, { deps: { limit: Math.max(1, Math.min(200, Number(limit) || 25)), timeBudgetMs: Math.max(0, Number(timeBudgetMs) || 0) } });
+            return send(200, { ok: true, dryRun: false, totals: plan.totals, ...r, notes: [...notes, ...r.notes], at: Date.now() });
+          } catch (e) { return send(500, { ok: false, error: (e && e.message) || String(e) }); }
+        });
+        return;
+      }
       // POST /cowork/import → the Cowork port P1 (2026-09-04). Body {apply:false} (default) = the DRY RUN plan
       // (reads the Cowork spaces, writes nothing); {apply:true} = bind/create the project objects, land the laws
       // as global directives and the memory files as directives/facts. Idempotent (marker + dedup). Loopback,
