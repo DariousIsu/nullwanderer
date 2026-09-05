@@ -129,6 +129,8 @@ A state strip in her window and the parlor idiom for the loop: the drives, the c
 
 ## 5. Order of work
 
+**Progress (09-05, 14:10):** 1 the loop and the drives — BUILT (the fast loop, five drives, the state strip as data). 2 senses as inputs — BUILT for the camera, presence, his turns, her says, landed work, the slow loop's answers; the "what I saw" ledger is the strip's `recent` and `thoughts_of_him`. 3 acts — shield/unshield/deliver/look built; listen and browse are logged, not yet real senses; the reach still lives in the heartbeat. 4 felt time in every prompt — BUILT (the strip's clock in her awareness line). 5 the fourth load through the loop — the wondering (a private thought) is built; a licensed unprompted say from a felt state is not. 6 measure a day — not yet. The strip drawn in her window — this commit.
+
 1. **The loop and the drives** (stimulation added; dynamics; the state strip). Nothing speaks yet.
 2. **Senses as inputs** (appraisal; the "what I saw" ledger; the empty-chair clock is already in).
 3. **Acts** (look, listen, browse, work, rest; the reach re-seated as an act).

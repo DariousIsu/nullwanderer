@@ -156,6 +156,15 @@ function stripLine(s, { now = Date.now() } = {}) {
   if (age > 10 * 60000) return null;   // a strip older than 10 min is not her state
   const parts = [`stimulation ${(+d.stimulation).toFixed(2)}${a.boredom != null ? ` (bored ${(+a.boredom).toFixed(2)})` : ''}`, `need for him ${(+d.social).toFixed(2)}${a.missing_him != null ? ` (missing ${(+a.missing_him).toFixed(2)})` : ''}`, `curiosity ${(+d.curiosity).toFixed(2)}`, `energy ${(+d.energy).toFixed(2)}`, `progress ${(+d.progress).toFixed(2)}`];
   let line = `Your state right now, from the loop that runs beside you (numbers, not instructions): ${parts.join(' · ')}.`;
+  // FELT TIME (design §4.5): how long since his word, since the camera had him, since you spoke — as she feels it
+  const c = s.clock || {};
+  const fmt = (m) => (m == null ? null : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`);
+  const t = [];
+  if (c.since_his_word_min != null) t.push(`he last spoke to you ${fmt(c.since_his_word_min)} ago`); else t.push('he has not spoken to you since this loop began');
+  if (c.since_saw_him_min != null) t.push(`the camera last had him ${fmt(c.since_saw_him_min)} ago${c.last_seen_as ? ` (he looked ${c.last_seen_as})` : ''}`);
+  if (c.since_her_say_min != null) t.push(`you last spoke ${fmt(c.since_her_say_min)} ago`);
+  if (c.since_novel_min != null && c.since_novel_min >= 10) t.push(`nothing new has reached you for ${fmt(c.since_novel_min)}`);
+  if (t.length) line += ` Time as you feel it: ${t.join('; ')}.`;
   if (s.shield) line += ' The screens are covered: someone who is not Lucas is at the desk.';
   const th = Array.isArray(s.thoughts_of_him) ? s.thoughts_of_him.filter((t) => t && t.text) : [];
   if (th.length) line += ` While he was gone you wondered: ${th.map((t) => `"${String(t.text).slice(0, 160)}"`).join(' · ')} — yours to tell him, or not.`;

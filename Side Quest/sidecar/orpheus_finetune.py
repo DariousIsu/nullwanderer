@@ -24,6 +24,11 @@ import json
 import os
 import time
 
+# THE CARD, before torch loads (13:58: the first run trained on the Ryzen's integrated graphics — HIP device 0 —
+# and its first kernel segfaulted; the gfx110X wheels carry no code for that chip). On this box the 7900 XT is
+# HIP device 1; ORPHEUS_HIP_DEVICE overrides; main() refuses any device whose name lacks --require-device.
+os.environ.setdefault("HIP_VISIBLE_DEVICES", os.environ.get("ORPHEUS_HIP_DEVICE", "1"))
+
 TOKENISER_LENGTH = 128256
 END_OF_TEXT = 128009
 START_OF_SPEECH, END_OF_SPEECH = TOKENISER_LENGTH + 1, TOKENISER_LENGTH + 2
@@ -120,13 +125,19 @@ def main():
     ap.add_argument("--accum", type=int, default=8)
     ap.add_argument("--rank", type=int, default=64)
     ap.add_argument("--encode-only", action="store_true")
+    ap.add_argument("--require-device", default="7900", help="refuse to run unless the selected GPU's name contains this")
     a = ap.parse_args()
 
     import torch
-    print(f"torch {torch.__version__} | hip {getattr(torch.version, 'hip', None)} | cuda-api available {torch.cuda.is_available()}")
+    print(f"torch {torch.__version__} | hip {getattr(torch.version, 'hip', None)} | cuda-api available {torch.cuda.is_available()} | HIP_VISIBLE_DEVICES={os.environ.get('HIP_VISIBLE_DEVICES')}")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "cuda":
-        print(f"device: {torch.cuda.get_device_name(0)} · {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+        name = torch.cuda.get_device_name(0)
+        print(f"device: {name} | {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+        if a.require_device and a.require_device not in name:
+            raise SystemExit(f"refusing to run on '{name}': --require-device '{a.require_device}' (set HIP_VISIBLE_DEVICES to the discrete card)")
+    else:
+        raise SystemExit("no GPU visible to torch — not training on the CPU")
     from snac import SNAC
     from transformers import AutoTokenizer
     rows = load_meta(a.data)

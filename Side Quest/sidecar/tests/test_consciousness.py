@@ -168,3 +168,15 @@ def test_the_strip_is_what_he_can_watch():
     st = C.initial_state(0)
     s = C.strip(st, 0)
     assert s["kind"] == "state" and set(s["drives"]) == set(C.DRIVES) and "boredom" in s["appraisals"] and s["shield"] is False
+    assert s["clock"] == {"since_his_word_min": None, "since_saw_him_min": None, "since_her_say_min": None, "since_novel_min": None, "last_seen_as": None}
+
+
+def test_felt_time_rides_the_strip():
+    """Design §4.5: minutes since his word, since the camera had him (and how he looked), since she spoke — numbers."""
+    st = C.initial_state(0)
+    st, _ = C.step(st, [face(True, True, expression="tired"), {"kind": "percept", "sense": "his_turn"}], 0)
+    st, _ = C.step(st, [{"kind": "percept", "sense": "her_say"}], 2 * M)
+    st, _ = C.step(st, [face(False, False)], 5 * M)
+    s = C.strip(st, 130 * M)
+    assert s["clock"]["since_his_word_min"] == 130 and s["clock"]["since_saw_him_min"] == 130 and s["clock"]["since_her_say_min"] == 128 and s["clock"]["last_seen_as"] == "tired"
+    assert s["clock"]["since_novel_min"] == 125, s["clock"]

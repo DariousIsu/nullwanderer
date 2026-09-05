@@ -236,11 +236,24 @@ def step(state, percepts, now, hour_local=None):
     return state, outputs
 
 
+def _ago_min(now, t):
+    return None if t is None else int(max(0, now - t) // 60000)
+
+
 def strip(state, now):
-    """The state strip — what he can watch."""
+    """The state strip — what he can watch, and FELT TIME (design §4.5): minutes since his word, since the camera
+    last saw him, since she last spoke, since anything new — as numbers she reads, never as a script."""
     a = appraisals(state, now)
     d = state["drives"]
-    return {"kind": "state", "at": now, "drives": {k: round(v, 3) for k, v in d.items()}, "appraisals": a, "shield": state["shield"]["on"], "face": state["face"], "presence": state["presence"]["state"], "recent": state["recent"][-3:], "thoughts_of_him": state["thoughts_of_him"][-2:]}
+    c = state["clock"]
+    clock = {
+        "since_his_word_min": _ago_min(now, c.get("his_last_word_at")),
+        "since_saw_him_min": _ago_min(now, c.get("last_saw_him_at")),
+        "since_her_say_min": _ago_min(now, c.get("her_last_say_at")),
+        "since_novel_min": _ago_min(now, c.get("last_novel_at")),
+        "last_seen_as": c.get("last_seen_as"),
+    }
+    return {"kind": "state", "at": now, "drives": {k: round(v, 3) for k, v in d.items()}, "appraisals": a, "clock": clock, "shield": state["shield"]["on"], "face": state["face"], "presence": state["presence"]["state"], "recent": state["recent"][-3:], "thoughts_of_him": state["thoughts_of_him"][-2:]}
 
 
 def serve():

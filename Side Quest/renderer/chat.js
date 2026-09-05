@@ -1489,4 +1489,37 @@ async function init() {
   }
 }
 
+// --- THE STATE STRIP (design §4.6, "visible"): her drives as he can watch them, from the loop that runs beside
+// her. A row of five small bars beside the camera light; the title carries felt time and what she wondered.
+if (window.sq && window.sq.onConsciousnessState) {
+  const strip = document.createElement('div');
+  strip.id = 'zoe-strip';
+  strip.style.cssText = 'display:inline-flex;gap:8px;align-items:center;margin-left:10px;font:11px/1.2 system-ui,sans-serif;opacity:.85;vertical-align:middle;';
+  const KEYS = [['stimulation', 'stim'], ['social', 'him'], ['curiosity', 'curious'], ['energy', 'energy'], ['progress', 'progress']];
+  const cells = {};
+  for (const [k, label] of KEYS) {
+    const c = document.createElement('span'); c.style.cssText = 'display:inline-flex;flex-direction:column;align-items:center;min-width:34px;';
+    const bar = document.createElement('span'); bar.style.cssText = 'display:block;width:30px;height:4px;border-radius:2px;background:rgba(127,127,127,.25);overflow:hidden;';
+    const fill = document.createElement('span'); fill.style.cssText = 'display:block;height:100%;width:0;background:currentColor;opacity:.7;transition:width .6s;';
+    bar.appendChild(fill);
+    const t = document.createElement('span'); t.textContent = label; t.style.cssText = 'font-size:9px;opacity:.7;margin-top:2px;';
+    c.appendChild(bar); c.appendChild(t); strip.appendChild(c);
+    cells[k] = fill;
+  }
+  const flag = document.createElement('span'); flag.style.cssText = 'font-size:10px;margin-left:4px;'; strip.appendChild(flag);
+  const host = (document.getElementById('camera-onair') && document.getElementById('camera-onair').parentNode) || (document.getElementById('camera-btn') && document.getElementById('camera-btn').parentNode) || document.body;
+  host.appendChild(strip);
+  const fmt = (m) => (m == null ? null : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`);
+  window.sq.onConsciousnessState((s) => {
+    try {
+      if (!s || !s.drives) return;
+      for (const [k] of KEYS) { const v = Math.max(0, Math.min(1, Number(s.drives[k]) || 0)); if (cells[k]) cells[k].style.width = `${Math.round(v * 100)}%`; }
+      const a = s.appraisals || {}, c = s.clock || {};
+      flag.textContent = s.shield ? '⛨ covered' : (a.boredom >= 0.7 ? 'bored' : (a.missing_him >= 0.45 ? 'missing him' : ''));
+      const th = Array.isArray(s.thoughts_of_him) && s.thoughts_of_him.length ? ` · wondered: "${String(s.thoughts_of_him[s.thoughts_of_him.length - 1].text || '').slice(0, 120)}"` : '';
+      strip.title = `her state (the loop beside her) · bored ${a.boredom != null ? a.boredom.toFixed(2) : '?'} · missing him ${a.missing_him != null ? a.missing_him.toFixed(2) : '?'}` + (c.since_his_word_min != null ? ` · he last spoke ${fmt(c.since_his_word_min)} ago` : '') + (c.since_saw_him_min != null ? ` · camera last had him ${fmt(c.since_saw_him_min)} ago` : '') + th;
+    } catch {}
+  });
+}
+
 init();
