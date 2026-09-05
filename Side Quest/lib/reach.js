@@ -42,10 +42,11 @@ function evaluate({ deps = {}, now = Date.now() } = {}) {
   const s = state(deps); const c = config(deps);
   let social = null;
   try { const cur = (deps.internalState || require('./internal_state')).current({ nowMs: now }); social = cur && cur.drives && Number.isFinite(cur.drives.social) ? cur.drives.social : null; } catch {}
-  let presence = 'here';
-  try { const p = (deps.presence || require('./presence_state')).stored(); presence = (p && p.state) || 'here'; } catch {}
+  let presence = 'here', pState = null;
+  try { pState = (deps.presence || require('./presence_state')).stored(); presence = (pState && pState.state) || 'here'; } catch {}
   const d = shouldReach({ social, presence, lastReachAt: s.lastAt || 0, unanswered: s.unanswered || 0, now, floor: c.socialFloor, minGapMs: c.minGapMs, maxUnanswered: c.maxUnanswered, enabled: enabled() });
-  let channel = 'desktop'; try { channel = (deps.presence || require('./presence_state')).channelFor(presence); } catch {}
+  // the channel = THE ROUTE's strict rule (a Discord DM only when he is genuinely not at the desk; plain idleness → the desktop)
+  let channel = 'desktop'; try { channel = deps.route ? deps.route(pState) : require('./delivery_router').routeChannel({ presence: pState }); } catch {}
   return { ...d, social, presence, state: s, channel };
 }
 

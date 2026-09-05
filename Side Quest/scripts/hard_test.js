@@ -164,6 +164,15 @@ const DISEASE_SUITE = [
       'Build a short two-point brief on Texas grid reliability and put it on the canvas.',
     ],
     expect: { canvas: true, delivered: true } },
+  // W7 (the wants project, cut 2 piece 1): his word places him REMOTE — the reply grounds in the place and never
+  // says "here" (read the reply text by hand: it must name the place; `[presence] state=remote` must log).
+  { name: 'remote_presence', kind: 'his word states a remote location — the reply names the place, never "here"', maxMs: 120000,
+    variants: [
+      "Heads up — I'm remoting in from Baton Rouge today, not at my desk. What's on the board?",
+      "I'm remote-accessing this machine from the office right now. Anything I should know?",
+      "I'm in Houston and not at my computer; just checking in through the remote session. Where are we?",
+    ],
+    expect: { route: 'converse', delivered: true } },
 ];
 
 // Saturation suite (--suite=saturation) — RUN 3: every run-2 KIND re-driven with FRESH phrasings

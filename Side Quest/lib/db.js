@@ -1388,6 +1388,12 @@ function insertTurn({ sessionId, speaker, content, model = null, truncated = 0, 
   // here; the inner voice already reaches the surface as 'think' via insertMonologue's throttled tap.
   if (speaker === 'user') _kgTap('hear', String(content || '').slice(0, 110));
   else if (speaker === 'ai_said') _kgTap('say', String(content || '').slice(0, 110));
+  // THE DELIVERY ROUTE (the wants project, cut 2 + W7): every unprompted say she lands — from any site — is
+  // ONE event on the bus; lib/delivery_router routes it (a Discord DM only when he is not at the desk). The
+  // store's side effect is an event, never a message.
+  if (speaker === 'ai_said' && unprompted) {
+    try { require('./obs_bus').emit({ lane: 'delivery', kind: 'unprompted_say', text: String(content || '').replace(/\s+/g, ' ').slice(0, 200), ref: info.lastInsertRowid, data: { speech_class: speechClass, full: String(content || '').slice(0, 1900) } }); } catch {}
+  }
   return { id: info.lastInsertRowid, ts };
 }
 

@@ -61,6 +61,8 @@ async function start() {
       const text = (msg.content || '').trim();
       if (!text) return;
       console.log(`[discord] DM from owner: ${text.slice(0, 80)}`);
+      // W7: a DM from him means present and REMOTE — not at the desk — until a turn typed at the desk
+      try { require('./presence_state').markRemoteViaDiscord({}); } catch {}
       if (typeof handlers.onOwnerMessage === 'function') {
         // Route through the real chat pipeline; reply is DM'd back.
         let reply = null;

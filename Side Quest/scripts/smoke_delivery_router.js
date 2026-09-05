@@ -43,5 +43,57 @@ ok(dr.noteSurfaced({ away: false, text: 'x', deps: { presence: pres } }) === fal
 ok(dr.clearHeld({ deps }) === true && held().length === 0, 'clearHeld empties the shelf');
 ok(dr.heldLine({ deps, nowMs: T }) === null, 'empty shelf → no awareness line');
 
-console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
-process.exit(fail === 0 ? 0 : 1);
+// ── THE ROUTE (the wants project, cut 2 + W7; Lucas 09-05: "really only when I am not at my desk") ──────
+(async () => {
+  const R = (state, reason) => dr.routeChannel({ presence: { state, reason } });
+  ok(R('here', 'active 2m ago') === 'desktop', 'here → the desktop');
+  ok(R('remote', 'his word: remoting in from Baton Rouge') === 'discord' && R('remote', 'remote session (SESSIONNAME: RDP-Tcp#3)') === 'discord', 'remote (his word or the OS session) → Discord');
+  ok(R('away', 'his word: for the night') === 'discord', 'away by HIS WORD → Discord');
+  ok(R('away', 'idle 47m, no one on camera') === 'discord', 'away with the camera seeing no one → Discord');
+  ok(R('away', 'idle 47m') === 'desktop', 'away by keyboard idleness ALONE → the desktop (he may be reading)');
+  ok(R('meeting', 'voice guard: Teams') === 'queue', 'a meeting → a queued note, never a ping');
+  ok(dr.routeChannel({ presence: null }) === 'desktop' && dr.routeChannel({ presence: {} }) === 'desktop', 'no presence reading → the desktop');
+
+  // deliver — an injected Discord, run ledger, presence and bus
+  const store2 = {}; const db2 = { getMeta: (k) => store2[k], setMeta: (k, v) => { store2[k] = v; } };
+  const sent = [], runs = [], busEv = [], logs = [];
+  const board = { start: (r) => { runs.push({ ...r, id: runs.length + 1 }); return { id: runs.length }; }, finish: (id, r) => { runs[id - 1].finish = r; } };
+  const d2 = (presence, sendOk = true) => ({ db: db2, presence, discord: { sendDM: async (t) => { sent.push(t); return sendOk ? { ok: true } : { ok: false, reason: 'not connected' }; } }, board, obsBus: { emit: (e) => busEv.push(e), subscribe: () => () => {} }, availability: { isAway: () => false }, log: (m) => logs.push(m) });
+  const r1 = await dr.deliver({ text: 'The Louisiana list is done — 64 parishes.', source: 'report', ref: 42, deps: d2({ state: 'remote', reason: 'his word: remoting in from Baton Rouge' }), nowMs: T });
+  ok(r1.channel === 'discord' && r1.dm.ok && sent.length === 1 && /64 parishes/.test(sent[0]), 'remote → the say goes to his Discord DM');
+  ok(runs.length === 1 && runs[0].lane === 'delivery' && runs[0].kind === 'discord-dm' && runs[0].finish.status === 'done' && runs[0].finish.note === 'sent', 'every DM = a run-ledger receipt (delivery / discord-dm, done: sent)');
+  ok(JSON.parse(store2[dr.LAST_DM_KEY]).ref === 42 && busEv.length === 1 && busEv[0].lane === 'delivery' && busEv[0].kind === 'dm' && busEv[0].data.ok === true, 'the last DM is recorded + one bus event');
+  ok(/report → Discord DM sent \(remote: his word/.test(logs[0]), 'the log names the source, the channel and why');
+  const r2 = await dr.deliver({ text: 'Another line right after.', source: 'say', deps: d2({ state: 'remote', reason: 'his word' }), nowMs: T + 20000 });
+  ok(r2.channel === 'discord' && !r2.dm.ok && /gap/.test(r2.dm.reason) && sent.length === 1, 'never two DMs inside a minute — the second waits');
+  const r3 = await dr.deliver({ text: 'Later.', source: 'say', deps: d2({ state: 'remote', reason: 'his word' }), nowMs: T + 90000 });
+  ok(r3.dm.ok && sent.length === 2, 'a minute later the next DM goes');
+  const r4 = await dr.deliver({ text: 'Desk line.', source: 'say', deps: d2({ state: 'here', reason: 'active 1m ago' }), nowMs: T + 200000 });
+  ok(r4.channel === 'desktop' && r4.dm === null && sent.length === 2, 'here → nothing leaves the desktop');
+  let notified5 = null;
+  const r5 = await dr.deliver({ text: 'Idle line.', source: 'say', deps: { ...d2({ state: 'away', reason: 'idle 47m' }), availability: { isAway: () => true }, presence: { state: 'away', reason: 'idle 47m' }, presenceNotify: null, presence_: null, presenceDesk: { notify: (t, b) => { notified5 = b; return { ok: true }; } } }, nowMs: T + 300000 });
+  ok(r5.channel === 'desktop' && sent.length === 2, 'away by idleness alone → still the desktop, no DM');
+  void notified5;
+  const r6 = await dr.deliver({ text: 'Down line.', source: 'say', deps: d2({ state: 'remote', reason: 'his word' }, false), nowMs: T + 400000 });
+  ok(r6.channel === 'discord' && !r6.dm.ok && runs[runs.length - 1].finish.status === 'failed' && busEv[busEv.length - 1].data.ok === false, 'a DM that fails is an honest failed receipt, never a claimed delivery');
+  ok((await dr.deliver({ text: '   ', deps: d2({ state: 'remote', reason: 'x' }) })).why === 'empty', 'empty text delivers nothing');
+  const line = dr.lastDeliveryLine({ deps: { db: db2 }, nowMs: T + 90000 + 30 * 60000 });
+  ok(/went to his Discord DM 30 min ago/.test(line) && /not at the desk/.test(line), `the manifest line (${line.slice(0, 60)}…)`);
+  ok(dr.lastDeliveryLine({ deps: { db: db2 }, nowMs: T + 13 * 3600e3 }) === null, 'the line ages out after 12 h');
+
+  // attach — the store's unprompted-say event routes; a replay-railed say never leaves; other events are ignored
+  dr._detach();
+  let listener = null; const bus3 = { subscribe: (fn) => { listener = fn; return () => {}; }, emit: (e) => busEv.push(e) };
+  const sent3 = []; const deps3 = { db: db2, discord: { sendDM: async (t) => { sent3.push(t); return { ok: true }; } }, board: null, obsBus: bus3, presence: { state: 'remote', reason: 'his word' }, log: () => {} };
+  ok(dr.attach({ deps: deps3 }) === true && typeof listener === 'function' && dr.attach({ deps: deps3 }) === false, 'attach subscribes once');
+  listener({ lane: 'delivery', kind: 'unprompted_say', text: 'short', ref: 7, data: { speech_class: null, full: 'The full say, longer than the event text.' } });
+  await new Promise((r) => setTimeout(r, 5));
+  ok(sent3.length === 1 && /The full say/.test(sent3[0]), 'an unprompted say from the store routes (the FULL text, not the event snippet)');
+  listener({ lane: 'delivery', kind: 'unprompted_say', text: 'again', ref: 8, data: { speech_class: 'replay', full: 'again' } });
+  listener({ lane: 'presence', kind: 'face', text: 'x' });
+  await new Promise((r) => setTimeout(r, 5));
+  ok(sent3.length === 1, 'a replay-railed say and non-delivery events never leave the box');
+  dr._detach();
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+  process.exit(fail === 0 ? 0 : 1);
+})().catch((e) => { console.error('route smoke threw:', e); process.exit(1); });

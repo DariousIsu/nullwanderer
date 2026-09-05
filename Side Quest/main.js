@@ -787,6 +787,9 @@ setInterval(() => {
   try { require('./lib/reach').checkUnanswered({ lastUserTurnTs: _presenceDeps().lastUserTurnTs }); } catch {}
 }, 60 * 1000).unref?.();
 setTimeout(() => { try { require('./lib/presence_state').tick({ deps: _presenceDeps() }); } catch {} }, 20 * 1000).unref?.();
+// THE DELIVERY ROUTE (cut 2 + W7): one subscription routes every unprompted say she lands — a Discord DM
+// only when he is genuinely not at the desk (his word, a remote session, or the camera seeing no one).
+try { if (require('./lib/delivery_router').attach({})) console.log('[delivery] route attached — Discord only when he is not at the desk'); } catch {}
 
 // Split an ALREADY-COMPLETE text into sentences (mirrors _lastSentenceEnd's boundary rule).
 function _splitSentences(s) {
@@ -8723,6 +8726,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // HIS WORD ABOUT WHERE HE IS (the wants project, cut 2 piece 1 + W7): "I'm remoting in from X" / "I'm at X,
     // not at my computer" / "back at my desk" → the location fact + an immediate re-fuse of presence.
     try { require('./lib/presence_state').recordHisWord(userMessage, { turnId: null, deps: _presenceDeps() }); } catch {}
+    // a turn typed at the desk clears a Discord-inferred "remote" (a DM turn arrives with channel:'discord')
+    try { if (!(io && io.channel === 'discord')) require('./lib/presence_state').markDeskTurn({ deps: _presenceDeps() }); } catch {}
     const awayReason = availability.detectAway(userMessage);
     if (awayReason) { availability.setAway(awayReason); console.log(`[main] Lucas marked away ("${awayReason}") — unprompted utterances will stay silent`); }
   } catch (e) { console.error('[main] availability update failed:', e.message); }

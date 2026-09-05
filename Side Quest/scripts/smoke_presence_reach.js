@@ -27,7 +27,9 @@ ok(!R.shouldReach({ ...base, enabled: false }).reach, 'the switch off → no');
 // ── the organ over injected readings + a fake store ───────────────────────────────────────────────
 const meta = {}; const db = { getMeta: (k) => meta[k], setMeta: (k, v) => { meta[k] = v; } };
 const events = [], logs = [];
-const deps = (social, presence) => ({ db, obsBus: { emit: (e) => events.push(e) }, log: (m) => logs.push(m), internalState: { current: () => ({ drives: { social } }) }, presence: { stored: () => ({ state: presence }), channelFor: (s) => (s === 'here' ? 'desktop' : s === 'meeting' ? 'queue' : 'discord') } });
+const deps = (social, presence) => ({ db, obsBus: { emit: (e) => events.push(e) }, log: (m) => logs.push(m), internalState: { current: () => ({ drives: { social } }) }, presence: { stored: () => ({ state: presence, reason: presence === 'away' ? 'his word: for the night' : presence }) }, route: (p) => (!p || p.state === 'here' ? 'desktop' : p.state === 'meeting' ? 'queue' : 'discord') });
+// the channel comes from THE ROUTE's strict rule (lib/delivery_router.routeChannel), injected here as `route`
+ok(require(path.join(LIB, 'delivery_router')).routeChannel({ presence: { state: 'away', reason: 'idle 47m' } }) === 'desktop' && require(path.join(LIB, 'delivery_router')).routeChannel({ presence: { state: 'away', reason: 'his word: for the night' } }) === 'discord', 'the real route: away by idleness alone → the desktop; away by his word → Discord');
 const e1 = R.evaluate({ deps: deps(0.8, 'away'), now });
 ok(e1.reach && e1.social === 0.8 && e1.presence === 'away' && e1.channel === 'discord', 'evaluate: reads the social drive + presence, picks the channel (Discord when away)');
 ok(!R.evaluate({ deps: deps(0.8, 'here'), now }).reach && R.evaluate({ deps: deps(0.8, 'here'), now }).channel === 'desktop', 'here → no reach, desktop channel');

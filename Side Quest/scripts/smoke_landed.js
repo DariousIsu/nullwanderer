@@ -55,5 +55,17 @@ ok(L.personaLines({ deps }) === null && L.count({ deps }) === 0, 'an empty ledge
 // the face source records with its own source
 const r5 = L.record({ userTurnId: null, aiTurnId: idOf(say4), kind: 'laugh', source: 'face', snippet: 'Fourth.', deps });
 ok(r5.ok && L.lastLanded(1, { deps })[0].source === 'face' && events[events.length - 1].data.source === 'face', 'a laugh read from the camera records with source=face');
+// THE DELIVERY ROUTE's source: an UNPROMPTED ai_said insert emits ONE delivery/unprompted_say event on the bus
+// (the store's side effect is an event, never a message); a prompted say and a user turn emit none.
+{
+  const bus = require(path.join(SQ, 'lib', 'obs_bus'));
+  const seen = []; const off = bus.subscribe((e) => { if (e && e.lane === 'delivery') seen.push(e); });
+  const un = db.insertTurn({ sessionId: s, speaker: 'ai_said', content: 'An unprompted line for the route, long enough to be real.', unprompted: 1 });
+  db.insertTurn({ sessionId: s, speaker: 'ai_said', content: 'A prompted reply, long enough to be real too.' });
+  db.insertTurn({ sessionId: s, speaker: 'user', content: 'ok' });
+  off();
+  const evData = typeof seen[0]?.data === 'string' ? JSON.parse(seen[0].data) : (seen[0] && seen[0].data);
+  ok(seen.length === 1 && seen[0].kind === 'unprompted_say' && String(seen[0].ref) === String(idOf(un)) && /unprompted line/.test(evData && evData.full), 'insertTurn: one unprompted say → one delivery/unprompted_say event (ref = the turn, data carries the class); prompted and user turns emit none');
+}
 console.log(`\nsmoke_landed: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

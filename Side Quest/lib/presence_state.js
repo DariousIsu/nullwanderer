@@ -94,6 +94,29 @@ function recordHisWord(text, { turnId = null, deps = {} } = {}) {
   return { ...hit, location };
 }
 
+/** A Discord DM from him = present and REMOTE (not at the desk) — the design's W7 rule. Holds until a desk turn. */
+function markRemoteViaDiscord({ deps = {} } = {}) {
+  const now = deps.now || Date.now();
+  const prev = storedLocation(deps);
+  if (prev && prev.remote === true && prev.source === 'discord dm') { try { tick({ deps: { ...deps, now } }); } catch {} return prev; }
+  const location = { place: (prev && prev.place) || null, since: now, source: 'discord dm', turn_id: null, remote: true };
+  try { _db(deps).setMeta(LOCATION_KEY, JSON.stringify(location)); } catch {}
+  (deps.log || console.log)('[presence] a Discord DM from him → remote (not at the desk)');
+  try { tick({ deps: { ...deps, now } }); } catch {}
+  return location;
+}
+/** A turn typed at the desk clears a Discord-inferred remote (his stated location by word stays until he says otherwise). */
+function markDeskTurn({ deps = {} } = {}) {
+  const prev = storedLocation(deps);
+  if (!prev || prev.source !== 'discord dm') return null;
+  const now = deps.now || Date.now();
+  const location = { ...prev, remote: false, here: true, since: now, source: 'desk turn' };
+  try { _db(deps).setMeta(LOCATION_KEY, JSON.stringify(location)); } catch {}
+  (deps.log || console.log)('[presence] a desk turn → no longer remote');
+  try { tick({ deps: { ...deps, now } }); } catch {}
+  return location;
+}
+
 /** The 60-second tick (and the chat door): read every sensor, fuse, persist on change, emit on change. */
 function tick({ deps = {} } = {}) {
   const now = deps.now || Date.now();
@@ -131,4 +154,4 @@ function awarenessLine({ deps = {}, now = Date.now(), name = 'Lucas' } = {}) {
   return `PRESENCE: ${name} is HERE at the desk (${s.reason}${ago != null ? `, for ${ago}m` : ''})${loc && loc !== 'at the desk' ? ` — ${loc}` : ''}.`;
 }
 
-module.exports = { detectLocationStatement, readRemoteSession, fuse, channelFor, recordHisWord, tick, stored, storedLocation, awarenessLine, STATES, STATE_KEY, LOCATION_KEY, IDLE_AWAY_MS, FACE_FRESH_MS };
+module.exports = { detectLocationStatement, readRemoteSession, fuse, channelFor, recordHisWord, markRemoteViaDiscord, markDeskTurn, tick, stored, storedLocation, awarenessLine, STATES, STATE_KEY, LOCATION_KEY, IDLE_AWAY_MS, FACE_FRESH_MS };

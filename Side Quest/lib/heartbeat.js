@@ -604,12 +604,9 @@ async function maybeHeartbeat() {
       // THE REACH lands: the ledger (the unanswered count starts), one `reach` event, and the channel —
       // a Discord DM when he is not at the desk (the desktop bubble still shows it for his return).
       if (reachCtx) {
-        try {
-          const rl = require('./reach'); rl.recordReach({ text: trimmedSay, channel: reachCtx.channel });
-          if (reachCtx.channel === 'discord') {
-            require('./discord').sendDM(trimmedSay).then((r) => console.log(`[reach] Discord DM ${r && r.ok !== false ? 'sent' : `failed: ${(r && (r.reason || r.error)) || '?'}`}`)).catch((e) => console.log(`[reach] Discord DM failed: ${e.message}`));
-          }
-        } catch (e) { console.error('[reach] record failed:', e.message); }
+        // the DM itself rides THE ROUTE (lib/delivery_router, subscribed to the store's unprompted-say event) —
+        // one door for every delivery, so a reach reaches him exactly the way any other say would
+        try { require('./reach').recordReach({ text: trimmedSay, channel: reachCtx.channel }); } catch (e) { console.error('[reach] record failed:', e.message); }
       }
       // write-bottom: an unprompted utterance goes on the shared timeline (kind
       // 'utterance' = a MessageAction to the user). Lets the StuckDetector catch

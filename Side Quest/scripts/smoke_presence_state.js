@@ -64,5 +64,12 @@ ok(/REMOTE/.test(line) && /Baton Rouge/.test(line) && /never say "here"/.test(li
 PS.recordHisWord('back at my desk', { turnId: 78, deps: deps({ now: now + 200000 }) });
 ok(JSON.parse(meta[PS.STATE_KEY]).state === 'here' && /is HERE/.test(PS.awarenessLine({ deps: deps(), now: now + 201000 })), '"back at my desk" → here again');
 ok(PS.recordHisWord('what time is it', { deps: deps() }) === null, 'an ordinary turn writes nothing');
+// W7: a Discord DM from him = remote until a desk turn; his stated location by WORD is never cleared by a desk turn
+const mk = PS.markRemoteViaDiscord({ deps: deps({ now: now + 300000 }) });
+ok(mk.remote === true && mk.source === 'discord dm' && JSON.parse(meta[PS.STATE_KEY]).state === 'remote', 'a Discord DM from him → remote (not at the desk)');
+const dk = PS.markDeskTurn({ deps: deps({ now: now + 360000 }) });
+ok(dk && dk.remote === false && JSON.parse(meta[PS.STATE_KEY]).state === 'here', 'a desk turn clears the Discord-inferred remote');
+PS.recordHisWord("I'm remoting in from Baton Rouge", { turnId: 79, deps: deps({ now: now + 400000 }) });
+ok(PS.markDeskTurn({ deps: deps({ now: now + 401000 }) }) === null && JSON.parse(meta[PS.STATE_KEY]).state === 'remote', 'his WORD ("remoting in from…") is not cleared by keystrokes — it holds until he says otherwise');
 console.log(`\nsmoke_presence_state: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

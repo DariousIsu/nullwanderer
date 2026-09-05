@@ -121,6 +121,8 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
   // THE REACH (cut 2): the reach and its silence, or his return after one — grounding, never a script.
   let reachLine = null;
   try { reachLine = require('./reach').awarenessLine(); } catch {}
+  let deliveryLine = null;
+  try { deliveryLine = require('./delivery_router').lastDeliveryLine(); } catch {}
   // Status-vector line (Loop A, 2026-08-15) — the measured self-read (organs, voice, quota, gate,
   // machine, memory substrate) + what changed since the last beat. Same stored object the full
   // state-door block renders from, so the two can never disagree. Fail-absent until first refresh.
@@ -303,6 +305,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
     presenceLine ? `• ${presenceLine}` : null,
     faceLine ? `• ${faceLine}` : null,
     reachLine ? `• ${reachLine}` : null,
+    deliveryLine ? `• ${deliveryLine}` : null,
     statusLine ? `• ${statusLine}` : null,
     gmeetLine ? `• ${gmeetLine}` : null,
     mediaLine ? `• ${mediaLine}` : null,
