@@ -747,6 +747,35 @@ const _speech = (() => {
 // Barge-in: the chat renderer detected the user talking over her → drop the rest of what she was saying.
 try { ipcMain.on('voice:barge', () => { try { _speech.flush(); } catch (e) {} }); } catch {}
 
+// ── THE CAMERA SENSE (the wants project, cut 13; 2026-09-05) — his switch lives in the renderer; main holds
+// the readings. A frame arrives as base64, goes to the resident face sidecar (in memory), becomes a reading in
+// lib/face_sense (never a file), feeds presence (lib/presence_state) and hands the gaze to the companion. The
+// resident sidecar starts on the first frame and stops itself when the frames stop.
+function _broadcastGaze(g) {
+  try { for (const wc of require('electron').webContents.getAllWebContents()) { try { if (!wc.isDestroyed()) wc.send('companion:gaze', g); } catch {} } } catch {}
+}
+// PRESENCE AS A MEASUREMENT (cut 2 piece 1 + W7): every 60 s fuse idle time, the voice guard, the OS remote
+// session, the camera and his word into meta presence.state (his word is added at the chat door at once).
+function _presenceDeps() {
+  return { guardState: () => { try { return _voiceGuard.state(); } catch { return null; } }, lastUserTurnTs: (() => { try { return Number(db.getMeta('user.last_turn_at')) || 0; } catch { return 0; } })() };
+}
+try {
+  ipcMain.handle('face:frame', async (_e, b64) => {
+    try { return await require('./lib/face_sense').onFrame(String(b64 || ''), { deps: { onGaze: _broadcastGaze } }); } catch (e) { return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('face:enroll', async (_e, b64) => {
+    try { return await require('./lib/face_sense').enroll(String(b64 || ''), {}); } catch (e) { return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('camera:state', async (_e, on) => {
+    console.log(`[face] camera ${on ? 'ON (his switch, this session; one frame / 2 s; nothing stored)' : 'OFF'}`);
+    if (!on) { try { require('./lib/face_match').resident().stop(); } catch {} try { require('./lib/face_sense')._reset(); } catch {} }
+    try { require('./lib/presence_state').tick({ deps: _presenceDeps() }); } catch {}
+    return { ok: true, on: !!on };
+  });
+} catch {}
+setInterval(() => { try { require('./lib/presence_state').tick({ deps: _presenceDeps() }); } catch {} }, 60 * 1000).unref?.();
+setTimeout(() => { try { require('./lib/presence_state').tick({ deps: _presenceDeps() }); } catch {} }, 20 * 1000).unref?.();
+
 // Split an ALREADY-COMPLETE text into sentences (mirrors _lastSentenceEnd's boundary rule).
 function _splitSentences(s) {
   const out = []; let start = 0;
@@ -8672,6 +8701,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     const availability = require('./lib/availability');
     availability.clearAway();
+    // HIS WORD ABOUT WHERE HE IS (the wants project, cut 2 piece 1 + W7): "I'm remoting in from X" / "I'm at X,
+    // not at my computer" / "back at my desk" → the location fact + an immediate re-fuse of presence.
+    try { require('./lib/presence_state').recordHisWord(userMessage, { turnId: null, deps: _presenceDeps() }); } catch {}
     const awayReason = availability.detectAway(userMessage);
     if (awayReason) { availability.setAway(awayReason); console.log(`[main] Lucas marked away ("${awayReason}") — unprompted utterances will stay silent`); }
   } catch (e) { console.error('[main] availability update failed:', e.message); }

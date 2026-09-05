@@ -75,4 +75,47 @@ async function confirmAgainst(referenceImage, candidateImages, { threshold = SAM
   return { ok: true, matches };
 }
 
-module.exports = { embedImages, confirmAgainst, cosine, isSameFace, SAME_FACE_THRESHOLD, VENV_PY, RUNNER };
+// ── THE RESIDENT SIDECAR (the camera sense, cut 13; 2026-09-05) ─────────────────────────────────────
+// One `--serve` process: the model loads once; a job is one JSON line in, one JSON line out (NDJSON, resolved
+// by id). It starts on the first job, stops itself after `idleMs` without one (RAM), and respawns on the next.
+// Frames arrive as b64 and never touch disk. Fail-soft: a dead process answers { ok:false }; nothing throws.
+let _resident = null;
+function createResident({ python = VENV_PY, idleMs = 90000, wallMs = 8000, spawnFn = spawn } = {}) {
+  let child = null, buf = '', ready = false, seq = 0, idleTimer = null;
+  const pending = new Map();
+  const { parseNdjson } = require('./tts');
+  function _fail(why) { for (const [, p] of pending) { clearTimeout(p.timer); p.resolve({ ok: false, error: why, results: [] }); } pending.clear(); }
+  function stop() { if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; } const c = child; child = null; ready = false; _fail('stopped'); if (c) { try { c.kill(); } catch {} } }
+  function _touch() { if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(stop, idleMs); if (idleTimer.unref) idleTimer.unref(); }
+  function _start() {
+    child = spawnFn(python, [RUNNER, '--serve'], { cwd: ROOT, env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }, stdio: ['pipe', 'pipe', 'pipe'] });
+    buf = ''; ready = false;
+    child.stdout.on('data', (d) => {
+      buf += d.toString();
+      const { messages, rest } = parseNdjson(buf); buf = rest;
+      for (const m of messages) {
+        if (m && m.ready) { ready = true; continue; }
+        const p = m && pending.get(String(m.id));
+        if (p) { pending.delete(String(m.id)); clearTimeout(p.timer); p.resolve(m); }
+      }
+    });
+    child.stderr.on('data', () => {});
+    child.on('exit', () => { child = null; ready = false; _fail('sidecar exited'); });
+    child.on('error', () => { child = null; ready = false; _fail('sidecar error'); });
+  }
+  function embed(items) {
+    return new Promise((resolve) => {
+      try { if (!child) _start(); } catch (e) { return resolve({ ok: false, error: 'spawn failed: ' + e.message, results: [] }); }
+      _touch();
+      const id = String(++seq);
+      const timer = setTimeout(() => { if (pending.has(id)) { pending.delete(id); resolve({ ok: false, error: 'timeout', results: [] }); } }, wallMs);
+      pending.set(id, { resolve, timer });
+      try { child.stdin.write(JSON.stringify({ id, items: items || [] }) + '\n'); }
+      catch (e) { pending.delete(id); clearTimeout(timer); resolve({ ok: false, error: 'stdin failed: ' + e.message, results: [] }); }
+    });
+  }
+  return { embed, stop, alive: () => !!child, isReady: () => ready };
+}
+function resident() { if (!_resident) _resident = createResident({}); return _resident; }
+
+module.exports = { embedImages, confirmAgainst, cosine, isSameFace, SAME_FACE_THRESHOLD, VENV_PY, RUNNER, createResident, resident };

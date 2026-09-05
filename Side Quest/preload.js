@@ -3,6 +3,11 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('sq', {
   getMeta: (key) => ipcRenderer.invoke('meta:get', key),
   setMeta: (key, value) => ipcRenderer.invoke('meta:set', key, value),
+  // THE CAMERA SENSE (the wants project, cut 13): a small frame → her face pass; his enrollment; his switch; the gaze → the companion
+  faceFrame: (b64) => ipcRenderer.invoke('face:frame', b64),
+  faceEnroll: (b64) => ipcRenderer.invoke('face:enroll', b64),
+  cameraState: (on) => ipcRenderer.invoke('camera:state', !!on),
+  onCompanionGaze: (cb) => ipcRenderer.on('companion:gaze', (_e, g) => cb(g)),
   getRecentHistory: () => ipcRenderer.invoke('history:recent'),
   sendMessage: (text, attachments) => ipcRenderer.invoke('chat:send', text, attachments || []),
   sttTranscribe: (audioBuf, opts) => ipcRenderer.invoke('stt:transcribe', audioBuf, opts || null),   // two-way voice input: audio bytes → { ok, text }; opts.handsFree arms the addressed gate

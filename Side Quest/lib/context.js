@@ -112,6 +112,12 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
   // pathways work (direct counter to capability-denial). Ages out within 12h.
   let selfCheckLine = null;
   try { selfCheckLine = require('./self_check').awarenessLine(); } catch {}
+  // PRESENCE (the wants project, cut 2 piece 1 + W7) + THE CAMERA (cut 13): where he is and how she knows,
+  // and what the camera reads — readings she may answer, never rules. Fail-absent.
+  let presenceLine = null;
+  try { presenceLine = require('./presence_state').awarenessLine(); } catch {}
+  let faceLine = null;
+  try { faceLine = require('./face_sense').awarenessLine(); } catch {}
   // Status-vector line (Loop A, 2026-08-15) — the measured self-read (organs, voice, quota, gate,
   // machine, memory substrate) + what changed since the last beat. Same stored object the full
   // state-door block renders from, so the two can never disagree. Fail-absent until first refresh.
@@ -291,6 +297,8 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
     downtimeLine ? `• ${downtimeLine}` : null,
     reawakenLine ? `• ${reawakenLine}` : null,
     selfCheckLine ? `• ${selfCheckLine}` : null,
+    presenceLine ? `• ${presenceLine}` : null,
+    faceLine ? `• ${faceLine}` : null,
     statusLine ? `• ${statusLine}` : null,
     gmeetLine ? `• ${gmeetLine}` : null,
     mediaLine ? `• ${mediaLine}` : null,

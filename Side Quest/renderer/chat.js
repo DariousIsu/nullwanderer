@@ -1091,6 +1091,61 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
   })();
 }
 
+// ── THE CAMERA SENSE (the wants project, cut 13; 2026-09-05) ─────────────────────────────────────
+// His lever: 📷 turns the camera ON for THIS session (off at every boot — never persisted; the design's
+// per-session switch), with an on-air indicator while it runs. A hidden <video> + <canvas> sample ONE small
+// frame (320×240 JPEG) every 2 s and hand it to main over IPC; the frame lives in memory only — no file, no
+// storage, no store (a pin greps this section). 👤 "that's me" sends one frame as his enrollment (a vector
+// lands in meta; no image is kept). The meeting rails that turn his camera OFF in Teams/Meet are untouched.
+(() => {
+  const cameraBtn = document.getElementById('camera-btn');
+  const faceEnrollBtn = document.getElementById('face-enroll-btn');
+  if (!cameraBtn) return;
+  if (!(window.sq && window.sq.faceFrame)) { cameraBtn.style.display = 'none'; return; }   // preload too old → hide, never dangle
+  let cameraOn = false, camStream = null, camTimer = null, video = null, cv = null;
+  const CAM_LABEL_OFF = '📷 camera', CAM_LABEL_ON = '🔴 camera on';
+  const onair = document.createElement('span');
+  onair.id = 'camera-onair'; onair.textContent = '● on air';
+  onair.title = 'The camera is sampling one frame every 2 seconds for her face sense (nothing is stored)';
+  onair.style.cssText = 'display:none;color:#e5484d;font-size:12px;margin-left:6px;';
+  cameraBtn.insertAdjacentElement('afterend', onair);
+  function grab() {
+    if (!cameraOn || !video || video.readyState < 2) return null;
+    cv = cv || document.createElement('canvas'); cv.width = 320; cv.height = 240;
+    cv.getContext('2d').drawImage(video, 0, 0, 320, 240);
+    return cv.toDataURL('image/jpeg', 0.6);   // in memory; handed over IPC, then dropped
+  }
+  async function cameraStart() {
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 320 }, height: { ideal: 240 }, facingMode: 'user' }, audio: false });
+    } catch (e) { renderEphemeral(`— camera: ${(e && e.message) || 'not available'} —`); return; }
+    video = video || document.createElement('video'); video.muted = true; video.playsInline = true; video.srcObject = camStream;
+    try { await video.play(); } catch {}
+    cameraOn = true; cameraBtn.textContent = CAM_LABEL_ON; cameraBtn.classList.add('recording'); onair.style.display = 'inline';
+    if (faceEnrollBtn) faceEnrollBtn.style.display = '';
+    try { await window.sq.cameraState(true); } catch {}
+    camTimer = setInterval(async () => { const f = grab(); if (!f) return; try { await window.sq.faceFrame(f); } catch {} }, 2000);
+  }
+  function cameraStop() {
+    cameraOn = false; if (camTimer) { clearInterval(camTimer); camTimer = null; }
+    try { if (camStream) camStream.getTracks().forEach((t) => t.stop()); } catch {}
+    camStream = null; if (video) { try { video.srcObject = null; } catch {} }
+    cameraBtn.textContent = CAM_LABEL_OFF; cameraBtn.classList.remove('recording'); onair.style.display = 'none';
+    if (faceEnrollBtn) faceEnrollBtn.style.display = 'none';
+    try { window.sq.cameraState(false); } catch {}
+  }
+  cameraBtn.textContent = CAM_LABEL_OFF;
+  cameraBtn.addEventListener('click', () => { if (cameraOn) cameraStop(); else cameraStart(); });
+  if (faceEnrollBtn) faceEnrollBtn.addEventListener('click', async () => {
+    const f = grab(); if (!f) { renderEphemeral('— turn the camera on first —'); return; }
+    try {
+      const r = await window.sq.faceEnroll(f);
+      renderEphemeral(r && r.ok ? '— got you. I know your face now (a vector, no picture kept). —' : `— couldn't enroll: ${(r && r.error) || 'no face found'} —`);
+    } catch (e) { renderEphemeral(`— couldn't enroll: ${e.message} —`); }
+  });
+  window.addEventListener('beforeunload', cameraStop);
+})();
+
 function showNameCapture() {
   const overlay = document.createElement('div');
   overlay.id = 'name-overlay';

@@ -64,6 +64,28 @@
     });
   } catch { /* no speech bridge → she stays silent, still present */ }
 
+  // THE GAZE (the wants project, cut 13): her eyes follow the face the camera sees. main hands a target {x,y}
+  // in −1..1 (x right, y down, in the camera frame); three-vrm's look-at takes a world position, built in
+  // front of her head from its own forward. meta avatar.gaze_flip = '1' mirrors x if the model faces the other way.
+  try {
+    let gazeFlip = 1; window.sq.getMeta('avatar.gaze_flip').then((v) => { gazeFlip = v === '1' ? -1 : 1; }).catch(() => {});
+    let gazeLogged = false;
+    window.sq.onCompanionGaze((g) => {
+      try {
+        const vrm = face._state && face._state.vrm; if (!vrm || !vrm.lookAt || !g) return;
+        const head = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode && vrm.humanoid.getNormalizedBoneNode('head');
+        if (!head) return;
+        const V3 = head.position.constructor;
+        const p = head.getWorldPosition(new V3());
+        const fwd = head.getWorldDirection(new V3());          // the face's forward, toward the viewer
+        const right = new V3(fwd.z, 0, -fwd.x);                // the head's right on the ground plane
+        const target = p.clone().add(fwd.multiplyScalar(1.4)).add(right.multiplyScalar(-g.x * 0.6 * gazeFlip)); target.y -= g.y * 0.35;
+        vrm.lookAt.lookAt(target);
+        if (!gazeLogged) { gazeLogged = true; console.log('[gaze] following the camera face', g); }
+      } catch {}
+    });
+  } catch {}
+
   document.getElementById('hide').addEventListener('click', () => { try { window.sq.companionHide(); } catch { window.close(); } });
 </script>
 </body>
