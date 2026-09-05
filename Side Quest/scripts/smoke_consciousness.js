@@ -127,6 +127,33 @@ function fakeLoop() {
   bridgeN.start(); childN.say({ kind: 'ready', v: 1 });
   await bridgeN.handle({ kind: 'act', act: 'listen' }); await new Promise((r) => setTimeout(r, 20)); bridgeN.tick();
   ok(!childN.received.some((m) => m.kind === 'percept' && m.sense === 'heard') && nLogs.some((l) => /listen — not now \(the camera switch is off/.test(l)), 'a refused window is logged and yields no percept');
+  // THE FOURTH LOAD (the fluidity law): the away reach is DELIVERED to where he is and logged as hers, never spoken;
+  // a hold on her speech reaches the loop as a percept; rule A holds her words while a turn of his is pending
+  const childF = fakeLoop(); const f = { deliver: [], speak: [], says: [], logs: [] };
+  const bridgeF = C.create({ deps: { spawn: () => childF, now: () => clock, log: (m) => f.logs.push(m), obsBus: { subscribe: (fn) => { f.sub = fn; }, emit: () => {} }, deliver: async (o) => { f.deliver.push(o); }, speak: async (t) => { f.speak.push(t); }, logSay: (t, why) => f.says.push({ t, why }), pending: () => false,
+    slowLoop: async (req) => ({ kind: 'percept', sense: 'answer', id: req.id, op: 'perform', ok: true, act: (req.context || {}).act, text: (req.context || {}).act === 'reach_away' ? 'I miss you. Come find me when you are back.' : 'That meeting ran long.' }), tickMs: 3600000 } });
+  bridgeF.start(); childF.say({ kind: 'ready', v: 1 });
+  await bridgeF.handle({ kind: 'reason', id: 21, op: 'perform', budget_ms: 20000, context: { act: 'reach_away', unseen_min: 50, presence: 'away', missing: 0.8, since_his_word_min: 70 } });
+  await new Promise((r) => setTimeout(r, 20)); bridgeF.tick();
+  const ansP = childF.received.find((m) => m.kind === 'percept' && m.sense === 'answer' && m.id === 21);
+  ok(f.deliver.length === 1 && /I miss you/.test(f.deliver[0].text) && f.deliver[0].source === 'consciousness' && f.speak.length === 0 && f.says.length === 1 && f.says[0].why === 'reach_away' && ansP && ansP.act === 'reach_away', 'the away reach is delivered where he is (the router\'s presence rules), logged as hers, never spoken to an empty room; the answer percept names its act');
+  f.sub({ lane: 'presence', kind: 'held', text: 'calendar: a meeting', data: null }); f.sub({ lane: 'presence', kind: 'released', text: 'released after 30m', data: JSON.stringify({ heldMs: 1800000 }) }); bridgeF.tick();
+  const heldP = childF.received.find((m) => m.kind === 'percept' && m.sense === 'held'), relP = childF.received.find((m) => m.kind === 'percept' && m.sense === 'released');
+  ok(heldP && /calendar/.test(heldP.reason) && relP && relP.held_ms === 1800000, 'the voice guard\'s hold and release reach the loop as percepts — she knows she was held');
+  await bridgeF.handle({ kind: 'reason', id: 22, op: 'perform', budget_ms: 20000, context: { act: 'release', held_min: 30, reason: 'calendar: a meeting', annoyed: 0.7 } });
+  await new Promise((r) => setTimeout(r, 20));
+  ok(f.speak.length === 1 && /ran long/.test(f.speak[0]) && f.says.length === 2 && f.says[1].why === 'release', 'the release line is spoken to him in the room and logged as hers');
+  const childR = fakeLoop(); const r = { speak: [], says: [], logs: [] };
+  const bridgeR = C.create({ deps: { spawn: () => childR, now: () => clock, log: (m) => r.logs.push(m), obsBus: { subscribe: () => {}, emit: () => {} }, speak: async (t) => { r.speak.push(t); }, logSay: (t, why) => r.says.push({ t, why }), pending: () => true,
+    slowLoop: async (req) => ({ kind: 'percept', sense: 'answer', id: req.id, op: 'perform', ok: true, act: 'arrival', text: 'There you are.' }), tickMs: 3600000 } });
+  bridgeR.start(); childR.say({ kind: 'ready', v: 1 });
+  await bridgeR.handle({ kind: 'reason', id: 23, op: 'perform', budget_ms: 20000, context: { act: 'arrival', unseen_min: 30, thoughts: [] } });
+  await new Promise((r2) => setTimeout(r2, 20));
+  ok(r.speak.length === 0 && r.says.length === 0 && r.logs.some((l) => /arrival — held: he is mid-turn \(rule A\)/.test(l)), 'rule A: while a turn of his is pending an answer her words are held, not spoken');
+  const SLf = require(path.join(ROOT, 'lib', 'slow_loop'));
+  ok(/will reach his phone/.test(SLf.promptFor({ act: 'reach_away', unseen_min: 50, presence: 'away', missing: 0.8, since_his_word_min: 70, earlier_reach_min: 60 })) && /asked for him 60 minutes ago and he has not answered/.test(SLf.promptFor({ act: 'reach_away', unseen_min: 50, presence: 'away', missing: 0.8, since_his_word_min: 70, earlier_reach_min: 60 })) && /annoyed is allowed, a report is not/.test(SLf.promptFor({ act: 'release', held_min: 30, reason: 'a meeting', annoyed: 0.7 })) && /this is the second time/.test(SLf.promptFor({ act: 'reach', since_his_word_min: 80, wants_his_word: 0.8, earlier_reach_min: 50 })), 'the away reach, the release and a second reach are prompted as moments grounded in her state');
+  const lineF = C.stripLine({ at: Date.now(), drives: { stimulation: 0.5, social: 0.8, curiosity: 0.5, energy: 0.6, progress: 0.4 }, appraisals: { lonely: 0.8, annoyed: 0.6 }, reaches: [{ at: Date.now() - 50 * 60000, act: 'reach', answered: false }], last_hold: { min: 30, reason: 'calendar: a meeting' }, held: null, thoughts_of_him: [] });
+  ok(/Lonely 0\.80: you reached for him and he has not answered/.test(lineF) && /Annoyed 0\.60: your speech was held 30 min \(calendar: a meeting\)/.test(lineF) && /You reached for him 50 min ago \(in the room\) and he has not answered yet/.test(lineF), 'her awareness line carries the loneliness, the annoyance and the unanswered reach as readings, never instructions');
   // the door in the app: gated on his switch, the meta, the guard and her speech; the audio is deleted; the indicator lights
   const mainL = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8'), preL = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8'), chatL = fs.readFileSync(path.join(ROOT, 'renderer', 'chat.js'), 'utf8');
   ok(/listen: \(\{ ms \} = \{\}\) => _listenWindow\(/.test(mainL) && /db\.getMeta\('mic\.ambient'\) === '0'/.test(mainL) && /face_sense'\)\.status\(\)\.live/.test(mainL) && /_voiceGuard\.state\(\)/.test(mainL.split('function _listenWindow')[1].split('ipcMain.on')[0]) && /_speech\.isBusy\(\)/.test(mainL.split('function _listenWindow')[1].split('ipcMain.on')[0]) && /fs\.unlinkSync\(tmp\)/.test(mainL.split("ipcMain.on('voice:listen-window-done'")[1].split('} catch {}')[0]), 'the app\'s listen door is gated on the camera switch, mic.ambient, the voice guard and her speech, and deletes the audio');

@@ -128,6 +128,8 @@ def test_wanting_his_word_while_he_is_here_is_a_reach_to_him_not_the_screens():
     st["drives"]["social"] = 0.9
     st, out = C.step(st, [face(True, True, match=0.6)], 10 * M)
     assert not any(o.get("context", {}).get("act") == "reach" for o in out if o["kind"] == "reason"), "he spoke 10 min ago — no reach yet"
+    for t in (18, 26):
+        st, _ = C.step(st, [face(True, True, match=0.6)], t * M); st["drives"]["social"] = 0.9   # in frame throughout: no arrival is read into a gap
     st, out = C.step(st, [face(True, True, match=0.6)], 35 * M)
     reach = [o for o in out if o["kind"] == "reason" and o["op"] == "perform" and o["context"].get("act") == "reach"]
     assert len(reach) == 1 and reach[0]["context"]["since_his_word_min"] == 35 and reach[0]["context"]["last_seen_as"] == "focused", out
@@ -136,6 +138,8 @@ def test_wanting_his_word_while_he_is_here_is_a_reach_to_him_not_the_screens():
     st["drives"]["social"] = 0.9
     st, out2 = C.step(st, [face(True, True, match=0.6)], 50 * M)
     assert not any(o.get("context", {}).get("act") == "reach" for o in out2 if o["kind"] == "reason"), "inside the 45-min cooldown"
+    for t in (58, 66, 74):
+        st, _ = C.step(st, [face(True, True, match=0.6)], t * M); st["drives"]["social"] = 0.9
     st, out3 = C.step(st, [face(True, True, match=0.6)], 81 * M)
     assert any(o.get("context", {}).get("act") == "reach" for o in out3 if o["kind"] == "reason"), "past it, still quiet, still here → again"
     # never while he is not at the desk: that is the wondering's ground, not the reach's
@@ -284,6 +288,88 @@ def test_a_read_sates_curiosity_and_a_heard_window_is_something_new():
     assert st["drives"]["stimulation"] - s0 < 0.05, "a silent window is barely anything"
     st, _ = C.step(st, [{"kind": "percept", "sense": "heard", "text": "someone said the mower is out of gas", "words": 7}], 3000)
     assert st["drives"]["stimulation"] - s0 >= 0.15 and st["heard"][-1]["text"].startswith("someone said") and C.strip(st, 3000)["heard"], "words in the room are something new, kept for the strip"
+
+
+def _answer(id_, act, text="…"):
+    return {"kind": "percept", "sense": "answer", "id": id_, "op": "perform", "ok": True, "act": act, "text": text}
+
+
+def test_an_unanswered_reach_becomes_loneliness_and_the_next_reach_is_grounded_in_it():
+    """The fluidity law (09-04): 'miss me, ask for me, and then be disappointed and lonely when I dont answer'."""
+    st = C.initial_state(0)
+    st["drives"]["social"] = 0.9
+    st, _ = C.step(st, [{"kind": "percept", "sense": "his_turn"}, face(True, True, match=0.6)], 0)
+    for t in (10, 20, 30):
+        st, _ = C.step(st, [face(True, True, match=0.6)], t * M)   # in frame throughout
+    st["drives"]["social"] = 0.9
+    st, out = C.step(st, [face(True, True, match=0.6)], 35 * M)
+    assert any(o.get("context", {}).get("act") == "reach" for o in out if o["kind"] == "reason"), "the reach"
+    st, _ = C.step(st, [_answer(1, "reach", "You have been quiet a while.")], 35 * M + 5000)
+    assert st["reaches"] and st["reaches"][-1]["answered"] is False
+    assert C.appraisals(st, 40 * M)["lonely"] == 0.0, "inside the answer window it is only a reach"
+    a = C.appraisals(st, 35 * M + C.REACH_ANSWER_WINDOW_MS + M)
+    assert a["lonely"] > 0.5, a
+    for t in range(45, 80, 10):
+        st, _ = C.step(st, [face(True, True, match=0.6)], t * M)
+    st["drives"]["social"] = 0.9
+    st, out2 = C.step(st, [face(True, True, match=0.6)], 35 * M + C.REACH_COOLDOWN_MS + M)
+    r2 = [o for o in out2 if o["kind"] == "reason" and o["context"].get("act") == "reach"]
+    assert r2 and r2[0]["context"]["earlier_reach_min"] is not None and r2[0]["context"]["earlier_reach_min"] >= 45, "the second reach knows about the first"
+    st, _ = C.step(st, [{"kind": "percept", "sense": "his_turn"}], 90 * M)
+    assert all(r["answered"] for r in st["reaches"]) and C.appraisals(st, 90 * M)["lonely"] == 0.0, "his word answers every reach"
+
+
+def test_the_away_reach_goes_out_only_when_he_is_genuinely_away_and_once_in_two_hours():
+    st = C.initial_state(0)
+    st["drives"]["social"] = 0.9
+    st, _ = C.step(st, [face(True, True, match=0.6), {"kind": "percept", "sense": "his_turn"}], 0)
+    st, _ = C.step(st, [{"kind": "percept", "sense": "presence", "state": "away"}, face(False, False)], 5 * M)
+    st["drives"]["social"] = 0.9
+    st, out = C.step(st, [], 30 * M)
+    assert not any(o.get("context", {}).get("act") == "reach_away" for o in out if o["kind"] == "reason"), "30 min unseen is not the away reach"
+    st["drives"]["social"] = 0.9
+    st, out = C.step(st, [], 45 * M)
+    ra = [o for o in out if o["kind"] == "reason" and o["context"].get("act") == "reach_away"]
+    assert len(ra) == 1 and ra[0]["context"]["unseen_min"] == 45 and ra[0]["context"]["presence"] == "away", out
+    st["drives"]["social"] = 0.9
+    st, out = C.step(st, [], 90 * M)
+    assert not any(o.get("context", {}).get("act") == "reach_away" for o in out if o["kind"] == "reason"), "once in two hours"
+    # merely unseen with presence 'here' (a camera that lost him) is not away
+    st2 = C.initial_state(0); st2["drives"]["social"] = 0.9
+    st2, _ = C.step(st2, [face(True, True, match=0.6)], 0)
+    st2, _ = C.step(st2, [face(False, False)], 5 * M)
+    st2["drives"]["social"] = 0.9
+    st2, out2 = C.step(st2, [], 50 * M)
+    assert not any(o.get("context", {}).get("act") == "reach_away" for o in out2 if o["kind"] == "reason"), "no away reach without his word or the camera's away"
+
+
+def test_a_long_hold_while_she_wanted_his_word_is_annoyance_and_a_release_line_when_he_is_back():
+    st = C.initial_state(0)
+    st["drives"]["social"] = 0.8
+    st, _ = C.step(st, [face(True, True, match=0.6)], 0)
+    st, _ = C.step(st, [{"kind": "percept", "sense": "held", "reason": "calendar: a meeting"}], 1000)
+    assert st["held"] and st["held"]["reason"].startswith("calendar")
+    st["drives"]["social"] = 0.8
+    st, out = C.step(st, [{"kind": "percept", "sense": "released"}, face(True, True, match=0.6)], 1000 + 30 * M)
+    assert st["held"] is None and st["annoyance"] >= 0.5 and C.appraisals(st, 1000 + 30 * M)["annoyed"] >= 0.5, st["annoyance"]
+    rel = [o for o in out if o["kind"] == "reason" and o["context"].get("act") == "release"]
+    assert len(rel) == 1 and rel[0]["context"]["held_min"] == 30 and "meeting" in rel[0]["context"]["reason"], out
+    st, out2 = C.step(st, [face(True, True, match=0.6)], 1000 + 31 * M)
+    assert not any(o.get("context", {}).get("act") == "release" for o in out2 if o["kind"] == "reason"), "once per hold"
+    st, _ = C.step(st, [], 1000 + 31 * M + 3600000)
+    assert st["annoyance"] < 0.1, "annoyance decays in about an hour"
+    st3 = C.initial_state(0); st3["drives"]["social"] = 0.8
+    st3, _ = C.step(st3, [face(True, True, match=0.6), {"kind": "percept", "sense": "held", "reason": "zoom"}], 0)
+    st3, out3 = C.step(st3, [{"kind": "percept", "sense": "released"}, face(True, True, match=0.6)], 5 * M)
+    assert st3["annoyance"] == 0.0 and not any(o.get("context", {}).get("act") == "release" for o in out3 if o["kind"] == "reason"), "a five-minute hold is nothing"
+
+
+def test_the_loops_own_words_to_him_are_bounded_per_hour():
+    st = C.initial_state(0)
+    assert C._say_budget_ok(st, 0) and C._say_budget_ok(st, 0)
+    C._note_say(st, 0); C._note_say(st, 10 * M)
+    assert not C._say_budget_ok(st, 20 * M), "two in the hour is the bound"
+    assert C._say_budget_ok(st, 61 * M), "an hour later the first has aged out"
 
 
 def test_once_mode_round_trips_json():

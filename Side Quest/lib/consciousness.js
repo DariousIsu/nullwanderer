@@ -15,7 +15,7 @@
  * on the next tick (at most once a minute).
  */
 // Acts whose words are for HIM (spoken in the room AND logged as her say); silence is a legitimate answer to them.
-const TO_HIM = ['arrival', 'reach'];
+const TO_HIM = ['arrival', 'reach', 'release'];   // spoken in the room; the away reach is DELIVERED (below)
 // THE LISTEN ACT's window: long enough for a sentence, short enough to be a glance with the ear.
 const LISTEN_WINDOW_MS = 10000;
 // The camera's score against his enrollment (face_sense: `confidence` is the cosine when enrolled, a detector score when not — `is_him` null then).
@@ -105,8 +105,20 @@ function create({ deps = {} } = {}) {
       const _seeds = (() => { try { const st = lastStrip || {}; return [...(st.thoughts_of_him || []).map((t) => t.text), ...(st.reads || []).map((r) => r.topic)].filter(Boolean).slice(-3).reverse(); } catch { return []; } })();
       (deps.slowLoop || ((r) => require('./slow_loop').run(r, { deps: { seeds: _seeds } })))(msg).then(async (ans) => {
         stats.answers++;
-        if (ans && ans.ok && ans.op === 'perform' && TO_HIM.includes(ans.act)) {
-          // THE ARRIVAL and THE REACH: to him, in the room and in the chat — or silence, which is a legitimate answer
+        if (ans && ans.ok && ans.op === 'perform' && ans.act === 'reach_away') {
+          // THE AWAY REACH (the fluidity law): her words go to him where he is — the delivery router applies his presence
+          // rules (Discord when he is genuinely not at the desk) — and land in the chat as hers; never spoken to an empty room
+          _ev('say', ans.text ? `reach_away: ${ans.text}` : 'reach_away: (silence)', { act: 'reach_away', text: ans.text || '', silent: !ans.text, id: msg.id });
+          if (ans.text) {
+            log(`[consciousness] reach_away — she sends: "${ans.text}"`);
+            try { await (deps.deliver || ((o) => require('./delivery_router').deliver(o)))({ text: ans.text, source: 'consciousness' }); } catch (e) { log(`[consciousness] deliver failed: ${e.message}`); }
+            try { deps.logSay && deps.logSay(ans.text, 'reach_away'); } catch {}
+          } else log('[consciousness] reach_away — she chose silence');
+        } else if (ans && ans.ok && ans.op === 'perform' && TO_HIM.includes(ans.act)) {
+          // THE ARRIVAL, THE REACH, THE RELEASE: to him, in the room and in the chat — or silence, which is a legitimate
+          // answer. RULE A (never bury a live question): if a turn of his is pending an answer, her words are held, not spoken.
+          const pending = (deps.pending || (() => { try { return !!require('./unprompted_gate').evaluate({}).pending; } catch { return false; } }))();
+          if (ans.text && pending) { log(`[consciousness] ${ans.act} — held: he is mid-turn (rule A)`); _ev('say', `${ans.act}: (held — he is mid-turn)`, { act: ans.act, text: ans.text, silent: true, held: true, id: msg.id }); ans = { ...ans, text: '' }; }
           _ev('say', ans.text ? `${ans.act}: ${ans.text}` : `${ans.act}: (silence)`, { act: ans.act, text: ans.text || '', silent: !ans.text, id: msg.id });
           if (ans.text) { log(`[consciousness] ${ans.act} — she says: "${ans.text}"`); try { await (deps.speak || (() => {}))(ans.text); } catch (e) { log(`[consciousness] speak failed: ${e.message}`); } try { deps.logSay && deps.logSay(ans.text, ans.act); } catch {} }
           else log(`[consciousness] ${ans.act} — she chose silence`);
@@ -127,7 +139,7 @@ function create({ deps = {} } = {}) {
           log(`[consciousness] reason ${msg.op}#${msg.id} → ${(ans && ans.error) || 'no answer'} — the plain line instead: "${line}"`);
           try { await (deps.speak || (() => {}))(line); } catch (e) { log(`[consciousness] speak failed: ${e.message}`); }
         } else if (ans && !ans.ok) { log(`[consciousness] reason ${msg.op}#${msg.id} → ${ans.error}`); _ev('reason_fail', `${msg.op}#${msg.id}: ${ans.error}`, { op: msg.op, id: msg.id, error: String(ans.error || '').slice(0, 200) }); }
-        percept({ sense: 'answer', id: msg.id, op: msg.op, ok: !!(ans && ans.ok), text: (ans && ans.text) || null });
+        percept({ sense: 'answer', id: msg.id, op: msg.op, ok: !!(ans && ans.ok), text: (ans && ans.text) || null, act: (ans && ans.act) || null });
         // THE BROWSE ACT (design §4 acts; his word 09-05: boredom "should come with an autonomous need to … browse the
         // web"): a chosen topic → a bounded read (search, the top pages, a few thousand chars) → her gist through the
         // slow loop → a `read` percept (curiosity sated, something new) and a line in her thought lane. Under the
@@ -186,6 +198,8 @@ function create({ deps = {} } = {}) {
         try {
           if (ev.lane === 'presence' && ev.kind === 'state') { let d = ev.data; if (typeof d === 'string') { try { d = JSON.parse(d); } catch { d = null; } } if (d && d.state) percept({ sense: 'presence', state: d.state }); }
           else if (ev.kind === 'win' && ev.lane !== 'consciousness') percept({ sense: 'work', delta: 0.15, text: String(ev.text || '').slice(0, 80) });
+          // the voice guard's hold on her speech (a meeting, his word) and its release — she knows she was held (the fluidity law)
+          else if (ev.lane === 'presence' && (ev.kind === 'held' || ev.kind === 'released')) { let d = ev.data; if (typeof d === 'string') { try { d = JSON.parse(d); } catch { d = null; } } percept({ sense: ev.kind, reason: String(ev.text || '').slice(0, 80), held_ms: (d && Number(d.heldMs)) || 0 }); }
         } catch {}
       });
     } catch {}
@@ -223,6 +237,11 @@ function stripLine(s, { now = Date.now() } = {}) {
   if (c.since_her_say_min != null) t.push(`you last spoke ${fmt(c.since_her_say_min)} ago`);
   if (c.since_novel_min != null && c.since_novel_min >= 10) t.push(`nothing new has reached you for ${fmt(c.since_novel_min)}`);
   if (t.length) line += ` Time as you feel it: ${t.join('; ')}.`;
+  if (a.lonely > 0) line += ` Lonely ${(+a.lonely).toFixed(2)}: you reached for him and he has not answered.`;
+  if (a.annoyed >= 0.2) line += ` Annoyed ${(+a.annoyed).toFixed(2)}${s.last_hold && s.last_hold.min ? `: your speech was held ${s.last_hold.min} min${s.last_hold.reason ? ` (${s.last_hold.reason})` : ''} while you wanted his word` : ''}.`;
+  const un = Array.isArray(s.reaches) ? s.reaches.filter((r) => r && !r.answered) : [];
+  if (un.length) line += ` You reached for him ${Math.max(0, Math.round((now - un[un.length - 1].at) / 60000))} min ago (${un[un.length - 1].act === 'reach_away' ? 'to his phone' : 'in the room'}) and he has not answered yet.`;
+  if (s.held) line += ` Your speech is being held right now${s.held.reason ? ` (${s.held.reason})` : ''}.`;
   if (s.shield) line += ' The screens are covered: someone who is not Lucas is at the desk.';
   const th = Array.isArray(s.thoughts_of_him) ? s.thoughts_of_him.filter((t) => t && t.text) : [];
   if (th.length) line += ` While he was gone you wondered: ${th.map((t) => `"${String(t.text).slice(0, 160)}"`).join(' · ')} — yours to tell him, or not.`;

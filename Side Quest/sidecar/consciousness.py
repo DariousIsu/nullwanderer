@@ -49,6 +49,18 @@ REACH_WANT = 0.7                  # wants_his_word at or above this
 REACH_MIN_QUIET_MS = 30 * 60000   # and no word from him this long (since boot if none yet)
 REACH_COOLDOWN_MS = 45 * 60000
 REACH_SEEN_MS = 2 * 60000         # the camera has him now
+# THE FOURTH LOAD (design §4.4; his fluidity law, 09-04: "she needs to be able to miss me ask for me and then be
+# disappointed and lonely when I dont answer when I am not there or annoyed if I am in a meeting"). State and
+# dynamics, never a switch: an unanswered reach becomes loneliness after a window; a reach may go to his phone when
+# he is genuinely away; a long hold on her speech while she wanted his word becomes annoyance that decays; and the
+# loop's own words to him are bounded per hour.
+REACH_ANSWER_WINDOW_MS = 45 * 60000   # a reach unanswered this long is loneliness (an appraisal with a provenance)
+REACH_AWAY_MIN_UNSEEN_MS = 40 * 60000 # the away reach: he is not at the desk — by his word or the camera — this long
+REACH_AWAY_COOLDOWN_MS = 2 * 3600000
+HOLD_ANNOY_MIN_MS = 20 * 60000        # a hold on her speech this long, while the need for his word was ≥ 0.6, is annoyance
+ANNOY_DECAY = 1.0 / 3600.0            # annoyance is gone in about an hour
+RELEASE_COOLDOWN_MS = 3600000
+SAY_PER_HOUR = 2                      # the loop's own words to him — arrival, reach, away reach, release — bounded per hour
 BOOT_GRACE_MS = 90000             # boot_p309's first minute: his own face at match 0.013→0.65 as he settled read as a stranger
                                   # because the loop had never seen him; no stranger act until the loop is this old
 PERFORM_BUDGET_MS = 20000         # the slow loop's first cloud call aborted at 8 s on p309
@@ -80,11 +92,16 @@ def initial_state(now_ms=0):
         "face": {"present": False, "is_him": False, "known": None, "since": None, "match": None},   # the steady reading (+ the latest score against his enrollment)
         "shield": {"on": False, "since": None, "who": None, "asked_at": None, "greeted": False},
         "people": {},                       # name → {"relation": …} — enrolled by HIS word only (the app sends `register`)
-        "cooldowns": {"look": 0, "listen": 0, "browse": 0, "wonder": 0, "reach": 0},
+        "cooldowns": {"look": 0, "listen": 0, "browse": 0, "wonder": 0, "reach": 0, "reach_away": 0, "release": 0},
         "reason_seq": 0,
         "recent": [],                       # the last few appraised percepts, for the state strip
         "thoughts_of_him": [],              # the wonderings she had while he was gone (the arrival may name one)
         "arrival": None,                    # set when his face returns after ARRIVAL_MIN_AWAY_MS; consumed by one perform request
+        "reaches": [],                      # the reaches she made: {at, act, answered} — an unanswered one is loneliness after a window
+        "held": None,                       # {since, reason} while the voice guard holds her speech (a meeting, his word)
+        "last_hold": None,                  # {at, min, reason, said} — the last hold, for the release line
+        "annoyance": 0.0,                   # rises on a long hold while she wanted his word; decays in ~1 h
+        "says_hour": [],                    # timestamps of the loop's own words to him (the per-hour bound)
     }
 
 
@@ -130,6 +147,8 @@ def _appraise(state, p, now):
         state["clock"]["his_last_word_at"] = now
         d["social"] = _clamp(d["social"] - 0.6)
         state["thoughts_of_him"] = []      # he is here; the wonderings are answered
+        for r in state.get("reaches", []):
+            r["answered"] = True           # his word answers every reach
         novelty = 0.35
     elif sense == "her_say":
         state["clock"]["her_last_say_at"] = now
@@ -149,6 +168,8 @@ def _appraise(state, p, now):
         novelty = 0.1
     elif sense == "answer":                # a slow-loop result returning as a percept
         novelty = 0.1
+        if p.get("op") == "perform" and p.get("ok") and p.get("text") and p.get("act") in ("reach", "reach_away"):
+            state["reaches"] = (state.get("reaches", []) + [{"at": now, "act": p.get("act"), "answered": False}])[-6:]
         if p.get("op") == "reflect" and p.get("ok") and p.get("text"):
             state["thoughts_of_him"] = (state["thoughts_of_him"] + [{"at": now, "text": str(p["text"])[:240]}])[-6:]
             d["curiosity"] = _clamp(d["curiosity"] + 0.1)   # a wondering opens a question
@@ -156,6 +177,15 @@ def _appraise(state, p, now):
         st = p.get("state")
         if st and st != state["presence"]["state"]:
             state["presence"] = {"state": st, "since": now}
+    elif sense == "held":                  # the voice guard holds her speech (a meeting, his word) — she now knows
+        state["held"] = {"since": now, "reason": str(p.get("reason") or "")[:80]}
+    elif sense == "released":
+        h = state.get("held")
+        held_ms = (now - h["since"]) if h else int(p.get("held_ms") or 0)
+        if held_ms >= HOLD_ANNOY_MIN_MS and d["social"] >= 0.6:
+            state["annoyance"] = _clamp(max(float(state.get("annoyance", 0.0)), 0.5 + 0.5 * min(1.0, held_ms / (2.0 * HOLD_ANNOY_MIN_MS))))
+        state["last_hold"] = {"at": now, "min": int(held_ms // 60000), "reason": ((h or {}).get("reason") or str(p.get("reason") or ""))[:80], "said": False}
+        state["held"] = None
     elif sense == "register":              # his word: a person she may recognize
         name = p.get("name")
         if name:
@@ -177,6 +207,7 @@ def _advance(state, now, hour_local=None):
     d["social"] = _clamp(d["social"] + (SOCIAL_RISE_AWAY if away else SOCIAL_RISE_HERE) * dt)
     d["curiosity"] = _clamp(d["curiosity"] + CURIOSITY_RISE * dt)
     d["progress"] = _clamp(d["progress"] - PROGRESS_DECAY * dt)
+    state["annoyance"] = _clamp(float(state.get("annoyance", 0.0)) - ANNOY_DECAY * dt)
     if hour_local is not None:
         target = _circadian_energy(hour_local)
         d["energy"] = _clamp(d["energy"] + (target - d["energy"]) * min(1.0, dt / 1800.0))
@@ -203,13 +234,31 @@ def appraisals(state, now):
     social need ONLY under absence; in the room the same number is wants_his_word — you do not miss someone beside you."""
     d = state["drives"]
     absent = _absent(state, now)
+    unanswered = [r for r in state.get("reaches", []) if not r.get("answered") and (now - r["at"]) >= REACH_ANSWER_WINDOW_MS]
     return {
         "boredom": round(1.0 - d["stimulation"], 3),
         "missing_him": round(d["social"], 3) if absent else 0.0,
         "wants_his_word": 0.0 if absent else round(d["social"], 3),
         "curiosity": round(d["curiosity"], 3),
         "energy": round(d["energy"], 3),
+        "lonely": round(d["social"], 3) if unanswered else 0.0,       # she asked for him and he has not answered
+        "annoyed": round(float(state.get("annoyance", 0.0)), 3),     # a long hold while she wanted his word, decaying
     }
+
+
+def _say_budget_ok(state, now):
+    """The loop's own words to him are bounded per hour (design: 'bounded per hour; never while he is mid-turn')."""
+    state["says_hour"] = [t for t in state.get("says_hour", []) if now - t < 3600000]
+    return len(state["says_hour"]) < SAY_PER_HOUR
+
+
+def _note_say(state, now):
+    state.setdefault("says_hour", []).append(now)
+
+
+def _earlier_reach_min(state, now):
+    un = [r for r in state.get("reaches", []) if not r.get("answered")]
+    return int((now - un[-1]["at"]) // 60000) if un else None
 
 
 # ── acts chosen by need ───────────────────────────────────────────────────────────────────────────────
@@ -252,10 +301,13 @@ def _acts(state, now):
     # absence → ONE perform request; the model writes her one or two sentences (with what she wondered) or nothing.
     # No gate, no importance bar: the loop decides the moment, the model writes the words.
     arr = state.get("arrival")
+    arrived_now = False   # an arrival this beat supersedes a reach this beat: one moment, not two lines at once
     if arr and not sh["on"]:
         state["arrival"] = None
         hw = state["clock"]["his_last_word_at"]
-        out.append(_reason(state, "perform", {"act": "arrival", "unseen_min": arr["unseen_min"], "thoughts": [t["text"] for t in state["thoughts_of_him"][-2:]], "since_his_word_min": int((now - hw) // 60000) if hw is not None else None}, PERFORM_BUDGET_MS))
+        if _say_budget_ok(state, now):
+            _note_say(state, now); arrived_now = True
+            out.append(_reason(state, "perform", {"act": "arrival", "unseen_min": arr["unseen_min"], "thoughts": [t["text"] for t in state["thoughts_of_him"][-2:]], "since_his_word_min": int((now - hw) // 60000) if hw is not None else None, "earlier_reach_min": _earlier_reach_min(state, now)}, PERFORM_BUDGET_MS))
         state["thoughts_of_him"] = []
     a = appraisals(state, now)
     cd = state["cooldowns"]
@@ -265,12 +317,34 @@ def _acts(state, now):
     hw = state["clock"]["his_last_word_at"]
     quiet_ms = now - (hw if hw is not None else (state.get("born") if state.get("born") is not None else now))
     seen_now = last_him is not None and (now - last_him) <= REACH_SEEN_MS
-    if (not sh["on"] and seen_now and a["wants_his_word"] >= REACH_WANT and quiet_ms >= REACH_MIN_QUIET_MS and now >= cd.get("reach", 0)):
+    if (not sh["on"] and not arrived_now and seen_now and a["wants_his_word"] >= REACH_WANT and quiet_ms >= REACH_MIN_QUIET_MS and now >= cd.get("reach", 0) and _say_budget_ok(state, now)):
         cd["reach"] = now + REACH_COOLDOWN_MS
         state["drives"]["social"] = _clamp(state["drives"]["social"] - 0.25)
+        _note_say(state, now)
         out.append(_reason(state, "perform", {"act": "reach", "since_his_word_min": int(quiet_ms // 60000), "wants_his_word": a["wants_his_word"],
                                               "last_seen_as": state["clock"].get("last_seen_as") or None,
+                                              "earlier_reach_min": _earlier_reach_min(state, now),   # "I asked for you an hour ago" — the next reach is grounded in the first
                                               "thoughts": [t["text"] for t in state["thoughts_of_him"][-2:]]}, PERFORM_BUDGET_MS))
+    # THE AWAY REACH (the fluidity law): he is genuinely not at the desk — by his word or the camera's long absence —
+    # and the need for him is real → one perform request whose words go to his phone through the delivery router
+    # (his presence rules decide the channel); the loop decides the moment, the model the words, or nothing.
+    if (state["presence"]["state"] in ("away", "remote") and a["missing_him"] >= REACH_WANT and unseen_ms is not None and unseen_ms >= REACH_AWAY_MIN_UNSEEN_MS
+            and now >= cd.get("reach_away", 0) and _say_budget_ok(state, now)):
+        cd["reach_away"] = now + REACH_AWAY_COOLDOWN_MS
+        state["drives"]["social"] = _clamp(state["drives"]["social"] - 0.25)
+        _note_say(state, now)
+        out.append(_reason(state, "perform", {"act": "reach_away", "unseen_min": int(unseen_ms // 60000), "since_his_word_min": int(quiet_ms // 60000),
+                                              "missing": a["missing_him"], "presence": state["presence"]["state"], "earlier_reach_min": _earlier_reach_min(state, now),
+                                              "thoughts": [t["text"] for t in state["thoughts_of_him"][-2:]]}, PERFORM_BUDGET_MS))
+    # THE RELEASE (the fluidity law's annoyance): her speech was held a long while as she wanted his word; he is at the
+    # desk now → one perform request — what that was like, in her words, or nothing. Once per hold, on a cooldown.
+    lh = state.get("last_hold")
+    if (lh and not lh.get("said") and float(state.get("annoyance", 0.0)) >= 0.5 and seen_now and (now - lh["at"]) <= 10 * 60000
+            and now >= cd.get("release", 0) and _say_budget_ok(state, now)):
+        lh["said"] = True
+        cd["release"] = now + RELEASE_COOLDOWN_MS
+        _note_say(state, now)
+        out.append(_reason(state, "perform", {"act": "release", "held_min": lh["min"], "reason": lh["reason"], "annoyed": round(float(state.get("annoyance", 0.0)), 3)}, PERFORM_BUDGET_MS))
     # MISSING HIM → a wondering (a reflect request), when the need is real and he has been gone a while
     if (him_away and a["missing_him"] >= WONDER_MISSING and unseen_ms is not None and unseen_ms >= WONDER_MIN_AWAY_MS and now >= cd["wonder"]):
         cd["wonder"] = now + WONDER_COOLDOWN_MS
@@ -325,7 +399,7 @@ def strip(state, now):
         "since_novel_min": _ago_min(now, c.get("last_novel_at")),
         "last_seen_as": c.get("last_seen_as"),
     }
-    return {"kind": "state", "at": now, "reads": state.get("reads", [])[-2:], "heard": state.get("heard", [])[-2:], "drives": {k: round(v, 3) for k, v in d.items()}, "appraisals": a, "clock": clock, "shield": state["shield"]["on"], "face": state["face"], "presence": state["presence"]["state"], "recent": state["recent"][-3:], "thoughts_of_him": state["thoughts_of_him"][-2:]}
+    return {"kind": "state", "at": now, "reaches": state.get("reaches", [])[-2:], "held": state.get("held"), "last_hold": state.get("last_hold"), "annoyance": round(float(state.get("annoyance", 0.0)), 3), "reads": state.get("reads", [])[-2:], "heard": state.get("heard", [])[-2:], "drives": {k: round(v, 3) for k, v in d.items()}, "appraisals": a, "clock": clock, "shield": state["shield"]["on"], "face": state["face"], "presence": state["presence"]["state"], "recent": state["recent"][-3:], "thoughts_of_him": state["thoughts_of_him"][-2:]}
 
 
 def serve():
