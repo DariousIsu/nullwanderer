@@ -7,7 +7,8 @@
  * never paced as research again." (docs/ZOE_MERGE_MAP §Stage 4.5)
  *
  * The tiers are the usage law's (lib/quota.TIER): interactive (his turn), directed (his word), development
- * (the program building itself), research and idle (EXPANSION, the only paced tier). This table names which
+ * (the program building itself), presence (her being here — the consciousness loop and the autonomy decider, 09-05),
+ * research and idle (EXPANSION, the only paced tier). This table names which
  * tier a TRIGGER bills — every trigger kind either side knows. Side Quest's spend-tier resolution keys on
  * the FOCUS (lib/focus.isDirected, the pen and swarm stamps in main._focusSpendTier); this table is the
  * trigger-side statement of the same law, and the read door the control port serves (GET /tiers) is how
@@ -27,6 +28,8 @@ const TRIGGER_TIERS = Object.freeze({
   interactive: 'interactive',
   // his word: a chat delegate, a directive, a manual run, a redirect, a swarm he commanded
   chat: 'directed', directed: 'directed', manual: 'directed', redirect: 'directed', operator: 'directed', swarm_chat: 'directed',
+  // HER BEING HERE (09-05): the consciousness loop's words to him, the wondering it asks for, the autonomy decider
+  consciousness: 'presence', autonomy: 'presence', presence: 'presence',
   // the program building itself
   pen: 'development', rehearsal: 'development', pursuit: 'development', self_build: 'development', study: 'development',
   // expansion — scheduled and autonomous research
@@ -34,7 +37,7 @@ const TRIGGER_TIERS = Object.freeze({
   // expansion — the drift lanes
   idle: 'idle', subc: 'idle', wonder: 'idle', puller: 'idle', news: 'idle', graphwalk: 'idle', promote: 'idle', decomp: 'idle',
 });
-const TIERS = Object.freeze(['interactive', 'directed', 'development', 'research', 'idle']);
+const TIERS = Object.freeze(['interactive', 'directed', 'presence', 'development', 'research', 'idle']);   // = lib/quota.TIER, in order
 const EXPANSION = Object.freeze(['research', 'idle']);
 const DEFAULT_TIER = 'research';
 

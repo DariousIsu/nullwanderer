@@ -12,12 +12,13 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
 // the tiers are the usage law's tiers, exactly
 ok(JSON.stringify(tl.TIERS) === JSON.stringify(Object.keys(q.TIER)), `the table's tiers ARE lib/quota's tiers, in order (${tl.TIERS.join(', ')})`);
 ok(tl.EXPANSION.every((t) => q.EXPANSION_TIERS.has(t)) && tl.EXPANSION.length === q.EXPANSION_TIERS.size, 'the expansion pair matches the pace gate\'s EXPANSION_TIERS');
-ok(Object.values(tl.TRIGGER_TIERS).every((t) => tl.TIERS.includes(t)), 'every trigger maps to one of the four tiers (interactive, directed, development, research, idle)');
+ok(Object.values(tl.TRIGGER_TIERS).every((t) => tl.TIERS.includes(t)), 'every trigger maps to one of the six tiers (interactive, directed, presence, development, research, idle)');
 // the law's sentence, row by row
 ok(tl.tierForTrigger('chat') === 'directed' && tl.tierForTrigger('directed') === 'directed' && tl.tierForTrigger('manual') === 'directed', '⭐ chat, directed and manual bill DIRECTED — a chat-triggered delegate is never paced as research again');
 ok(tl.tierForTrigger('cron') === 'research' && tl.tierForTrigger('cadence') === 'research' && tl.tierForTrigger('scheduled') === 'research' && tl.tierForTrigger('beat') === 'research', 'scheduled kinds bill EXPANSION (research)');
 ok(tl.tierForTrigger('pen') === 'development' && tl.tierForTrigger('rehearsal') === 'development' && tl.tierForTrigger('pursuit') === 'development', 'the pen, the rehearsal and the pursuit bill DEVELOPMENT');
 ok(tl.tierForTrigger('subc') === 'idle' && tl.tierForTrigger('wonder') === 'idle' && tl.tierForTrigger('puller') === 'idle', 'the drift lanes bill idle (expansion)');
+ok(tl.tierForTrigger('consciousness') === 'presence' && tl.tierForTrigger('autonomy') === 'presence' && !tl.isExpansionTier('presence') && q.tierOf('consciousness') === 'presence', 'the consciousness loop and the autonomy decider bill presence — never expansion, never paced (09-05)');
 ok(tl.tierForTrigger('INTERACTIVE') === 'interactive' && tl.tierForTrigger(' Chat ') === 'directed', 'kinds are case- and space-insensitive');
 ok(tl.tierForTrigger('never-heard-of') === 'research' && tl.tierForTrigger('') === 'research' && tl.tierForTrigger(null) === 'research', 'an unknown kind falls to research — the paced, conservative side');
 ok(tl.isExpansionTier('research') && tl.isExpansionTier('idle') && !tl.isExpansionTier('directed') && !tl.isExpansionTier('development'), 'isExpansionTier names the paced pair');

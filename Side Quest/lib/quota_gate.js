@@ -84,7 +84,7 @@ function spentLastHour(now = Date.now()) {
 function spentLastHourBackground(now = Date.now()) {
   try {
     const um = require('./usage_meter');
-    const byModel = um.byModelSince(now - quota.HOUR, now, { lanes: ['research', 'idle', '?'] });
+    const byModel = um.byModelSince(now - quota.HOUR, now, { lanes: ['research', 'idle', 'presence', 'consciousness', 'autonomy', '?'] });
     let total = 0;
     for (const [model, tokens] of Object.entries(byModel)) total += quota.costOf({ model, tokens });
     return total;

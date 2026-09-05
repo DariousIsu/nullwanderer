@@ -257,6 +257,31 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     ok(op.FREE_CLOCK.has('self_test'), 'self_test is the declared free-clock tool');
   }
 
+  // ── THE RUN BUDGET + THE TURN CAP (Lucas 09-05 16:20: "yes build all three") ─────────────────────────────
+  {
+    const step = { thought: 'look', action: { tool: 'web_search', args: { q: 'x' } } };
+    const mk = (promptTokens) => { let k = 0; return async (messages) => {
+      const last = String(messages[messages.length - 1].content || '');
+      if (/out of tool steps/.test(last)) return { text: 'the compiled answer', usage: { prompt_tokens: 1000, eval_tokens: 50 } };
+      k++;   // a fresh query every step, so the replan guard never reads the run as a repeat
+      return { text: JSON.stringify({ ...step, action: { tool: 'web_search', args: { q: 'x' + k } } }), usage: { prompt_tokens: promptTokens, eval_tokens: 400 } };
+    }; };
+    const r = await op.runOperator({ userMessage: 'find everything', deps: { complete: mk(90000), tools: { web_search: async () => 'result' }, histBudget: 5_000_000 }, maxSteps: 12, maxMs: 60000, runTokenBudget: 200000 });
+    ok(r && r.steps.length === 3 && r.answer === 'the compiled answer', `the run budget: 90k-token turns stop after the third (270k ≥ 200k) and the final is compiled from the work gathered (steps ${r && r.steps.length}, answer "${r && r.answer}")`);
+    const r0 = await op.runOperator({ userMessage: 'find everything', deps: { complete: mk(1000), tools: { web_search: async () => 'result' }, histBudget: 5_000_000 }, maxSteps: 5, maxMs: 60000, runTokenBudget: 200000 });
+    ok(r0 && r0.steps.length === 5, `small turns run to the step limit (${r0 && r0.steps.length} of 5) — the budget never bites a normal run`);
+    const logs = []; const _log = console.log; console.log = (...a) => { logs.push(a.join(' ')); };
+    try {
+      await op.runOperator({ userMessage: 'find everything', deps: { complete: mk(1000), tools: { web_search: async () => 'r'.repeat(20000) }, histBudget: 5_000_000 }, maxSteps: 6, maxMs: 60000, runTokenBudget: 10_000_000, turnTokenCap: 32768 });
+    } finally { console.log = _log; }
+    const capped = logs.filter((l) => /history compacted/.test(l)).length, spend = logs.find((l) => /run spend:/.test(l)) || '';
+    ok(capped >= 1 && /turn cap 32,768/.test(spend), `the turn cap: an injected 5M-char history budget is bounded to the cap's share (${Math.floor(32768 * 3.2 * 0.45).toLocaleString()} chars) so 20k-char results compact (${capped} compaction(s)); the spend line names the caps`);
+    const logs2 = []; console.log = (...a) => { logs2.push(a.join(' ')); };
+    try {
+      await op.runOperator({ userMessage: 'find everything', deps: { complete: mk(1000), tools: { web_search: async () => 'r'.repeat(20000) }, histBudget: 5_000_000 }, maxSteps: 6, maxMs: 60000, runTokenBudget: 10_000_000, turnTokenCap: 1_000_000 });
+    } finally { console.log = _log; }
+    ok(!logs2.some((l) => /history compacted/.test(l)), 'with a wide turn cap the same run never compacts (the cap is what bounded it)');
+  }
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

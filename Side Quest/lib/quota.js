@@ -84,14 +84,29 @@ const HOUR = 3600 * 1000;
 const TIER = {
   interactive: 0,   // Lucas is typing. Never blocked.
   directed: 1,      // work he explicitly assigned. Blocked only when the pool is genuinely empty.
-  development: 2,   // the program's own build. Floor-gated only.
-  research: 3,      // autonomous research passes (EXPANSION).
-  idle: 4,          // graph-walk / puller / subconscious drift (EXPANSION).
+  presence: 2,      // HER BEING HERE (09-05 16:20): the consciousness loop's words to him, the wondering, the
+                    // autonomy decider. Small by construction (PRESENCE_MAX_TOKENS), floor-gated only, never paced.
+  development: 3,   // the program's own build. Floor-gated only.
+  research: 4,      // autonomous research passes (EXPANSION).
+  idle: 5,          // graph-walk / puller / subconscious drift (EXPANSION).
 };
 const EXPANSION_TIERS = new Set(['research', 'idle']);
+// Lanes that are a tier under another name: the slow loop meters as 'consciousness' (its history keeps
+// that label) and the autonomy tick as 'autonomy'; both are the presence tier. An unknown lane is idle.
+const LANE_TIER = { consciousness: 'presence', autonomy: 'presence' };
+function tierOf(lane) { const l = String(lane || ''); return TIER[l] != null ? l : (LANE_TIER[l] || 'idle'); }
+// THE PRESENCE CAP: a presence call is refused above this many tokens — the tier is cheap because its prompts
+// are bounded, never because the gate trusts the caller. (The autonomy tick measures ~5.5k; the loop's words
+// ~1k.) Measured 09-05: the whole tier's day is under 1% of the pool.
+const PRESENCE_MAX_TOKENS = 8192;
 // Fraction of the pool each tier is allowed to consume. Interactive keeps a reserve nothing else can
 // touch: at 99% spent she must still be able to answer.
-const TIER_FLOOR = { interactive: 0.00, directed: 0.03, development: 0.05, research: 0.10, idle: 0.15 };
+const TIER_FLOOR = { interactive: 0.00, directed: 0.03, presence: 0.01, development: 0.05, research: 0.10, idle: 0.15 };
+// THE CHEAP FLEET THROUGH THE FLOORS (Lucas 09-05 16:20, "yes build all three"): a research/idle call on the
+// cost-friendly fleet (weight ≤ CHEAP_WEIGHT) stops at this floor instead of its tier's — the news lane, the
+// swarm and the wondering stay alive all week at ~1.5% of the pool a day. Measured the day this was built:
+// the pool hit 85% a day and a half into the week and every autonomic lane was dead until the reset.
+const CHEAP_FLOOR = 0.03;
 // Models at or under this weight (billions of parameters) are the cost-friendly fleet — the swarm's
 // gemma4:31b — and never trip the PACE check (his law: "the swarms shouldn't really be included").
 const CHEAP_WEIGHT = 35;
@@ -214,11 +229,12 @@ function state({ limit = 0, markPct = 0, markAt = 0, spentSince = 0, resetAt = 0
 // outstanding threads, his directed focus, the pen's queue? false = nothing above → expansion may
 // spend the whole sustainable rate; true or unknown (an old caller) = the conservative shares.
 function check({ lane = 'idle', st = null, spentLastHour = 0, spentLastHourBg = null, estimate = 0, reopening = false, model = '', queuedAbove = null } = {}) {
-  const tier = TIER[lane] != null ? lane : 'idle';
+  const tier = tierOf(lane);
   if (tier === 'interactive') return { allow: true, reason: 'interactive — never throttled' };
   if (!st || !st.known) return { allow: true, reason: 'no quota configured' };
 
-  const floor = TIER_FLOOR[tier];
+  const cheap = !!(model && weightFor(model) <= CHEAP_WEIGHT);
+  const floor = (cheap && EXPANSION_TIERS.has(tier)) ? Math.min(TIER_FLOOR[tier], CHEAP_FLOOR) : TIER_FLOOR[tier];
   if (st.usedPct >= 1 - floor) {
     return {
       allow: false,
@@ -237,12 +253,22 @@ function check({ lane = 'idle', st = null, spentLastHour = 0, spentLastHourBg = 
   // reverse. See [[db-is-foundation-no-recall-only]]'s sibling principle on priority. Interactive already
   // returned at the top; directed exits here; only research/idle reach the rate check.
   if (tier === 'directed') return { allow: true, reason: 'directed — user work, floor-gated only (never pace-throttled)', usedPct: st.usedPct, pacePerHour: st.pacePerHour };
+  // THE PRESENCE TIER: floor-gated only, never paced — and capped. The estimate is compute (weight × ktokens);
+  // the tokens behind it are what the cap is on, so an unbounded prompt on a small model is refused too.
+  if (tier === 'presence') {
+    const w = weightFor(model) || DEFAULT_WEIGHT;
+    const tokens = num(estimate) > 0 ? (num(estimate) / w) * 1000 : 0;
+    if (tokens > PRESENCE_MAX_TOKENS) {
+      return { allow: false, reason: `presence prompt over its cap (~${Math.round(tokens).toLocaleString()} tokens > ${PRESENCE_MAX_TOKENS}) — bound it; the tier is cheap because its prompts are`, usedPct: st.usedPct, pacePerHour: st.pacePerHour, capped: true };
+    }
+    return { allow: true, reason: 'presence — her being here; floor-gated only, never pace-throttled', usedPct: st.usedPct, pacePerHour: st.pacePerHour };
+  }
   // DEVELOPMENT (usage law 09-03): the program building itself — pen cures, rehearsal, pursuit, the
   // self-build operators — is its own tier: named, measured in the meter, floor-gated only, never paced.
   if (tier === 'development') return { allow: true, reason: 'development — the program\'s own build, floor-gated only (never pace-throttled)', usedPct: st.usedPct, pacePerHour: st.pacePerHour };
   // THE CHEAP-MODEL EXEMPTION (usage law 09-03): a call on the cost-friendly fleet (gemma4:31b, the
   // swarm's model) never trips the pace gate — the floors above already held. Weight from the name.
-  if (model && weightFor(model) <= CHEAP_WEIGHT) {
+  if (cheap) {
     return { allow: true, cheap: true, reason: `cheap model (${model}, weight ${weightFor(model)} ≤ ${CHEAP_WEIGHT}) — the pace gate never trips; floors still armed`, usedPct: st.usedPct, pacePerHour: st.pacePerHour };
   }
   // Pace is a rate check, so it needs the trailing hour, not the instant. The background tiers get a slice
@@ -304,4 +330,4 @@ function describe(st) {
     + `${st.hoursLeft.toFixed(1)}h to reset · sustainable ${Math.round(st.pacePerHour).toLocaleString()}/h`;
 }
 
-module.exports = { state, check, describe, weightFor, costOf, TIER, TIER_FLOOR, EXPANSION_TIERS, CHEAP_WEIGHT, HOUR, NAMED_WEIGHTS, DEFAULT_WEIGHT, WINDOW_H, BURST_AHEAD_MARGIN };
+module.exports = { state, check, describe, weightFor, costOf, tierOf, TIER, TIER_FLOOR, LANE_TIER, EXPANSION_TIERS, CHEAP_WEIGHT, CHEAP_FLOOR, PRESENCE_MAX_TOKENS, HOUR, NAMED_WEIGHTS, DEFAULT_WEIGHT, WINDOW_H, BURST_AHEAD_MARGIN };

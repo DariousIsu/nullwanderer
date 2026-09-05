@@ -209,7 +209,8 @@ console.log('\nthe usage law (four tiers, queued-above, the cheap fleet, burst 0
   ok(q.check({ lane: 'idle', st, spentLastHour: hot, spentLastHourBg: hot, queuedAbove: true, model: 'deepseek-v4-flash' }).allow === false, 'a heavy model on the same hot hour is paced');
   ok(q.CHEAP_WEIGHT === 35 && q.weightFor('gemma4:31b-cloud') <= q.CHEAP_WEIGHT && q.weightFor('gpt-oss:120b') > q.CHEAP_WEIGHT, 'the cheap line sits at 35B: gemma4:31b is under it, gpt-oss:120b is not');
   const st86 = q.state({ limit: 1_000_000, markPct: 0.86, markAt: NOW, spentSince: 0, resetAt: NOW + 84 * H, now: NOW });
-  ok(q.check({ lane: 'idle', st: st86, spentLastHour: 0, spentLastHourBg: 0, queuedAbove: false, model: 'gemma4:31b-cloud' }).allow === false, 'the FLOOR still stops idle at 85% — cheap or not, queued or not (his chat reserve survives everything)');
+  ok(q.check({ lane: 'idle', st: st86, spentLastHour: 0, spentLastHourBg: 0, queuedAbove: false, model: 'deepseek-v4-flash' }).allow === false, 'the FLOOR still stops idle at 85% for the paid fleet — queued or not (his chat reserve survives everything)');
+  ok(q.check({ lane: 'idle', st: st86, spentLastHour: 0, spentLastHourBg: 0, queuedAbove: false, model: 'gemma4:31b-cloud' }).allow === true, 'the cheap fleet passes the 85% floor (Lucas 09-05: the autonomic lanes were dead a day and a half into the week); it stops at 97%');
   const st96 = q.state({ limit: 1_000_000, markPct: 0.96, markAt: NOW, spentSince: 0, resetAt: NOW + 84 * H, now: NOW });
   ok(q.check({ lane: 'development', st: st96, spentLastHour: 0 }).allow === false && q.check({ lane: 'directed', st: st96, spentLastHour: 0 }).allow === true, 'development stops at its 95% floor; directed still runs to 97% (the pool genuinely empty is the only stop)');
   ok(q.BURST_AHEAD_MARGIN <= 0.02, 'the burst margin is 0.02: ahead of schedule at all = no pacing');
@@ -254,6 +255,31 @@ console.log('\nquota_gate.queuedAbove (a hermetic store):');
     gate._resetQueueCache();
     ok(gate.peek('research').queuedAbove === true && /of his threads/.test(gate.peek('research').queuedAboveWhy), 'peek() (the read door Echo asks) reports the queue state and why');
     console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+    // ── THE PRESENCE TIER (Lucas 09-05 16:20: "yes build all three, presence tier first") ──────────────────
+    ok(q.tierOf('consciousness') === 'presence' && q.tierOf('autonomy') === 'presence' && q.tierOf('presence') === 'presence' && q.tierOf('whatever') === 'idle' && q.tierOf('') === 'idle', 'the slow loop and the autonomy tick are the presence tier under their own lane names; an unknown lane is still idle');
+    const deep = q.state({ limit: POOL, markPct: 0.91, markAt: NOW, spentSince: 0, resetAt: NOW + 29 * H, now: NOW });   // the pool as measured 09-05 15:30
+    ok(!q.check({ lane: 'idle', st: deep, spentLastHour: 0, estimate: 10, model: 'gpt-oss:120b-cloud' }).allow, 'at 91% idle is still stopped (the 85% floor)');
+    const p1 = q.check({ lane: 'consciousness', st: deep, spentLastHour: 500_000, estimate: q.costOf({ model: 'glm-5.2:cloud', tokens: 1200 }), model: 'glm-5.2:cloud' });
+    ok(p1.allow && /presence/.test(p1.reason), `the arrival's words pass at 91% with a hot hour: ${p1.reason}`);
+    const p2 = q.check({ lane: 'autonomy', st: deep, spentLastHour: 500_000, estimate: q.costOf({ model: 'gpt-oss:120b-cloud', tokens: 6000 }), model: 'gpt-oss:120b-cloud' });
+    ok(p2.allow, 'the autonomy tick (~6k tokens) passes on the presence tier, never paced');
+    const p3 = q.check({ lane: 'presence', st: deep, spentLastHour: 0, estimate: q.costOf({ model: 'glm-5.2:cloud', tokens: 20_000 }), model: 'glm-5.2:cloud' });
+    ok(!p3.allow && p3.capped && /over its cap/.test(p3.reason), `a 20k-token presence prompt is refused by the cap, whatever the pool: ${p3.reason.slice(0, 60)}`);
+    const gone = q.state({ limit: POOL, markPct: 0.995, markAt: NOW, spentSince: 0, resetAt: NOW + 2 * H, now: NOW });
+    ok(!q.check({ lane: 'presence', st: gone, spentLastHour: 0, estimate: 10, model: 'glm-5.2:cloud' }).allow, 'at 99.5% presence stops too (its 1% floor) — the last percent is his chat');
+    // ── THE CHEAP FLEET THROUGH THE FLOORS ──────────────────────────────────────────────────────────────
+    const c1 = q.check({ lane: 'idle', st: deep, spentLastHour: 500_000, estimate: q.costOf({ model: 'gemma4:31b-cloud', tokens: 5000 }), model: 'gemma4:31b-cloud' });
+    ok(c1.allow && c1.cheap, 'at 91% an idle call on gemma4:31b passes: the cheap fleet stops at 97%, not 85%');
+    const c2 = q.check({ lane: 'research', st: deep, spentLastHour: 500_000, estimate: 100, model: 'gemma4:31b-cloud' });
+    ok(c2.allow && c2.cheap, 'the news lane on the cheap fleet is alive at 91% too');
+    const at98 = q.state({ limit: POOL, markPct: 0.98, markAt: NOW, spentSince: 0, resetAt: NOW + 6 * H, now: NOW });
+    ok(!q.check({ lane: 'idle', st: at98, spentLastHour: 0, estimate: 10, model: 'gemma4:31b-cloud' }).allow, 'at 98% even the cheap fleet stops for idle (97%)');
+    ok(!q.check({ lane: 'idle', st: deep, spentLastHour: 0, estimate: 10, model: 'deepseek-v4-flash' }).allow, 'a non-cheap idle call at 91% is still stopped — the floors are unchanged for the paid fleet');
+    ok(q.check({ lane: 'directed', st: deep, spentLastHour: 900_000, estimate: 1000, model: 'deepseek-v4-pro' }).allow, 'directed is untouched: floor-gated only (97%), never paced');
+    // the callers ride the tier
+    const fs = require('fs'), path = require('path');
+    ok(/lane: 'consciousness'/.test(fs.readFileSync(path.join(__dirname, '..', 'lib', 'slow_loop.js'), 'utf8')) && /lane: 'autonomy'/.test(fs.readFileSync(path.join(__dirname, '..', 'lib', 'autonomy.js'), 'utf8')), 'the slow loop and the autonomy tick name their lanes');
+    ok(/lanes: \['research', 'idle', 'presence', 'consciousness', 'autonomy', '\?'\]/.test(fs.readFileSync(path.join(__dirname, '..', 'lib', 'quota_gate.js'), 'utf8')), 'presence spend counts as background in the pace of research and idle');
     process.exit(fail === 0 ? 0 : 1);
   })().catch((e) => { console.error('smoke_quota crashed:', e && e.stack || e); process.exit(1); });
 }

@@ -18,6 +18,16 @@ const { completeDetailed } = require('./ollama');
 
 const DEFAULT_MAX_STEPS = 4;       // keep the loop snappy for chat latency
 const DEFAULT_MAX_MS = 45000;      // hard wall-clock budget so a turn can NEVER block for minutes
+// THE TURN CAP and THE RUN BUDGET (Lucas 09-05 16:20: "how much over spend we are using with unbound windows sizes"
+// → "yes build all three"). Measured that afternoon: every cloud window resolves to 131,072, so the history
+// budget alone was ~59k tokens a turn; a directed run of 12–24 steps re-sent it every step and the meter showed
+// single runs of 500k–814k tokens on 300–400-weight models — one run = 2–3% of the WEEK. Two ceilings, both
+// overridable per call and by env: no turn's history exceeds TURN cap tokens (the 45% history share of that cap),
+// and a run stops spending at RUN budget tokens and compiles its final from the work gathered (the same forced
+// final the out-of-steps path uses) — a partial deliverable over a dead pool.
+function _envInt(name) { const v = parseInt(process.env[name] || '', 10); return Number.isFinite(v) && v > 0 ? v : 0; }
+const TURN_TOKEN_CAP = () => _envInt('ZOE_OPERATOR_TURN_TOKENS') || 32768;
+const RUN_TOKEN_BUDGET = () => _envInt('ZOE_OPERATOR_RUN_TOKENS') || 200000;
 // MULTI-ACTION STEPS (build plan 2.4). A step is one MODEL ROUND-TRIP, and round-trips — not tool
 // executions — are what the 4-step budget was really rationing. Letting one step carry several
 // independent lookups is a direct engine-starvation lever: the same budget now buys up to 4× the
@@ -336,7 +346,7 @@ const FREE_CLOCK = new Set(['self_test']);
  * Run the agent loop. deps.complete(messages)->{text}|string ; deps.tools = { web_search, echo,
  * browser_read, recall, file } each (args)->string. Returns { answer, steps, toolsUsed } or null.
  */
-async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DEFAULT_MAX_STEPS, maxMs = DEFAULT_MAX_MS, numPredict = 900, model = null, toolSpec = null, lane = null } = {}) {
+async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DEFAULT_MAX_STEPS, maxMs = DEFAULT_MAX_MS, numPredict = 900, model = null, toolSpec = null, lane = null, turnTokenCap = null, runTokenBudget = null } = {}) {
   const complete = deps.complete || _operatorComplete;
   const tools = deps.tools || {};
   const nowFn = deps.now || Date.now;
@@ -370,6 +380,18 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
       if (w && w.num_ctx) histBudget = Math.floor(w.num_ctx * 3.2 * 0.45);
     } catch { /* floor share stands */ }
   }
+  // THE TURN CAP: the history share is bounded by the cap, whatever window the model advertises.
+  const _turnCap = Number(turnTokenCap) > 0 ? Number(turnTokenCap) : TURN_TOKEN_CAP();
+  const _histCap = Math.floor(_turnCap * 3.2 * 0.45);
+  if (histBudget > _histCap) histBudget = _histCap;
+  // THE RUN BUDGET: tokens metered from every completion this run; reaching it ends the loop.
+  const _runBudget = Number(runTokenBudget) > 0 ? Number(runTokenBudget) : RUN_TOKEN_BUDGET();
+  let _spent = 0, _budgetHit = false;
+  const _tok = (u) => { try { return require('./usage_meter').tokensOf(u) || 0; } catch { return 0; } };
+  const _done = (v) => {
+    if (_spent > 0) console.log(`[operator] run spend: ${_spent.toLocaleString()} tokens over ${steps.length} step(s) · turn cap ${_turnCap.toLocaleString()} · run budget ${_runBudget.toLocaleString()}${_budgetHit ? ' — REACHED, the final was compiled from the work gathered' : ''}${lane ? ` · lane ${lane}` : ''}`);
+    return v;
+  };
   let repaired = false;
   // FORCE A FINAL from the work already gathered — the same compile the out-of-steps path uses.
   const _forceFinalFromWork = async () => {
@@ -397,6 +419,7 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
   const _guard = _cg.newState();   // Wave 3 replan layer: track repeated / no-progress retrieval steps this run
   for (let i = 0; i < maxSteps; i++) {
     if (nowFn() - t0 > maxMs) break;   // over the wall-clock budget → stop looping, force a final below
+    if (_spent >= _runBudget) { _budgetHit = true; console.log(`[operator] run budget reached — ${_spent.toLocaleString()} tokens over ${steps.length} step(s) ≥ ${_runBudget.toLocaleString()} → the final is compiled from the work gathered`); break; }
     // Compact BEFORE building the prompt, and verify the drop actually happened (O1: eviction is
     // measured, never assumed) — an over-budget history that stubs down still reads coherently.
     if (histParts.reduce((n, p) => n + p.length, 0) > histBudget) {
@@ -410,8 +433,9 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
     // A quota deferral is a PAUSE signal, not a failure — rethrow the typed error so the opt-in
     // caller can distinguish "no work happened" from "nothing new" (the false-validated grinder:
     // every deferred pass read as dry → target marked validated with zero actual work).
-    catch (e) { if (e && e.deferred) throw e; return steps.length ? _finalize(steps, null) : null; }
-    if (res == null) return steps.length ? _finalize(steps, null) : null;   // no cloud configured
+    catch (e) { if (e && e.deferred) throw e; return _done(steps.length ? _finalize(steps, null) : null); }
+    if (res == null) return _done(steps.length ? _finalize(steps, null) : null);   // no cloud configured
+    _spent += _tok(res && res.usage);
     let text = (typeof res === 'string') ? res : (res.text || '');
     let parsed = parseAction(text);
     // ONE repair reprompt when the text ATTEMPTED a step but didn't parse. Without this, a garbled
@@ -426,17 +450,18 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
           { role: 'assistant', content: text },
           { role: 'user', content: 'That was not a parseable step. Re-emit it as EXACTLY ONE valid JSON object — {"thought":"…","action":{"tool":"…","args":{…}}}, or {"thought":"…","actions":[{"tool":"…","args":{…}},…]} for independent lookups, or {"thought":"…","final":"…"} — and nothing else.' }
         ], cOpts);
+        _spent += _tok(r2 && r2.usage);
         const t2 = (typeof r2 === 'string') ? r2 : ((r2 && r2.text) || '');
         const p2 = parseAction(t2);
         if (p2) { parsed = p2; text = t2; }
       } catch { /* repair is best-effort — fall through to the prose contract */ }
     }
-    if (!parsed) return _finalize(steps, await _answerFromLeftover(text));  // plain prose → answer; leaked JSON → compile
-    if (parsed.final !== undefined) return _finalize(steps, parsed.final);
+    if (!parsed) return _done(_finalize(steps, await _answerFromLeftover(text)));  // plain prose → answer; leaked JSON → compile
+    if (parsed.final !== undefined) return _done(_finalize(steps, parsed.final));
 
     // ── MULTI-ACTION STEP (2.4). One round-trip may carry several INDEPENDENT lookups. ──────────
     const { list: asked, dropped } = actionsOf(parsed);
-    if (!asked.length) return _finalize(steps, await _answerFromLeftover(text));   // step object w/ no runnable tool → compile, never voice raw JSON
+    if (!asked.length) return _done(_finalize(steps, await _answerFromLeftover(text)));   // step object w/ no runnable tool → compile, never voice raw JSON
     const { list: batch, deferred } = cutAtObservePoint(asked);
 
     // Run ONE action and shape its result. Factored out so the concurrent and sequential paths
@@ -509,7 +534,7 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
     if (_exhausted) {
       histParts.push(`\n[STOP: you've tried ${_tried} without landing it. Do NOT run another lookup. Answer now in plain words — what you were after, that you couldn't find it, and offer to search the web live.]`);
       console.log(`[operator] replan budget spent (${_guard.noProgress} no-progress steps) → honest miss`);
-      return _finalize(steps, await _forceFinalFromWork());
+      return _done(_finalize(steps, await _forceFinalFromWork()));
     }
     if (_needsReplan) {
       histParts.push(`\n[ANALYZE & REPLAN: you've already tried ${_tried} and it didn't answer the need. Do NOT re-issue the same call. Ask WHY it came up empty (our records may not hold this), then take a GENUINELY DIFFERENT step — different args, a different tool, or web_search if it's public info — or give the honest final answer naming what you couldn't find.]`);
@@ -517,7 +542,7 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
     }
   }
   // out of steps → force a final answer from what we gathered (same compile as the narrated-done path)
-  return _finalize(steps, await _forceFinalFromWork());
+  return _done(_finalize(steps, await _forceFinalFromWork()));
 }
 
 module.exports = { runOperator, parseAction, looksLikeJsonStep, isDirectedTask, parseSliceResult, operatorModel, _operatorComplete, TOOL_SPEC, TOOL_SPEC_CORE, TOOL_SPEC_TAIL, DEFAULT_MAX_STEPS, actionsOf, batchIsReadOnly, cutAtObservePoint, compactHistory, FREE_CLOCK, MAX_BATCH, READ_SAFE, OBSERVE_AFTER };

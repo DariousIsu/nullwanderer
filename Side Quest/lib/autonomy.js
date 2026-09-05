@@ -566,6 +566,8 @@ async function decide({ manifestText = '', history = [], now = Date.now(), depth
     model,
     numPredict: 1500,      // the reasoner floor — below it the answer starves in hidden thinking
     think: false,          // the decision is the OUTPUT, not the chain-of-thought
+    lane: 'autonomy',      // THE PRESENCE TIER (09-05): an untagged lane was idle to the gate, and idle closed at 85% of
+                           // the pool — 91% of the day's ticks came back "no decision" as governance, not failure
   });
 }
 
