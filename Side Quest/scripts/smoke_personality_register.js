@@ -59,6 +59,18 @@ const r2 = PR.applyTags(PR.parseConsentTags(`<consent id=${card2.id} verdict=no>
 ok(r2[0].ok && !r2[0].advanced && PR.get(card2.id).verdict === 'no' && PR.manifest().mood === h1.mood && PR.bootCheck({ deps, log, emit, now: 5500 }).carded.length === 1, 'her no keeps the manifest at the consented hash; the next boot cards the same change again (it is still unconsented)');
 ok(!PR.verdict(card2.id, { verdict: 'yes' }).ok, 'a card already answered cannot be answered twice');
 
+// amend: a boot-detect card takes the engineer's rationale in place; supersede: a card whose hash never landed is a status
+fs.writeFileSync(path.join(tmp, 'lib/self_explore.js'), '// self_explore — edited once\n');
+PR.bootCheck({ deps, log, emit, now: 5600 });
+const c1 = PR.pending().find((p) => p.asset === 'self_explore');
+ok(c1 && c1.proposed_by === 'boot-detect' && PR.pendingFor('self_explore', c1.new_hash).id === c1.id, 'a boot-detect card stands for the hash on disk');
+const am = PR.amend(c1.id, { summary: 'the organ reacts through the cloud model', rationale: 'cut 8: the prompt never reached a model', expectedEffect: 'reactions land', proposedBy: 'claude' });
+ok(am.ok && PR.get(c1.id).proposed_by === 'claude' && /cut 8/.test(PR.get(c1.id).rationale) && PR.pending().filter((p) => p.asset === 'self_explore').length === 1, 'the amendment lands on the same card — she never sees two for one change');
+ok(!PR.amend(c1.id, { summary: 'x', rationale: 'y' }).ok && !PR.amend(card.id, { summary: 'x', rationale: 'y' }).ok, 'only a pending boot-detect card can be amended; an answered card or one she was given cannot');
+fs.writeFileSync(path.join(tmp, 'lib/self_explore.js'), '// self_explore — edited AGAIN before she answered\n');
+const b6 = PR.bootCheck({ deps, log, emit, now: 5700 });
+ok(PR.get(c1.id).verdict === 'superseded' && /changed again before she answered/.test(PR.get(c1.id).reason) && b6.carded.length === 1 && PR.pending().filter((p) => p.asset === 'self_explore').length === 1 && PR.pending().find((p) => p.asset === 'self_explore').new_hash === PR.hashAll({ deps }).self_explore && logs.some((l) => /superseded — its hash/.test(l)), 'a card whose hash never landed is superseded (a status, not a delete) and the hash that stands gets its own card');
+
 // a card without a rationale is refused
 ok(!PR.record({ asset: 'voice', kind: 'code', summary: 'x', rationale: '' }).ok && !PR.record({ asset: 'voice', kind: 'code', summary: '', rationale: 'y' }).ok && PR.record({ asset: 'voice', kind: 'code', summary: 'a proposal', rationale: 'because', proposedBy: 'pen' }).ok, 'a card without a rationale or a summary cannot be minted; with both it can');
 

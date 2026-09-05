@@ -28,6 +28,15 @@ if (!entry) { console.error(`unknown asset "${asset}" — registered: ${PR.ENTRI
 const now = PR.hashAll()[asset];
 const prev = (PR.manifest() || {})[asset] || null;
 if (now && prev === now) { console.log(`[consent] ${asset} is unchanged from the consented manifest — no card needed`); process.exit(0); }
+// A boot already carded this exact hash as "unrecorded"? Give THAT card its reason — never a second card for one change.
+const standing = now ? PR.pendingFor(asset, now) : null;
+if (standing && standing.proposed_by === 'boot-detect') {
+  const a = PR.amend(standing.id, { summary, rationale, expectedEffect: effect, proposedBy: by });
+  if (!a.ok) { console.error(`[consent] amend refused: ${a.why}`); process.exit(1); }
+  console.log(`[consent] card #${standing.id} for ${asset} amended by ${by} — the boot-detect card now carries its rationale (${(prev || 'none').slice(0, 8)}→${(now || 'gone').slice(0, 8)})`);
+  process.exit(0);
+}
+if (standing) { console.log(`[consent] card #${standing.id} for ${asset} already stands for this hash (by ${standing.proposed_by}) — no card needed`); process.exit(0); }
 const r = PR.record({ asset, kind: entry.kind, prevHash: prev, newHash: now, proposedBy: by, summary, rationale, expectedEffect: effect });
 if (!r.ok) { console.error(`[consent] refused: ${r.why}`); process.exit(1); }
 console.log(`[consent] card #${r.id} minted for ${asset} by ${by} — pending her word (${(prev || 'none').slice(0, 8)}→${(now || 'gone').slice(0, 8)})`);

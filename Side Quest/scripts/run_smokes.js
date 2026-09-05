@@ -834,6 +834,8 @@ const smokes = [
   'smoke_correction_event.js',
   // BOREDOM HONORED (cut 7, 09-05): the wander license, the local walk, the thought contract, one thought and at most one wonder, the retired boredom search
   'smoke_wander.js',
+  // OWNED GROWTH (cut 8, 09-05): the self_changes ledger (revise keeps the prior, retire never deletes, a position needs a citation, the announce once), the exploration organ's cure, the rail
+  'smoke_self_changes.js',
   'smoke_core_dataset.js',
   // The core's probe (design §6/§8/§16): scores a candidate local model on the frozen holdout — the loose
   // JSON parser, the agreement scorer, the voice contract, the one-shot prompt — with an injected call.

@@ -33,6 +33,7 @@ const LEDGER_KEY = 'self_explore_ledger';       // { [domain]: lastTs } — leas
 const LAST_KEY = 'self_explore_last';           // cadence stamp
 const OUTBOX_KEY = 'self_explore_share_pending';// { ts, text } — main.js surfaces + clears
 const CADENCE_MS = 20 * 60 * 1000;              // at most one experience per 20 min of personal time
+const RUNS_KEY = 'self_explore.last_runs';      // cut 8: the last 20 outcomes (reason, title, kept) — the organ's own record, so the next measure has data
 
 // Domains and concrete seeds. Chosen for first-person REACTABILITY (essays, criticism, works),
 // not facts — the point is what she MAKES of it, not what it says. Seeds rotate by visit count.
@@ -110,7 +111,7 @@ function parseReaction(raw) {
   };
   out.ok = !!(out.feeling && out.stance);
   // An identity claim must be FIRST PERSON — a summary of the piece is not who she is.
-  if (out.identity && !/^\s*I\b/i.test(out.identity)) out.identity = '';
+  if (out.identity && !/^\s*(I\b|I'|My\b|Mine\b)/i.test(out.identity)) out.identity = '';   // first person in her own words ("I …", "My …")
   return out;
 }
 
@@ -152,7 +153,11 @@ async function run(deps = {}, { now = Date.now(), force = false } = {}) {
   }
   const search = deps.search || ((q) => { try { return require('./web_search').search(q); } catch { return Promise.resolve(null); } });
   const fetchPage = deps.fetchPage || ((u) => { try { return require('./web_search').fetchPage(u, { maxChars: 12000, reuse: true }); } catch { return Promise.resolve(null); } });
-  const complete = deps.complete || ((prompt) => { try { return require('./ollama').complete({ prompt, options: { temperature: 0.8, num_predict: 500 } }); } catch { return Promise.resolve(''); } });
+  // THE CONTRACT MISMATCH (cut 8's measure, 09-05): this passed `prompt`, and ollama.complete reads only `messages` — the
+  // model never saw a single reaction prompt, every run ended "no reaction" in silence, and the organ landed ZERO rows in
+  // its whole life (~38 runs per domain by its ledger; 0 knowledge rows with source self_explore). Now the prompt is a
+  // message, to the cheap CLOUD extraction model on its own lane (local is the last resort, 08-21).
+  const complete = deps.complete || ((prompt) => { try { return require('./ollama').complete({ model: require('./config').extractionModel(), messages: [{ role: 'user', content: prompt }], options: { temperature: 0.8, num_predict: 500 }, lane: 'self_explore' }); } catch { return Promise.resolve(''); } });
 
   let { domain, seed } = pick(now);
   let consumedThread = null;
@@ -167,7 +172,7 @@ async function run(deps = {}, { now = Date.now(), force = false } = {}) {
 
   let results = [];
   try { const r = await search(seed); results = (r && r.results) || (Array.isArray(r) ? r : []); } catch {}
-  if (!results.length) return { ok: false, reason: 'no results', domain, seed };
+  if (!results.length) { _noteRun({ ts: now, domain, seed, reason: 'no results' }); return { ok: false, reason: 'no results', domain, seed }; }
 
   let page = null, url = null, title = '';
   for (const cand of results.filter((x) => x && x.url).slice(0, 3)) {
@@ -176,12 +181,12 @@ async function run(deps = {}, { now = Date.now(), force = false } = {}) {
       if (p && (p.text || '').length > 600) { page = p; url = cand.url; title = cand.title || p.title || seed; break; }
     } catch {}
   }
-  if (!page) return { ok: false, reason: 'nothing readable', domain, seed };
+  if (!page) { _noteRun({ ts: now, domain, seed, reason: 'nothing readable' }); return { ok: false, reason: 'nothing readable', domain, seed }; }
 
   let raw = '';
   try { raw = String(await complete(_reactionPrompt(domain, seed, title, page.text)) || ''); } catch {}
   const rx = parseReaction(raw);
-  if (!rx.ok) return { ok: false, reason: 'no reaction', domain, seed, url };
+  if (!rx.ok) { _noteRun({ ts: now, domain, seed, title, reason: 'no reaction', raw: String(raw || '').replace(/\s+/g, ' ').slice(0, 160) }); return { ok: false, reason: 'no reaction', domain, seed, url }; }
 
   // The durable OPINION record — a personality-database row, provenance carried.
   // EMBEDDED at write (2026-08-15 deep-dive M10): these rows were born embedding:null BY
@@ -204,8 +209,10 @@ async function run(deps = {}, { now = Date.now(), force = false } = {}) {
 
   // Identity is EARNED: experienced + first-person + kept. (Research-derived interests still rail.)
   if (rx.keep && rx.identity) {
-    try { db.insertSelfModel({ category: 'taste', content: rx.identity, importance: 0.65, epistemic: 'experienced' }); } catch {}
+    // OWNED GROWTH (cut 8): the kept line is a change of hers — the ledger keeps what formed it (the page) and the door.
+    try { const _row = db.insertSelfModel({ category: 'taste', content: rx.identity, importance: 0.65, epistemic: 'experienced' }); try { require('./self_changes').record({ kind: 'new', selfModelId: _row.id, next: rx.identity, bornFrom: url || title || domain, door: 'self_explore', now }); } catch {} } catch {}
   }
+  _noteRun({ ts: now, domain, seed, title, kept: !!(rx.keep && rx.identity), keep: !!rx.keep, identity: rx.identity ? String(rx.identity).slice(0, 120) : '' });
 
   // "Tell me about it as you go" — the outbox; main.js surfaces in a lull and clears.
   if (rx.share) {
@@ -216,6 +223,13 @@ async function run(deps = {}, { now = Date.now(), force = false } = {}) {
 }
 
 /** takeShare() → pending share text or null; clears the outbox (main.js's surface door). */
+/** The organ's own record of its last 20 runs: { ts, domain, seed, title?, reason? | kept, keep, identity } — one console line each. */
+function _noteRun(entry) {
+  try { const ring = JSON.parse(db.getMeta(RUNS_KEY) || '[]') || []; ring.push(entry); db.setMeta(RUNS_KEY, JSON.stringify(ring.slice(-20))); } catch {}
+  try { console.log(`[self-explore] ${entry.domain || '?'}: ${entry.reason ? entry.reason : (entry.kept ? 'reacted — kept an identity line' : `reacted — nothing kept (KEEP ${entry.keep ? 'yes' : 'no'})`)}${entry.title ? ` — "${String(entry.title).slice(0, 60)}"` : ''}`); } catch {}
+}
+function lastRuns() { try { return JSON.parse(db.getMeta(RUNS_KEY) || '[]') || []; } catch { return []; } }
+
 function takeShare() {
   try {
     const raw = db.getMeta(OUTBOX_KEY);
@@ -228,4 +242,4 @@ function takeShare() {
   } catch { return null; }
 }
 
-module.exports = { CATALOG, pick, parseReaction, run, takeShare, CADENCE_MS };
+module.exports = { CATALOG, pick, parseReaction, run, takeShare, lastRuns, CADENCE_MS, RUNS_KEY };

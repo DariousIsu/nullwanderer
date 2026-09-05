@@ -125,6 +125,21 @@ function record({ asset, kind = 'code', prevHash = null, newHash = null, propose
   return { ok: true, id: Number(info.lastInsertRowid) };
 }
 function get(id) { ensure(); return _handle().prepare('SELECT * FROM consent_events WHERE id = ?').get(id) || null; }
+/** A pending boot-detect card gets its rationale from the engineer's own note (09-05: four cards minted "unrecorded" when a
+ *  boot read edits still on disk); the card stays the same card, so she never sees two for one change. */
+function amend(id, { summary = '', rationale = '', expectedEffect = '', proposedBy = 'claude' } = {}) {
+  ensure();
+  const row = get(id);
+  if (!row) return { ok: false, why: `no card #${id}` };
+  if (row.verdict !== 'pending') return { ok: false, why: `card #${id} already ${row.verdict}` };
+  if (row.proposed_by !== 'boot-detect') return { ok: false, why: `card #${id} was proposed by ${row.proposed_by}, not detected at boot` };
+  if (!String(rationale || '').trim() || !String(summary || '').trim()) return { ok: false, why: 'an amendment needs a summary and a rationale' };
+  _handle().prepare('UPDATE consent_events SET summary = ?, rationale = ?, expected_effect = ?, proposed_by = ? WHERE id = ?')
+    .run(String(summary).slice(0, 400), String(rationale).slice(0, 800), String(expectedEffect || '').slice(0, 400), String(proposedBy), id);
+  return { ok: true, id, asset: row.asset };
+}
+/** The pending card for an asset at a hash, if any (the boot check and consent_note look before they mint). */
+function pendingFor(asset, newHash) { ensure(); return _handle().prepare("SELECT * FROM consent_events WHERE asset = ? AND new_hash = ? AND verdict = 'pending' ORDER BY id DESC LIMIT 1").get(asset, newHash) || null; }
 function pending() { ensure(); return _handle().prepare("SELECT * FROM consent_events WHERE verdict = 'pending' ORDER BY id ASC").all(); }
 function recent({ limit = 20 } = {}) { ensure(); return _handle().prepare('SELECT * FROM consent_events ORDER BY id DESC LIMIT ?').all(limit); }
 function _consented(asset, hash) { ensure(); return !!_handle().prepare("SELECT id FROM consent_events WHERE asset = ? AND new_hash = ? AND verdict = 'yes' LIMIT 1").get(asset, hash); }
@@ -185,6 +200,13 @@ function bootCheck({ now = Date.now(), log = null, emit = null, deps = {} } = {}
     }
     if (c.now && _consented(c.id, c.now)) { m[c.id] = c.now; continue; }   // a consented change that had not yet reached the manifest
     if (!out.required) { say(`[consent] unconsented change: ${c.id} (${(c.prev || 'none').slice(0, 8)}→${(c.now || 'gone').slice(0, 8)}) — consent_required is OFF by his decision; recorded, not carded`); m[c.id] = c.now; continue; }
+    // A pending card for a hash that is no longer on disk (the file changed again before she answered) is SUPERSEDED — a
+    // status, never a delete; the card for the hash that stands is minted below. (09-05: three such cards after cut 8's
+    // edits kept moving under a boot.)
+    for (const stale of pending().filter((p) => p.asset === c.id && p.new_hash !== c.now && p.new_hash !== c.prev)) {
+      _handle().prepare("UPDATE consent_events SET verdict = 'superseded', reason = ? WHERE id = ? AND verdict = 'pending'").run('the file changed again before she answered; the card for the hash that stands replaces this one', stale.id);
+      say(`[consent] card #${stale.id} for ${c.id} superseded — its hash ${String(stale.new_hash || '').slice(0, 8)} never landed`);
+    }
     const already = pending().find((p) => p.asset === c.id && p.new_hash === c.now);
     if (!already) {
       const r = record({ asset: c.id, kind: c.kind, prevHash: c.prev, newHash: c.now, proposedBy: 'boot-detect', summary: `${c.path} changed on disk since the last consented manifest`, rationale: 'unrecorded — detected at boot; whoever changed it did not say why', expectedEffect: 'unknown until read', now });
@@ -221,4 +243,4 @@ function setConsentRequired(on, { log = null } = {}) {
   (log || console.log)(`[consent] consent_required → ${on ? 'ON' : 'OFF'} — his decision, logged`);
 }
 
-module.exports = { ENTRIES, MANIFEST_KEY, SWITCH_KEY, hashAll, diff, manifest, consentRequired, setConsentRequired, ensure, record, get, pending, recent, verdict, revoke, bootCheck, buildPromptBlock, parseConsentTags, applyTags, _setDb };
+module.exports = { ENTRIES, MANIFEST_KEY, SWITCH_KEY, hashAll, diff, manifest, consentRequired, setConsentRequired, ensure, record, amend, pendingFor, get, pending, recent, verdict, revoke, bootCheck, buildPromptBlock, parseConsentTags, applyTags, _setDb };

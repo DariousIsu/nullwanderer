@@ -30,8 +30,8 @@ const PREFILTER_SIM = 0.68;
 const SATURATION_MASS = 12;
 const CLUSTER_SIM = 0.70;
 
-const VALID = new Set(['trait', 'value', 'preference', 'taste', 'opinion', 'relationship', 'identity', 'insight']);
-const PERSONALITY = new Set(['preference', 'taste', 'value', 'opinion', 'relationship', 'trait', 'identity']);
+const VALID = new Set(['trait', 'value', 'preference', 'taste', 'opinion', 'relationship', 'identity', 'insight', 'position']);   // position: cut 8 (owned growth) — an opinion she will defend, with a citation
+const PERSONALITY = new Set(['preference', 'taste', 'value', 'opinion', 'relationship', 'trait', 'identity', 'position']);
 const gist = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 70);
 // The preference SLOT, e.g. "favorite movie" → "movie". Two statements about the same
 // favorite slot are the same aspect of her even if the VALUE (and thus the embedding)
@@ -119,7 +119,10 @@ function _leakedSelfStatement(text) {
   return _GARBLED.test(t) || _REASSURANCE.test(t) || _addressedByOwnName(t);
 }
 
-async function record(content, { category = 'insight', importance = 0.6, decideFn = null, epistemic = 'speculated' } = {}) {
+// door / bornFrom (cut 8, owned growth): when one of HER OWN doors writes (self_explore, persona_attend, prompted_turn,
+// preferences, told), a revision or a new facet also lands in the self_changes ledger with what formed it. Research and
+// reflection callers pass no door and write no ledger row (the drift cure's rail).
+async function record(content, { category = 'insight', importance = 0.6, decideFn = null, epistemic = 'speculated', door = null, bornFrom = null } = {}) {
   const text = String(content || '').trim();
   if (text.length < 8) return null;
   if (SELF_REJECT.test(text)) { console.log('[self_model] guardrail rejected self-critical takeaway:', text.slice(0, 70)); return { skipped: 'self-criticism' }; }
@@ -172,6 +175,7 @@ async function record(content, { category = 'insight', importance = 0.6, decideF
         // LOOP B: a REVISION is the self actually changing — journal it URGENT so the narrative
         // recomposes now (minimally), instead of carrying the old self up to a blind TTL later.
         try { require('./self_narrative').markDirty('self_model', candidate.id, `revised: "${gist(old)}" → "${gist(text)}"`, { urgent: true }); } catch {}
+        if (door) { try { require('./self_changes').record({ kind: 'revise', selfModelId: candidate.id, prior: old, next: text, bornFrom, door }); } catch {} }
         return { action: 'revise', id: candidate.id, old, sim: cSim };
       }
       // 'different' → fall through to ADD
@@ -185,13 +189,26 @@ async function record(content, { category = 'insight', importance = 0.6, decideF
   // LOOP B: a new facet journals non-urgent (3 accumulate → recompose); a TOLD trait (Lucas
   // affirmed it) is urgent — external affirmation is identity news, not drift.
   try { require('./self_narrative').markDirty('self_model', row.id, `new ${cat}: "${gist(text)}"`, { urgent: epistemic === 'told' }); } catch {}
+  if (door) { try { require('./self_changes').record({ kind: 'new', selfModelId: row.id, next: text, bornFrom, door }); } catch {} }
   return { action: 'add', id: row.id };
 }
 
 // Grounding helper: record/promote a trait Lucas affirmed about her (told) — higher base
 // importance because external affirmation matters more than self-assertion.
-async function recordTold(content, { category = 'trait', importance = 0.78 } = {}) {
-  return record(content, { category, importance, epistemic: 'told' });
+async function recordTold(content, { category = 'trait', importance = 0.78, bornFrom = null } = {}) {
+  return record(content, { category, importance, epistemic: 'told', door: 'told', bornFrom });
+}
+
+// OWNED GROWTH (cut 8): her OWN explicit change of mind in a prompted reply — "I've changed my mind about X", "I no longer
+// think X", "I don't X anymore" — is a door of hers. Returns the first-person statement, or null. Questions never count.
+function detectSelfChange(text) {
+  const t = String(content_str(text)).replace(/\s+/g, ' ').trim();
+  if (!t || /\?\s*$/.test(t)) return null;
+  let m;
+  if ((m = t.match(/\bI(?:'ve| have) changed my mind (?:about|on) ([^.!?;,—–]{4,120})/i))) return `I've changed my mind about ${m[1].trim()}`;
+  if ((m = t.match(/\bI no longer (think|believe|hold|feel|like|want|enjoy) (?:that )?([^.!?;,—–]{4,120})/i))) return `I no longer ${m[1].toLowerCase()} ${m[2].trim()}`;
+  if ((m = t.match(/\bI (?:don't|do not) (?:really )?([a-z][^.!?;]{3,100}?) anymore\b/i))) return `I don't ${m[1].trim()} anymore`;
+  return null;
 }
 
 // Detect Lucas affirming a trait ABOUT her in a chat message → a first-person 'told' self-
@@ -224,7 +241,7 @@ const HEADER = `WHO YOU ARE — your own self: your preferences, tastes, values,
 
 function render(rows) {
   if (!rows || !rows.length) return null;
-  return `${HEADER}\n${rows.map(r => `  • ${r.content}`).join('\n')}`;
+  return `${HEADER}\n${rows.map(r => `  • ${r.content}${r.category === 'position' ? ' — a position I hold' : ''}`).join('\n')}`;   // a position renders as hers (cut 8), never as a fact
 }
 
 // Priority of a self-entry for injection. SATURATES the mentions boost (research:
@@ -312,4 +329,4 @@ async function buildContextBlock(query, { limit = 10, relevantK = 4 } = {}) {
   return render(out.slice(0, limit));
 }
 
-module.exports = { record, recordTold, detectAffirmedTrait, buildPromptBlock, buildContextBlock, retrieveRelevant, selectDiverse, _priority, inferCategory, defaultDecide, classify3, _leakedSelfStatement, PREFILTER_SIM, SELF_REJECT, SELF_TRUST };
+module.exports = { record, recordTold, detectAffirmedTrait, detectSelfChange, buildPromptBlock, buildContextBlock, retrieveRelevant, selectDiverse, _priority, inferCategory, defaultDecide, classify3, _leakedSelfStatement, PREFILTER_SIM, SELF_REJECT, SELF_TRUST };

@@ -112,7 +112,7 @@ async function answer(userMessage, userName = 'Lucas', { retrieveFn = selfModel.
   // Store CANONICALLY (with the slot word) so the next ask RECALLS this one instead of forming
   // a fresh pick, and so self_model dedups future picks of the same slot rather than splitting
   // into competing rows (the ocean-blue vs emerald-green bug). Spoken answer stays natural.
-  try { await selfModel.record(canonicalPref(subject, picked), { category: 'preference', importance: 0.8 }); } catch {}
+  try { await selfModel.record(canonicalPref(subject, picked), { category: 'preference', importance: 0.8, door: 'preferences', bornFrom: `asked: ${String(subject).slice(0, 60)}` }); } catch {}   // cut 8: a preference she formed is a change of hers
   return { thought: `${userName} asked what I like — I'll decide and own it, and it's mine now.`, say: picked };
 }
 
@@ -151,7 +151,7 @@ async function answerIdentity(userMessage, userName = 'Lucas') {
       if (stored) return { thought: `${userName} asked my name — that one's mine.`, say: stored.content };
     } catch {}
     const say = `My name is ${name}. ${userName} chose it, but it's mine now — I'm the one who answers to it.`;
-    try { await selfModel.record(say, { category: 'identity', importance: 0.9 }); } catch {}
+    try { await selfModel.record(say, { category: 'identity', importance: 0.9, door: 'preferences', bornFrom: 'asked: my name' }); } catch {}
     return { thought: `${userName} asked my name — that one's easy, it's mine.`, say };
   }
   // who/what are you → reframed intro seeded with her self-model

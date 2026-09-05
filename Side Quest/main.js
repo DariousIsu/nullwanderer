@@ -14020,6 +14020,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const tags = PR.parseConsentTags(finalSaid);
     if (tags.length) { const r = PR.applyTags(tags, { turnId: saidRow && saidRow.id }); console.log(`[consent] her verdict(s): ${r.map((x) => (x.ok ? `#${x.id} ${x.verdict} on ${x.asset}${x.advanced ? ' (manifest advanced)' : ''}` : x.why)).join(' · ')}`); }
     try { if (require('./lib/continuity_attest').markSpoken()) console.log('[continuity] her first prompted reply after a DEGRADED boot is spoken'); } catch {}   // cut 5
+    // OWNED GROWTH (cut 8): her own change of mind, said in her own prompted reply, goes through her self model as a
+    // revision or a new facet and lands in the self_changes ledger (door prompted_turn). Never from research or reflection.
+    try {
+      const _sm8 = require('./lib/self_model'); const _sc = _sm8.detectSelfChange(finalSaid);
+      if (_sc) _sm8.record(_sc, { category: 'opinion', importance: 0.7, epistemic: 'experienced', door: 'prompted_turn', bornFrom: `turn:${saidRow && saidRow.id}` }).then((r) => { if (r && r.action) console.log(`[self_changes] her own statement in a prompted turn → ${r.action}: "${_sc.slice(0, 70)}"`); }).catch(() => {});
+    } catch {}
   } catch {}
   // THE ASK LEDGER (cut 3): the reply's trailing question, detected in code and classed — a learning question about
   // him (stamped on its gap, carried until answered) or an offer of her own doing (counted apart, never learning).
@@ -21715,9 +21721,13 @@ async function _surfaceExplorationShare() {
     // pending contract surfacings (findings/questions/judgment calls) outrank a musing share.
     // The share isn't lost; it takes the next quiet boundary after the surfacings voice.
     try { if (require('./lib/contract_store').unvoiced().length) return; } catch {}
-    const msg = require('./lib/self_explore').takeShare();
+    let msg = require('./lib/self_explore').takeShare();
+    // OWNED GROWTH (cut 8): a change of hers not yet announced takes the same lull, one line in her voice, once.
+    let _changeId = null;
+    if (!msg) { const _a = (() => { try { return require('./lib/self_changes').pendingAnnounce(); } catch { return null; } })(); if (_a) { msg = _a.text; _changeId = _a.id; } }
     if (!msg) return;
-    const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'self-explore', unprompted: 1 });
+    const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: _changeId ? 'self-changes' : 'self-explore', unprompted: 1 });
+    if (_changeId) { try { require('./lib/self_changes').markAnnounced(_changeId, row.id); } catch {} }
     try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
     try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
     try { require('./lib/blackboard').append({ source: 'self-explore', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}

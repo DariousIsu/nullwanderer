@@ -2514,13 +2514,13 @@ function updateSelfModel(id, { content = null, embedding = null, importance = nu
 }
 
 function getAllSelfModelEmbeddings() {
-  return getDb().prepare('SELECT id, category, content, embedding, importance, mentions, epistemic FROM self_model WHERE embedding IS NOT NULL').all();
+  return getDb().prepare('SELECT id, category, content, embedding, importance, mentions, epistemic FROM self_model WHERE embedding IS NOT NULL AND importance > 0').all();   // importance 0 = retired (cut 8): kept, never rendered
 }
 
 // Top entries for the always-injected persona block: weight importance by how often
 // the trait has been reinforced (mentions), then recency.
 function getSelfModelForPrompt(limit = 10) {
-  return getDb().prepare('SELECT category, content, mentions, epistemic FROM self_model ORDER BY (importance * (1 + 0.1 * mentions)) DESC, updated_ts DESC LIMIT ?').all(limit);
+  return getDb().prepare('SELECT category, content, mentions, epistemic FROM self_model WHERE importance > 0 ORDER BY (importance * (1 + 0.1 * mentions)) DESC, updated_ts DESC LIMIT ?').all(limit);
 }
 
 function getAllSelfModel() {
