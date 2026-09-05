@@ -748,8 +748,11 @@ const _speech = (() => {
     } catch {}
     // RESPIRATION: a breath where a person would take one — before a sentence that follows a long one, or after a
     // few sentences without one; never the first sentence of a reply; only when she wrote no mark of her own.
+    // OFF unless meta voice.auto_breath='1' — his verdict on the first clip (09-05: "someone blowing into a mic");
+    // the clip is rebuilt (nonverbal v2) and her own <breath/> mark still plays it; the rule waits for his ear.
     let auto = null;
-    if (nv && !marks.before.length && !marks.after.length) {
+    const autoOn = (() => { try { return db.getMeta('voice.auto_breath') === '1'; } catch { return false; } })();
+    if (nv && autoOn && !marks.before.length && !marks.after.length) {
       const now = Date.now();
       if (now - _breath.lastAt > 8000) { _breath.index = 0; _breath.since = 0; _breath.prevLen = 0; }   // a new reply after a pause
       auto = tts.autoNonverbal({ index: _breath.index, prevLen: _breath.prevLen, sinceBreath: _breath.since });

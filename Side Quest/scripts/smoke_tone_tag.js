@@ -59,6 +59,25 @@ ok(tts.autoNonverbal({ index: 2, prevLen: 40, sinceBreath: 2 }) === null && tts.
 ok(tts.autoNonverbal({ index: 1, prevLen: 300, sinceBreath: 1 }) === null, 'at most one breath per few sentences (never two in a row)');
 const mainSrcEarly = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/autoNonverbal\(\{ index: _breath\.index/.test(mainSrcEarly) && /if \(auto\) _enqueueItem\(\{ clip: auto \}\)/.test(mainSrcEarly) && /!marks\.before\.length && !marks\.after\.length/.test(mainSrcEarly), 'the speech manager applies it only when she wrote no mark of her own');
+ok(/db\.getMeta\('voice\.auto_breath'\) === '1'/.test(mainSrcEarly) && /nv && autoOn && !marks/.test(mainSrcEarly), 'the automatic breath is OFF unless meta voice.auto_breath=1 (his verdict on the first clip)');
+// THE BREATH v2 — measured, since his ear said v1 was "someone blowing into a mic" (hiss + a plateau)
+{
+  const nvb = require(path.join(__dirname, '..', 'lib', 'nonverbal'));
+  const x = nvb.synthBreath(); const n = x.length, sr = nvb.SR;
+  let rms = 0, pk = 0, zc = 0; for (let i = 0; i < n; i++) { rms += x[i] * x[i]; pk = Math.max(pk, Math.abs(x[i])); if (i && (x[i] >= 0) !== (x[i - 1] >= 0)) zc++; }
+  rms = Math.sqrt(rms / n); const zcr = zc / (n / sr);
+  const a = Math.exp(-2 * Math.PI * 150 / sr); let y = 0, lf = 0, tot = 0; for (let i = 0; i < n; i++) { y = a * y + (1 - a) * x[i]; lf += y * y; tot += x[i] * x[i]; }
+  const dB = (v) => 20 * Math.log10(v || 1e-9);
+  let pkHead = 0, pkTail = 0; for (let i = 0; i < n * 0.12; i++) pkHead = Math.max(pkHead, Math.abs(x[i])); for (let i = Math.floor(n * 0.92); i < n; i++) pkTail = Math.max(pkTail, Math.abs(x[i]));
+  ok(Math.abs(n / sr - 0.34) < 0.01, `a catch-breath is a third of a second (${(n / sr).toFixed(2)}s), not half`);
+  ok(zcr > 1400 && zcr < 3200, `its centre sits near 1 kHz, not in the hiss (zcr ${Math.round(zcr)}/s; v1 was ~7300)`);
+  ok(dB(rms) > -41 && dB(rms) < -35 && dB(pk) <= -22, `its level is a decision: rms ${dB(rms).toFixed(1)} dBFS, peak ${dB(pk).toFixed(1)} (≈18 dB under speech)`);
+  ok(lf / tot < 0.03, `no rumble below 150 Hz (${(100 * lf / tot).toFixed(1)}%)`);
+  ok(pkHead < 0.4 * pk && pkTail < 0.3 * pk, `it rises and falls — no plateau, no blow (head ${(pkHead / pk).toFixed(2)}, tail ${(pkTail / pk).toFixed(2)} of peak)`);
+  ok(nvb.KINDS.breath.ms === 340 && /breath\.(?!41db694866)/.test(path.basename(nvb.clipPath('breath', null))), 'the bank names the new length and the cached v1 clip is left behind (a new hash)');
+  const sg = nvb.synthSigh(); let sgHead = 0, sgPk = 0; for (let i = 0; i < sg.length; i++) sgPk = Math.max(sgPk, Math.abs(sg[i])); for (let i = 0; i < sg.length * 0.2; i++) sgHead = Math.max(sgHead, Math.abs(sg[i]));
+  ok(sg.length === Math.round(sr * 0.95) && sgHead > 0.5 * sgPk, 'a sigh is an exhale: it starts near full and falls');
+}
 ok(/baselineFromState\(base, st, \{ enabled: db\.getMeta\('voice\.state_baseline'\) !== '0' \}\)/.test(mainSrcEarly) && /baseline=/.test(mainSrcEarly), 'every sentence rides the state baseline (on unless meta voice.state_baseline=0) and the log names it');
 
 // ── the marks survive prepareText; extractVoiceMarks splits them ───────────────────────────────────
@@ -104,7 +123,7 @@ ok(/for \(const k of marks\.before\) _enqueueItem\(\{ clip: k \}\)/.test(mainSrc
 
 // ── the non-verbal bank ───────────────────────────────────────────────────────────────────────────
 const b1 = NV.synthBreath(), b2 = NV.synthBreath();
-ok(b1.length === Math.round(NV.SR * 0.52) && NV.peak(b1) <= 0.2 && NV.peak(b1) > 0.02, `a breath: 520 ms at ${NV.SR} Hz, soft (peak ${NV.peak(b1).toFixed(3)})`);
+ok(b1.length === Math.round(NV.SR * 0.34) && NV.peak(b1) <= 0.06 && NV.peak(b1) > 0.02, `a breath: 340 ms at ${NV.SR} Hz, soft (peak ${NV.peak(b1).toFixed(3)})`);
 ok(b1.every((v, i) => v === b2[i]), 'deterministic (seeded)');
 const s1 = NV.synthSigh();
 ok(s1.length === Math.round(NV.SR * 0.95) && NV.peak(s1) <= 0.35 && NV.peak(s1) > NV.peak(b1) * 0.8, `a sigh: 950 ms, a voiced fall under the breath (peak ${NV.peak(s1).toFixed(3)})`);

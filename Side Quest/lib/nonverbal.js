@@ -21,7 +21,7 @@ const SR = 24000;   // the tuner's rate, so a clip splices beside a sentence wit
 
 // The bank. spoken → through Kokoro (her recipe + a tone); dsp → synthesized here.
 const KINDS = {
-  breath:  { dsp: 'breath',  ms: 520 },
+  breath:  { dsp: 'breath',  ms: 340 },
   sigh:    { dsp: 'sigh',    ms: 950 },
   laugh:   { spoken: 'Ha ha ha!',  tone: 'quick' },
   chuckle: { spoken: 'Heh heh.',   tone: 'warm' },
@@ -31,27 +31,49 @@ function kinds() { return Object.keys(KINDS); }
 
 // ── DSP (pure) ──────────────────────────────────────────────────────────────────────────────────────
 function _prng(seed) { let s = seed >>> 0 || 1; return () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return (s / 4294967296) * 2 - 1; }; }
-// a breath: white noise → a one-pole low-pass (~1.4 kHz) minus a low-pass (~250 Hz) = a soft band → an
-// attack/hold/decay envelope. amp caps the peak well under speech level.
-function synthBreath({ ms = 520, amp = 0.16, seed = 7, sr = SR } = {}) {
+// an RBJ band-pass biquad (constant-skirt), state inside the returned function
+function _bandpass(f, Q, sr) {
+  const w = 2 * Math.PI * f / sr, alpha = Math.sin(w) / (2 * Q), cosw = Math.cos(w);
+  const a0 = 1 + alpha, b0 = alpha / a0, b2 = -alpha / a0, a1 = -2 * cosw / a0, a2 = (1 - alpha) / a0;
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  return (x) => { const y = b0 * x + b2 * x2 - a1 * y1 - a2 * y2; x2 = x1; x1 = x; y2 = y1; y1 = y; return y; };
+}
+// A BREATH (v2, 2026-09-05 — his verdict on v1: "it just sounds like someone blowing into a mic"). v1 was white
+// noise through two one-pole filters (a 6 dB/oct skirt: hiss to the top of the band, ZCR ≈ 7300/s) held at a
+// plateau for a third of a second — a steady stream of air on a capsule. A catch-breath before a sentence is
+// shaped by the mouth: a resonance near 950 Hz with a touch of air near 2.2 kHz, almost nothing above 3 kHz,
+// a rise with no plateau and a quick fall, a slight flutter, and a level ~18 dB under speech. shape 'in' is the
+// inhale (rise 70 % / fall 30 %); 'out' the exhale a sigh rides (rise 15 % / fall 85 %). Level is normalized
+// to targetRms so the loudness is a decision here, not an accident of the filters.
+function synthBreath({ ms = 340, amp = null, seed = 7, sr = SR, shape = 'in', targetRms = 0.0126, peakCap = 0.05 } = {}) {
   const n = Math.round(sr * ms / 1000), out = new Float32Array(n), rnd = _prng(seed);
-  const aHi = 1 - Math.exp(-2 * Math.PI * 1400 / sr), aLo = 1 - Math.exp(-2 * Math.PI * 250 / sr);
-  let lp1 = 0, lp2 = 0;
-  const attack = Math.round(n * 0.35), decay = Math.round(n * 0.45);
+  const body = _bandpass(950, 1.6, sr), air = _bandpass(2200, 3.0, sr);
+  const aLp = 1 - Math.exp(-2 * Math.PI * 2800 / sr);
+  const aHp = 1 - Math.exp(-2 * Math.PI * 300 / sr);
+  let lp1 = 0, lp2 = 0, hp = 0;
+  const rise = shape === 'out' ? 0.15 : 0.70;
   for (let i = 0; i < n; i++) {
     const w = rnd();
-    lp1 += aHi * (w - lp1); lp2 += aLo * (w - lp2);
-    let env = 1;
-    if (i < attack) env = i / attack; else if (i > n - decay) env = (n - i) / decay;
-    env = env * env;   // soft edges
-    out[i] = (lp1 - lp2) * env * amp;
+    let s = body(w) + 0.32 * air(w);
+    lp1 += aLp * (s - lp1); lp2 += aLp * (lp1 - lp2);          // two poles above 2.8 kHz
+    hp += aHp * (lp2 - hp); s = lp2 - hp;                          // nothing below ~300 Hz
+    const t = i / n;
+    let env = t < rise ? Math.pow(t / rise, 1.4) : Math.pow(Math.cos((Math.PI / 2) * ((t - rise) / (1 - rise))), 1.2);
+    env *= 1 + 0.10 * Math.sin(2 * Math.PI * 12 * i / sr);         // a slight flutter — not a constant stream
+    out[i] = s * env;
   }
+  // level: a decision, not an accident
+  let rms = 0, pk = 0; for (let i = 0; i < n; i++) { rms += out[i] * out[i]; pk = Math.max(pk, Math.abs(out[i])); }
+  rms = Math.sqrt(rms / n) || 1e-9;
+  let g = (amp != null ? amp : targetRms) / rms;
+  if (pk * g > peakCap) g = peakCap / pk;
+  for (let i = 0; i < n; i++) out[i] *= g;
   return out;
 }
 // a sigh: a longer breath with a voiced, softly descending tone underneath (a low "haaah"), two harmonics.
 function synthSigh({ ms = 950, amp = 0.15, seed = 11, sr = SR } = {}) {
   const n = Math.round(sr * ms / 1000);
-  const breath = synthBreath({ ms, amp: amp * 0.9, seed, sr });
+  const breath = synthBreath({ ms, seed, sr, shape: 'out', targetRms: 0.02, peakCap: 0.08 });
   const out = new Float32Array(n);
   let phase = 0;
   for (let i = 0; i < n; i++) {
@@ -84,7 +106,7 @@ function peak(samples) { let p = 0; for (let i = 0; i < samples.length; i++) p =
 function _hash(o) { return crypto.createHash('sha1').update(JSON.stringify(o)).digest('hex').slice(0, 10); }
 function clipPath(kind, recipe, { dir = DIR } = {}) {
   const spec = KINDS[kind]; if (!spec) return null;
-  const key = spec.dsp ? _hash({ kind, dsp: spec.dsp, ms: spec.ms, v: 1 }) : _hash({ kind, spoken: spec.spoken, tone: spec.tone, recipe: recipe && { w: recipe.weights, l: recipe.lang, s: recipe.speed }, v: 1 });
+  const key = spec.dsp ? _hash({ kind, dsp: spec.dsp, ms: spec.ms, v: 2 }) : _hash({ kind, spoken: spec.spoken, tone: spec.tone, recipe: recipe && { w: recipe.weights, l: recipe.lang, s: recipe.speed }, v: 1 });
   return path.join(dir, `${kind}.${key}.wav`);
 }
 
