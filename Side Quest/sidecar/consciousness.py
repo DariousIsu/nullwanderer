@@ -36,6 +36,9 @@ CURIOSITY_RISE = 1.0 / 7200.0
 PROGRESS_DECAY = 1.0 / 3600.0
 
 STRANGER_STEADY_MS = 8000         # a face that is not him must hold this long — flicker never counts
+BOOT_GRACE_MS = 90000             # boot_p309's first minute: his own face at match 0.013→0.65 as he settled read as a stranger
+                                  # because the loop had never seen him; no stranger act until the loop is this old
+PERFORM_BUDGET_MS = 20000         # the slow loop's first cloud call aborted at 8 s on p309
 STRANGER_REASK_MS = 10 * 60000    # ask an unknown person again only after this long
 LOOK_COOLDOWN_MS = 4 * 60000
 LOOK_BOREDOM = 0.7
@@ -56,6 +59,7 @@ def initial_state(now_ms=0):
     return {
         "v": 1,
         "at": now_ms,
+        "born": now_ms,
         "drives": {"stimulation": 0.6, "social": 0.2, "curiosity": 0.4, "energy": 0.8, "progress": 0.5},
         "clock": {"his_last_word_at": None, "her_last_say_at": None, "last_saw_him_at": None, "last_novel_at": None, "last_seen_as": None},
         "presence": {"state": "here", "since": now_ms},
@@ -173,20 +177,21 @@ def _acts(state, now):
     him_away = state["presence"]["state"] in ("away", "remote") or last_him is None or (now - last_him) > 60000
     # THE FIRST ACT — someone else at the desk (§4.5b)
     someone_else = f["present"] and not f["is_him"] and f["since"] is not None and (now - f["since"]) >= STRANGER_STEADY_MS
-    if someone_else and him_away and not sh["on"]:
+    settled = (now - (state.get("born") if state.get("born") is not None else now)) >= BOOT_GRACE_MS
+    if someone_else and him_away and settled and not sh["on"]:
         who = f.get("known")
         sh.update({"on": True, "since": now, "who": who, "asked_at": None, "greeted": False})
         out.append({"kind": "act", "act": "shield", "why": f"someone at the desk who is not him ({who or 'unknown'})", "at": now})
         out.append({"kind": "act", "act": "deliver", "to": "him", "text": f"{who or 'Someone I don\'t recognize'} sat down at your desk. I've covered the screens.", "at": now})
         if who:
             sh["greeted"] = True
-            out.append(_reason(state, "perform", {"act": "greet", "name": who, "relation": state["people"].get(who, {}).get("relation", "known")}, 8000))
+            out.append(_reason(state, "perform", {"act": "greet", "name": who, "relation": state["people"].get(who, {}).get("relation", "known")}, PERFORM_BUDGET_MS))
         else:
             sh["asked_at"] = now
-            out.append(_reason(state, "perform", {"act": "ask", "text": "who they are and how you can help — one line, no data on the screen named"}, 8000))
+            out.append(_reason(state, "perform", {"act": "ask", "text": "who they are and how you can help — one line, no data on the screen named"}, PERFORM_BUDGET_MS))
     elif sh["on"] and someone_else and not f.get("known") and sh["asked_at"] and (now - sh["asked_at"]) >= STRANGER_REASK_MS:
         sh["asked_at"] = now
-        out.append(_reason(state, "perform", {"act": "ask", "text": "again, gently — they have not said who they are"}, 8000))
+        out.append(_reason(state, "perform", {"act": "ask", "text": "again, gently — they have not said who they are"}, PERFORM_BUDGET_MS))
     if sh["on"] and f["present"] and f["is_him"]:
         sh.update({"on": False, "since": None, "who": None, "asked_at": None, "greeted": False})
         out.append({"kind": "act", "act": "unshield", "why": "he is back", "at": now})

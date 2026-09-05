@@ -64,6 +64,18 @@ def test_known_face_is_greeted_by_name_after_his_word_enrolled_them():
     assert not any(o.get("context", {}).get("act") == "ask" for o in outs), "a known face is never asked who they are"
 
 
+def test_no_stranger_act_in_the_boots_first_ninety_seconds():
+    """boot_p309, 11:04: his own face at match 0.013→0.65 as he settled, held 8 s, read as a stranger — the loop had
+    never seen him. A face the loop cannot match in its first BOOT_GRACE_MS is never a stranger."""
+    st = C.initial_state(1000)
+    st, out = _run(st, [(1000, [face(True, False)]), (1000 + 10000, [face(True, False)]), (1000 + 30000, [face(True, False)])])
+    assert not any(o.get("act") == "shield" for now, os_ in out for o in os_), "no shield inside the boot grace"
+    st, out = _run(st, [(1000 + C.BOOT_GRACE_MS + 1000, [face(True, False)])])
+    assert any(o.get("act") == "shield" for now, os_ in out for o in os_), "past the grace, the same steady stranger shields"
+    ask = [o for now, os_ in out for o in os_ if o.get("op") == "perform"]
+    assert ask and ask[0]["budget_ms"] == C.PERFORM_BUDGET_MS == 20000, "the slow loop's line gets a budget a cloud call can meet"
+
+
 def test_a_face_while_he_is_here_never_shields():
     st = C.initial_state(0)
     st, out = _run(st, [(0, [face(True, True)]), (20000, [face(True, False)]), (40000, [face(True, False)])])

@@ -29,6 +29,29 @@ const C = require(path.join(ROOT, 'lib', 'consciousness'));
 const shield = require(path.join(ROOT, 'lib', 'shield'));
 ok(/getElementById\('zoe-shield'\)/.test(shield.coverScript({ who: 'Raegan' })) && /Hi Raegan\./.test(shield.coverScript({ who: 'Raegan' })) && /Tell me who you are/.test(shield.coverScript({})) && /removeChild/.test(shield.uncoverScript()), 'the cover: an opaque overlay injected by script, a name when known, a question when not');
 ok(!/<img|<script/.test(shield.coverScript({ who: '<img onerror=alert(1)>' })) && /Hi img onerror=alert\(1\)\./.test(shield.coverScript({ who: '<img onerror=alert(1)>' })), 'a name loses its angle brackets and quotes before it reaches a window (it lands as textContent, never markup)');
+ok(/background:#000/.test(shield.coverPage({})) && /<h1>Zoe<\/h1>/.test(shield.coverPage({})) && /Tell me who you are/.test(shield.coverPage({})) && !/<img/.test(shield.coverPage({ who: '<img>' })), 'the display cover: black, her name, the line, a name escaped');
+// EVERY DISPLAY (his word after p309: "it should black out all screens"): one always-on-top cover per monitor, closed on unshield
+(async () => {
+  const made = [];
+  function FakeWin(opts) { this.opts = opts; this.closed = false; this.top = null; this.url = null; made.push(this); }
+  FakeWin.prototype.setAlwaysOnTop = function (on, level) { this.top = level; };
+  FakeWin.prototype.setFullScreen = function () { this.fs = true; };
+  FakeWin.prototype.loadURL = function (u) { this.url = u; };
+  FakeWin.prototype.showInactive = function () { this.shown = true; };
+  FakeWin.prototype.close = function () { this.closed = true; };
+  FakeWin.prototype.isDestroyed = function () { return this.closed; };
+  const fakeEl = { screen: { getAllDisplays: () => [{ bounds: { x: 0, y: 0, width: 1920, height: 1080 } }, { bounds: { x: 1920, y: 0, width: 2560, height: 1440 } }] }, BrowserWindow: FakeWin };
+  fakeEl.BrowserWindow.getAllWindows = () => [];
+  const r1 = await shield.cover({ who: null, deps: { electron: fakeEl, windows: [], log: () => {} } });
+  ok(r1.displays === 2 && made.length === 2 && made[1].opts.x === 1920 && made[1].opts.width === 2560 && made.every((w) => w.top === 'screen-saver' && w.opts.alwaysOnTop && w.opts.focusable === false && w.opts.skipTaskbar && w.shown && /data:text\/html/.test(w.url)), `cover → one always-on-top cover per display (${r1.displays}), inactive, over everything`);
+  const r1b = await shield.cover({ who: null, deps: { electron: fakeEl, windows: [], log: () => {} } });
+  ok(r1b.displays === 2 && made.length === 2 && shield.state().on && shield.state().displays === 2, 'a second cover while covered makes no second set');
+  const r2 = await shield.uncover({ deps: { electron: fakeEl, windows: [], log: () => {} } });
+  ok(r2.displays === 2 && made.every((w) => w.closed) && !shield.state().on && shield.state().displays === 0, 'uncover closes every cover');
+  const r3 = await shield.cover({ who: 'Raegan', deps: { electron: null, windows: [{ webContents: { executeJavaScript: async () => true } }], log: () => {} } });
+  ok(r3.displays === 0 && r3.windows === 1, 'without electron (a test) the in-window overlay still covers hers');
+  await shield.uncover({ deps: { electron: null, windows: [], log: () => {} } });
+})();
 function fakeLoop() {
   const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stderr = new EventEmitter(); c.received = [];
   c.stdin = { writable: true, write: (line) => { c.received.push(JSON.parse(line)); return true; } };
@@ -68,6 +91,13 @@ function fakeLoop() {
   child.say({ kind: 'reason', id: 2, op: 'reflect', budget_ms: 20000, context: { act: 'wonder', unseen_min: 30 } });
   await new Promise((r) => setTimeout(r, 20));
   ok(calls.thoughts.length === 1 && /thirty-five/.test(calls.thoughts[0]) && calls.speak.length === 1, 'a wondering goes to her thought lane and is never spoken by itself');
+  // his word after p309 ("also speak to the person"): the model slow or failed → she still speaks, a plain line
+  const bridge2 = C.create({ deps: { spawn: () => child, now: () => clock, log: () => {}, obsBus: { subscribe: () => {}, emit: () => {} }, speak: async (t) => { calls.speak.push(t); }, slowLoop: async (req) => ({ kind: 'percept', sense: 'answer', id: req.id, op: 'perform', ok: false, error: 'This operation was aborted' }), tickMs: 3600000 } });
+  await bridge2.handle({ kind: 'reason', id: 3, op: 'perform', budget_ms: 20000, context: { act: 'ask' } });
+  await new Promise((r) => setTimeout(r, 20));
+  await bridge2.handle({ kind: 'reason', id: 4, op: 'perform', budget_ms: 20000, context: { act: 'greet', name: 'Raegan' } });
+  await new Promise((r) => setTimeout(r, 20));
+  ok(calls.speak.length === 3 && /Who are you, and how can I help\?$/.test(calls.speak[1]) && /^Hi Raegan\./.test(calls.speak[2]), 'when the model cannot write the line in time, she still speaks a plain one (ask, or a greet by name)');
   child.say({ kind: 'act', act: 'unshield', why: 'he is back' });
   child.say({ kind: 'state', at: clock, drives: { stimulation: 0.5 }, appraisals: { boredom: 0.5 }, shield: false, thoughts_of_him: [] });
   await new Promise((r) => setTimeout(r, 20));

@@ -89,6 +89,12 @@ function create({ deps = {} } = {}) {
           // a wondering: her thought lane, never spoken by itself
           log(`[consciousness] she wonders: "${ans.text.slice(0, 160)}"`);
           try { deps.logThought && deps.logThought(ans.text); } catch {}
+        } else if (msg.op === 'perform' && (!ans || !ans.ok)) {
+          // his word after p309 ("also speak to the person"): the model was slow or failed — she still speaks, a plain line
+          const ctx = msg.context || {};
+          const line = ctx.act === 'greet' && ctx.name ? `Hi ${ctx.name}. Lucas stepped away, so his screens are covered for now. How are you?` : 'Hi. Lucas is away and his screens are covered. Who are you, and how can I help?';
+          log(`[consciousness] reason ${msg.op}#${msg.id} → ${(ans && ans.error) || 'no answer'} — the plain line instead: "${line}"`);
+          try { await (deps.speak || (() => {}))(line); } catch (e) { log(`[consciousness] speak failed: ${e.message}`); }
         } else if (ans && !ans.ok) log(`[consciousness] reason ${msg.op}#${msg.id} → ${ans.error}`);
         percept({ sense: 'answer', id: msg.id, op: msg.op, ok: !!(ans && ans.ok), text: (ans && ans.text) || null });
       }).catch((e) => log(`[consciousness] slow loop threw: ${e.message}`));
