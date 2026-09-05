@@ -117,6 +117,19 @@ ok(PS.markDeskTurn({ deps: deps({ now: now + 401000 }) }) === null && JSON.parse
   const arr5 = PS.arrival({ deps: { db: db5 }, now: t + 1000 });
   ok(arr5 && Math.round(arr5.awayMs / 60000) === 34 && ev5.some((e) => e.kind === 'arrived'), `the 35-minute errand → an arrival measured from the empty chair (${arr5 && Math.round(arr5.awayMs / 60000)}m), not from the flip`);
   ok(JSON.parse(m5[PS.STATE_KEY]).emptySince === null, 'his face resets the empty-chair clock');
+  // SOMEONE ELSE in his chair (boot_p306 09:08: a stranger at match 0.06–0.31 while he was out) runs the same clock
+  const m7 = {}; const db7 = { getMeta: (k) => m7[k], setMeta: (k, v) => { m7[k] = v; } }; const ev7 = [];
+  const strangerAt = (t) => ({ present: true, is_him: false, confidence: 0.2, faces: 1, at: t - 500 });
+  const d7 = (o) => ({ db: db7, log: () => {}, obsBus: { emit: (e) => ev7.push(e) }, availability: { isAway: () => false, awayReason: () => null }, remoteSession: () => ({ active: false }), face: () => null, lastUserTurnTs: now - 60000, now, ...o });
+  PS.tick({ deps: d7({ face: () => ({ present: true, is_him: true, at: now - 500 }) }) });
+  let t7 = now + 3 * 60000; PS.tick({ deps: d7({ now: t7, face: () => strangerAt(t7) }) });
+  ok(JSON.parse(m7[PS.STATE_KEY]).state === 'here' && JSON.parse(m7[PS.STATE_KEY]).emptySince === t7, 'a stranger in his chair starts the clock; he is still here for now');
+  t7 = now + 14 * 60000; PS.tick({ deps: d7({ now: t7, face: () => strangerAt(t7) }) });
+  const s7 = JSON.parse(m7[PS.STATE_KEY]);
+  ok(s7.state === 'away' && /^camera: someone else, not him, for 11m/.test(s7.reason), `someone else at the desk for 10+ min with no turn from him → away (${s7.reason})`);
+  t7 = now + 40 * 60000; PS.tick({ deps: d7({ now: t7, face: () => ({ present: true, is_him: true, looking_at_screen: true, at: t7 - 500 }) }) });
+  const arr7 = PS.arrival({ deps: { db: db7 }, now: t7 + 1000 });
+  ok(arr7 && Math.round(arr7.awayMs / 60000) === 37 && ev7.some((e) => e.kind === 'arrived'), `his return → an arrival measured from when the camera last saw HIM (${arr7 && Math.round(arr7.awayMs / 60000)}m)`);
 }
 console.log(`\nsmoke_presence_state: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

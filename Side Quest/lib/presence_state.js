@@ -62,7 +62,10 @@ function fuse({ now = Date.now(), lastUserTurnTs = 0, guard = null, calendarBusy
   // at a high bar — no one for cameraAwayMs AND no chat turn for as long — because a false "away" would route a
   // Discord DM to a man sitting at his own desk (his law: only when he is genuinely not at the desk).
   const nobody = !!(faceFresh && !face.present);
-  const emptySince = nobody ? ((prev && prev.emptySince) || now) : null;
+  // the clock runs whenever the camera stops seeing HIM — an empty chair or someone else in it (boot_p306, 09:08:
+  // a stranger at the desk at match 0.06–0.31 while he was out; "someone else" alone never started it before).
+  const notHim = !!(faceFresh && (!face.present || face.is_him === false));
+  const emptySince = notHim ? ((prev && prev.emptySince) || now) : null;
   const location = (hisWord && hisWord.location) || (prev && prev.location) || null;
   let state, reason;
   if (guard && guard.paused && /meet|teams|zoom|call|calendar|meeting/i.test(String(guard.reason || '')) || calendarBusy) { state = 'meeting'; reason = guard && guard.paused ? `voice guard: ${guard.reason}` : 'calendar busy'; }
@@ -70,8 +73,8 @@ function fuse({ now = Date.now(), lastUserTurnTs = 0, guard = null, calendarBusy
   else if (hisWord && hisWord.away) { state = 'away'; reason = `his word: ${hisWord.awayReason || 'away'}`; }
   else if (remoteSession && remoteSession.active) { state = 'remote'; reason = `remote session (${remoteSession.source}: ${remoteSession.name})`; }
   else if (himHere) { state = 'here'; reason = face.looking_at_screen ? 'camera: him, looking at the screen' : 'camera: him'; }
+  else if (notHim && now - emptySince >= cameraAwayMs && idleMs >= cameraAwayMs) { state = 'away'; reason = `camera: ${nobody ? 'no one' : 'someone else, not him,'} for ${Math.round((now - emptySince) / 60000)}m`; }
   else if (faceFresh && face.present && face.is_him === false) { state = idleMs < idleAwayMs ? 'here' : 'away'; reason = 'camera: someone else is in front of the camera'; }
-  else if (nobody && now - emptySince >= cameraAwayMs && idleMs >= cameraAwayMs) { state = 'away'; reason = `camera: no one for ${Math.round((now - emptySince) / 60000)}m`; }
   else if (idleMs < idleAwayMs) { state = 'here'; reason = `active ${Math.round(idleMs / 60000)}m ago${nobody ? ', no one on camera' : ''}`; }
   else { state = 'away'; reason = idleMs === Infinity ? 'no turn yet' : `idle ${Math.round(idleMs / 60000)}m${nobody ? ', no one on camera' : ''}`; }
   const since = prev && prev.state === state && prev.since ? prev.since : now;
