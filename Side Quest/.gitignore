@@ -36,3 +36,5 @@ boot_*.err
 # Python bytecode (the tissues + vendored cores compile on run)
 __pycache__/
 *.pyc
+
+sidecar/train_venv/

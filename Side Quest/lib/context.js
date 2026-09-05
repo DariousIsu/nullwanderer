@@ -124,6 +124,13 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
   try { reachLine = require('./reach').awarenessLine(); } catch {}
   let deliveryLine = null;
   try { deliveryLine = require('./delivery_router').lastDeliveryLine(); } catch {}
+  // THE CONSCIOUSNESS SUBROUTINE'S STRIP (design §4.5, felt state in every prompt): her drives as numbers, what
+  // she wondered while he was gone, the cover. A NOTE FROM THE ENGINEER (Lucas 09-05: "explain to Zoe what you
+  // are doing"): an attributed channel from Claude to her, never a message dressed as his. Both fail-absent.
+  let consciousnessLine = null;
+  try { consciousnessLine = require('./consciousness').awarenessLine(); } catch {}
+  let engineerLine = null;
+  try { engineerLine = require('./engineer_note').line(); } catch {}
   // Status-vector line (Loop A, 2026-08-15) — the measured self-read (organs, voice, quota, gate,
   // machine, memory substrate) + what changed since the last beat. Same stored object the full
   // state-door block renders from, so the two can never disagree. Fail-absent until first refresh.
@@ -307,6 +314,8 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
     faceLine ? `• ${faceLine}` : null,
     reachLine ? `• ${reachLine}` : null,
     deliveryLine ? `• ${deliveryLine}` : null,
+    consciousnessLine ? `• ${consciousnessLine}` : null,
+    engineerLine ? `• ${engineerLine}` : null,
     statusLine ? `• ${statusLine}` : null,
     gmeetLine ? `• ${gmeetLine}` : null,
     mediaLine ? `• ${mediaLine}` : null,

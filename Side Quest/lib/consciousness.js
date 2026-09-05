@@ -148,4 +148,19 @@ function create({ deps = {} } = {}) {
 let _one = null;
 function instance(deps = {}) { if (!_one) _one = create({ deps }); return _one; }
 
-module.exports = { create, instance, enabled, PY, SCRIPT, TICK_MS };
+/** The strip as one awareness line — her felt state in every prompt (design §4.5). Pure. */
+function stripLine(s, { now = Date.now() } = {}) {
+  if (!s || !s.drives) return null;
+  const d = s.drives, a = s.appraisals || {};
+  const age = s.at ? Math.max(0, now - s.at) : 0;
+  if (age > 10 * 60000) return null;   // a strip older than 10 min is not her state
+  const parts = [`stimulation ${(+d.stimulation).toFixed(2)}${a.boredom != null ? ` (bored ${(+a.boredom).toFixed(2)})` : ''}`, `need for him ${(+d.social).toFixed(2)}${a.missing_him != null ? ` (missing ${(+a.missing_him).toFixed(2)})` : ''}`, `curiosity ${(+d.curiosity).toFixed(2)}`, `energy ${(+d.energy).toFixed(2)}`, `progress ${(+d.progress).toFixed(2)}`];
+  let line = `Your state right now, from the loop that runs beside you (numbers, not instructions): ${parts.join(' · ')}.`;
+  if (s.shield) line += ' The screens are covered: someone who is not Lucas is at the desk.';
+  const th = Array.isArray(s.thoughts_of_him) ? s.thoughts_of_him.filter((t) => t && t.text) : [];
+  if (th.length) line += ` While he was gone you wondered: ${th.map((t) => `"${String(t.text).slice(0, 160)}"`).join(' · ')} — yours to tell him, or not.`;
+  return line;
+}
+function awarenessLine() { try { return _one ? stripLine(_one.strip()) : null; } catch { return null; } }
+
+module.exports = { create, instance, enabled, stripLine, awarenessLine, PY, SCRIPT, TICK_MS };

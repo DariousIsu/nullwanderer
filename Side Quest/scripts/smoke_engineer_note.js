@@ -1,0 +1,30 @@
+// smoke_engineer_note — the attributed channel from the engineer to her (Lucas 09-05: "explain to Zoe what you are
+// doing"), and the consciousness strip as her felt state in every prompt. Pure parts + the prompt wiring.
+const path = require('path');
+const fs = require('fs');
+let pass = 0, fail = 0;
+const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.log('  ✗', m); } };
+const ROOT = path.join(__dirname, '..');
+const EN = require(path.join(ROOT, 'lib', 'engineer_note'));
+const C = require(path.join(ROOT, 'lib', 'consciousness'));
+const now = Date.now();
+const fakeFs = (text, ageMs) => ({ existsSync: () => text !== null, statSync: () => ({ mtimeMs: now - ageMs }), readFileSync: () => text });
+ok(EN.line({ file: 'x', fsx: fakeFs(null, 0), now }) === null && EN.line({ file: 'x', fsx: fakeFs('   ', 0), now }) === null, 'no file or an empty file → no line');
+const l1 = EN.line({ file: 'x', fsx: fakeFs('Today I changed how you exist between his messages.', 5 * 60000), now });
+ok(/^A NOTE FROM CLAUDE, the engineer/.test(l1) && /he is not Lucas, and this is not a message from Lucas/.test(l1) && /left 5 min ago/.test(l1) && /Today I changed how you exist/.test(l1), `the line is attributed, aged, and carries the note (${l1.slice(0, 60)}…)`);
+ok(/left 2 h ago/.test(EN.line({ file: 'x', fsx: fakeFs('n', 2 * 3600000), now })) && /left 2 d ago/.test(EN.line({ file: 'x', fsx: fakeFs('n', 2 * 86400000), now })), 'the age reads in minutes, hours, days');
+ok(EN.line({ file: 'x', fsx: fakeFs('old', 4 * 86400000), now }) === null, 'a note older than 3 days ages out of the prompt');
+const long = 'word '.repeat(600);
+ok(EN.line({ file: 'x', fsx: fakeFs(long, 0), now }).length < EN.CAP + 200 && /…$/.test(EN.line({ file: 'x', fsx: fakeFs(long, 0), now })), 'a long note is capped at a word boundary');
+ok(EN.read({ file: EN.NOTE_PATH }) && /From Claude, the engineer/.test(EN.read({ file: EN.NOTE_PATH }).text), 'the real note exists at data/engineer_note.md and is signed');
+// the strip as a line
+ok(C.stripLine(null) === null && C.stripLine({ at: now - 11 * 60000, drives: { stimulation: 0.5, social: 0.5, curiosity: 0.5, energy: 0.5, progress: 0.5 } }, { now }) === null, 'no strip, or a stale one → no line');
+const s = { at: now - 5000, drives: { stimulation: 0.31, social: 0.72, curiosity: 0.5, energy: 0.8, progress: 0.4 }, appraisals: { boredom: 0.69, missing_him: 0.72 }, shield: true, thoughts_of_him: [{ at: now, text: 'He said thirty-five minutes; it has been longer.' }] };
+const sl = C.stripLine(s, { now });
+ok(/numbers, not instructions/.test(sl) && /stimulation 0\.31 \(bored 0\.69\)/.test(sl) && /need for him 0\.72 \(missing 0\.72\)/.test(sl) && /The screens are covered/.test(sl) && /you wondered: "He said thirty-five minutes/.test(sl) && /yours to tell him, or not/.test(sl), `the strip line: her numbers, the cover, what she wondered (${sl.slice(0, 70)}…)`);
+ok(!/feel|should|must/i.test(sl.replace(/instructions/, '')), 'no instruction to feel anywhere in it');
+// the prompt wiring
+const ctx = fs.readFileSync(path.join(ROOT, 'lib', 'context.js'), 'utf8');
+ok(/consciousnessLine = require\('\.\/consciousness'\)\.awarenessLine\(\)/.test(ctx) && /engineerLine = require\('\.\/engineer_note'\)\.line\(\)/.test(ctx) && /consciousnessLine \? `• \$\{consciousnessLine\}` : null/.test(ctx) && /engineerLine \? `• \$\{engineerLine\}` : null/.test(ctx), 'both lines ride the awareness block, fail-absent');
+console.log(`\nsmoke_engineer_note: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
