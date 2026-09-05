@@ -771,6 +771,7 @@ try {
   ipcMain.handle('face:frame', async (_e, b64) => {
     try { return await require('./lib/face_sense').onFrame(String(b64 || ''), { deps: { onGaze: _broadcastGaze } }); } catch (e) { return { ok: false, error: e.message }; }
   });
+  ipcMain.handle('face:status', async () => { try { return require('./lib/face_sense').status(); } catch (e) { return { enrolled: false, live: false, error: e.message }; } });
   ipcMain.handle('face:enroll', async (_e, b64) => {
     try { return await require('./lib/face_sense').enroll(String(b64 || ''), {}); } catch (e) { return { ok: false, error: e.message }; }
   });
@@ -14893,6 +14894,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           if (r && r.ok && t.tag === 'clipboard-read' && r.text != null) {
             const row = db.insertMonologue({ content: `I read the clipboard:\n${r.text}`, model: 'clipboard', type: 'reading' });
             try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: '(read clipboard)', type: 'reading' }); } catch {}
+          } else if (t.tag === 'look' && r && r.text) {
+            // HER VERB <look/> (cut 13): what she saw — or that the camera is off — lands as a reading she carries into her next turn
+            const row = db.insertMonologue({ content: r.text, model: 'camera', type: 'reading' });
+            try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(looked) ${String(r.text).slice(0, 80)}`, type: 'reading' }); } catch {}
           } else if (r && r.ok) {
             try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(${t.tag})`, type: 'reading' }); } catch {}
           }

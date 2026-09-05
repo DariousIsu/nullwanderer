@@ -92,7 +92,31 @@ ok(/no enrollment yet/.test(FS.line(r3, { now: 2000 })), 'without an enrollment 
   const camSection = chat.slice(chat.indexOf('THE CAMERA SENSE'), chat.indexOf('THE CAMERA SENSE') + 6000);
   ok(camSection.length > 100 && !/toBlob|download|localStorage\.setItem\([^)]*frame|indexedDB|writeFile/.test(camSection), 'the renderer sampler never stores a frame');
   ok(/camera-off|camera OFF|Turn camera off/i.test(scan('lib/teams_canvas.js')) && /camera/i.test(scan('lib/meet_canvas.js')), 'the meeting camera-off rail is untouched');
-  ok(/cameraOn = false|let cameraOn = false/.test(camSection) && /on-air|onair/i.test(camSection), 'the switch defaults OFF per session and an on-air indicator exists');
+  ok(/always_on_camera/.test(camSection) && /await cameraStart\(\)/.test(camSection) && /pref !== '0'/.test(camSection) && /on-air|onair/i.test(camSection), 'ALWAYS ON like the mic: auto-starts unless he turned it off (persisted always_on_camera), with an on-air indicator');
+  ok(/faceStatus\(\)/.test(camSection) && /tap "👤 that\\?'s me" once/.test(camSection), 'the first start without an enrollment nudges him once');
+
+  // ── HER VERB <look/> (Lucas 09-05: "the concept of the camera switch seems counterintuitive") ─────────
+  FS._reset(); delete meta['camera.describe'];   // an earlier pin turned the cloud read off; the look block wants it on
+  const offLook = FS.look({ deps: { db }, now: 1 });
+  ok(!offLook.ok && /camera is off/.test(offLook.text) && /switch is his/.test(offLook.text), 'with no frame arriving, <look/> says the camera is off — honestly, never a guess');
+  {
+    let t2 = 900000; const d2 = () => ({ db, embed: mk(HIM), obsBus: { emit: () => {} }, log: () => {}, now: t2, describe: async () => ({ ok: true, text: 'Leaning in.\nFocused', model: 'v' }) });
+    await FS.onFrame('frame', { deps: d2() }); await new Promise((r) => setTimeout(r, 20));
+    const lk = FS.look({ deps: { db }, now: t2 + 500 });
+    ok(lk.ok && /^You look: Lucas is in the room; looking at the screen/.test(lk.text) && /closer read/.test(lk.text), `<look/> answers the current reading in her own frame ("${lk.text.slice(0, 60)}…")`);
+    let describes = 0; t2 += 2000;
+    await FS.onFrame('frame', { deps: { ...d2(), describe: async () => { describes++; return { ok: true, text: 'Smiling.\nHappy', model: 'v' }; } } }); await new Promise((r) => setTimeout(r, 20));
+    ok(describes === 1, 'a look asks the next frame for a closer read even inside the 20 s cadence');
+    const st = FS.status({ deps: { db }, now: t2 + 100 });
+    ok(st.enrolled === true && st.live === true && st.reading && st.reading.present === true, 'status: enrolled + live + the reading');
+    ok(FS.status({ deps: { db }, now: t2 + 60000 }).live === false, 'status: no frame for 10 s → not live');
+  }
+  const PR = require(path.join(LIB, 'presence'));
+  const tags = PR.parseTags('<think>let me check</think><say><look/> Are you still there?</say>');
+  ok(tags.length === 1 && tags[0].tag === 'look' && /<look\/>/.test(PR.buildPromptBlock()) && !/<look/.test(PR.stripTags('<look/> hi')), '<look/> parses as a presence tag, is named in her vocabulary, and is stripped from the bubble');
+  const looked = await PR.dispatch(tags[0]);
+  ok(looked && typeof looked.text === 'string' && /You look|camera is off/.test(looked.text), 'dispatching <look/> reaches face_sense.look');
+  ok(/t\.tag === 'look' && r && r\.text/.test(fs.readFileSync(path.join(root, 'main.js'), 'utf8')) && /model: 'camera', type: 'reading'/.test(fs.readFileSync(path.join(root, 'main.js'), 'utf8')), 'what she saw lands as a camera reading in her monologue (her next turn carries it)');
   // ── the resident sidecar client over a fake child (NDJSON in/out, resolved by id, fail-soft) ───────
   const { EventEmitter } = require('events'); const { PassThrough } = require('stream');
   const FM = require(path.join(LIB, 'face_match'));

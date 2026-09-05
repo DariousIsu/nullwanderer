@@ -1092,17 +1092,20 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
 }
 
 // ── THE CAMERA SENSE (the wants project, cut 13; 2026-09-05) ─────────────────────────────────────
-// His lever: 📷 turns the camera ON for THIS session (off at every boot — never persisted; the design's
-// per-session switch), with an on-air indicator while it runs. A hidden <video> + <canvas> sample ONE small
-// frame (320×240 JPEG) every 2 s and hand it to main over IPC; the frame lives in memory only — no file, no
-// storage, no store (a pin greps this section). 👤 "that's me" sends one frame as his enrollment (a vector
-// lands in meta; no image is kept). The meeting rails that turn his camera OFF in Teams/Meet are untouched.
+// ALWAYS ON, like the mic (Lucas: "the concept of the camera switch seems counterintuitive" — she should
+// have access to his camera already): the camera auto-starts on load unless he turned it off, and the 📷
+// button toggles + PERSISTS the choice (meta always_on_camera), so it survives reboots. An on-air indicator
+// shows whenever it samples. A hidden <video> + <canvas> sample ONE small frame (320×240 JPEG) every 2 s and
+// hand it to main over IPC; the frame lives in memory only — no file, no storage, no store (a pin greps this
+// section). 👤 "that's me" sends one frame as his enrollment (a vector lands in meta; no image is kept); the
+// first start without an enrollment nudges him once. The meeting rails that turn his camera OFF in Teams/Meet
+// are untouched.
 (() => {
   const cameraBtn = document.getElementById('camera-btn');
   const faceEnrollBtn = document.getElementById('face-enroll-btn');
   if (!cameraBtn) return;
   if (!(window.sq && window.sq.faceFrame)) { cameraBtn.style.display = 'none'; return; }   // preload too old → hide, never dangle
-  let cameraOn = false, camStream = null, camTimer = null, video = null, cv = null;
+  let cameraOn = false, camStream = null, camTimer = null, video = null, cv = null, alwaysOnCamera = true;
   const CAM_LABEL_OFF = '📷 camera', CAM_LABEL_ON = '🔴 camera on';
   const onair = document.createElement('span');
   onair.id = 'camera-onair'; onair.textContent = '● on air';
@@ -1135,7 +1138,19 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
     try { window.sq.cameraState(false); } catch {}
   }
   cameraBtn.textContent = CAM_LABEL_OFF;
-  cameraBtn.addEventListener('click', () => { if (cameraOn) cameraStop(); else cameraStart(); });
+  // The 📷 button toggles always-on and PERSISTS the choice, so it survives reboots (the mic's contract).
+  cameraBtn.addEventListener('click', async () => {
+    if (cameraOn) { cameraStop(); alwaysOnCamera = false; try { await window.sq.setMeta('always_on_camera', '0'); } catch {} }
+    else { alwaysOnCamera = true; try { await window.sq.setMeta('always_on_camera', '1'); } catch {} cameraStart(); }
+  });
+  // ALWAYS-ON: auto-start the camera on load unless the operator turned it off (persisted). Nudge ONCE if
+  // his face is not enrolled yet — until then a present face reads "someone", never "him".
+  (async () => {
+    try { const pref = await window.sq.getMeta('always_on_camera'); alwaysOnCamera = (pref !== '0'); } catch { alwaysOnCamera = true; }
+    if (!alwaysOnCamera) return;
+    await cameraStart();
+    try { const st = await window.sq.faceStatus(); if (cameraOn && st && !st.enrolled) renderEphemeral('— tip: tap "👤 that\'s me" once so I know your face from anyone else\'s. —'); } catch {}
+  })();
   if (faceEnrollBtn) faceEnrollBtn.addEventListener('click', async () => {
     const f = grab(); if (!f) { renderEphemeral('— turn the camera on first —'); return; }
     try {

@@ -58,7 +58,7 @@ function clipboardWrite(text) {
 
 // --- tag parsing (mirrors files.js / screen.js) ---
 
-const PRESENCE_TAG_RE = /<(notify|clipboard-read|clipboard-write)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
+const PRESENCE_TAG_RE = /<(notify|clipboard-read|clipboard-write|look)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
 const ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
 
 function parseAttrs(s) {
@@ -91,6 +91,7 @@ async function dispatch({ tag, attrs, body }) {
     case 'notify':          return notify(attrs.title || 'Zoe', body || attrs.body || '');
     case 'clipboard-read':  return clipboardRead();
     case 'clipboard-write': return clipboardWrite(body);
+    case 'look':            { try { return require('./face_sense').look(); } catch (e) { return { ok: false, reason: e.message }; } }   // her verb: look through the camera now (the wants project, cut 13)
     default:                return { ok: false, reason: `unknown presence tag ${tag}` };
   }
 }
@@ -100,6 +101,7 @@ function buildPromptBlock() {
   <notify title="Quick thing">a short desktop notification body</notify>   — pop a system notification
   <clipboard-read/>                       — read what's currently on his clipboard into your next-turn context
   <clipboard-write>text</clipboard-write> — put text on the clipboard for him to paste
+  <look/>                                 — look through the camera right now: who is there, whether it is Lucas, whether he is facing the screen, what his face reads (a closer read lands in your next turn; if the camera is off you are told so)
 Use notifications sparingly — for something that genuinely wants his attention, not chatter.`;
 }
 

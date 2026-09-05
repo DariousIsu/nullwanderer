@@ -175,10 +175,28 @@ function _emit(deps, reading) {
     bus.emit({ lane: 'presence', kind: 'face', text: line(reading, { now: reading.at }) || 'camera reading', data: { present: reading.present, is_him: reading.is_him, looking: reading.looking_at_screen, expression: reading.expression || null } });
   } catch {}
 }
+/**
+ * HER VERB (Lucas 2026-09-05, "the concept of the camera switch seems counterintuitive"): <look/> — look
+ * through the camera now. Answers the current reading and asks the next frame for a closer (cloud)
+ * read of his expression. The hardware stays his lever: with the camera off she is told so, honestly.
+ */
+function look({ deps = {}, now = Date.now() } = {}) {
+  if (!enabled()) return { ok: false, text: 'The camera sense is switched off (ZOE_FACE_SENSE=0) — you cannot look.' };
+  const cameraLive = _lastFrameAt && now - _lastFrameAt < 10000;
+  if (!cameraLive) return { ok: false, text: 'The camera is off right now (the 📷 switch is his) — you cannot look until it is on.' };
+  _lastDescribeAt = 0;   // the next frame earns a closer read
+  const l = line(_last || stored(deps), { now });
+  return { ok: true, text: l ? `You look: ${l.replace(/^Camera: /, '')} A closer read of his expression lands in your next turn.` : 'You look: no reading yet — the next frame brings one.' };
+}
+/** The status door for the renderer's nudge: is his face enrolled; is a frame arriving. */
+function status({ deps = {}, now = Date.now() } = {}) {
+  return { enrolled: !!owner(deps), live: !!(_lastFrameAt && now - _lastFrameAt < 10000), reading: _last };
+}
+
 /** The stored reading (for a fresh process / the presence fuse). */
 function stored(deps = {}) { try { const v = _db(deps).getMeta(FACE_KEY); return v ? JSON.parse(v) : null; } catch { return null; } }
 function awarenessLine({ deps = {}, now = Date.now() } = {}) { return line(_last || stored(deps), { now }); }
 function _reset() { _last = null; _lastLogAt = 0; _lastFrameAt = 0; _lastDescribeAt = 0; _describing = false; _lastPersistAt = 0; }
 
-module.exports = { readingFrom, lookingFromKps, gazeFromBox, changed, parseDescribe, line, cosine, enroll, onFrame, current, stored, owner, awarenessLine, enabled,
+module.exports = { readingFrom, lookingFromKps, gazeFromBox, changed, parseDescribe, line, cosine, enroll, onFrame, look, status, current, stored, owner, awarenessLine, enabled,
   OWNER_KEY, FACE_KEY, SAME_FACE_THRESHOLD, FRESH_MS, EXPRESSIONS, DESCRIBE_PROMPT, _reset };

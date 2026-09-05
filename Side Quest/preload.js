@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('sq', {
   faceFrame: (b64) => ipcRenderer.invoke('face:frame', b64),
   faceEnroll: (b64) => ipcRenderer.invoke('face:enroll', b64),
   cameraState: (on) => ipcRenderer.invoke('camera:state', !!on),
+  faceStatus: () => ipcRenderer.invoke('face:status'),   // { enrolled, live } — for the one-time "tap 👤" nudge
   onCompanionGaze: (cb) => ipcRenderer.on('companion:gaze', (_e, g) => cb(g)),
   getRecentHistory: () => ipcRenderer.invoke('history:recent'),
   sendMessage: (text, attachments) => ipcRenderer.invoke('chat:send', text, attachments || []),
