@@ -1,0 +1,104 @@
+diff --git a/Side Quest/lib/ollama.js b/Side Quest/lib/ollama.js
+index 2863d48..8f6e8e4 100644
+--- a/Side Quest/lib/ollama.js	
++++ b/Side Quest/lib/ollama.js	
+@@ -54,7 +54,7 @@ function _govern(options) {
+   return o;
+ }
+ 
+-async function streamChat({ model, messages, options = {}, onToken, onThinking, signal, inactivityMs = 90000, maxMs = 0, think, base = OLLAMA_BASE, headers = {}, lane = undefined }) {
++async function streamChat({ model, messages, options = {}, onToken, onThinking, signal, inactivityMs = 90000, maxMs = 0, think, base = OLLAMA_BASE, headers = {}, lane = undefined, keepAlive = undefined }) {
+   // AMBIENT SPEND-TIER FALLBACK (2026-08-12 review M5): a caller that doesn't know its tier inherits
+   // the run's ambient spendTier (declared once by the orchestrator via lane.run) before the legacy
+   // 'interactive' default. Explicit lane always wins; a bare legacy call outside any run stays
+@@ -64,7 +64,8 @@ async function streamChat({ model, messages, options = {}, onToken, onThinking,
+     model,
+     messages,
+     stream: true,
+-    keep_alive: _keepAlive(base),
++    // keepAlive: an explicit caller override (the resident core passes -1 by design; lib/core_route) — else the policy.
++    keep_alive: keepAlive != null ? keepAlive : _keepAlive(base),
+     options: {
+       temperature: 0.8,
+       top_p: 0.9,
+@@ -602,6 +603,13 @@ async function sweepLoaded({ keep = [], minVramBytes = 2e9, base = OLLAMA_BASE }
+  */
+ async function cognitionWindow(deps = {}) {
+   const FLOOR = 8192;
++  // THE CORE FIRST (lib/core_route): when the idle lane is served by the resident core, the window a caller must fit
++  // to is the core's, not the cloud's — a heartbeat packed for 262k would be dropped at the front by an 8k model.
++  try {
++    const core = deps.core || require('./core_route');
++    const cfg = core.config();
++    if (cfg.on && cfg.model && cfg.firstLanes.has('idle')) return { num_ctx: cfg.numCtx, isCloud: false, model: cfg.model, core: true };
++  } catch { /* fall through to the cloud window */ }
+   try {
+     const subconsciousModel = deps.subconsciousModel || require('./config').subconsciousModel;
+     const sources = deps.sources || require('./models').sources;
+@@ -626,6 +634,44 @@ let _cloudLastSeenTs = 0;
+ async function streamCognition({ messages, options = {}, onToken, onThinking, signal, inactivityMs, maxMs, think, lane = 'idle' } = {}) {
+   let subModel = '';
+   try { subModel = require('./config').subconsciousModel(); } catch {}
++
++  // THE CORE UNDER THE IDLE LANE (lib/core_route; docs/ZOE_CORE_SML_DESIGN_2026-09-05.md §15–§17; his word 09-05
++  // "alright, lets build it"). A resident local model serves this lane when the cloud will not — the quota gate has
++  // closed it (5 h of 09-05, measured), a blip, an outage — or FIRST for a lane he moved by his card. With `core.on`
++  // unset (the default) the legacy path below is byte-for-byte the path of record.
++  {
++    let core = null, cfg = null, cloudSrc = null, route = { route: 'legacy' };
++    try {
++      core = require('./core_route');
++      cfg = core.config();
++      if (cfg.on && cfg.model) {
++        if (subModel) { try { cloudSrc = (require('./models').sources() || []).find(s => s.tier === 'cloud' && s.token) || null; } catch {} }
++        route = core.decide({ cfg, lane, cloud: !!cloudSrc, ready: await core.ready(cfg) });
++      }
++    } catch { route = { route: 'legacy' }; }
++    if (route.route !== 'legacy') {
++      const cloudCall = (tap) => {
++        _cloudLastSeenTs = Date.now();
++        return streamChat({ model: subModel, messages, options, onToken: tap || onToken, onThinking, signal, inactivityMs, maxMs, think, base: cloudSrc.base, headers: cloudSrc.token ? { Authorization: `Bearer ${cloudSrc.token}` } : {}, lane });
++      };
++      if (route.route === 'core') {
++        return core.serve({ cfg, lane, why: route.why, messages, options, onToken, onThinking, signal, inactivityMs, maxMs, think, escalate: cloudSrc ? () => cloudCall() : null });
++      }
++      // cloud_then_core: the cloud first; a deferral (the gate closed the lane), a blip or an error → the core. When the
++      // cloud answers, the core shadows the same messages off the hot path (sampled) so the agreement is measured.
++      let captured = '';
++      try {
++        const text = await cloudCall((t) => { captured += String(t || ''); if (onToken) onToken(t); });
++        try { core.shadow({ cfg, lane, messages, options, think, cloudText: (typeof text === 'string' && text) || captured }); } catch {}
++        return text;
++      } catch (e) {
++        const why = e && e.deferred ? 'quota' : 'cloud_error';
++        try { console.log(`[core] cloud ${why} on ${lane} — the core serves (${String(e && e.message || e).slice(0, 100)})`); } catch {}
++        return core.serve({ cfg, lane, why, messages, options, onToken, onThinking, signal, inactivityMs, maxMs, think });
++      }
++    }
++  }
++
+   if (subModel) {
+     let cloud = null;
+     try { cloud = (require('./models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch {}
+diff --git a/Side Quest/main.js b/Side Quest/main.js
+index 8831ff2..ce3b223 100644
+--- a/Side Quest/main.js	
++++ b/Side Quest/main.js	
+@@ -2606,10 +2606,16 @@ app.whenReady().then(() => {
+   // and let it load on demand with Ollama's default ~5min keep_alive (unloads when idle = cold fallback).
+   // Re-warm it with ZOE_WARM_FRONT=1 if a workload ever needs the local front hot again.
+   const _warmFront = /^(1|true|yes|on)$/i.test(String(process.env.ZOE_WARM_FRONT || '').trim());
+-  sweepLoaded({ keep: _warmFront ? [MODEL] : [], minVramBytes: 2e9 })
++  // THE CORE (lib/core_route, design §15): the resident model under her idle lane is never swept and is warmed at
++  // boot when it is on and the card can take it (the VRAM read inside ready()). Off by default.
++  let _coreCfg = null;
++  try { _coreCfg = require('./lib/core_route').config(); } catch {}
++  const _coreKeep = _coreCfg && _coreCfg.on && _coreCfg.model ? [_coreCfg.model] : [];
++  sweepLoaded({ keep: [...(_warmFront ? [MODEL] : []), ..._coreKeep], minVramBytes: 2e9 })
+     .then(swept => { if (swept.length) console.log('[boot] swept stale resident model(s):', swept.join(', ')); })
+     .catch(() => {})
+     .finally(() => {
++      if (_coreKeep.length) { try { require('./lib/core_route').warm(_coreCfg).catch(() => {}); } catch {} }
+       if (!_warmFront) { console.log('[main] local front DEMOTED to cold (loads on demand); VRAM reserved for image-gen. Set ZOE_WARM_FRONT=1 to re-warm.'); return; }
+       fetch('http://localhost:11434/api/chat', {
+         method: 'POST',

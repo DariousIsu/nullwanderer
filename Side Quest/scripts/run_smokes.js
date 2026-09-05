@@ -818,6 +818,15 @@ const smokes = [
   // test mode (temperature → 0 in deterministic mode; a fixed replayable seed in the test modes) so a
   // turn is diffable run-to-run. Prod is a no-op. The fact path (completeDetailed) is temp 0 already.
   'smoke_ollama_entropy.js',
+  // The core's dataset builder (docs/ZOE_CORE_SML_DESIGN_2026-09-05.md §5/§14): filters, the think/say
+  // contract, the frozen holdout, the index — against a synthetic store, no DB file, no model.
+  'smoke_core_dataset.js',
+  // The core's probe (design §6/§8/§16): scores a candidate local model on the frozen holdout — the loose
+  // JSON parser, the agreement scorer, the voice contract, the one-shot prompt — with an injected call.
+  'smoke_core_probe.js',
+  // The core under the idle lane (lib/core_route, design §15–§17): config + kill, the routing decision, readiness
+  // with the VRAM bar, serving with the refit and keep_alive -1, the escalation, the sampled shadow, the warm.
+  'smoke_core_route.js',
 ];
 
 // SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
