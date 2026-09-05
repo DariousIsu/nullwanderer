@@ -127,6 +127,13 @@ function fakeLoop() {
   bridgeN.start(); childN.say({ kind: 'ready', v: 1 });
   await bridgeN.handle({ kind: 'act', act: 'listen' }); await new Promise((r) => setTimeout(r, 20)); bridgeN.tick();
   ok(!childN.received.some((m) => m.kind === 'percept' && m.sense === 'heard') && nLogs.some((l) => /listen — not now \(the camera switch is off/.test(l)), 'a refused window is logged and yields no percept');
+  // WORK and REST: the work act ticks the autonomy driver through the app's door; rest is a named silence
+  const childW = fakeLoop(); const wLogs = []; let ticked = 0;
+  const bridgeW = C.create({ deps: { spawn: () => childW, now: () => clock, log: (m) => wLogs.push(m), obsBus: { subscribe: () => {}, emit: () => {} }, work: async () => { ticked++; return { ok: true }; }, tickMs: 3600000 } });
+  bridgeW.start(); childW.say({ kind: 'ready', v: 1 });
+  await bridgeW.handle({ kind: 'act', act: 'work', why: 'progress 0.2' }); await bridgeW.handle({ kind: 'act', act: 'rest', why: 'energy 0.1' });
+  ok(ticked === 1 && wLogs.some((l) => /act work — the autonomy driver ticked/.test(l)) && wLogs.some((l) => /act rest — energy 0\.1: no sensing for a while/.test(l)), 'work ticks the driver once through the door; rest is logged as a named silence');
+  ok(/work: async \(\) => \{ try \{ if \(typeof autonomyTick !== 'function'\)/.test(fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8')), 'the app\'s work door is the autonomy tick, its own gates holding');
   // THE FOURTH LOAD (the fluidity law): the away reach is DELIVERED to where he is and logged as hers, never spoken;
   // a hold on her speech reaches the loop as a percept; rule A holds her words while a turn of his is pending
   const childF = fakeLoop(); const f = { deliver: [], speak: [], says: [], logs: [] };

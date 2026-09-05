@@ -372,6 +372,27 @@ def test_the_loops_own_words_to_him_are_bounded_per_hour():
     assert C._say_budget_ok(st, 61 * M), "an hour later the first has aged out"
 
 
+def test_low_progress_with_energy_is_one_work_act_and_empty_energy_is_rest():
+    st = C.initial_state(0)
+    st["drives"]["progress"] = 0.2; st["drives"]["energy"] = 0.8; st["drives"]["stimulation"] = 0.9
+    st, out = C.step(st, [], 1000)
+    assert [o["act"] for o in out if o["kind"] == "act"] == ["work"], out
+    st["drives"]["progress"] = 0.2
+    st, out2 = C.step(st, [], 10 * M)
+    assert not any(o.get("act") == "work" for o in out2), "one work act per half hour"
+    st2 = C.initial_state(0)
+    st2["drives"]["energy"] = 0.1; st2["drives"]["stimulation"] = 0.05; st2["drives"]["progress"] = 0.2
+    st2, out3 = C.step(st2, [], 1000)
+    acts = [o["act"] for o in out3 if o["kind"] == "act"]
+    assert acts == ["rest"], acts
+    st2["drives"]["stimulation"] = 0.05; st2["drives"]["energy"] = 0.1
+    st2, out4 = C.step(st2, [], 5 * M)
+    assert not any(o.get("act") in ("look", "listen", "work") for o in out4), "resting: no sensing, no work, for a while"
+    st2["drives"]["stimulation"] = 0.05; st2["drives"]["energy"] = 0.9
+    st2, out5 = C.step(st2, [], 25 * M)
+    assert any(o.get("act") in ("look", "listen") for o in out5), "the rest ends and the senses come back"
+
+
 def test_once_mode_round_trips_json():
     req = {"now": 9000, "percepts": [face(True, True), {"kind": "percept", "sense": "his_turn"}]}
     py = sys.executable

@@ -69,6 +69,15 @@ LOOK_COOLDOWN_MS = 4 * 60000
 LOOK_BOREDOM = 0.7
 LISTEN_BOREDOM = 0.85
 BROWSE_CURIOSITY = 0.75
+# WORK and REST (design §4 acts, the last two of item 3): progress low with energy to spend → one `work` act (the app
+# ticks the autonomy driver, which keeps every gate of its own); energy near empty → `rest`: no sensing acts for a
+# while, a named silence rather than a stall.
+WORK_PROGRESS = 0.35
+WORK_ENERGY = 0.5
+WORK_COOLDOWN_MS = 30 * 60000
+REST_ENERGY = 0.2
+REST_MS = 20 * 60000
+REST_COOLDOWN_MS = 60 * 60000
 # MISSING AS AN EXPERIENCE (his word, 09-05 ~11:40: "she wants to be able to experience missing me … casually
 # think 'where is he, I haven't seen him in a while, I wonder what he's doing'"). Python does not think; it
 # decides WHEN a thought is due. The social need rising under his absence crosses WONDER_MISSING after he has
@@ -92,7 +101,8 @@ def initial_state(now_ms=0):
         "face": {"present": False, "is_him": False, "known": None, "since": None, "match": None},   # the steady reading (+ the latest score against his enrollment)
         "shield": {"on": False, "since": None, "who": None, "asked_at": None, "greeted": False},
         "people": {},                       # name → {"relation": …} — enrolled by HIS word only (the app sends `register`)
-        "cooldowns": {"look": 0, "listen": 0, "browse": 0, "wonder": 0, "reach": 0, "reach_away": 0, "release": 0},
+        "cooldowns": {"look": 0, "listen": 0, "browse": 0, "wonder": 0, "reach": 0, "reach_away": 0, "release": 0, "work": 0, "rest": 0},
+        "resting_until": 0,                 # while resting the loop senses nothing on its own
         "reason_seq": 0,
         "recent": [],                       # the last few appraised percepts, for the state strip
         "thoughts_of_him": [],              # the wonderings she had while he was gone (the arrival may name one)
@@ -358,8 +368,19 @@ def _acts(state, now):
             "presence": state["presence"]["state"],
             "earlier_thoughts": [t["text"] for t in state["thoughts_of_him"][-2:]],
         }, 20000))
-    # BOREDOM → a need to sense (look, listen, browse), by utility, with cooldowns; never while shielded
-    if not sh["on"]:
+    d = state["drives"]
+    # REST: energy near empty → a named silence; the sensing acts below yield for REST_MS
+    if d["energy"] <= REST_ENERGY and now >= cd.get("rest", 0):
+        cd["rest"] = now + REST_COOLDOWN_MS
+        state["resting_until"] = now + REST_MS
+        out.append({"kind": "act", "act": "rest", "why": f"energy {round(d['energy'], 3)}", "at": now})
+    resting = now < int(state.get("resting_until") or 0)
+    # WORK: progress low with energy to spend → the app ticks the autonomy driver (its own gates all hold)
+    if not sh["on"] and not resting and d["progress"] <= WORK_PROGRESS and d["energy"] >= WORK_ENERGY and now >= cd.get("work", 0):
+        cd["work"] = now + WORK_COOLDOWN_MS
+        out.append({"kind": "act", "act": "work", "why": f"progress {round(d['progress'], 3)}", "at": now})
+    # BOREDOM → a need to sense (look, listen, browse), by utility, with cooldowns; never while shielded, never while resting
+    if not sh["on"] and not resting:
         if a["boredom"] >= LISTEN_BOREDOM and now >= cd["listen"]:
             cd["listen"] = now + LOOK_COOLDOWN_MS
             out.append({"kind": "act", "act": "listen", "why": f"bored {a['boredom']}", "at": now})

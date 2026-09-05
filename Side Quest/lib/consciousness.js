@@ -78,6 +78,13 @@ function create({ deps = {} } = {}) {
         if (msg.act === 'shield') await (deps.shield || require('./shield')).cover({ who: msg.who || null });
         else if (msg.act === 'unshield') await (deps.shield || require('./shield')).uncover({});
         else if (msg.act === 'deliver') await (deps.deliver || ((o) => require('./delivery_router').deliver(o)))({ text: msg.text, source: 'consciousness' });
+        else if (msg.act === 'work') {
+          // WORK (design §4): the loop's progress is low with energy to spend → one tick of the autonomy driver, which
+          // keeps every gate of its own (in flight, the pen's quiet window, the pace, the slot pool). The app injects it.
+          const r = await (deps.work || (() => ({ ok: false, reason: 'no work door' })))();
+          log(`[consciousness] act work — ${r && r.ok ? 'the autonomy driver ticked' : `not now (${(r && r.reason) || 'no answer'})`}`);
+        }
+        else if (msg.act === 'rest') { log(`[consciousness] act rest — ${msg.why || ''}: no sensing for a while`); }
         else if (msg.act === 'listen') {
           // THE LISTEN ACT (design §4 acts; his word 09-05: boredom "should come with an autonomous need to … listen to
           // the mic"): a short mic window through the app's door (main.js gates it: the camera switch this session, the

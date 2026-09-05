@@ -941,14 +941,17 @@ try {
     finally { try { if (tmp) fs.unlinkSync(tmp); } catch {} }   // the audio never persists
   });
 } catch {}
-// THE PERSON MODEL (cut 3): his row is seeded at boot from the partner-grade gaps minus the personal facts the store
-// already holds (knowledge rows with source 'personal_fact'); the seed is idempotent and keeps asked/carried state.
-try {
-  const PM = require('./lib/person_model');
-  const facts = (() => { try { return db.getDb().prepare("SELECT content FROM knowledge WHERE source = 'personal_fact' ORDER BY created_ts DESC LIMIT 200").all().map((r) => r.content); } catch { return []; } })();
-  const me = PM.seedOwner({ knownFacts: facts });
-  console.log(`[ask] person model seeded — ${facts.length} known fact(s), ${me ? me.unknowns.filter((u) => !u.learned).length : '?'} open gap(s) about him`);
-} catch (e) { console.warn('[ask] person model seed failed: ' + e.message); }
+// THE PERSON MODEL (cut 3): his row is seeded after the database opens (app ready) from the partner-grade gaps minus the
+// personal facts the store already holds (knowledge rows with source 'personal_fact'); idempotent, keeps asked/carried
+// state. Boot p318 showed the first try ran at module load, before db.init(): "db not initialized" — hence the hook.
+function _seedPersonModel() {
+  try {
+    const PM = require('./lib/person_model');
+    const facts = (() => { try { return db.getDb().prepare("SELECT content FROM knowledge WHERE source = 'personal_fact' ORDER BY created_ts DESC LIMIT 200").all().map((r) => r.content); } catch { return []; } })();
+    const me = PM.seedOwner({ knownFacts: facts });
+    console.log(`[ask] person model seeded — ${facts.length} known fact(s), ${me ? me.unknowns.filter((u) => !u.learned).length : '?'} open gap(s) about him`);
+  } catch (e) { console.warn('[ask] person model seed failed: ' + e.message); }
+}
 // THE CONSCIOUSNESS SUBROUTINE (his word, 09-05): the fast loop runs beside the app; the bridge feeds it and
 // executes its acts. A `perform` answer is spoken to the ROOM through the one aloud door (never routed to him);
 // a `reflect` answer is her thought lane. Kill switch: ZOE_CONSCIOUSNESS=0 / meta consciousness.on=0.
@@ -961,6 +964,7 @@ try {
       gaps: () => { try { return require('./lib/person_model').openGaps('owner', { limit: 2 }).map((g) => g.question); } catch { return []; } },
       sweepPeople: () => { try { return require('./lib/person_model').sweepThirdParties({ sinceMs: 3600000 }); } catch { return []; } },
       listen: ({ ms } = {}) => _listenWindow(Math.max(3000, Math.min(20000, Number(ms) || 10000))),   // THE LISTEN ACT's door (gated above)
+      work: async () => { try { if (typeof autonomyTick !== 'function') return { ok: false, reason: 'no driver' }; await autonomyTick(); return { ok: true }; } catch (e) { return { ok: false, reason: e.message }; } },   // THE WORK ACT: a tick of the autonomy driver, its own gates holding
       logThought: (text) => { try { const sid = (typeof currentSessionId === 'function' ? currentSessionId() : null) || db.getMeta('current_session_id') || null; if (sid) db.insertTurn({ sessionId: sid, speaker: 'ai_thought', content: `<think>${text}</think>`, unprompted: 1 }); } catch {} },
       onState: (s) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('consciousness:state', s); } catch {} },
       // THE ARRIVAL's words are hers to him: a turn in the chat (unprompted, model 'consciousness') and the window's
@@ -1026,6 +1030,7 @@ function _lastSentenceEnd(s, from) {
 app.whenReady().then(() => {
   config.loadEnv();
   db.init();
+  _seedPersonModel();   // cut 3: after the database opens, never before
   configureMainSessionPermissions();   // two-way voice: allow getUserMedia mic on the default session
   // VOICE GUARD manual backstop — a SYSTEM-WIDE hotkey, because the moment it's needed a meeting app
   // (not Zoe) holds focus. Toggles pause/resume; 'auto' hands back via the voice:guard-manual IPC.
@@ -9771,6 +9776,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let _askGap = null, _askBlock = null;
   try {
     const PM = require('./lib/person_model'), AD = require('./lib/ask_door');
+    if (!PM.get('owner')) _seedPersonModel();   // lazy, once: a boot that missed the seed
     const gap = PM.topGap('owner');
     const social = (() => { try { const st = require('./lib/consciousness').instance().strip(); return st && st.drives ? Number(st.drives.social) : 0.5; } catch { return 0.5; } })();
     const d = AD.decide({ socialTurn, gap, turnsSinceLastAsk: PM.turnsSinceLastAsk('owner', { turnIdNow: userTurnRow ? userTurnRow.id : null }), social, enabled: AD.enabled() });
