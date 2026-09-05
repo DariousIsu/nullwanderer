@@ -201,7 +201,13 @@ async function maybeHeartbeat() {
   // chat — no musing (or even inbound announcements) into a window he isn't watching.
   // His rule: don't talk just to talk, and especially not while away. Inbounds remain
   // pending (not consumed) so they surface when he's back.
-  try { if (require('./availability').isAway()) return; } catch {}
+  // THE REACH (the wants project, cut 2 pieces 3–5; his law: miss him, reach for him): away used to mean
+  // total silence. Now: away and no reach licensed → silent, as before; a licensed reach (the social drive
+  // over its floor, the quiet, the cadence, the unanswered ceiling — lib/reach) passes, and its say is
+  // written from the reach manifest below, never a template.
+  let reachCtx = null;
+  try { const rl = require('./reach'); const ev = rl.evaluate({}); if (ev.reach) reachCtx = ev; } catch {}
+  try { if (require('./availability').isAway() && !reachCtx) return; } catch {}
   // Inbounds bypass the idle + gap gates — a chat-bot reply is a priority signal
   // we want surfaced quickly, not in 3 minutes.
   const earlyInbounds = db.getPendingInbounds(2);
@@ -234,17 +240,19 @@ async function maybeHeartbeat() {
   }
 
   const recentMonologue = db.getRecentMonologue(RECENT_MONOLOGUE_LIMIT);
-  if (recentMonologue.length < 2 && !hasInbound) return; // nothing to surface
+  if (recentMonologue.length < 2 && !hasInbound && !reachCtx) return; // nothing to surface (a reach needs no monologue)
 
   const userName = db.getMeta('user_name') || 'them';
   const recentReflections = db.getRecentReflections(RECENT_REFLECTION_LIMIT);
   const recentTurns = db.getRecentTurns(RECENT_TURN_LIMIT);
 
-  const awareness = buildAwarenessBlock({
+  let awareness = buildAwarenessBlock({
     chosenName: db.getMeta('chosen_name'),
     sessionStartedAt: opts.getSessionStartedAt ? opts.getSessionStartedAt() : null,
     cumulativeMs: db.getCumulativeSessionTime()
   });
+  // a licensed reach grounds the say: the why, the gap, the last reach and its silence, the channel
+  if (reachCtx) { try { awareness = `${awareness || ''}\n• ${require('./reach').manifest({ ev: reachCtx, lastUserTurnTs: lastUserActivityTs })}`; console.log(`[reach] licensed — ${reachCtx.why} → ${reachCtx.channel}`); } catch {} }
 
   const protocols = db.getActiveProtocols();
   const pendingInbounds = db.getPendingInbounds(6);
@@ -498,7 +506,7 @@ async function maybeHeartbeat() {
     // stay silent. GENUINE questions (a decision/preference/info only Lucas holds) are preserved — the
     // classifier returns 'act' ONLY for a clear self-work permission-offer. Not applied to inbounds (a
     // reply to a real external message is not her own musing).
-    if (wantsToSpeak && !hasInbound) {
+    if (wantsToSpeak && !hasInbound && !reachCtx) {
       let ask = 'surface';
       try { ask = require('./internal_action').classifyUnpromptedAsk(trimmedSay); } catch (e) { console.error('[heartbeat] internal-action classify failed:', e.message); }
       if (ask === 'act') {
@@ -550,7 +558,7 @@ async function maybeHeartbeat() {
     // trivia. Score the candidate utterance 1–10 and stay silent below threshold.
     // The bar drops when she's been quiet a long while (gap-fill) so she isn't
     // mute forever, and inbound chat-bot replies bypass it (time-sensitive).
-    if (wantsToSpeak && !hasInbound) {
+    if (wantsToSpeak && !hasInbound && !reachCtx) {   // a reach is relational, not trivia — the importance bar is not its gate
       const imp = await importanceLib.score(trimmedSay, { userName, kind: 'utterance' });
       // LANE-AWARE gate (importance × WHOSE-LANE): the bar depends on whose lane the
       // utterance is in. HERS (her own research/curiosity) stays near-silent (bar 9);
@@ -593,6 +601,16 @@ async function maybeHeartbeat() {
         unprompted: 1
       });
       db.setMeta('last_ai_utterance_at', String(Date.now()));
+      // THE REACH lands: the ledger (the unanswered count starts), one `reach` event, and the channel —
+      // a Discord DM when he is not at the desk (the desktop bubble still shows it for his return).
+      if (reachCtx) {
+        try {
+          const rl = require('./reach'); rl.recordReach({ text: trimmedSay, channel: reachCtx.channel });
+          if (reachCtx.channel === 'discord') {
+            require('./discord').sendDM(trimmedSay).then((r) => console.log(`[reach] Discord DM ${r && r.ok !== false ? 'sent' : `failed: ${(r && (r.reason || r.error)) || '?'}`}`)).catch((e) => console.log(`[reach] Discord DM failed: ${e.message}`));
+          }
+        } catch (e) { console.error('[reach] record failed:', e.message); }
+      }
       // write-bottom: an unprompted utterance goes on the shared timeline (kind
       // 'utterance' = a MessageAction to the user). Lets the StuckDetector catch
       // the heartbeat repeating the same surfaced line, and lets the monologue see

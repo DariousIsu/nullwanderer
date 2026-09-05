@@ -370,6 +370,8 @@ const smokes = [
   'smoke_tone_tag.js',
   'smoke_face_sense.js',
   'smoke_presence_state.js',
+  'smoke_landed.js',
+  'smoke_presence_reach.js',
   'smoke_spreadsheet.js',
   'smoke_site_ledger.js',
   'smoke_site_crawler.js',

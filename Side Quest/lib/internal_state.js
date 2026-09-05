@@ -37,7 +37,7 @@ const JOURNAL_CAP = 300;
 const VAD_BASELINE = { v: 0.55, a: 0.45, d: 0.50 };
 const VAD_HALF_LIFE_MS = 4 * 3600e3;
 const VAD_MAX_DEV = 0.30;          // max deviation from baseline per axis — no saturation at the extremes
-const MODEL_VERSION = 3;           // bump when the appraisal/dynamics model changes → journal resets (v3 = 08-31 appraisal symmetry)
+const MODEL_VERSION = 4;           // bump when the appraisal/dynamics model changes → journal resets (v3 = 08-31 appraisal symmetry; v4 = 09-05 held/unanswered/answered)
 const SOCIAL_HALF_RISE_MS = 5 * 3600e3;
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -109,6 +109,13 @@ function appraiseEvents(events) {
     // a registered road delivery) — satisfaction moves valence up; competence-shaped, so dominance
     // rises a little too. Same dedupe + per-tick cap + deviation band bound it.
     else if (e.kind === 'win') { seen.add(sig); dv += 0.05; da += 0.01; dd += 0.02; why.push(`win:${e.lane}`); }
+    // THE WANTS PROJECT, cut 2 (v4, 2026-09-05; his law: be lonely when unanswered, annoyed when a meeting
+    // blocks her): `held` = a meeting hold on her voice (a small annoyance: −v +a, deduped per hold);
+    // `unanswered` = a reach with no answer past the window (the loneliness: −v); `answered` = his turn after
+    // a reach (a small +v). `released` and `reach` themselves are neutral. Same dedupe + cap + band bound them.
+    else if (e.kind === 'held' && e.lane === 'presence') { seen.add(sig); dv -= 0.02; da += 0.03; why.push('held'); }
+    else if (e.kind === 'unanswered' && e.lane === 'presence') { seen.add(sig); dv -= 0.04; da += 0.01; why.push('unanswered'); }
+    else if (e.kind === 'answered' && e.lane === 'presence') { seen.add(sig); dv += 0.02; why.push('answered'); }
     // everything else (self_watch's raw `anomaly` firehose, info lines, deprecation noise) is NOT appraised
   }
   return {

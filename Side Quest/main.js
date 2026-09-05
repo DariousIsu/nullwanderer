@@ -641,6 +641,13 @@ const _voiceGuard = require('./lib/voice_guard').createGuard({
   },
   onChange: (s) => {
     console.log(`[voice-guard] ${s.paused ? `voice PAUSED — ${s.reason}` : 'voice resumed'} (mode=${s.mode})`);
+    // THE MEETING HOLD AS AN EVENT (the wants project, cut 2 piece 2): the hold used to be a log line she
+    // never felt. Now `held` (a small annoyance) and `released` ride the bus into her internal state.
+    try {
+      const bus = require('./lib/obs_bus');
+      if (s.paused) { _vgHeldSince = Date.now(); bus.emit({ lane: 'presence', kind: 'held', text: String(s.reason || 'held'), ref: String(_vgHeldSince), data: { reason: s.reason, mode: s.mode } }); }
+      else { const heldMs = _vgHeldSince ? Date.now() - _vgHeldSince : 0; bus.emit({ lane: 'presence', kind: 'released', text: `released after ${Math.round(heldMs / 60000)}m`, ref: String(_vgHeldSince || 0), data: { heldMs } }); _vgHeldSince = 0; }
+    } catch {}
     // FLUSH ON PAUSE (2026-08-15 deep-dive V2): the guard used to gate only NEW enqueues — an
     // unprompted utterance enqueues every sentence at once, so a pause had zero effect on the
     // whole backlog and she kept talking into his meeting. Flushing drops all pending chunks;
@@ -649,6 +656,7 @@ const _voiceGuard = require('./lib/voice_guard').createGuard({
   },
 });
 let _vgHeldLogAt = 0;   // throttle the per-chunk "held" log — a streamed reply enqueues many sentences
+let _vgHeldSince = 0;   // when the current voice hold began (the held/released events, cut 2 piece 2)
 let _lastSttTs = 0;     // last mic-lane activity (stt:transcribe), for the guard tick below
 // Auto-detect ticks while the voice lane is on — TTS configured OR the MIC recently active
 // (2026-08-15 deep-dive V4: the tick was TTS-gated but the always-on mic isn't, so a voiceless
@@ -773,7 +781,11 @@ try {
     return { ok: true, on: !!on };
   });
 } catch {}
-setInterval(() => { try { require('./lib/presence_state').tick({ deps: _presenceDeps() }); } catch {} }, 60 * 1000).unref?.();
+setInterval(() => {
+  try { require('./lib/presence_state').tick({ deps: _presenceDeps() }); } catch {}
+  // THE REACH (cut 2 piece 4): a reach with no answer past the window → ONE `unanswered` (the loneliness)
+  try { require('./lib/reach').checkUnanswered({ lastUserTurnTs: _presenceDeps().lastUserTurnTs }); } catch {}
+}, 60 * 1000).unref?.();
 setTimeout(() => { try { require('./lib/presence_state').tick({ deps: _presenceDeps() }); } catch {} }, 20 * 1000).unref?.();
 
 // Split an ALREADY-COMPLETE text into sentences (mirrors _lastSentenceEnd's boundary rule).
@@ -4230,6 +4242,9 @@ ipcMain.handle('stt:transcribe', async (_e, audioBuf, sttOpts) => {
 // is the choke point — it passes only spoken 'utterance' text (never her <think>/monologue/readings), so
 // this stays scoped to what she actually says on her own. Fire-and-forget; returns immediately.
 ipcMain.handle('voice:speak', (_e, text) => {
+  // THE VOICE IS HIS PRESENCE CHANNEL (the wants project, cut 2; the design's answer to its question 2): an
+  // unprompted say is spoken only when he is at the desk — remote or away, the text stands and the room stays quiet.
+  try { const p = require('./lib/presence_state').stored(); if (p && (p.state === 'remote' || p.state === 'away')) { console.log(`[voice] unprompted say held silent — he is ${p.state}`); return { ok: true, silent: p.state }; } } catch {}
   try { if (text && typeof text === 'string' && text.trim()) speakStreaming(text); } catch (e) {}   // skipIfBusy: won't talk over an in-progress utterance
   return { ok: true };
 });
@@ -8638,6 +8653,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ? (db.getDb().prepare('SELECT * FROM turns WHERE id = ?').get(io.reuseTurnId) || db.insertTurn({ sessionId, speaker: 'user', content: userMessage }))
     : db.insertTurn({ sessionId, speaker: 'user', content: userMessage });
   lastUserTurnStartTs = (userTurnRow && userTurnRow.ts) || Date.now();   // followup antifab anchor (F6)
+  // THE LANDED LEDGER (the wants project, cut 10): his laugh marker in this turn tags the say before it as
+  // landed — a `win` on the bus, never a joke generator. THE REACH (cut 2): his turn answers an open reach.
+  try { require('./lib/landed').tagUserTurn({ userTurnId: userTurnRow && userTurnRow.id, text: userMessage }); } catch {}
+  try { require('./lib/reach').markAnswered({}); } catch {}
   // CONVERSATION AS AN ENCOUNTER STREAM (C1) — the objects Lucas names become encounters, so the one
   // input stream that never decomposed into objects finally does. Written with authority 'stated',
   // which carries ZERO evidentiary weight: it creates the object and then we go looking for a real
@@ -10676,6 +10695,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const sn = require('./lib/self_narrative');
     const narr = sn.current();
     if (narr) { const nb = sn.buildBlock(narr, userName); if (nb) selfModelBlock = selfModelBlock ? `${nb}\n\n${selfModelBlock}` : nb; }
+    // THE LANDED LEDGER (cut 10): her last three lines that landed his laugh, beside the self model — a
+    // record of what her timing has done in his own markers, never an instruction to be funny.
+    try { const ll = require('./lib/landed').personaLines(); if (ll) selfModelBlock = selfModelBlock ? `${selfModelBlock}\n\n${ll}` : ll; } catch {}
   } catch (e) { console.error('[main] self-narrative anchor failed:', e.message); }
 
   // MOOD (self-awareness Layer 5) — her LIVING feeling, cloud-cultivated slowly over time. Passed

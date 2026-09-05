@@ -61,7 +61,7 @@ const windup = is.appraiseEvents(Array.from({ length: 30 }, () => ({ kind: 'win'
 ok(Math.abs(windup.dv - win.dv) < 1e-9, 'appraisal v3: 30 re-emits of ONE win (signature dedupe) = one signal — no euphoria pinning');
 const winflood = is.appraiseEvents(Array.from({ length: 50 }, (_, i) => ({ kind: 'win', lane: 'pursuit', ref: 'rq:' + i })));
 ok(winflood.dv === 0.12, 'appraisal v3: 50 distinct wins still CAPPED at +0.12 (the lurch bound is symmetric)');
-ok(is.MODEL_VERSION === 3, 'v3: MODEL_VERSION bumped — the saturated v2 journal restarts clean');
+ok(is.MODEL_VERSION >= 3, 'v3+: MODEL_VERSION bumped past the saturated v2 journal (v4 = the wants project appraisals)');
 // wiring: the two win emitters exist (the exhaust actually carries wins now)
 {
   const fsw = require('fs'), pathw = require('path');
@@ -123,6 +123,19 @@ ok(A.st['drive_gauge'] === undefined && C.st['drive_gauge'] === undefined, 'DARK
   ok(!tired.neutral && tired.exploreGateMult === 1.75 && tired.graphMovesDelta === -1, 'Slice 2: exhausted energy → longer gates, −1 move');
   ok(is.tickWeights(null).neutral && is.tickWeights(null).exploreGateMult === 1 && is.tickWeights(null).graphMovesDelta === 0, 'Slice 2: no vector → NEUTRAL (byte-identical tick)');
   ok(is.tickWeights({ drives: { curiosity: 0.5, energy: 0.5, progress: 0.5 } }).neutral, 'Slice 2: unpressured drives → neutral (weights fire on pressure, not presence)');
+}
+
+// THE WANTS PROJECT, cut 2 (v4, 2026-09-05): held / unanswered / answered are appraised; released and the
+// reach itself are neutral; each is deduped per ref like every other impulse.
+{
+  const held = is.appraiseEvents([{ kind: 'held', lane: 'presence', ref: '1' }, { kind: 'held', lane: 'presence', ref: '1' }]);
+  ok(held.dv < 0 && held.da > 0 && held.why.join() === 'held', 'v4: a meeting hold is a small annoyance (−v +a), deduped per hold');
+  const lonely = is.appraiseEvents([{ kind: 'unanswered', lane: 'presence', ref: '9' }]);
+  ok(lonely.dv <= -0.04 && lonely.why.includes('unanswered'), 'v4: an unanswered reach is the loneliness (−v)');
+  ok(is.appraiseEvents([{ kind: 'answered', lane: 'presence', ref: '9' }]).dv > 0, 'v4: his answer after a reach is a small +v');
+  ok(is.appraiseEvents([{ kind: 'released', lane: 'presence', ref: '1' }, { kind: 'reach', lane: 'presence', ref: '2' }]).dv === 0, 'v4: released and the reach itself are neutral');
+  ok(is.appraiseEvents([{ kind: 'held', lane: 'watch', ref: '1' }]).dv === 0, 'v4: a `held` on another lane is not the meeting hold');
+  ok(is.MODEL_VERSION === 4, 'v4: the model version bumped (the journal resets by design)');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
