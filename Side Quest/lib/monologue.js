@@ -1,7 +1,7 @@
 const db = require('./db');
 const { streamChat, streamCognition, complete, completeDetailed } = require('./ollama');
 const { search: webSearch, fetchPage } = require('./web_search');
-const { detectCuriosity, isBareCuriositySeed, buildBoredomPrompt, parseBoredomResponse } = require('./curiosity');
+const { detectCuriosity, isBareCuriositySeed } = require('./curiosity');
 const { runSelfDialogue } = require('./self_dialogue');
 const openThreadsLib = require('./open_threads');
 const filesLib = require('./files');
@@ -54,6 +54,7 @@ const RECENT_MONOLOGUE_WINDOW = 6;
 const ANTI_LOOP_RECENT = 10;            // last N monologue lines checked for repetition
 const ANTI_LOOP_THRESHOLD = 0.30;       // Jaccard similarity above this = skip
 const BOREDOM_INTERVAL_MS = 5 * 60 * 1000;  // every 5 min, ask her what she'd want to look up
+const BOREDOM_REQUEST_FLOOR = 0.6;          // cut 7: the loop's boredom reading (1 − stimulation) that makes a wander request real
 const MIN_GAP_BETWEEN_SEARCHES_MS = 60 * 1000;  // at most one search per minute
 const GRAPHWALK_MIN_INTERVAL_MS = 30 * 1000;    // graph-building moves are slow + deliberate (not the 10s tick)
 const GRAPHWALK_LAST_KEY = 'graphwalk.lastAt';
@@ -2936,57 +2937,17 @@ async function maybeBoredomSearch() {
 
   db.setMeta('last_boredom_search_at', String(Date.now()));
 
-  const userName = db.getMeta('user_name') || 'them';
-  // Pull conversation context — this is what the search must be grounded in
-  const recentTurnsAll = db.getRecentTurns(30);
-  const recentTurns = recentTurnsAll.filter(t => t.speaker === 'user' || t.speaker === 'ai_said');
-  const heldCommitments = db.getHeldCommitments(5);
-  const recentReadings = db.getRecentMonologueByType('reading', 8, { excludeConsolidated: true });
-  const recentReadingTopics = recentReadings.map(r => {
-    if (r.query) return r.query;
-    const m = (r.content || '').match(/(?:looked up|wondered about) "([^"]+)"/i);
-    return m ? m[1] : (r.content || '').slice(0, 60);
-  }).filter(Boolean);
-
-  const messages = buildBoredomPrompt(userName, {
-    recentTurns,
-    heldCommitments,
-    recentReadingTopics
-  });
-
-  let raw = '';
-  const ctrl = new AbortController();
-  currentController = ctrl;
-  let aborted = false;
-  try {
-    await streamCognition({
-      messages,
-      options: { temperature: 0.9, top_p: 0.9, num_ctx: 8192, num_predict: 30 },
-      onToken: (t) => { raw += t; },
-      signal: ctrl.signal
-    });
-  } catch (e) {
-    if (e && (e.name === 'AbortError' || ctrl.signal.aborted)) aborted = true;
-    else throw e;
-  } finally {
-    if (currentController === ctrl) currentController = null;
-  }
-  if (aborted) return;
-
-  const query = parseBoredomResponse(raw);
-  if (!query) return;
-
-  // RUMINATION BRAKE: the boredom search bypasses the thought-level rumination
-  // guard (its query is generated here, not in the surfaced thought stream), which
-  // is how she fired 264 near-identical theme searches in 24h. Embed the candidate
-  // against her recent reading queries; if it's a semantic near-repeat, suppress it
-  // so she stops re-circling and the next idle tick can do something new instead.
-  if (await isRepeatOfRecentSearch(query)) {
-    console.log(`[monologue] boredom search suppressed (rumination brake): "${query.slice(0, 60)}"`);
-    return;
-  }
-
-  await runSearch(query, 'boredom');   // self-fragment guard is now universal (inside runSearch)
+  // BOREDOM HONORED (cut 7, 09-05): the boredom search is RETIRED — it discharged boredom into a work-shaped search
+  // (and had not fired since 2026-07-01). A boredom trigger is now a WANDER request to the decider (lib/wander): a
+  // no-goal walk of her own graph for one private thought, licensed against her drives and the queue.
+  // The request carries the LOOP'S boredom (its strip: boredom = 1 − stimulation), never this five-minute timer — a timed
+  // request would keep the wander licensed always and hollow out the drive competition. No loop reading → no request;
+  // the curiosity drive still licenses a wander on its own.
+  let bored = null;
+  try { const st = require('./consciousness').peekStrip(); bored = st && st.appraisals && typeof st.appraisals.boredom === 'number' ? st.appraisals.boredom : null; } catch {}
+  if (bored == null || bored < BOREDOM_REQUEST_FLOOR) return;
+  try { require('./wander').request(); console.log(`[monologue] bored ${bored.toFixed(2)} → wander requested (the boredom search is retired: cut 7)`); } catch (e) { console.error('[monologue] wander request failed:', e.message); }
+  return;
 }
 
 // The self-fragment guard, callable from any search path. True → this query is her own

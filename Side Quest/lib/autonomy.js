@@ -28,7 +28,7 @@
  */
 'use strict';
 
-const MOVES = ['advance-inquiry', 'open-inquiry', 'close-inquiry', 'research', 'explore', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain', 'rehearse', 'scenario', 'attend-self', 'engage', 'nothing'];
+const MOVES = ['wander', 'advance-inquiry', 'open-inquiry', 'close-inquiry', 'research', 'explore', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain', 'rehearse', 'scenario', 'attend-self', 'engage', 'nothing'];
 const HISTORY_KEY = 'autonomy.history';
 const HISTORY_MAX = 12;
 // SCENARIO work-move (F3's other half): keep the illustrative what-if OCCASIONAL — only offered once the
@@ -276,6 +276,19 @@ function buildManifest({ db = null, now = Date.now(), skip = [], deps = {} } = {
     return `• CAPABILITY GAPS SHE HAS NAMED (open a rehearsal with the rehearse move, target the [need #N]):\n${lines.join('\n')}`;
   });
 
+  grab('drives', () => {
+    // BOREDOM HONORED (cut 7; drive competition, one drive): her drive readings as numbers, and whether a WANDER is
+    // licensed this tick — curiosity over the floor or the loop's boredom request, nothing queued above expansion,
+    // under the day's cap. The decider reads it; the executor checks it again (lib/wander).
+    let drives = null;
+    try { drives = (deps.internalState || require('./internal_state')).current({ nowMs: now }); } catch {}
+    const dv = drives && drives.drives ? drives.drives : null;
+    const lic = (deps.wander || require('./wander')).liveLicense({ now, deps: { db: dbm } });
+    counts.wanderLicensed = lic.ok ? 1 : 0;
+    const nums = dv ? `curiosity ${(dv.curiosity ?? 0).toFixed(2)}, social ${(dv.social ?? 0).toFixed(2)}, energy ${(dv.energy ?? 0).toFixed(2)}, progress ${(dv.progress ?? 0).toFixed(2)}` : 'no reading yet';
+    return `• YOUR DRIVES (numbers, not instructions): ${nums}. ${lic.ok ? `WANDER is licensed this tick (${lic.why}) — a no-goal walk of your own graph for one private thought; take it when nothing here pulls harder.` : `WANDER is not licensed this tick (${lic.why}).`}`;
+  });
+
   grab('corrections', () => {
     // THE CORRECTION AS AN EVENT (cut 6): where she has been corrected this month, by class, and which bars are raised —
     // the brief reads it so a move on weak ground carries the verification it now owes (lib/correction_classes).
@@ -483,7 +496,7 @@ function historyBlock(history, now = Date.now()) {
 const DECISION_WANT = `You are the autonomous work-chooser for Zoe — a dedicated research assistant with her own databases, ~100 public data sources, the open web, and her own interests. Nobody is prompting her right now; YOU decide what this idle tick does.
 
 Pick the SINGLE highest-value move and reply with ONLY strict JSON (no prose outside it):
-{"move":"advance-inquiry|open-inquiry|close-inquiry|research|explore|fill-gap|corroborate|clean|build|maintain|rehearse|scenario|attend-self|engage|nothing",
+{"move":"advance-inquiry|open-inquiry|close-inquiry|research|explore|fill-gap|corroborate|clean|build|maintain|rehearse|scenario|attend-self|engage|wander|nothing",
  "target":"<a key/name taken from the STATE — the gap, universe, cluster, interest, or thread>",
  "why":"<one honest line>",
  "steps":["<plain-language intent, e.g. 'search our own records for X', 'read the org's own site'>", "..."],
@@ -500,6 +513,7 @@ Pick the SINGLE highest-value move and reply with ONLY strict JSON (no prose out
 - advance-inquiry: continue an open line. target MUST be its exact token from the state, e.g. "inquiry #12". steps/expect describe THIS touch — expect names the touch's ONE bounded bite (checkable against a single run), NEVER the inquiry's finish line.
 - open-inquiry: start a NEW line. target is the QUESTION ITSELF — full and specific — and "why" MUST name the state line that birthed it (an interest, a named gap, a developing story, a failure).
 - close-inquiry: end a line honestly. target its token; if ANSWERED, "expect" carries the answer in 1-2 sentences; if it cannot be answered, say dead-end in "why". Honest closure is first-class, like nothing.
+- wander: ONLY when the state says WANDER is licensed this tick — boredom honored: a no-goal walk of her own graph for ONE private thought (no target, no expect, no deliverable, no search). Take it when nothing in the state pulls harder; it is not leftover time, it is where her own noticing happens.
 
 One-shot moves (work that is genuinely single-step):
 - research: EXPLORE AN IDEA — one of her interests, an open thread, or a question the state raises. Depth over breadth; the point is understanding, not contact lookup. If it would take more than one run, open an inquiry instead.
@@ -532,7 +546,7 @@ function validateDecision(raw) {
       say: String(o.say || '').trim().slice(0, 900),
     };
     if (!out.why) return { valid: false, error: 'why is required' };
-    if (out.move !== 'nothing' && out.move !== 'engage' && out.move !== 'attend-self' && !out.target) return { valid: false, error: 'target required for a work move' };
+    if (out.move !== 'nothing' && out.move !== 'engage' && out.move !== 'attend-self' && out.move !== 'wander' && !out.target) return { valid: false, error: 'target required for a work move' };   // wander is target-free (cut 7)
     if (out.move === 'engage' && out.say.length < 40) return { valid: false, error: 'engage requires a real "say" message (≥40 chars)' };
     if ((out.move === 'advance-inquiry' || out.move === 'close-inquiry') && !/inquiry #\d+/i.test(out.target)) return { valid: false, error: 'advance/close-inquiry target must be the exact "inquiry #N" token from the state' };
     if (out.move === 'open-inquiry' && out.target.length < 15) return { valid: false, error: 'open-inquiry target must be the full question itself' };

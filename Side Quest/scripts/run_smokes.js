@@ -832,6 +832,8 @@ const smokes = [
   'smoke_continuity_attest.js',
   // THE CORRECTION AS AN EVENT (cut 6, 09-05): the ledger, the doors, the appraisal, the raised bars, the brief and grounding lines
   'smoke_correction_event.js',
+  // BOREDOM HONORED (cut 7, 09-05): the wander license, the local walk, the thought contract, one thought and at most one wonder, the retired boredom search
+  'smoke_wander.js',
   'smoke_core_dataset.js',
   // The core's probe (design §6/§8/§16): scores a candidate local model on the frozen holdout — the loose
   // JSON parser, the agreement scorer, the voice contract, the one-shot prompt — with an injected call.

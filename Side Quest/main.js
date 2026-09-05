@@ -16970,7 +16970,33 @@ async function autonomyTick() {
     }
     if (decision.move === 'nothing') {
       autonomy.historyPush(H, { ts: now, move: 'nothing', outcome: `declined: ${decision.why}` });
-      console.log(`[autonomy] chose=nothing — ${decision.why}`);
+      // BOREDOM HONORED (cut 7): nothing while a wander was licensed is a named deferral, not the stall shape.
+      const _wl = (() => { try { return require('./lib/wander').liveLicense({ now }); } catch { return null; } })();
+      if (_wl && _wl.ok) console.log(`[autonomy] bored — wander deferred (${decision.why})`);
+      else console.log(`[autonomy] chose=nothing — ${decision.why}`);
+      return;
+    }
+    if (decision.move === 'wander') {
+      // BOREDOM HONORED (cut 7): a no-goal walk of her own graph for one private thought — never the operator, never
+      // the web. The license is checked again here (the decider may pick it unlicensed); the run is its own module.
+      const _wl = (() => { try { return require('./lib/wander').liveLicense({ now }); } catch (e) { return { ok: false, why: e.message }; } })();
+      if (!_wl.ok) {
+        autonomy.historyPush(H, { ts: now, move: 'wander', outcome: `refused — not licensed: ${_wl.why}` });
+        console.log(`[autonomy] chose=wander → REFUSED (not licensed: ${_wl.why})`);
+        return;
+      }
+      try {
+        const _wr = await require('./lib/wander').run({ now, skipLicense: true });
+        if (_wr && _wr.ok) {
+          autonomy.historyPush(H, { ts: now, move: 'wander', outcome: `one thought${_wr.wonder ? ' and one wonder' : ''}: ${String(_wr.thought || '').slice(0, 120)}` });
+          console.log(`[autonomy] chose=wander → thought=1 wonder=${_wr.wonder ? 1 : 0} — walk: ${String(_wr.walk && _wr.walk.text || '').slice(0, 160)}`);
+          try { require('./lib/obs_bus').emit({ lane: 'idle', kind: 'wander', text: `wander: ${String(_wr.thought || '').slice(0, 200)}`, data: { wonder: _wr.wonder || '', walk: String(_wr.walk && _wr.walk.text || '').slice(0, 300) } }); } catch {}
+          if (_wr.row && mainWindow && !mainWindow.isDestroyed()) { try { mainWindow.webContents.send('monologue:tick', { id: _wr.row.id, ts: _wr.row.ts, content: `(wander) ${String(_wr.thought || '')}`, model: 'wander', type: 'thought' }); } catch {} }
+        } else {
+          autonomy.historyPush(H, { ts: now, move: 'wander', outcome: `no thought: ${(_wr && _wr.why) || 'unknown'}` });
+          console.log(`[autonomy] chose=wander → no thought (${(_wr && _wr.why) || 'unknown'})`);
+        }
+      } catch (e) { autonomy.historyPush(H, { ts: now, move: 'wander', outcome: `failed: ${e.message}` }); console.error('[autonomy] wander failed:', e.message); }
       return;
     }
     if (decision.move === 'engage') {

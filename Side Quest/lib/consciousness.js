@@ -239,6 +239,8 @@ function create({ deps = {} } = {}) {
 
 let _one = null;
 function instance(deps = {}) { if (!_one) _one = create({ deps }); return _one; }
+/** The last strip if the bridge exists, else null — a read that never spawns the loop (the boredom request, cut 7). */
+function peekStrip() { try { return _one ? _one.strip() : null; } catch { return null; } }
 
 /** The strip as one awareness line — her felt state in every prompt (design §4.5). Pure. */
 function stripLine(s, { now = Date.now() } = {}) {
@@ -269,4 +271,4 @@ function stripLine(s, { now = Date.now() } = {}) {
 }
 function awarenessLine() { try { return _one ? stripLine(_one.strip()) : null; } catch { return null; } }
 
-module.exports = { create, instance, enabled, stripLine, awarenessLine, PY, SCRIPT, TICK_MS };
+module.exports = { create, instance, peekStrip, enabled, stripLine, awarenessLine, PY, SCRIPT, TICK_MS };
