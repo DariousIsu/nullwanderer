@@ -249,8 +249,64 @@ function createRegistry({ dir = DEFAULT_DIR } = {}) {
 let _singleton = null;
 function _reg() { if (!_singleton) _singleton = createRegistry({}); return _singleton; }
 
+// ── TONE — the wants project, cut 9 tier A (her wish zero: "modulate my voice"; 2026-09-05) ─────────
+// A tone is a BOUNDED DELTA on her recipe, never a different voice: a speed shift within ±0.15 of her
+// baseline and a lean of at most 20 points of blend weight toward the softer (af_nicole) or crisper
+// (bf_isabella) voice. Pure and idempotent (a recipe already carrying this tone is returned as is), so a
+// consumer can never compound deltas. A voice-IDENTITY change is a personality-register change, not a tone.
+const TONES = {
+  warm:  { speed: -0.05, lean: { af_nicole: 0.15 } },
+  dry:   { speed: +0.03 },
+  quick: { speed: +0.10 },
+  low:   { speed: -0.10, lean: { af_nicole: 0.08 } },
+  pause: { pauseMs: 400 },
+};
+const TONE_SPEED_SPAN = 0.15;      // relative to her baseline
+const TONE_LEAN_MAX = 0.20;        // blend points
+const SPEED_HARD = [0.7, 1.5];
+function toneNames() { return Object.keys(TONES); }
+function applyTone(recipe, tone) {
+  const t = TONES[String(tone || '').toLowerCase()];
+  const base = recipe && typeof recipe === 'object' ? recipe : { weights: {}, lang: 'a', speed: 1.0 };
+  if (!t) return { recipe: base, pauseMs: 0, tone: null };
+  if (base._tone === tone) return { recipe: base, pauseMs: t.pauseMs || 0, tone };
+  const baseline = Number.isFinite(base._baseSpeed) ? base._baseSpeed : (Number(base.speed) || 1.0);
+  let speed = baseline + (t.speed || 0);
+  speed = Math.max(baseline - TONE_SPEED_SPAN, Math.min(baseline + TONE_SPEED_SPAN, speed));
+  speed = Math.max(SPEED_HARD[0], Math.min(SPEED_HARD[1], speed));
+  const weights = { ...(base.weights || {}) };
+  if (t.lean) {
+    for (const [voice, pts] of Object.entries(t.lean)) {
+      const shift = Math.min(TONE_LEAN_MAX, Math.max(0, pts));
+      const others = Object.keys(weights).filter((k) => k !== voice);
+      const pool = others.reduce((s, k) => s + (weights[k] || 0), 0);
+      if (!pool) continue;
+      for (const k of others) weights[k] = Math.max(0, (weights[k] || 0) - shift * ((weights[k] || 0) / pool));
+      weights[voice] = (weights[voice] || 0) + shift;
+    }
+    const sum = Object.values(weights).reduce((s, v) => s + v, 0) || 1;
+    for (const k of Object.keys(weights)) weights[k] = +(weights[k] / sum).toFixed(4);
+  }
+  return { recipe: { ...base, weights, speed: +speed.toFixed(3), _tone: tone, _baseSpeed: baseline }, pauseMs: t.pauseMs || 0, tone };
+}
+// The baseline from her state (measured, never scripted): energy shifts speed by at most ±0.05 —
+// rested a touch faster, exhausted a touch slower. Off unless meta voice.state_baseline = '1'.
+function baselineFromState(recipe, internalState, { enabled = false } = {}) {
+  const base = recipe && typeof recipe === 'object' ? recipe : { weights: {}, lang: 'a', speed: 1.0 };
+  if (!enabled || !internalState || !Number.isFinite(internalState.energy)) return base;
+  const e = Math.max(0, Math.min(1, internalState.energy));
+  const delta = Math.max(-0.05, Math.min(0.05, (e - 0.5) * 0.1));
+  const speed = Math.max(SPEED_HARD[0], Math.min(SPEED_HARD[1], (Number(base.speed) || 1.0) + delta));
+  return { ...base, speed: +speed.toFixed(3), _baseSpeed: Number(base.speed) || 1.0 };
+}
+/** Her active recipe from the registry (null when none) — the base every tone is a delta on. */
+function activeRecipe() {
+  try { const r = _reg().load(); const v = r && r.active && r.voices[r.active]; return v && v.recipe ? { ...v.recipe } : null; } catch { return null; }
+}
+
 module.exports = {
   createRegistry,
+  TONES, toneNames, applyTone, baselineFromState, activeRecipe,
   // thin delegators to the default registry
   load: (...a) => _reg().load(...a),
   reload: (...a) => _reg().reload(...a),

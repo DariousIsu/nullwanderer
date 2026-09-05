@@ -336,6 +336,10 @@ function cleanLiveSay(s) {
     .replace(/<wonder>[\s\S]*?<\/wonder>/gi, '')
     .replace(/<\|[a-z_]+\|>/gi, '')   // tokenizer special tokens like <|system|>, <|user|>
     .replace(/<\|[a-z_]+/gi, '')       // unfinished tokenizer tokens still streaming
+    // Her voice marks (cut 9): <tone warm/> <laugh/> <sigh/> <breath/> <chuckle/> <hmm/> are heard, never shown —
+    // whole tags go, and an unfinished one still streaming goes too.
+    .replace(/<tone\s+[a-z]+\s*\/?>/gi, '').replace(/<(breath|sigh|laugh|chuckle|hmm|pause)\s*\/?>/gi, '')
+    .replace(/<tone\b[^>]*$/i, '').replace(/<(breath|sigh|laugh|chuckle|hmm|pause)[^>]*$/i, '')
     // Markdown-italic markers: drop the ASTERISKS, keep the WORDS. The display never destroys content
     // (the old blanket strip ate "*Almost Famous*" → "My favorite movie is because…"). Whether stage
     // directions appear at all is the PROMPT's job, per mode (normal suppresses them; fantasy wants

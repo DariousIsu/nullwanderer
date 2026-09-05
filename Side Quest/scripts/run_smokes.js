@@ -367,6 +367,7 @@ const smokes = [
   'smoke_inquiry.js',
   'smoke_dig.js',
   'smoke_skills.js',
+  'smoke_tone_tag.js',
   'smoke_spreadsheet.js',
   'smoke_site_ledger.js',
   'smoke_site_crawler.js',

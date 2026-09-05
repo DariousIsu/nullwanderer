@@ -681,6 +681,29 @@ const _speech = (() => {
   let queued = 0, offTimer = null, speakingOn = false, gen = 0;   // gen bumps on barge-in → pending chunks skip
   const setOn = () => { if (offTimer) { clearTimeout(offTimer); offTimer = null; } if (!speakingOn) { speakingOn = true; broadcastVoiceSpeaking(true); } };
   const scheduleOff = () => { if (offTimer) clearTimeout(offTimer); offTimer = setTimeout(() => { offTimer = null; if (queued === 0 && speakingOn) { speakingOn = false; broadcastVoiceSpeaking(false); } }, 400); };
+  // ONE ITEM = a sentence (with its tone and a trailing pause) OR a non-verbal clip (a breath, a sigh, a
+  // laugh); every item rides the same two serial chains, so a laugh lands exactly where she put it.
+  function _enqueueItem(item) {
+    const tc = config.ttsConfig();
+    const tts = require('./lib/tts');
+    const myGen = gen;   // captured at enqueue; a barge-in (gen++) makes this item stale → skipped
+    setOn();
+    queued++;
+    // start synth immediately (pipelined — does NOT wait for prior playback); keep synth strictly serial.
+    const synthP = synthChain.then(() => {
+      if (gen !== myGen) return null;
+      if (item.clip) return require('./lib/nonverbal').ensureClip(item.clip, {}).catch(() => null);
+      return tts.synthesize(item.text, { voice: tc.voice, speaker: tc.speaker, wallMs: tc.wallMs, recipe: item.recipe || null }).catch(() => null);
+    });
+    synthChain = synthP.then(() => {}, () => {});
+    // play strictly in order: after the previous item's playback AND once this item's wav is ready.
+    playChain = playChain.then(async () => {
+      if (gen !== myGen) return;   // barged since enqueue → skip
+      const res = await synthP;
+      if (res && res.ok && gen === myGen) { try { await _playWavFile(res); } catch (e) {} }
+      if (item.pauseMs > 0 && gen === myGen) await new Promise((r) => setTimeout(r, Math.min(2000, item.pauseMs)));   // <tone pause/>
+    }).finally(() => { queued--; if (queued === 0) scheduleOff(); });
+  }
   function enqueue(text) {
     const tc = config.ttsConfig();
     if (!tc.enabled || !tc.configured) return;
@@ -693,21 +716,30 @@ const _speech = (() => {
       }
     } catch {}
     const tts = require('./lib/tts');
-    const clean = tts.prepareText(text, { maxChars: 100000 });   // chunks are already sentence-sized
-    if (!clean || clean.length < 2) return;
-    console.log(`[voice] enqueue +${clean.length}ch "${clean.slice(0, 28).replace(/\n/g, ' ')}${clean.length > 28 ? '…' : ''}"`);
-    const myGen = gen;   // captured at enqueue; a barge-in (gen++) makes this chunk stale → skipped
-    setOn();
-    queued++;
-    // start synth immediately (pipelined — does NOT wait for prior playback); keep synth strictly serial.
-    const synthP = synthChain.then(() => (gen === myGen) ? tts.synthesize(clean, { voice: tc.voice, speaker: tc.speaker, wallMs: tc.wallMs }).catch(() => null) : null);
-    synthChain = synthP.then(() => {}, () => {});
-    // play strictly in order: after the previous chunk's playback AND once this chunk's wav is ready.
-    playChain = playChain.then(async () => {
-      if (gen !== myGen) return;   // barged since enqueue → skip
-      const res = await synthP;
-      if (res && res.ok && gen === myGen) { try { await _playWavFile(res); } catch (e) {} }
-    }).finally(() => { queued--; if (queued === 0) scheduleOff(); });
+    // HER VOICE MARKS (the wants project, cut 9 + the non-verbal bank): a chunk is already sentence-sized;
+    // its <tone …/> becomes a bounded delta on her recipe, its <laugh/> <sigh/> <breath/> become clips
+    // queued before or after the words, its <tone pause/> a silence after them. Never spoken, never shown.
+    const marks = tts.extractVoiceMarks(tts.prepareText(text, { maxChars: 100000 }));
+    const clean = marks.text;
+    const nv = process.env.ZOE_NONVERBAL !== '0';
+    const clips = nv ? [...marks.before, ...marks.after] : [];
+    if ((!clean || clean.length < 2) && !clips.length) return;
+    let recipe = null;
+    if (marks.tone && process.env.ZOE_TONE_TAG !== '0') {
+      try {
+        const voices = require('./lib/voices');
+        let base = voices.activeRecipe();
+        if (base) {
+          let st = null; try { st = JSON.parse(db.getMeta('internal_state') || 'null'); } catch {}
+          base = voices.baselineFromState(base, st, { enabled: db.getMeta('voice.state_baseline') === '1' });
+          recipe = voices.applyTone(base, marks.tone).recipe;
+        }
+      } catch {}
+    }
+    console.log(`[voice] enqueue +${clean.length}ch "${clean.slice(0, 28).replace(/\n/g, ' ')}${clean.length > 28 ? '…' : ''}"${marks.tone ? ` tone=${marks.tone}${recipe ? ` speed=${recipe.speed}` : ''}` : ''}${clips.length ? ` nv=${clips.join(',')}` : ''}${marks.pauseMs ? ` pause=${marks.pauseMs}ms` : ''}`);
+    if (nv) for (const k of marks.before) _enqueueItem({ clip: k });
+    if (clean && clean.length >= 2) _enqueueItem({ text: clean, recipe, pauseMs: marks.pauseMs });
+    if (nv) for (const k of marks.after) _enqueueItem({ clip: k });
   }
   function flush() { gen++; }   // barge-in: skip everything currently pending (the renderer stops the audible clip itself)
   return { enqueue, isBusy: () => queued > 0, flush };
@@ -9548,7 +9580,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const browserConnBlock = browserLib.isConnected() ? browserLib.buildPromptBlock() : null;
   // THE GATED PEN (Lucas 09-01): source read + change proposals; his card + the gate are the law.
   const penBlock = require('./lib/code_pen').buildPromptBlock();
-  const browserBlock = [fileBlock, screenBlock, schedBlock, presenceBlock, emailBlock, inboxBlock, discordConnBlock, browserConnBlock, penBlock].filter(Boolean).join('\n\n') || null;
+  // HER VOICE MARKS (the wants project, cut 9): the vocabulary exists only when she has a voice to shape.
+  let voiceBlock = null; try { if (config.ttsConfig().enabled) voiceBlock = require('./lib/tts').buildVoicePromptBlock(); } catch {}
+  const browserBlock = [fileBlock, screenBlock, schedBlock, presenceBlock, emailBlock, inboxBlock, discordConnBlock, browserConnBlock, penBlock, voiceBlock].filter(Boolean).join('\n\n') || null;
   // THE ATTACHMENT LAND DOOR (2026-08-14, the fabricated-review audit — lib/attach_intake): a
   // .docx used to arrive as ZIP bytes read as UTF-8, capped to 6,000 chars of mojibake, landed
   // nowhere — and the reply reviewed it anyway (#11891, "JobsOhio case study" from thin air).
@@ -13623,6 +13657,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   sayStripped = discordLib.stripTags(sayStripped);
   sayStripped = echoSuitLib.stripEchoTags(sayStripped);
   sayStripped = recallLib.stripRecallTags(sayStripped);
+  sayStripped = require('./lib/tts').stripVoiceTags(sayStripped);   // her voice marks are heard, never shown (cut 9)
   sayStripped = require('./lib/dig').stripDigTags(sayStripped);
   sayStripped = require('./lib/skills').stripSkillTags(sayStripped);
   sayStripped = require('./lib/vision').stripGenTags(sayStripped);   // <image-gen> tags don't render

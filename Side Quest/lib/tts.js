@@ -36,6 +36,53 @@ const OUT_DIR = path.join(ROOT, 'data', 'tts');
 // scaffolding (emphasis, code ticks, link syntax, headings, list bullets), collapses whitespace, and caps
 // length (very long single utterances are slow + unnatural — the caller should chunk; we hard-cap as a
 // backstop). Returns '' for empty/non-string input. Deterministic → safe to unit-test offline.
+// ── HER VOICE MARKS (the wants project, cut 9 + the non-verbal bank; 2026-09-05) ──────────────────
+// Inside <say> she may shape how a sentence is SPOKEN: <tone warm|dry|quick|low|pause/> before it, and
+// <breath/> <sigh/> <laugh/> <chuckle/> <hmm/> where one belongs. prepareText turns them into PRIVATE
+// MARKERS (⟦t:warm⟧ ⟦nv:laugh⟧) that survive the tag scrub, the whitespace collapse and the sentence
+// split; synthesize() and the speech manager extract them (extractVoiceMarks) — the marker text itself is
+// never spoken and stripVoiceTags keeps it out of every bubble. Kill switches: ZOE_TONE_TAG=0 (tones
+// ignored), ZOE_NONVERBAL=0 (clips skipped); the tags are stripped either way.
+const NONVERBAL_KINDS = ['breath', 'sigh', 'laugh', 'chuckle', 'hmm'];
+const TONE_TAG_RE = /<tone\s+([a-z]+)\s*\/?>/gi;
+const NV_TAG_RE = new RegExp(`<(${NONVERBAL_KINDS.join('|')}|pause)\\s*\\/?>`, 'gi');
+const MARK_RE = /⟦(t|nv):([a-z]+)⟧/g;
+function markVoiceTags(text) {
+  return String(text || '')
+    .replace(TONE_TAG_RE, (_m, name) => ` ⟦t:${name.toLowerCase()}⟧ `)
+    .replace(NV_TAG_RE, (_m, kind) => (kind.toLowerCase() === 'pause' ? ' ⟦t:pause⟧ ' : ` ⟦nv:${kind.toLowerCase()}⟧ `));
+}
+/** Strip her voice tags AND the private markers from text bound for a bubble or a log. */
+function stripVoiceTags(text) {
+  return String(text || '').replace(TONE_TAG_RE, '').replace(NV_TAG_RE, '').replace(MARK_RE, '')
+    .replace(/<tone\b[^>]*$/i, '').replace(new RegExp(`<(${NONVERBAL_KINDS.join('|')}|pause)[^>]*$`, 'i'), '')   // an unfinished tag mid-stream
+    .replace(/[ \t]{2,}/g, ' ');
+}
+/**
+ * Split a prepared chunk into what is spoken and how: { text, tone, pauseMs, before:[kinds], after:[kinds] }.
+ * A tone marker anywhere in the chunk sets its tone (the first wins); ⟦t:pause⟧ adds a 400 ms silence after
+ * it; non-verbal markers before the first word play BEFORE the words, the rest AFTER.
+ */
+function extractVoiceMarks(text) {
+  const out = { text: '', tone: null, pauseMs: 0, before: [], after: [] };
+  const s = String(text || '');
+  let firstWordSeen = false;
+  const parts = s.split(/(⟦(?:t|nv):[a-z]+⟧)/g);
+  const words = [];
+  for (const p of parts) {
+    const m = /^⟦(t|nv):([a-z]+)⟧$/.exec(p);
+    if (!m) { if (p.trim()) { firstWordSeen = true; words.push(p); } continue; }
+    if (m[1] === 't') { if (m[2] === 'pause') out.pauseMs += 400; else if (!out.tone) out.tone = m[2]; }
+    else if (NONVERBAL_KINDS.includes(m[2])) (firstWordSeen ? out.after : out.before).push(m[2]);
+  }
+  out.text = words.join(' ').replace(/\s+/g, ' ').trim();
+  return out;
+}
+/** The vocabulary, for her prompt — names what exists, never tells her to feel (the anti-performance law). */
+function buildVoicePromptBlock() {
+  return `VOICE — how a sentence is SPOKEN is yours to shape inside <say>: put <tone warm/>, <tone dry/>, <tone quick/>, <tone low/> or <tone pause/> before a sentence to bend its delivery (a bounded shift on your own voice, never a different one), and <breath/>, <sigh/>, <laugh/>, <chuckle/> or <hmm/> where a breath, a sigh or a laugh actually belongs. They are stripped from the text and never shown — only heard. Punctuation is prosody too: an ellipsis pauses, short sentences quicken, a question rises. Use them when the moment has them, not as decoration.`;
+}
+
 function prepareText(text, { maxChars = 1000 } = {}) {
   if (typeof text !== 'string') return '';
   let t = text;
@@ -46,6 +93,7 @@ function prepareText(text, { maxChars = 1000 } = {}) {
   t = t.replace(/<(think|thinking|thought|thoughts)\b[\s\S]*?<\/\1>/gi, ' ');   // whole think blocks (all 4 spellings the parser tolerates)
   const say = [...t.matchAll(/<say>([\s\S]*?)<\/say>/gi)].map((m) => m[1]);
   if (say.length) t = say.join(' ');                                    // if she used <say>, speak only that
+  t = markVoiceTags(t);                                                 // her voice marks survive as private markers
   t = t.replace(/<\/?[a-z][\w-]*\b[^>]*>?/gi, ' ');                     // any remaining tags, incl. unclosed
   t = t.replace(/```[\s\S]*?```/g, ' ');            // fenced code blocks — don't read code aloud
   t = t.replace(/`([^`]*)`/g, '$1');                // inline code ticks
@@ -199,11 +247,12 @@ function shutdownTts() { if (_singleton) { _singleton.shutdown(); _singleton = n
 // speaks through it (no weights in the request → the tuner uses Zoe's saved recipe server-side)
 // instead of every consumer (app, studio, tests) each holding a ~3GB stdio child. The stdio child
 // remains ONLY as the fallback when the tuner cannot come up — voice never dies from consolidation.
-async function _synthesizeKokoro({ clean, out, wallMs }) {
+async function _synthesizeKokoro({ clean, out, wallMs, recipe = null }) {
   try {
     const vk = require('./voice_kokoro');
     if (await vk.ensureUp()) {
-      const r = await vk.synthesizeDefault(clean, { out, timeoutMs: wallMs });
+      // a toned recipe (cut 9) rides the full-recipe synth; without one the tuner speaks her saved blend
+      const r = recipe && recipe.weights ? await vk.synthesize(clean, recipe, { out, timeoutMs: wallMs }) : await vk.synthesizeDefault(clean, { out, timeoutMs: wallMs });
       if (r && r.ok) return r;
       console.warn('[tts] tuner synth failed (' + String(r && r.error).slice(0, 120) + ') — falling back to the stdio sidecar');
     } else {
@@ -219,8 +268,14 @@ async function _synthesizeKokoro({ clean, out, wallMs }) {
 // opts: { voice, speaker, out, wallMs, python, oneShot, maxChars }
 function synthesize(text, opts = {}) {
   return new Promise((resolve) => {
-    const clean = prepareText(text, { maxChars: opts.maxChars });
+    // the ONE synth door: her voice marks are extracted here too, so no path can ever speak a marker
+    const marks = extractVoiceMarks(prepareText(text, { maxChars: opts.maxChars }));
+    const clean = marks.text;
     if (!clean) return resolve({ ok: false, error: 'empty text' });
+    let recipe = opts.recipe || null;
+    if (!recipe && marks.tone && process.env.ZOE_TONE_TAG !== '0') {
+      try { const voices = require('./voices'); const base = voices.activeRecipe(); if (base) recipe = voices.applyTone(base, marks.tone).recipe; } catch {}
+    }
     const voice = resolveVoice(opts);
     // Piper needs an .onnx model path; the Kokoro paths carry Zoe's baked blend (no voice arg).
     if (_provider() !== 'kokoro' && !voice) return resolve({ ok: false, error: 'no voice model configured' });
@@ -230,7 +285,7 @@ function synthesize(text, opts = {}) {
     if (opts.oneShot || opts.python) {
       synthesizeOneShot({ text: clean, voice, out, speaker, python: opts.python, wallMs }).then(resolve);
     } else if (_provider() === 'kokoro') {
-      _synthesizeKokoro({ clean, out, wallMs }).then(resolve);
+      _synthesizeKokoro({ clean, out, wallMs, recipe }).then(resolve);
     } else {
       _service().request({ text: clean, voice, out, speaker }, wallMs).then(resolve);
     }
@@ -256,4 +311,5 @@ async function speak(text, opts = {}) {
   return res;
 }
 
-module.exports = { synthesize, speak, shutdownTts, createPiperService, parseNdjson, prepareText, resolveVoice, VENV_PY, RUNNER, OUT_DIR };
+module.exports = { synthesize, speak, shutdownTts, createPiperService, parseNdjson, prepareText, resolveVoice, VENV_PY, RUNNER, OUT_DIR,
+  markVoiceTags, stripVoiceTags, extractVoiceMarks, buildVoicePromptBlock, NONVERBAL_KINDS };
