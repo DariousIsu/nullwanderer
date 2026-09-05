@@ -41,10 +41,10 @@ ok(voices.toneNames().join() === 'warm,dry,quick,low,pause', 'the five tones of 
 
 // ── the state baseline (measured never scripted; ON unless meta voice.state_baseline='0') ──────────
 ok(voices.baselineFromState(zoe, { energy: 1 }, { enabled: false }).speed === zoe.speed, 'the baseline shift can be switched off');
-ok(near(voices.baselineFromState(zoe, { energy: 1 }).speed, 1.16) && near(voices.baselineFromState(zoe, { energy: 0 }).speed, 1.10), 'energy alone shifts speed by up to ±0.03 (rested faster, exhausted slower)');
+ok(voices.baselineFromState(zoe, { energy: 1 }).speed === zoe.speed && near(voices.baselineFromState(zoe, { energy: 0 }).speed, 1.10), 'energy alone: rested never speeds her past his tuned recipe (his ear 15:00: "dropping a few words"); exhausted slows by up to 0.03');
 const live = { mv: 4, drives: { energy: 0.81, curiosity: 0.7 }, vad: { v: 0.76, a: 0.75, d: 0.66 } };   // the LIVE vector on 09-05 08:40 (lib/internal_state's shape)
 const bl = voices.baselineFromState(zoe, live);
-ok(near(bl.speed, 1.159) && near(bl._baseline.dSpeed, 0.029) && /af_bella\+10/.test(bl._baseline.lean) && near(sum(bl.weights), 1) && bl.weights.af_bella > zoe.weights.af_bella && bl.weights.af_nicole < zoe.weights.af_nicole, `the live shape: rested + keyed-up → +0.03, warm valence → the ANIMATED voice +10 pts (${JSON.stringify(bl._baseline)})`);
+ok(bl.speed === zoe.speed && bl._baseline.dSpeed === 0 && /af_bella\+10/.test(bl._baseline.lean) && near(sum(bl.weights), 1) && bl.weights.af_bella > zoe.weights.af_bella && bl.weights.af_nicole < zoe.weights.af_nicole, `the live shape: rested + keyed-up → speed stays his 1.13 (never past his ear), warm valence → the ANIMATED voice +10 pts (${JSON.stringify(bl._baseline)})`);
 // RHYTHM — a tempo and a pause per sentence (his ear: "still sounded really flat"); pure, deterministic, bounded
 const P = (text, o) => tts.prosody({ text, ...(o || {}) });
 ok(P('Did you get the file?').dSpeed <= 0 && P('Did you get the file?').pauseAfterMs === 240 && /question/.test(P('Did you get the file?').why), 'a question slows a touch and waits');
@@ -61,7 +61,7 @@ const mainSrcR = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/tts\.prosody\(\{ text: clean, index: _breath\.index, prevLen: _breath\.prevLen \}\)/.test(mainSrcR) && /pauseMs: pauseAfter/.test(mainSrcR) && /voice\.prosody'\) !== '0'/.test(mainSrcR) && /rhythm=/.test(mainSrcR), 'the speech manager gives every sentence its tempo and its pause (off: meta voice.prosody=0) and the log names it');
 ok(/_breath\.lastAt = nowMs; _breath\.index\+\+; _breath\.prevLen = clean\.length;/.test(mainSrcR) && !/} else if \(clips\.length\) \{ _breath\.since = 0/.test(mainSrcR), 'the sentence memory is tracked on every sentence, not only when the breath rule is on');
 const top = voices.baselineFromState(zoe, { drives: { energy: 1 }, vad: { v: 0.5, a: 1 } });
-ok(near(top.speed, 1.18) && top._baseline.dSpeed === 0.05 && top._baseline.lean === null, 'the ceiling: +0.05 at full energy and arousal; neutral valence leans nothing');
+ok(top.speed === zoe.speed && top._baseline.dSpeed === 0 && top._baseline.lean === null, 'the ceiling is his recipe: full energy and arousal add nothing to speed; neutral valence leans nothing');
 const low = voices.baselineFromState(zoe, { drives: { energy: 0 }, vad: { v: 0.2, a: 0 } });
 ok(near(low.speed, 1.08) && /bf_isabella\+10/.test(low._baseline.lean), 'the floor: exhausted, flat, low valence → −0.05 and the crisper voice +10 (clamped)');
 ok(voices.baselineFromState(zoe, { drives: { energy: 0.5 }, vad: { v: 0.5, a: 0.5 } }).speed === zoe.speed && voices.baselineFromState(zoe, { drives: { energy: 0.5 }, vad: { v: 0.5, a: 0.5 } })._baseline.lean === null, 'a neutral vector changes nothing');

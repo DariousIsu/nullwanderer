@@ -309,7 +309,11 @@ function baselineFromState(recipe, internalState, { enabled = true } = {}) {
   let dSpeed = 0;
   if (energy != null) dSpeed += (Math.max(0, Math.min(1, energy)) - 0.5) * 0.06;
   if (a != null) dSpeed += (Math.max(0, Math.min(1, a)) - 0.5) * 0.04;
-  dSpeed = Math.max(-0.05, Math.min(0.05, dSpeed));
+  // HIS EAR (09-05 15:00: "sounds better but is clipping a little and dropping a few words from each sentence"):
+  // the clips measured clean (0% clipped samples, every word transcribed) — the loss was SPEED: his 1.13 plus this
+  // shift plus the rhythm reached 1.16–1.18, and Kokoro swallows function words there. State may slow her (tired,
+  // flat) but never speeds her past the recipe he tuned by ear; the rhythm's own small lift still applies.
+  dSpeed = Math.max(-0.05, Math.min(0, dSpeed));
   const speed = Math.max(SPEED_HARD[0], Math.min(SPEED_HARD[1], (Number(base.speed) || 1.0) + dSpeed));
   let weights = { ...(base.weights || {}) }, lean = null;
   if (v != null && Object.keys(weights).length) {
