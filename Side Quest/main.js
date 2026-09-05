@@ -3184,6 +3184,18 @@ app.whenReady().then(() => {
         const _sw = rq.sweepAbsences({});
         markActivity('idle');
         if (_sw.queued) console.log(`[metabolism] swept ${_sw.queued} expired gap(s) into the queue`);
+        // THE RETIRE SWEEP (2026-09-04): once a day, park open absence rows whose subject fails the
+        // floor — the request-phrase rows minted before the rule existed (row #359, "list of ten
+        // people in Louisiana", 7 passive passes then the top of the gap plan). Logged every run,
+        // zero included, so a silent sweep is distinguishable from one that never ran.
+        try {
+          const _rtLast = parseInt(db.getMeta('recheck.retire_sweep_at') || '0', 10) || 0;
+          if (Date.now() - _rtLast > 24 * 3600 * 1000) {
+            const _rt = rq.retireUnresearchable({});
+            db.setMeta('recheck.retire_sweep_at', String(Date.now()));
+            console.log(`[metabolism] retire sweep: ${_rt.parked} unresearchable open gap(s) parked${_rt.sample.length ? ` — e.g. "${String(_rt.sample[0]).slice(0, 60)}"` : ''}`);
+          }
+        } catch (e) { console.error('[metabolism] retire sweep failed:', e.message); }
         // SPINE 3 A2.2: surface one open delivery-promise (past its grace window) so a debt is never dropped.
         await _surfaceOpenPromise();
         // Self-exploration share outbox → chat in a lull ("tell me about it as you go").
@@ -3193,9 +3205,22 @@ app.whenReady().then(() => {
         // changes (lib/gap_plan.js owns cadence + fingerprint; deterministic text, key names and
         // commands must be exact — never a cloud paraphrase). Lull-gated like every unprompted door.
         try {
-          if (currentSessionId && !_conversationActive()) {
+          if (currentSessionId) {
+            // THE DOOR (2026-09-04): idle tier ≥ 1 + not away + the structural unprompted gate. The
+            // 30-second _conversationActive window was the only lull test, and the plan fired 14 min
+            // into an evening with Lucas present. gap_plan.doorOpen is pure; the readings gather here.
+            const _gpDoor = (() => {
+              try {
+                const _il = require('./lib/idle_depth');
+                const _t = _il.tier(Date.now() - lastUserTurnTs, _il.optsFromMeta((k) => { try { return db.getMeta(k); } catch { return null; } }));
+                const _away = (() => { try { return require('./lib/availability').isAway(); } catch { return false; } })();
+                const _g = (() => { try { return require('./lib/unprompted_gate').evaluate({}); } catch { return null; } })();
+                return require('./lib/gap_plan').doorOpen({ idleTier: _t && _t.tier, away: _away, gate: _g });
+              } catch (e) { return { open: false, why: `door error: ${e.message}` }; }
+            })();
             const _gpSid = currentSessionId;
             const gp = await require('./lib/gap_plan').maybePresent({
+              door: _gpDoor,
               dispatch: (tag, o) => echoSuitLib.dispatch(tag, o),
               // The FULL sheet is a workspace DOC (Lucas 08-21: a 2.4KB command wall in her chat
               // voice was "nonsensical" — chat gets chatLine's one-liner, the sheet lives here).

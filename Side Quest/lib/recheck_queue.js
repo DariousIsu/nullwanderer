@@ -41,14 +41,58 @@ const _SUBJ_JUNK_RE = /^(?:that|this|it|they|them|those|these|he|she|him|her|we|
 // requireProper:false = the LAX floor for sources that LOWERCASE their subjects (the absence store
 // does — "ward 3 alderman of testville") where the proper-noun test would starve every legitimate
 // row. The lax floor still rejects junk words, URLs, file paths, and fragments under 5 chars.
+// ── THE REQUEST-PHRASE FLOOR (2026-09-04, the "list of ten people in Louisiana" catch) ──────────
+// A subject that is a RETRIEVAL REQUEST — "that most recent list of ten people in Louisiana", "the
+// sheet with those ten people's proper emails" — is a delivery debt (a promise), never an absence
+// gap: there is no entity to research, only a held artifact to hand back. Queue row #359 burned
+// seven passive passes on that phrase, then topped the gap plan's "needs your go" list as a
+// whole-site crawl. Three request shapes, kept narrow so a real roster gap ("list of Louisiana
+// parish presidents", "Louisiana parishes list") still passes:
+//   1. a deictic/possessive determiner (that/those/my/our/your, "the most recent/latest/last…") on
+//      an ARTIFACT noun (list, sheet, report, doc, file, email…), or "the <artifact> with/from/for…";
+//   2. "list of <count>" — a list sized by a number is an order, not a thing in the world;
+//   3. a request tail: "we/you found", "contact information for", "can you", "pull up", "please".
+const _ARTIFACT = '(?:list|sheet|spreadsheet|report|summary|dossier|docs?|documents?|files?|emails?|memo|table|csv|xlsx|pdf|brief|write-?up|breakdown|analysis)';
+const _REQUEST_PHRASE_RE = new RegExp([
+  `^(?:that|those|these|my|our|your|the (?:most )?(?:recent|latest|last|previous|other|same|new|old|full|whole))\\s+(?:\\w+\\s+){0,2}?${_ARTIFACT}s?\\b`,
+  `^the ${_ARTIFACT}s? (?:with|from|for|of those|of these|we|you|i)\\b`,
+  '^(?:a |the )?list of (?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten|twenty|dozen|several|some|those|these|the)\\b',
+  '\\b(?:we|you|i) (?:found|made|built|pulled|compiled|sent|printed|wrote|discussed|talked about)\\b',
+  '\\bcontact (?:info|information|details) for\\b',
+  '\\b(?:please|can you|could you|pull up|print (?:out )?the)\\b',
+].join('|'), 'i');
+function isRequestPhrase(subject) { return _REQUEST_PHRASE_RE.test(String(subject || '').replace(/\s+/g, ' ').trim()); }
+
 function researchable(subject, { requireProper = true } = {}) {
   const s = String(subject || '').trim();
   if (s.length < 5) return false;
   if (/^https?:\/\//i.test(s)) return false;                       // a bare URL is a fetch, not a gap
   if (/^[\w./\\-]+\.(?:md|txt|csv|pdf|docx?)$/i.test(s)) return false;   // a held file path is not a research subject
   if (_SUBJ_JUNK_RE.test(s)) return false;
+  if (isRequestPhrase(s)) return false;                             // a retrieval request is a promise, never a gap (both floors)
   if (requireProper && !/[A-Z]/.test(s) && !/\b\d{2,4}\b/.test(s)) return false;   // no proper noun and no number → a generic fragment
   return true;
+}
+
+/** retireUnresearchable({now, limit}) → {parked, sample} — the floor applied BACKWARD: open absence
+ * rows minted before a floor rule existed (row #359's batch) are PARKED (the reversible status —
+ * never `done`, which is the affect substrate's win channel; a parked request is not a satisfaction).
+ * Bounded, fail-soft, idempotent (a parked row is not open). The metabolism tick runs it once a day. */
+function retireUnresearchable({ now = Date.now(), limit = 500 } = {}) {
+  let parked = 0; const sample = [];
+  try {
+    const d = db().getDb();
+    const rows = d.prepare(`SELECT id, subject FROM recheck_queue WHERE status = 'open' AND kind = 'absence' ORDER BY id ASC LIMIT ?`).all(limit);
+    const upd = d.prepare(`UPDATE recheck_queue SET status = 'parked', outcome = ?, last_attempt_ts = ? WHERE id = ? AND status = 'open'`);
+    for (const r of rows) {
+      if (researchable(r.subject, { requireProper: false })) continue;
+      const why = isRequestPhrase(r.subject) ? 'a retrieval request, not a gap' : 'junk fragment';
+      upd.run(`PARKED: unresearchable subject (${why})`, now, r.id);
+      parked++;
+      if (sample.length < 5) sample.push(str(r.subject));
+    }
+  } catch { /* fail-soft: nothing parked this run */ }
+  return { parked, sample };
 }
 
 /** enqueue({kind, subject, detail?, priority?, dueTs?, bornFrom?}) → {id, existing} — one OPEN row
@@ -405,4 +449,4 @@ function applyOutcome(item, ans, { now = Date.now() } = {}) {
   return { action: 'deferred' };
 }
 
-module.exports = { enqueue, due, openByKind, complete, defer, hold, stats, sweepAbsences, buildPrompt, heldContext, parseVerdict, parseRoster, parseLocalRoster, applyOutcome, backoffMs, isBatchable, buildBatchPrompt, parseBatchVerdicts, BATCH_MAX, QUOTA_HOLD_MS, researchable };
+module.exports = { enqueue, due, openByKind, complete, defer, hold, stats, sweepAbsences, buildPrompt, heldContext, parseVerdict, parseRoster, parseLocalRoster, applyOutcome, backoffMs, isBatchable, buildBatchPrompt, parseBatchVerdicts, BATCH_MAX, QUOTA_HOLD_MS, researchable, isRequestPhrase, retireUnresearchable };

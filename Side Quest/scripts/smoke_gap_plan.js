@@ -70,6 +70,14 @@ const DAY = 86400000;
     ok(!rq.researchable(junk), `junk subject rejected: "${junk}"`);
   for (const real of ['Louisiana parish roster', "De'Keither Stamps", 'Mississippi Public Service Commission', 'anti-china bills 2026', 'SB 200 co-sponsors'])
     ok(rq.researchable(real), `real subject kept: "${real}"`);
+  // THE REQUEST-PHRASE FLOOR (09-04, the "list of ten people in Louisiana" catch): a retrieval request
+  // is a promise, never an absence gap — rejected on BOTH floors (strict and lax).
+  for (const req of ['list of ten people in Louisiana', 'that most recent list of ten people in Louisiana', "the sheet with those ten people's proper emails",
+    'people we found contact information for', 'can you pull up the roster', 'my Louisiana spreadsheet', 'the latest report on Acadia Parish']) {
+    ok(rq.isRequestPhrase(req) && !rq.researchable(req) && !rq.researchable(req, { requireProper: false }), `request phrase rejected on both floors: "${req}"`);
+  }
+  for (const real of ['list of Louisiana parish presidents', 'Louisiana parishes list', 'Evangeline Parish clerk', 'Acadia Parish treasurer', 'Sen. Ed Hooper work'])
+    ok(!rq.isRequestPhrase(real) && rq.researchable(real, { requireProper: false }), `a real roster/entity subject is NOT a request phrase: "${real}"`);
   const withJunk = [
     { id: 1, kind: 'absence', subject: 'scratch doc', attempts: 5, priority: 8, created_ts: T - 20 * DAY },
     { id: 2, kind: 'absence', subject: 'Evangeline Parish clerk', attempts: 5, priority: 8, created_ts: T - 20 * DAY },
@@ -111,6 +119,23 @@ const DAY = 86400000;
   ok(line.length < 400 && !/nx-echo|keys set|Register it|Re-set it/i.test(line),
     'the CHAT surface is one short line in her voice — no CLI, no command walls');
   ok(/gap_plan\.md/.test(line) && /Evangeline Parish/.test(line), 'the chat line points at the doc and names the top go item');
+  // THE ASK CAP + THE PASSIVE-CYCLE DIAGNOSIS (09-04, the 19:26 catch: "322 need a go" of 400 open).
+  const stalledItems = Array.from({ length: 12 }, (_, i) => ({ id: 100 + i, kind: 'absence', subject: `Parish ${i} assessor`, attempts: 5, priority: 5, created_ts: T - 20 * DAY }))
+    .concat([{ id: 200, kind: 'absence', subject: 'Fresh Parish clerk', attempts: 0, priority: 5, created_ts: T }, { id: 201, kind: 'absence', subject: 'Other Parish clerk', attempts: 0, priority: 5, created_ts: T }]);
+  const pStall = gp.buildPlan({ items: stalledItems, keyRows: [], probes: {}, now: T });
+  ok(pStall.counts.aggressive === 12 && pStall.counts.asked === gp._SHOW && pStall.counts.stalled === 12 - gp._SHOW,
+    'counts carry the ask cap: 12 aggressive → 5 asked, 7 stalled');
+  ok(pStall.passiveBroken === true, '12 of 14 open items stalled ≥ the half-share → the passive cycle is diagnosed as the defect');
+  const stallLine = gp.chatLine(pStall);
+  ok(/\b5 gap\(s\) are worth a deeper dig/.test(stallLine) && !/\b12 gap/.test(stallLine), 'the chat line asks for at most _SHOW gos, never the whole queue');
+  ok(/7 more are stalled on my passive cycle/.test(stallLine) && /mine to fix, not 7 crawls to approve/.test(stallLine),
+    'the remainder is a COUNT that names the passive cycle as HER defect, not N crawls for him');
+  ok(stallLine.length < 520 && !/nx-echo|keys set/i.test(stallLine), 'the diagnosed chat line stays one short paragraph, no CLI');
+  const stallText = gp.compose(pStall);
+  ok(/\+7 more have each failed 3\+ passive passes/.test(stallText) && /not 7 crawls for you to approve/.test(stallText),
+    'the sheet carries the same diagnosis under "Needs your go"');
+  const pFew = gp.buildPlan({ items: stalledItems.slice(0, 2).concat(Array.from({ length: 18 }, (_, i) => ({ id: 300 + i, kind: 'absence', subject: `Quiet Parish ${i} clerk`, attempts: 0, priority: 5, created_ts: T }))), keyRows: [], probes: {}, now: T });
+  ok(pFew.passiveBroken === false && !/passive cycle/.test(gp.chatLine(pFew)), '2 stalled of 20 open is the exception the go-list exists for — no defect wording');
 
   // ── maybePresent edge (temp DB) ───────────────────────────────────────────────────────────────
   console.log('maybePresent:');
@@ -139,6 +164,43 @@ const DAY = 86400000;
   db.setMeta('gapplan.last_ts', '0'); db.setMeta('gapplan.fp', '');
   const echoDown = await gp.maybePresent({ now: T, deliver, dispatch: async () => null });
   ok(echoDown.presented && !/Re-set it/.test(delivered[0]), 'Echo down → the plan still presents, without a key section');
+
+  // ── THE DOOR (09-04): idle tier + away + the unprompted gate, judged after the cadence ────────
+  console.log('doorOpen:');
+  ok(gp.doorOpen({ idleTier: 2, away: true }).open === false && /away/.test(gp.doorOpen({ idleTier: 2, away: true }).why), 'away → closed');
+  ok(gp.doorOpen({ idleTier: 0 }).open === false && /tier 0/.test(gp.doorOpen({ idleTier: 0 }).why), 'idle tier 0 (he just spoke) → closed');
+  const gated = gp.doorOpen({ idleTier: 1, gate: { allow: false, reason: 'pending-user-turn' } });
+  ok(gated.open === false && /pending-user-turn/.test(gated.why), 'the structural unprompted gate closes the door with its reason');
+  ok(gp.doorOpen({ idleTier: 1, gate: { allow: true } }).open === true && gp.doorOpen({ idleTier: 3 }).open === true, 'hygiene tier or deeper, not away, gate allowing → open');
+  ok(gp.doorOpen({}).open === false, 'no readings at all → closed (fail-quiet, never a plan into a live turn)');
+  delivered = [];
+  db.setMeta('gapplan.last_ts', '0'); db.setMeta('gapplan.fp', '');
+  const closed = await gp.maybePresent({ now: T, deliver, door: { open: false, why: 'idle tier 0 — he just spoke' } });
+  ok(closed.presented === false && /^door-closed \(idle tier 0/.test(closed.reason) && delivered.length === 0,
+    'a due plan behind a closed door is NOT presented, and the reason names the door');
+  ok((await gp.maybePresent({ now: T, deliver, door: { open: true, why: 'ok' } })).presented && delivered.length === 1, 'the same due plan presents once the door opens');
+  ok((await gp.maybePresent({ now: T + 3600000, deliver, door: { open: false, why: 'Lucas away' } })).reason === 'cadence',
+    'the cadence is judged FIRST — a closed door is only reported when a plan is actually due');
+
+  // ── THE RETIRE SWEEP (09-04): the floor applied backward, parked never done ──────────────────
+  console.log('retireUnresearchable:');
+  const ins = db.getDb().prepare(`INSERT INTO recheck_queue (kind, subject, detail, priority, due_ts, attempts, status, created_ts) VALUES (?, ?, NULL, 8, ?, 7, 'open', ?)`);
+  ins.run('absence', 'list of ten people in Louisiana', T, T - 26 * DAY);
+  ins.run('absence', 'Iberia Parish assessor', T, T - 26 * DAY);
+  ins.run('local-roster', 'that most recent list', T, T - 26 * DAY);   // not an absence → the sweep never touches other kinds
+  const sweep1 = rq.retireUnresearchable({ now: T });
+  const rowReq = db.getDb().prepare(`SELECT status, outcome FROM recheck_queue WHERE subject = 'list of ten people in Louisiana'`).get();
+  const rowReal = db.getDb().prepare(`SELECT status FROM recheck_queue WHERE subject = 'Iberia Parish assessor'`).get();
+  const rowOther = db.getDb().prepare(`SELECT status FROM recheck_queue WHERE subject = 'that most recent list'`).get();
+  ok(sweep1.parked === 1 && sweep1.sample[0] === 'list of ten people in Louisiana', 'the request-phrase absence row is parked, and the sample names it');
+  ok(rowReq && rowReq.status === 'parked' && /^PARKED: unresearchable subject \(a retrieval request, not a gap\)/.test(rowReq.outcome),
+    'parked (reversible), never done — with the reason in the outcome');
+  ok(rowReal && rowReal.status === 'open', 'a real absence gap stays open');
+  ok(rowOther && rowOther.status === 'open', 'other kinds are out of the sweep\'s scope');
+  ok(rq.retireUnresearchable({ now: T }).parked === 0, 'a second sweep is idempotent (parked rows are no longer open)');
+  const pAfter = await gp.maybePresent({ now: T + 21 * 3600000, deliver, door: { open: true } });
+  ok(!delivered.some((t) => /ten people/.test(t)) && (!pAfter.presented || !/ten people/.test(delivered[delivered.length - 1])),
+    'a parked request phrase never reaches the plan again');
 
   // ── BUILD 0: the browser-lane web_search floor ────────────────────────────────────────────────
   console.log('_webSearchFloor:');
@@ -198,8 +260,11 @@ const DAY = 86400000;
   ok(/gap_plan'\)\.maybePresent/.test(mainSrc), 'main.js metabolism tick calls gap_plan.maybePresent');
   ok(/writeDoc: \(text\) =>/.test(mainSrc) && /gap_plan\.md/.test(mainSrc), 'the full sheet writes to the workspace doc');
   ok(/if \(!_rq\.researchable\(_subj\)\) continue/.test(mainSrc), 'the conversation-warming producer enforces the subject floor');
-  ok(/_conversationActive\(\)\)\s*\{\s*\n\s*const _gpSid/.test(mainSrc) || /if \(currentSessionId && !_conversationActive\(\)\)/.test(mainSrc),
-    'the gap-plan surface is lull-gated');
+  ok(/gap_plan'\)\.doorOpen\(\{ idleTier: _t && _t\.tier, away: _away, gate: _g \}\)/.test(mainSrc) && /maybePresent\(\{\s*\n\s*door: _gpDoor,/.test(mainSrc),
+    'the gap-plan surface is DOOR-gated (idle tier + away + the unprompted gate), not the 30-second lull');
+  ok(!/if \(currentSessionId && !_conversationActive\(\)\)\s*\{\s*\n\s*const _gpSid/.test(mainSrc), 'the old 30-second-only gate is gone');
+  ok(/rq\.retireUnresearchable\(\{\}\)/.test(mainSrc) && /recheck\.retire_sweep_at/.test(mainSrc) && /\[metabolism\] retire sweep:/.test(mainSrc),
+    'the metabolism tick runs the daily retire sweep and logs it every run');
   ok(/const lane = await _webSearchLanePrimary\(tag\)/.test(suitSrc), 'echo_suit dispatch serves web_search from the stealth lane FIRST');
   ok(/if \(!_laneMissed\) _res = await _webSearchFloor\(tag, _res\)/.test(suitSrc),
     'the post-dispatch floor stands down when the primary lane already missed (no double lane attempt)');

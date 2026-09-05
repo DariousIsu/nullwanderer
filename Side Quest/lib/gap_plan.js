@@ -39,7 +39,16 @@ const _REAIR_MS = 7 * 24 * 3600 * 1000;      // an unchanged plan re-airs weekly
 const _AGGRESSIVE_ATTEMPTS = 3;              // the passive verify cycle has failed this many times
 const _AGGRESSIVE_AGE_MS = 10 * 24 * 3600 * 1000;   // a report-born gap (priority>=8) this old escalates
 const _MAX_ROWS = 400;                        // sweep bound
-const _SHOW = 5;                              // rows shown per action bucket
+const _SHOW = 5;                              // rows shown per action bucket — and the ASK CAP (09-04):
+                                              // the plan names at most this many gos; the rest is a count.
+// THE PASSIVE-CYCLE DIAGNOSIS (2026-09-04, the 19:26 catch: "322 need a go" out of 400 open). When
+// at least this share of the open inventory has failed _AGGRESSIVE_ATTEMPTS passive passes, the
+// broken thing is the passive cycle, not 322 gaps each deserving a crawl — the plan must say so
+// instead of asking for 322 approvals (a plan that asks for everything asks for nothing). Half is
+// the line: below it, stalled items are the exception the go-list exists for; at or above it, the
+// go-list would be the whole queue.
+const _STALL_SHARE = 0.5;
+const _STALL_MIN_OPEN = 10;                   // below this many open items a share is noise, not a diagnosis
 const _KEYS_CLI = '& "C:\\Users\\azrae\\Desktop\\NX ECHO\\nx-echo\\.venv\\Scripts\\nx-echo.exe" keys set';
 
 // The capability keys the plan watches by name. Beyond these, any registry row with
@@ -125,11 +134,16 @@ function buildPlan({ items = [], absenceOpen = 0, keyRows = [], probes = {}, now
     else if (c.bucket === 'blocked') blockedItems.push({ ...it, why: c.why });
     else fillable.push(it);
   }
+  // The ask cap + the diagnosis: at most _SHOW named gos; the remainder is `stalled`, and when the
+  // stalled share says the passive cycle itself is broken, the plan reports a defect, not 300 asks.
+  const stalled = Math.max(0, aggressive.length - _SHOW);
+  const passiveBroken = items.length >= _STALL_MIN_OPEN && (aggressive.length / items.length) >= _STALL_SHARE;
   return {
     fillable, blockedItems, aggressive,
     blockedKeys: keyBlockers(keyRows, probes),
     absenceOpen: Number(absenceOpen) || 0,
-    counts: { open: items.length, fillable: fillable.length, blocked: blockedItems.length, aggressive: aggressive.length },
+    counts: { open: items.length, fillable: fillable.length, blocked: blockedItems.length, aggressive: aggressive.length, asked: Math.min(aggressive.length, _SHOW), stalled },
+    passiveBroken,
     now,
   };
 }
@@ -151,11 +165,19 @@ function fingerprint(plan) {
 function chatLine(plan) {
   const watchBlocked = plan.blockedKeys.filter((b) => _WATCH.has(b.name)).length + plan.blockedItems.length;
   const nGo = plan.aggressive.length;
+  const nAsk = Math.min(nGo, _SHOW);   // THE ASK CAP (09-04): the chat line asks for at most _SHOW gos
+  const stalled = (plan.counts && plan.counts.stalled) || 0;
   const top = nGo ? `"${str(plan.aggressive[0].subject).replace(/\s+/g, ' ').trim().slice(0, 60)}"` : '';
   const bits = [];
-  if (nGo) bits.push(`${nGo} gap(s) are worth a deeper dig — top of the list: ${top}`);
+  if (nGo) bits.push(`${nAsk} gap(s) are worth a deeper dig — top of the list: ${top}`);
   if (watchBlocked) bits.push(`${watchBlocked} thing(s) need your hand`);
-  return `I've updated my gap plan — the full sheet is in my notes (gap_plan.md). Short version: ${bits.join(', and ')}. Ask me to walk through it, or give a go in plain words and I'll run it.`;
+  // The remainder is a COUNT, and when the count says the passive cycle is what's broken, the line
+  // names that as my defect — never as N crawls for him to approve.
+  const tail = !stalled ? ''
+    : plan.passiveBroken
+      ? ` ${stalled} more are stalled on my passive cycle (${_AGGRESSIVE_ATTEMPTS}+ empty passes each) — that's mine to fix, not ${stalled} crawls to approve.`
+      : ` ${stalled} more wait on the same kind of go — they're in the sheet.`;
+  return `I've updated my gap plan — the full sheet is in my notes (gap_plan.md). Short version: ${bits.join(', and ')}.${tail} Ask me to walk through it, or give a go in plain words and I'll run it.`;
 }
 
 /** compose(plan, {userName, projects}) → the FULL plan sheet (the workspace DOC body, not chat) —
@@ -197,7 +219,11 @@ function compose(plan, { userName = 'Lucas', projects = [] } = {}) {
     plan.aggressive.slice(0, _SHOW).forEach((a, i) => {
       L.push(`${i + 1}. "${sub(a.subject)}" (${a.why}) → ${a.action}.`);
     });
-    if (plan.aggressive.length > _SHOW) L.push(`(+${plan.aggressive.length - _SHOW} more waiting on the same kind of go.)`);
+    if (plan.aggressive.length > _SHOW) {
+      L.push(plan.passiveBroken
+        ? `(+${plan.aggressive.length - _SHOW} more have each failed ${_AGGRESSIVE_ATTEMPTS}+ passive passes — the passive cycle isn't clearing them. That's a defect on my side to fix, not ${plan.aggressive.length - _SHOW} crawls for you to approve; they stay on the cycle.)`
+        : `(+${plan.aggressive.length - _SHOW} more waiting on the same kind of go.)`);
+    }
     L.push(`Tell me in plain words which to run — e.g. "run the deep crawl on ${sub(plan.aggressive[0].subject, 50)}" — and I'll take it from there. Anything without a go stays on the passive cycle.`);
   }
   return L.join('\n').slice(0, 2400);
@@ -207,11 +233,27 @@ function compose(plan, { userName = 'Lucas', projects = [] } = {}) {
 // dispatch(tag, opts) reaches Echo fail-soft (null when down); deliver(text) lands the ONE-LINE
 // chat turn; writeDoc(text) lands the full sheet in the workspace (best-effort — a doc-write
 // failure never blocks the chat line, and vice versa).
-async function maybePresent({ now = Date.now(), dispatch = null, deliver = null, writeDoc = null } = {}) {
+/** doorOpen({idleTier, away, gate}) → {open, why} — the unprompted DOOR for the plan (2026-09-04, the
+ * 19:26 catch: the plan fired 14 minutes into an evening with Lucas present, because its only "lull"
+ * test was the 30-second _conversationActive window — no idle tier, no away check, no unprompted
+ * gate). Same doors as every other unprompted path: he is not away; the idle ladder has reached at
+ * least the hygiene tier (≥15 min since his last turn by default, meta-overridable like the ladder
+ * itself); and the structural unprompted gate allows (no pending user turn, no streak). Pure —
+ * the three readings are gathered by the caller. */
+function doorOpen({ idleTier = 0, away = false, gate = null } = {}) {
+  if (away) return { open: false, why: 'Lucas away' };
+  if (!(Number(idleTier) >= 1)) return { open: false, why: 'idle tier 0 — he just spoke' };
+  if (gate && gate.allow === false) return { open: false, why: `unprompted gate: ${gate.reason || 'blocked'}` };
+  return { open: true, why: 'ok' };
+}
+
+async function maybePresent({ now = Date.now(), dispatch = null, deliver = null, writeDoc = null, door = null } = {}) {
   try {
     if (typeof deliver !== 'function') return { presented: false, reason: 'no-deliver' };
     const last = parseInt(db().getMeta('gapplan.last_ts') || '0', 10);
     if (now - last < _MIN_INTERVAL_MS) return { presented: false, reason: 'cadence' };
+    // The door is judged AFTER the cadence so a closed door is only reported when a plan is actually due.
+    if (door && door.open === false) return { presented: false, reason: `door-closed (${door.why || 'closed'})` };
 
     // 1) the open-gap inventory (promises are delivery debts, not gaps — excluded like the drain).
     const items = db().getDb().prepare(
@@ -255,4 +297,4 @@ async function maybePresent({ now = Date.now(), dispatch = null, deliver = null,
   } catch (e) { return { presented: false, reason: `error: ${e.message}` }; }
 }
 
-module.exports = { classifyItem, keyBlockers, buildPlan, fingerprint, compose, chatLine, maybePresent, _WATCH, _DECLINED, _AGGRESSIVE_ATTEMPTS, _MIN_INTERVAL_MS, _REAIR_MS };
+module.exports = { classifyItem, keyBlockers, buildPlan, fingerprint, compose, chatLine, maybePresent, doorOpen, _WATCH, _DECLINED, _AGGRESSIVE_ATTEMPTS, _MIN_INTERVAL_MS, _REAIR_MS, _SHOW, _STALL_SHARE, _STALL_MIN_OPEN };
