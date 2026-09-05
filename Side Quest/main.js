@@ -1393,6 +1393,11 @@ app.whenReady().then(() => {
       const r = await require('./lib/security_scan').runScanOnce({ deps: { trigger_kind: 'scheduled' } });
       console.log(`[security] audit pass: ${r.scanned} files, ${r.packages || 0} packages, ${r.recorded} new finding(s), ${r.summary.open} open ${JSON.stringify(r.summary.bySeverity)}${r.notes && r.notes.length ? ` notes: ${r.notes.join(' | ')}` : ''}`);
       if (r.recorded > 0) { try { require('./lib/obs_bus').emit({ lane: 'security', kind: 'findings', level: 'warn', text: `audit pass: ${r.recorded} new issue(s), ${r.summary.open} open`, data: r.summary.bySeverity }); } catch {} }
+      // 5.3 THE REMEDIATION FOLD: an open finding → its lane (code-fixable → a gated pen-work thread;
+      // operator action → an aggregated needs card). Idempotent (open→proposed); kill switch ZOE_SECURITY_REMEDIATE=0.
+      if (!/^(0|false|no|off)$/i.test(String(process.env.ZOE_SECURITY_REMEDIATE || '').trim())) {
+        try { const rr = require('./lib/security_remediate').routeOpenFindings({}); if (rr.pens || rr.cards) console.log(`[security] remediation: ${rr.pens} pen-work + ${rr.cards} card(s) filed (${JSON.stringify(rr.byLane)})`); } catch (e) { console.error('[security] remediation failed:', e.message); }
+      }
     } catch (e) { console.error('[security] scan organ failed:', e.message); }
     finally { markActivity('idle'); secScanRunning = false; }
   };

@@ -258,6 +258,12 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
           .catch((e) => send(500, { ok: false, error: (e && e.message) || String(e) }));
         return;
       }
+      // POST /security/remediate → route the open findings to their lanes ON DEMAND (increment 5.3): a
+      // code-fixable finding → a gated pen-work thread; an operator finding → an aggregated needs card.
+      if (req.method === 'POST' && req.url.startsWith('/security/remediate')) {
+        try { const r = require('./security_remediate').routeOpenFindings({}); return send(200, { ok: true, ...r, at: Date.now() }); }
+        catch (e) { return send(500, { ok: false, error: (e && e.message) || String(e) }); }
+      }
       // POST /pen/allow-constitutional → Lucas's EXPLICIT out-of-band go for a boundary change (stage 5.2).
       // Arms a ONE-SHOT (meta pen.allow_constitutional) that the next approved constitutional proposal
       // consumes at apply. Loopback + non-GET, so it already cleared the token/cross-origin gate above; a
