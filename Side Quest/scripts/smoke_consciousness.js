@@ -17,9 +17,10 @@ ok(r.status === 0 && /passed/.test(r.stdout || '') && !/failed/.test(r.stdout ||
 // the wire: --once takes {now, percepts} and answers {state, outputs}; a stranger after 9 s while he is away → shield + deliver + a perform ask
 const M = 60000;
 const once = (req) => JSON.parse(spawnSync(PY, [path.join(ROOT, 'sidecar', 'consciousness.py'), '--once'], { input: JSON.stringify(req), encoding: 'utf8' }).stdout);
-const st0 = once({ now: 0, percepts: [{ kind: 'percept', sense: 'face', present: true, is_him: true }] }).state;
-const st1 = once({ state: st0, now: 30 * M, percepts: [{ kind: 'percept', sense: 'presence', state: 'away' }, { kind: 'percept', sense: 'face', present: true, is_him: false }] }).state;
-const res = once({ state: st1, now: 30 * M + 9000, percepts: [{ kind: 'percept', sense: 'face', present: true, is_him: false }] });
+const st0 = once({ now: 0, percepts: [{ kind: 'percept', sense: 'face', present: true, is_him: true, match: 0.6 }] }).state;
+const st1 = once({ state: st0, now: 30 * M, percepts: [{ kind: 'percept', sense: 'presence', state: 'away' }, { kind: 'percept', sense: 'face', present: false, is_him: false }] }).state;
+const st2 = once({ state: st1, now: 31 * M, percepts: [{ kind: 'percept', sense: 'face', present: true, is_him: false, match: 0.05 }] }).state;
+const res = once({ state: st2, now: 31 * M + 21000, percepts: [{ kind: 'percept', sense: 'face', present: true, is_him: false, match: 0.05 }] });
 const acts = res.outputs.map((o) => o.act || o.op);
 ok(acts.includes('shield') && acts.includes('deliver') && acts.includes('perform') && res.state.shield.on === true, `the wire: a stranger at his desk → ${acts.join(', ')}`);
 ok(res.outputs.every((o) => o.kind === 'act' || o.kind === 'reason') && res.outputs.find((o) => o.kind === 'reason').budget_ms > 0, 'every output is an act or a budgeted reasoning request — never a decision to act asked of a model');
@@ -102,13 +103,34 @@ function fakeLoop() {
   child.say({ kind: 'state', at: clock, drives: { stimulation: 0.5 }, appraisals: { boredom: 0.5 }, shield: false, thoughts_of_him: [] });
   await new Promise((r) => setTimeout(r, 20));
   ok(calls.uncover === 1 && calls.states.length === 1 && bridge.strip().appraisals.boredom === 0.5, 'unshield uncovers; the state strip reaches the window and is kept');
+  // THE ARRIVAL (his word 15:20): her words to him are spoken AND logged as her say; silence is a legitimate answer
+  const says = [];
+  const bridgeA = C.create({ deps: { spawn: () => child, now: () => clock, log: () => {}, obsBus: { subscribe: () => {}, emit: () => {} }, speak: async (t) => { calls.speak.push(t); }, logSay: (t, why) => says.push({ t, why }), slowLoop: async (req) => (req.id === 7 ? { kind: 'percept', sense: 'answer', id: 7, op: 'perform', ok: true, act: 'arrival', text: 'There you are. I wondered whether the roads were bad.' } : req.id === 9 ? { kind: 'percept', sense: 'answer', id: 9, op: 'perform', ok: true, act: 'reach', text: 'You have been quiet for an hour. I would like a word when you surface.' } : { kind: 'percept', sense: 'answer', id: 8, op: 'perform', ok: true, act: 'arrival', text: '', silent: true }), tickMs: 3600000 } });
+  const spokeBefore = calls.speak.length;
+  await bridgeA.handle({ kind: 'reason', id: 7, op: 'perform', budget_ms: 20000, context: { act: 'arrival', unseen_min: 40, thoughts: ['whether the roads were bad'] } });
+  await new Promise((r) => setTimeout(r, 20));
+  ok(calls.speak.length === spokeBefore + 1 && /There you are/.test(calls.speak[calls.speak.length - 1]) && says.length === 1 && says[0].why === 'arrival', 'an arrival answer is spoken in the room AND logged as her say in the chat');
+  await bridgeA.handle({ kind: 'reason', id: 8, op: 'perform', budget_ms: 20000, context: { act: 'arrival', unseen_min: 25, thoughts: [] } });
+  await new Promise((r) => setTimeout(r, 20));
+  ok(calls.speak.length === spokeBefore + 1 && says.length === 1, 'her silence on an arrival is honored — no plain line, nothing logged');
+  // THE REACH (his word 14:50: "she should say something to me about it, not lock her program"): spoken to him and logged as her say
+  await bridgeA.handle({ kind: 'reason', id: 9, op: 'perform', budget_ms: 20000, context: { act: 'reach', since_his_word_min: 60, wants_his_word: 0.8 } });
+  await new Promise((r) => setTimeout(r, 20));
+  ok(calls.speak.length === spokeBefore + 2 && /quiet for an hour/.test(calls.speak[calls.speak.length - 1]) && says.length === 2 && says[1].why === 'reach', 'a reach is spoken to him in the room AND logged as her say');
+  const SL = require(path.join(ROOT, 'lib', 'slow_loop'));
+  ok(/Lucas is at his desk right now/.test(SL.promptFor({ act: 'reach', since_his_word_min: 60, wants_his_word: 0.8 })) && /output an empty line if silence is right/.test(SL.promptFor({ act: 'reach', since_his_word_min: 60, wants_his_word: 0.8 })) && SL._two('Silence.') === '' && SL._two('One. Two. Three.') === 'One. Two.', 'the reach prompt names the moment and allows silence; the answer is at most two sentences');
+  // the camera's score rides the face percept (a near-miss of his own face must never read as a stranger)
+  const bridgeM = C.create({ deps: { spawn: () => child, now: () => clock, log: () => {}, obsBus: { subscribe: () => {}, emit: () => {} }, face: () => ({ present: true, is_him: false, confidence: 0.387, expression: null }), presence: () => ({ state: 'away' }), tickMs: 3600000 } });
+  bridgeM.start(); child.say({ kind: 'ready', v: 1 }); const before = child.received.length; bridgeM.tick();
+  const fp = child.received.slice(before).find((m) => m.kind === 'percept' && m.sense === 'face');
+  ok(fp && fp.match === 0.387 && fp.is_him === false, `the face percept carries the score against his enrollment (match ${fp && fp.match})`);
   const stats = bridge.stats();
   ok(stats.acts === 3 && stats.reasons === 2 && stats.answers === 2 && stats.alive === true, `the ledger: ${JSON.stringify(stats)}`);
   bridge.stop();
   ok(!bridge.alive(), 'stop() ends the child');
   // the app-side wiring
   const mainSrc = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
-  ok(/consc\.instance\(\{[\s\S]{0,600}speak: \(text\) => \{ try \{ _speech\.enqueue\(text\); \}/.test(mainSrc) && /logThought: \(text\)/.test(mainSrc) && /consciousness:state/.test(mainSrc), 'the bridge starts at boot with the aloud door, the thought lane and the state strip');
+  ok(/consc\.instance\(\{[\s\S]{0,600}speak: \(text\) => \{ try \{ _speech\.enqueue\(text\); \}/.test(mainSrc) && /logThought: \(text\)/.test(mainSrc) && /consciousness:state/.test(mainSrc) && /logSay: \(text, why\) =>[\s\S]{0,300}model: 'consciousness', unprompted: 1/.test(mainSrc) && /chat:complete', \{ saidId: row\.id, truncated: 0, unprompted: true, say: text \}/.test(mainSrc), 'the bridge starts at boot with the aloud door, the thought lane, the state strip, and her say into the chat');
   ok(/consc\.instance\(\)\.noteHisTurn\(userMessage\)/.test(mainSrc) && /enrollPerson\(m\[1\], m\[2\] \|\| null/.test(mainSrc), 'the chat door tells the loop his turn and enrolls a face by his word');
   ok(/speech_class === 'room'/.test(fs.readFileSync(path.join(ROOT, 'lib', 'delivery_router.js'), 'utf8')), 'a line to the room never becomes his DM');
   console.log(`\nsmoke_consciousness: ${pass} passed, ${fail} failed`);

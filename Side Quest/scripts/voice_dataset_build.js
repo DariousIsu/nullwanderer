@@ -5,7 +5,7 @@
 // Run: ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/voice_dataset_build.js [--n 400]
 const fs = require('fs'), path = require('path');
 const ROOT = path.join(__dirname, '..');
-const OUT = path.join(ROOT, 'data', 'voices', 'zoe_dataset');
+const OUT = path.join(ROOT, 'data', 'voices', process.env.ZOE_DATASET_DIR || 'zoe_dataset_v2');
 const N = Math.max(50, parseInt((process.argv.find((a) => a.startsWith('--n=')) || '--n=400').slice(4), 10) || 400);
 const SR = 24000;
 function clean(s) {
@@ -25,16 +25,33 @@ function usable(t) {
   const D = require('better-sqlite3');
   const db = new D(require(path.join(ROOT, 'lib', 'db')).DB_PATH, { readonly: true });
   const rows = db.prepare("SELECT content FROM turns WHERE speaker='ai_said' ORDER BY ts DESC LIMIT 6000").all();
+  // v2 (run 4, 09-05): her replies are multi-sentence; a set of single sentences taught the model that an
+  // utterance is one sentence (run 3 stopped early on three-sentence lines and ran long on some single ones).
+  // Consecutive usable sentences from the SAME say are grouped 1–3 at a time up to GROUP_CHARS, so the model
+  // learns her utterances at their real length, with her own pauses between sentences.
+  const GROUP_CHARS = 260;
   const seen = new Set(); const lines = [];
   for (const r of rows) {
-    for (const s of sentences(clean(r.content))) {
-      const key = s.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').slice(0, 60);
-      if (!usable(s) || seen.has(key)) continue;
-      seen.add(key); lines.push(s);
-      if (lines.length >= N) break;
+    const ss = sentences(clean(r.content)).filter((s) => usable(s));
+    let i = 0;
+    while (i < ss.length && lines.length < N) {
+      const take = 1 + Math.floor(Math.random() * 3);   // 1, 2 or 3 sentences
+      const group = [];
+      for (let j = i; j < Math.min(ss.length, i + take); j++) {
+        if ((group.join(' ') + ' ' + ss[j]).trim().length > GROUP_CHARS) break;
+        group.push(ss[j]);
+      }
+      if (!group.length) { i++; continue; }
+      i += group.length;
+      const text = group.join(' ');
+      const key = text.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').slice(0, 80);
+      if (seen.has(key)) continue;
+      seen.add(key); lines.push(text);
     }
     if (lines.length >= N) break;
   }
+  const multi = lines.filter((l) => sentences(l).length > 1).length;
+  console.log(`grouped: ${lines.length} utterances, ${multi} with 2–3 sentences`);
   // a few lines with the model's tags so her voice learns to carry them (the tags are text to Orpheus)
   const tagged = ['<laugh> You already know that, Lucas.', '<sigh> I suppose we could try the other door.', '<chuckle> That went about as well as last time.', '<laugh> Okay, okay. I hear you.', '<sigh> It is what it is. Let me fix it.', '<chuckle> Of course it did.'];
   console.log(`her lines: ${lines.length} usable of ${rows.length} says (+${tagged.length} tagged)`);

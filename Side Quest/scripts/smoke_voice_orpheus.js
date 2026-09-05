@@ -75,6 +75,10 @@ function fakeChild({ readyOk = true, answer = null } = {}) {
   delete process.env.ZOE_ORPHEUS_TEMP;
   ok(vo.requestBody('x', 'zoe').options.temperature === 0.4 && vo.requestBody('x', 'zoe').options.num_predict === 2400, 'sampling holds one voice (0.4) and a request may carry a paragraph (2400 tokens)');
   process.env.ZOE_ORPHEUS_TEMP = '0.7'; ok(vo.requestBody('x', 'zoe').options.temperature === 0.7, 'ZOE_ORPHEUS_TEMP overrides'); delete process.env.ZOE_ORPHEUS_TEMP;
+  // THE PREFIX FOLLOWS THE MODEL (15:40): <|audio|> is id 156939 in the tokenizer; her fine-tune was trained on [BOS][128259 = <custom_token_3>]
+  ok(vo.prefixFor('orpheus-tts') === '<|audio|>' && vo.prefixFor('orpheus-zoe') === '<custom_token_3>' && vo.prefixFor('orpheus-zoe4:latest') === '<custom_token_3>', 'the base keeps the community prompt; a model named for her gets the training prefix');
+  process.env.ZOE_ORPHEUS_PREFIX = '<|audio|>'; ok(vo.prefixFor('orpheus-zoe') === '<|audio|>', 'ZOE_ORPHEUS_PREFIX overrides'); delete process.env.ZOE_ORPHEUS_PREFIX;
+  ok(/^<\|audio\|>zoe: x<\|eot_id\|>$/.test(vo.requestBody('x', 'zoe').prompt), 'the live body (base model) still opens with <|audio|>');
   function streamingChild() {
     const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stderr = new EventEmitter(); c.lines = [];
     c.stdin = { write: (line) => {

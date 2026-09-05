@@ -29,21 +29,24 @@ def face(present, is_him, known=None, **kw):
 def test_stranger_shields_asks_once_and_unshields_on_his_face():
     st = C.initial_state(0)
     st, out = _run(st, [
-        (0, [face(True, True)]),                                  # him, at the desk
-        (30 * M, [{"kind": "percept", "sense": "presence", "state": "away"}, face(False, False)]),   # gone
-        (31 * M, [face(True, False)]),                            # a stranger sits down
-        (31 * M + 5000, [face(True, False)]),                     # 5 s — flicker window, nothing yet
-        (31 * M + 9000, [face(True, False)]),                     # 9 s — steady
-        (31 * M + 20000, [face(True, False)]),
-        (40 * M, [face(True, True)]),                             # he is back
+        (0, [face(True, True, match=0.62)]),                      # him, at the desk
+        (30 * M, [{"kind": "percept", "sense": "presence", "state": "away"}, face(False, False)]),   # gone — the frame is empty
+        (31 * M, [face(True, False, match=0.05)]),                # a stranger sits down
+        (31 * M + 5000, [face(True, False, match=0.05)]),         # 5 s — flicker window, nothing yet
+        (31 * M + 9000, [face(True, False, match=0.05)]),         # 9 s — still inside the 20 s window (8 s locked HIM out, 14:44)
+        (31 * M + 21000, [face(True, False, match=0.05)]),        # 21 s — steady
+        (31 * M + 40000, [face(True, False, match=0.05)]),
+        (40 * M, [face(True, True, match=0.62)]),                 # he is back
     ])
     acts = [(now, o["kind"], o.get("act") or o.get("op")) for now, os_ in out for o in os_]
-    assert (31 * M + 5000, "act", "shield") not in acts, "5 s of a face is flicker, never a shield"
-    assert (31 * M + 9000, "act", "shield") in acts, acts
-    assert (31 * M + 9000, "act", "deliver") in acts
-    asks = [a for a in acts if a[2] == "perform"]
-    assert len(asks) == 1 and asks[0][0] == 31 * M + 9000, "asked who they are exactly once (the re-ask waits 10 min)"
+    assert (31 * M + 9000, "act", "shield") not in acts, "9 s of a face is flicker, never a shield"
+    assert (31 * M + 21000, "act", "shield") in acts, acts
+    assert (31 * M + 21000, "act", "deliver") in acts
+    performs = [(now, o["context"]["act"]) for now, os_ in out for o in os_ if o.get("op") == "perform"]
+    asks = [p for p in performs if p[1] == "ask"]
+    assert len(asks) == 1 and asks[0][0] == 31 * M + 21000, "asked who they are exactly once (the re-ask waits 10 min)"
     assert (40 * M, "act", "unshield") in acts, acts
+    assert (40 * M, "arrival") in performs, "his face uncovers the screens AND he gets his arrival in the same beat (40 min unseen)"
     assert st["shield"]["on"] is False
     deliver = [o for now, os_ in out for o in os_ if o.get("act") == "deliver"][0]
     assert "covered the screens" in deliver["text"] and "recognize" in deliver["text"]
@@ -54,8 +57,8 @@ def test_known_face_is_greeted_by_name_after_his_word_enrolled_them():
     st, out = _run(st, [
         (0, [{"kind": "percept", "sense": "register", "name": "Raegan", "relation": "his kid"}, face(True, True)]),
         (30 * M, [{"kind": "percept", "sense": "presence", "state": "away"}, face(False, False)]),
-        (31 * M, [face(True, False, known="Raegan")]),
-        (31 * M + 9000, [face(True, False, known="Raegan")]),
+        (31 * M, [face(True, False, known="Raegan", match=0.04)]),
+        (31 * M + 21000, [face(True, False, known="Raegan", match=0.04)]),
     ])
     outs = [o for now, os_ in out for o in os_]
     greet = [o for o in outs if o.get("op") == "perform"]
@@ -68,12 +71,80 @@ def test_no_stranger_act_in_the_boots_first_ninety_seconds():
     """boot_p309, 11:04: his own face at match 0.013→0.65 as he settled, held 8 s, read as a stranger — the loop had
     never seen him. A face the loop cannot match in its first BOOT_GRACE_MS is never a stranger."""
     st = C.initial_state(1000)
-    st, out = _run(st, [(1000, [face(True, False)]), (1000 + 10000, [face(True, False)]), (1000 + 30000, [face(True, False)])])
+    st, out = _run(st, [(1000, [face(False, False)]), (3000, [face(True, False, match=0.05)]), (3000 + 10000, [face(True, False, match=0.05)]), (3000 + 30000, [face(True, False, match=0.05)])])
     assert not any(o.get("act") == "shield" for now, os_ in out for o in os_), "no shield inside the boot grace"
-    st, out = _run(st, [(1000 + C.BOOT_GRACE_MS + 1000, [face(True, False)])])
+    st, out = _run(st, [(1000 + C.BOOT_GRACE_MS + 1000, [face(True, False, match=0.05)])])
     assert any(o.get("act") == "shield" for now, os_ in out for o in os_), "past the grace, the same steady stranger shields"
     ask = [o for now, os_ in out for o in os_ if o.get("op") == "perform"]
     assert ask and ask[0]["budget_ms"] == C.PERFORM_BUDGET_MS == 20000, "the slow loop's line gets a budget a cloud call can meet"
+
+
+def test_the_desk_rules_his_own_near_miss_never_locks_him_out():
+    """The 14:44 incident, replayed from boot_self.log: back at the desk, matched once (0.461), one empty beat, then his
+    face at 0.387 and 0.365 with presence 'away' (chat idle 183 min) → the screens were covered. His words: 'the camera
+    lock has failed in the wrong direction'. Three rules, each enough alone: a near-miss is not a stranger; the camera
+    must have had no match for 3 min; chat idleness never means the desk is empty."""
+    st = C.initial_state(0)
+    st, _ = _run(st, [(0, [face(True, True, match=0.6)]), (5 * M, [{"kind": "percept", "sense": "presence", "state": "away"}, face(False, False)])])
+    st, out = _run(st, [
+        (60 * M, [face(True, True, match=0.461)]),                # back, matched once
+        (60 * M + 5000, [face(False, False)]),                    # an empty beat
+        (60 * M + 10000, [face(True, False, match=0.387)]),       # his face, under the bar by a hair
+        (60 * M + 15000, [face(True, False, match=0.365)]),
+        (60 * M + 40000, [face(True, False, match=0.37)]),        # 30 s "steady"
+        (60 * M + 70000, [face(True, False, match=0.36)]),
+    ])
+    assert not any(o.get("act") == "shield" for now, os_ in out for o in os_), "a near-miss of his own face, a minute after a match, is him"
+    # the same track scoring like a stranger (0.05) but only 70 s after his match: still not — the camera had him 3 min ago
+    st2 = C.initial_state(0)
+    st2, _ = _run(st2, [(0, [face(True, True, match=0.6)]), (60 * M, [face(True, True, match=0.5)]), (60 * M + 5000, [face(False, False)])])
+    st2, out2 = _run(st2, [(60 * M + 10000, [face(True, False, match=0.05)]), (60 * M + 40000, [face(True, False, match=0.05)]), (60 * M + 70000, [face(True, False, match=0.05)])])
+    assert not any(o.get("act") == "shield" for now, os_ in out2 for o in os_), "unseen 70 s is not gone from the desk"
+    # and presence 'away' with his face matched 30 s ago and no empty frame since: never
+    st3 = C.initial_state(0)
+    st3, out3 = _run(st3, [(0, [{"kind": "percept", "sense": "presence", "state": "away"}, face(True, True, match=0.5)]), (30000, [face(True, False, match=0.1)]), (60000, [face(True, False, match=0.1)])])
+    assert not any(o.get("act") == "shield" for now, os_ in out3 for o in os_), "presence 'away' (chat idleness) never empties the desk"
+
+
+def test_a_true_stranger_arrives_at_an_empty_desk_and_still_shields():
+    st = C.initial_state(0)
+    st, out = _run(st, [
+        (0, [face(True, True, match=0.6)]),
+        (2 * M, [face(False, False)]),                            # he leaves; the frame is empty
+        (10 * M, [face(True, False, match=0.03)]),                # eight minutes later, someone
+        (10 * M + 25000, [face(True, False, match=0.03)]),        # 25 s steady, clearly not him
+    ])
+    assert any(o.get("act") == "shield" for now, os_ in out for o in os_), "a stranger at an empty desk, clearly not him, still covers the screens"
+    st4 = C.initial_state(0)
+    st4, out4 = _run(st4, [(0, [face(True, True, match=0.6)]), (2 * M, [face(False, False)]), (10 * M, [face(True, False)]), (10 * M + 25000, [face(True, False)])])
+    assert not any(o.get("act") == "shield" for now, os_ in out4 for o in os_), "no score in the reading (no enrollment) → no one is ever a stranger"
+
+
+def test_wanting_his_word_while_he_is_here_is_a_reach_to_him_not_the_screens():
+    """His word (14:50): 'If I am sitting here and she misses me she should say something to me about it, not lock her program'."""
+    st = C.initial_state(0)
+    st["drives"]["social"] = 0.9
+    st, _ = C.step(st, [{"kind": "percept", "sense": "his_turn"}, face(True, True, match=0.6, expression="focused")], 0)
+    st["drives"]["social"] = 0.9
+    st, out = C.step(st, [face(True, True, match=0.6)], 10 * M)
+    assert not any(o.get("context", {}).get("act") == "reach" for o in out if o["kind"] == "reason"), "he spoke 10 min ago — no reach yet"
+    st, out = C.step(st, [face(True, True, match=0.6)], 35 * M)
+    reach = [o for o in out if o["kind"] == "reason" and o["op"] == "perform" and o["context"].get("act") == "reach"]
+    assert len(reach) == 1 and reach[0]["context"]["since_his_word_min"] == 35 and reach[0]["context"]["last_seen_as"] == "focused", out
+    assert not any(o.get("act") == "shield" for o in out)
+    assert st["drives"]["social"] < 0.9, "the asking spends some of the need"
+    st["drives"]["social"] = 0.9
+    st, out2 = C.step(st, [face(True, True, match=0.6)], 50 * M)
+    assert not any(o.get("context", {}).get("act") == "reach" for o in out2 if o["kind"] == "reason"), "inside the 45-min cooldown"
+    st, out3 = C.step(st, [face(True, True, match=0.6)], 81 * M)
+    assert any(o.get("context", {}).get("act") == "reach" for o in out3 if o["kind"] == "reason"), "past it, still quiet, still here → again"
+    # never while he is not at the desk: that is the wondering's ground, not the reach's
+    st5 = C.initial_state(0); st5["drives"]["social"] = 0.9
+    st5, _ = C.step(st5, [face(True, True, match=0.6)], 0)
+    st5, _ = C.step(st5, [face(False, False)], 5 * M)
+    st5["drives"]["social"] = 0.9
+    st5, out5 = C.step(st5, [], 40 * M)
+    assert not any(o.get("context", {}).get("act") == "reach" for o in out5 if o["kind"] == "reason"), "unseen → no reach"
 
 
 def test_a_face_while_he_is_here_never_shields():
@@ -153,6 +224,51 @@ def test_no_wondering_while_he_is_here_or_seen_recently():
     st["drives"]["social"] = 0.9
     st, out = _run(st, [(0, [face(True, True)]), (30 * M, [face(True, True)]), (60 * M, [face(True, True)])])
     assert not any(o["kind"] == "reason" and o["op"] == "reflect" for now, os_ in out for o in os_), "seen on camera → no wondering, however high the need"
+
+
+def test_his_return_after_a_real_absence_is_one_perform_request_with_what_she_wondered():
+    """His word (15:20): 'she didn't say anything or react to my returning' — the arrival is an act of THIS loop."""
+    st = C.initial_state(0)
+    st, _ = C.step(st, [face(True, True), {"kind": "percept", "sense": "his_turn"}], 0)
+    st, _ = C.step(st, [{"kind": "percept", "sense": "presence", "state": "away"}, face(False, False)], 5 * M)
+    st, _ = C.step(st, [{"kind": "percept", "sense": "answer", "id": 9, "op": "reflect", "ok": True, "text": "He said thirty-five minutes; it has been longer."}], 30 * M)
+    st, out = C.step(st, [{"kind": "percept", "sense": "presence", "state": "here"}, face(True, True)], 40 * M)
+    arr = [o for o in out if o["kind"] == "reason" and o["op"] == "perform" and o["context"].get("act") == "arrival"]
+    assert len(arr) == 1, out
+    ctx = arr[0]["context"]
+    assert ctx["unseen_min"] == 40 and ctx["since_his_word_min"] == 40 and ctx["thoughts"] == ["He said thirty-five minutes; it has been longer."]
+    assert st["arrival"] is None and st["thoughts_of_him"] == [], "consumed once; the wonderings went with it"
+    st, out2 = C.step(st, [face(True, True)], 41 * M)
+    assert not any(o.get("context", {}).get("act") == "arrival" for o in out2 if o["kind"] == "reason"), "no second arrival"
+
+
+def test_no_arrival_under_twenty_minutes_and_none_while_shielded():
+    st = C.initial_state(0)
+    st, _ = C.step(st, [face(True, True)], 0)
+    st, _ = C.step(st, [face(False, False)], 5 * M)
+    st, out = C.step(st, [face(True, True)], 15 * M)
+    assert not any(o.get("context", {}).get("act") == "arrival" for o in out if o["kind"] == "reason"), "15 min is a stretch, not a return"
+    st2 = C.initial_state(0)
+    st2, _ = C.step(st2, [face(True, True)], 0)
+    st2["shield"]["on"] = True
+    st2, out2 = C.step(st2, [face(True, True)], 30 * M)
+    kinds = [(o.get("act") or o.get("context", {}).get("act")) for o in out2]
+    assert kinds.index("unshield") < kinds.index("arrival") and st2["arrival"] is None, "his face uncovers first, then the arrival — never a greeting under the cover"
+
+
+def test_missing_needs_absence_in_the_room_it_is_wanting_his_word():
+    """His word (15:20): 'if missing him is related to the camera its broken because I am here'."""
+    st = C.initial_state(0)
+    st["drives"]["social"] = 0.9
+    st, _ = C.step(st, [face(True, True)], 0)
+    a = C.appraisals(st, 1000)
+    assert a["missing_him"] == 0.0 and a["wants_his_word"] >= 0.9, a
+    st, _ = C.step(st, [face(False, False)], 25 * M)
+    a2 = C.appraisals(st, 25 * M)
+    assert a2["missing_him"] >= 0.9 and a2["wants_his_word"] == 0.0, a2
+    st3 = C.initial_state(0); st3["drives"]["social"] = 0.9
+    st3, _ = C.step(st3, [{"kind": "percept", "sense": "presence", "state": "away"}], 1000)
+    assert C.appraisals(st3, 1000)["missing_him"] >= 0.9, "away by presence is absence too"
 
 
 def test_once_mode_round_trips_json():

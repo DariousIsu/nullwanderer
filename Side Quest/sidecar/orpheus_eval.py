@@ -38,9 +38,22 @@ DEFAULT_LINES = [
 ]
 
 
+def prefix_for(model):
+    """THE PREFIX FOLLOWS THE MODEL (09-05 15:40, measured in the HF tokenizer.json): <|audio|> is id 156939 — the
+    LAST token of the Orpheus vocab — while the reference fine-tune format starts the human turn with 128259 =
+    <custom_token_3>. The base model tolerates the community prompt (<|audio|>, WER 0.31); HER fine-tune was
+    trained on exactly [BOS][128259] text [128009] (sidecar/orpheus_finetune.py), so it is prompted with the same
+    ids — Ollama prepends BOS itself in raw mode, and <custom_token_3> tokenizes to the single id 128259 (measured:
+    prompt_eval_count 2 for that string alone, on both models). ORPHEUS_PREFIX overrides."""
+    env = os.environ.get("ORPHEUS_PREFIX")
+    if env:
+        return env
+    return "<custom_token_3>" if "zoe" in str(model or "").lower() else "<|audio|>"
+
+
 def generate_tokens(text, voice, host, model, temperature=0.6, top_p=0.9, repeat_penalty=1.1, max_tokens=1200, timeout=600):
     """One raw completion through Ollama; returns the response text (custom-token strings) and timing."""
-    prompt = f"<|audio|>{voice}: {text}<|eot_id|>"
+    prompt = f"{prefix_for(model)}{voice}: {text}<|eot_id|>"
     # STOP at end_of_speech (<custom_token_2>): the fine-tuned model ends a line there and, with no stop, runs on
     # into a second take (six of eight lines came back at twice their length, 15:20). Harmless for the base model.
     body = json.dumps({

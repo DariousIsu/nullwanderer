@@ -30,6 +30,7 @@ import time
 os.environ.setdefault("HIP_VISIBLE_DEVICES", os.environ.get("ORPHEUS_HIP_DEVICE", "1"))
 
 TOKENISER_LENGTH = 128256
+BOS = 128000
 END_OF_TEXT = 128009
 START_OF_SPEECH, END_OF_SPEECH = TOKENISER_LENGTH + 1, TOKENISER_LENGTH + 2
 START_OF_HUMAN, END_OF_HUMAN = TOKENISER_LENGTH + 3, TOKENISER_LENGTH + 4
@@ -90,8 +91,12 @@ def build_examples(rows, tok, snac, device, voice, max_len, log=print):
             audio_ids = snac_tokens(snac, wav, device)
         except Exception as e:  # noqa: BLE001
             log(f"  skip {os.path.basename(wav)}: {e}"); skipped += 1; continue
-        text_ids = tok.encode(f"{voice}: {text}", add_special_tokens=True)
-        ids = [START_OF_HUMAN] + text_ids + [END_OF_TEXT, END_OF_HUMAN, START_OF_AI, START_OF_SPEECH] + audio_ids + [END_OF_SPEECH, END_OF_AI]
+        # THE PREFIX = THE INFERENCE PREFIX, exactly (15:10): at inference Ollama adds <|begin_of_text|> first, then
+        # the prompt "<|audio|>{voice}: {text}<|eot_id|>" (<|audio|> is start_of_human, 128259), and the model itself
+        # emits end_of_human, start_of_ai, start_of_speech. Run 3 trained on [start_of_human][BOS]text… and was fed
+        # [BOS][start_of_human]text… — a prefix it never saw; its words were gone. Same order here as at inference.
+        text_ids = tok.encode(f"{voice}: {text}", add_special_tokens=False)
+        ids = [BOS, START_OF_HUMAN] + text_ids + [END_OF_TEXT, END_OF_HUMAN, START_OF_AI, START_OF_SPEECH] + audio_ids + [END_OF_SPEECH, END_OF_AI]
         if len(ids) > max_len:
             skipped += 1; continue
         examples.append({"input_ids": ids, "labels": list(ids), "attention_mask": [1] * len(ids)})
@@ -117,7 +122,7 @@ class PadCollator:
         return {"input_ids": ids, "labels": lab, "attention_mask": att}
 
 
-END_WEIGHT = 5.0   # run 2: the end marker appears once per sequence against ~57 audio frames × 7 tokens and was
+END_WEIGHT = 3.0   # run 2: the end marker appears once per sequence against ~57 audio frames × 7 tokens and was
                    # learned weakly; its loss is weighted so the end of a line is learned as firmly as its sounds
 
 
@@ -133,7 +138,14 @@ def weighted_lm_loss(model, inputs, return_outputs=False, num_items_in_batch=Non
     w = torch.ones_like(tgt, dtype=loss_tok.dtype)
     w = torch.where((tgt == END_OF_SPEECH) | (tgt == END_OF_AI), torch.full_like(w, end_weight), w)
     w = torch.where(tgt == -100, torch.zeros_like(w), w)
-    loss = (loss_tok * w).sum() / w.sum().clamp(min=1.0)
+    # NORMALIZATION (run 3's first line: loss 29.4 and an 8x gradient — the accumulation factor): when the Trainer
+    # hands us the accumulated batch's token count it SUMS our micro-batch losses without rescaling, so we return a
+    # weighted SUM over this micro-batch divided by that count (a weighted mean over the whole accumulated batch);
+    # without the count (no accumulation) the plain weighted mean is right.
+    if num_items_in_batch is not None:
+        loss = (loss_tok * w).sum() / max(1.0, float(num_items_in_batch))
+    else:
+        loss = (loss_tok * w).sum() / w.sum().clamp(min=1.0)
     return (loss, out) if return_outputs else loss
 
 
@@ -156,12 +168,12 @@ def main():
     # weights is open and lives in the store once downloaded (Desktop\Core\hf\orpheus-3b-0.1-ft).
     ap.add_argument("--base", default=os.environ.get("ORPHEUS_BASE") or (r"C:\Users\azrae\Desktop\Core\hf\orpheus-3b-0.1-ft" if os.path.exists(r"C:\Users\azrae\Desktop\Core\hf\orpheus-3b-0.1-ft\config.json") else "unsloth/orpheus-3b-0.1-ft"))
     ap.add_argument("--voice", default="zoe")
-    ap.add_argument("--epochs", type=float, default=3.0)
-    ap.add_argument("--lr", type=float, default=2e-4)
+    ap.add_argument("--epochs", type=float, default=2.0)
+    ap.add_argument("--lr", type=float, default=5e-5)   # run 3 at 2e-4 broke the text conditioning
     ap.add_argument("--max-len", type=int, default=2048)
     ap.add_argument("--batch", type=int, default=1)
     ap.add_argument("--accum", type=int, default=8)
-    ap.add_argument("--rank", type=int, default=64)
+    ap.add_argument("--rank", type=int, default=32)
     ap.add_argument("--encode-only", action="store_true")
     ap.add_argument("--require-device", default="7900", help="refuse to run unless the selected GPU's name contains this")
     ap.add_argument("--snac-device", default="cpu", help="where SNAC encodes (cpu: the ROCm nightly's conv kernels return garbage)")

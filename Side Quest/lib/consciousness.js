@@ -14,6 +14,10 @@
  * Kill switch: ZOE_CONSCIOUSNESS=0 or meta consciousness.on='0'. Fail-soft everywhere; a dead child respawns
  * on the next tick (at most once a minute).
  */
+// Acts whose words are for HIM (spoken in the room AND logged as her say); silence is a legitimate answer to them.
+const TO_HIM = ['arrival', 'reach'];
+// The camera's score against his enrollment (face_sense: `confidence` is the cosine when enrolled, a detector score when not — `is_him` null then).
+const _match = (f) => (f && f.is_him !== null && f.is_him !== undefined && typeof f.confidence === 'number') ? f.confidence : null;
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -72,7 +76,7 @@ function create({ deps = {} } = {}) {
         if (msg.act === 'shield') await (deps.shield || require('./shield')).cover({ who: msg.who || null });
         else if (msg.act === 'unshield') await (deps.shield || require('./shield')).uncover({});
         else if (msg.act === 'deliver') await (deps.deliver || ((o) => require('./delivery_router').deliver(o)))({ text: msg.text, source: 'consciousness' });
-        else if (msg.act === 'look') { const r = await (deps.look || (() => require('./face_sense').look()))(); if (r && typeof r === 'object' && r.reading) percept({ sense: 'face', ...r.reading }); }
+        else if (msg.act === 'look') { const r = await (deps.look || (() => require('./face_sense').look()))(); if (r && typeof r === 'object' && r.reading) percept({ sense: 'face', ...r.reading, match: _match(r.reading) }); }
       } catch (e) { log(`[consciousness] act ${msg.act} failed: ${e.message}`); }
       return;
     }
@@ -81,7 +85,11 @@ function create({ deps = {} } = {}) {
       log(`[consciousness] reason ${msg.op}#${msg.id} (${msg.budget_ms} ms) ${JSON.stringify(msg.context).slice(0, 120)}`);
       (deps.slowLoop || ((r) => require('./slow_loop').run(r, {})))(msg).then(async (ans) => {
         stats.answers++;
-        if (ans && ans.ok && ans.op === 'perform' && ans.text) {
+        if (ans && ans.ok && ans.op === 'perform' && TO_HIM.includes(ans.act)) {
+          // THE ARRIVAL and THE REACH: to him, in the room and in the chat — or silence, which is a legitimate answer
+          if (ans.text) { log(`[consciousness] ${ans.act} — she says: "${ans.text}"`); try { await (deps.speak || (() => {}))(ans.text); } catch (e) { log(`[consciousness] speak failed: ${e.message}`); } try { deps.logSay && deps.logSay(ans.text, ans.act); } catch {} }
+          else log(`[consciousness] ${ans.act} — she chose silence`);
+        } else if (ans && ans.ok && ans.op === 'perform' && ans.text) {
           log(`[consciousness] to the room: "${ans.text}"`);
           try { await (deps.speak || (() => {}))(ans.text); } catch (e) { log(`[consciousness] speak failed: ${e.message}`); }
           try { deps.logTurn && deps.logTurn(ans.text); } catch {}
@@ -89,7 +97,7 @@ function create({ deps = {} } = {}) {
           // a wondering: her thought lane, never spoken by itself
           log(`[consciousness] she wonders: "${ans.text.slice(0, 160)}"`);
           try { deps.logThought && deps.logThought(ans.text); } catch {}
-        } else if (msg.op === 'perform' && (!ans || !ans.ok)) {
+        } else if (msg.op === 'perform' && (!ans || !ans.ok) && !TO_HIM.includes((msg.context || {}).act)) {
           // his word after p309 ("also speak to the person"): the model was slow or failed — she still speaks, a plain line
           const ctx = msg.context || {};
           const line = ctx.act === 'greet' && ctx.name ? `Hi ${ctx.name}. Lucas stepped away, so his screens are covered for now. How are you?` : 'Hi. Lucas is away and his screens are covered. Who are you, and how can I help?';
@@ -108,7 +116,7 @@ function create({ deps = {} } = {}) {
     stats.ticks++;
     const t = now();
     // the senses every beat: the camera reading (the loop dedups), the fused presence
-    try { const f = (deps.face || (() => require('./face_sense').current()))(); if (f) percept({ sense: 'face', present: !!f.present, is_him: f.is_him === true, known: f.known || null, expression: f.expression || null }); } catch {}
+    try { const f = (deps.face || (() => require('./face_sense').current()))(); if (f) percept({ sense: 'face', present: !!f.present, is_him: f.is_him === true, known: f.known || null, expression: f.expression || null, match: _match(f) }); } catch {}
     try { const p = (deps.presence || (() => require('./presence_state').stored()))(); if (p && p.state) percept({ sense: 'presence', state: p.state }); } catch {}
     for (const p of pending) send(p);
     pending = [];

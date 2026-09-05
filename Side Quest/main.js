@@ -915,6 +915,9 @@ try {
       speak: (text) => { try { _speech.enqueue(text); } catch {} },
       logThought: (text) => { try { const sid = (typeof currentSessionId === 'function' ? currentSessionId() : null) || db.getMeta('current_session_id') || null; if (sid) db.insertTurn({ sessionId: sid, speaker: 'ai_thought', content: `<think>${text}</think>`, unprompted: 1 }); } catch {} },
       onState: (s) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('consciousness:state', s); } catch {} },
+      // THE ARRIVAL's words are hers to him: a turn in the chat (unprompted, model 'consciousness') and the window's
+      // complete event, the same door the delivery lane's says use — never routed to his phone: he is here.
+      logSay: (text, why) => { try { const sid = currentSessionId || db.getMeta('current_session_id') || null; if (!sid) return; const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: text, model: 'consciousness', unprompted: 1 }); db.setMeta('last_ai_utterance_at', String(Date.now())); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: text }); console.log(`[consciousness] ${why || 'say'} → chat #${row.id}`); } catch (e) { console.warn('[consciousness] logSay failed: ' + e.message); } },
     }).start();
   } else console.log('[consciousness] off (ZOE_CONSCIOUSNESS=0 / meta consciousness.on=0)');
 } catch (e) { console.warn('[consciousness] bridge not started: ' + e.message); }

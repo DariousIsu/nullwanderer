@@ -44,10 +44,23 @@ function temperature() {
   try { const m = parseFloat(require('./db').getMeta('voice.orpheus_temp') || ''); if (Number.isFinite(m) && m > 0 && m <= 1.5) return m; } catch {}
   return 0.4;
 }
+/**
+ * THE PREFIX FOLLOWS THE MODEL (09-05 15:40, measured in the fine-tune's tokenizer.json): <|audio|> is id 156939,
+ * the LAST token of the Orpheus vocab, while the reference fine-tune format opens the human turn with 128259 =
+ * <custom_token_3>. The base model tolerates the community prompt (WER 0.31); HER fine-tune (a model name with
+ * "zoe") was trained on exactly [BOS][128259] text [128009] (sidecar/orpheus_finetune.py), so it is prompted with
+ * the same ids — Ollama prepends BOS itself in raw mode and <custom_token_3> is one token (prompt_eval_count 2
+ * for that string alone, both models). Mirrors sidecar/orpheus_eval.py prefix_for. ZOE_ORPHEUS_PREFIX overrides.
+ */
+function prefixFor(model) {
+  const env = String(process.env.ZOE_ORPHEUS_PREFIX || '').trim();
+  if (env) return env;
+  return /zoe/i.test(String(model || '')) ? '<custom_token_3>' : '<|audio|>';
+}
 function requestBody(text, voice, { maxTokens = 2400 } = {}) {
   return {
     model: MODEL, raw: true, stream: false, keep_alive: -1,
-    prompt: `<|audio|>${voice}: ${String(text).trim()}<|eot_id|>`,
+    prompt: `${prefixFor(MODEL)}${voice}: ${String(text).trim()}<|eot_id|>`,
     // stop at end_of_speech (<custom_token_2>): her fine-tuned voice ends a line there and would run on without it
     options: { temperature: temperature(), top_p: 0.9, repeat_penalty: 1.1, num_predict: maxTokens, stop: ['<custom_token_2>'] },
   };
@@ -234,4 +247,4 @@ async function synthesize(text, { voice = null, out, timeoutMs = 60000, deps = {
 
 function shutdown() { if (_decoder) { _decoder.stop(); _decoder = null; } }
 
-module.exports = { synthesize, synthesizeStream, available, requestBody, voiceName, createDecoder, decoder, shutdown, VOICES, MODEL, OLLAMA, DECODER_PY, DECODER_SCRIPT };
+module.exports = { synthesize, synthesizeStream, available, requestBody, voiceName, createDecoder, decoder, shutdown, VOICES, MODEL, OLLAMA, DECODER_PY, DECODER_SCRIPT, prefixFor };

@@ -35,7 +35,20 @@ SOCIAL_RISE_AWAY = 1.0 / 2700.0  # … and twice as fast while he is away (missi
 CURIOSITY_RISE = 1.0 / 7200.0
 PROGRESS_DECAY = 1.0 / 3600.0
 
-STRANGER_STEADY_MS = 8000         # a face that is not him must hold this long — flicker never counts
+STRANGER_STEADY_MS = 20000        # a face that is not him must hold this long — flicker never counts (8 s locked HIM out, 14:44)
+# THE DESK RULES (his words, 14:50: "the camera lock has failed in the wrong direction" · "If I am sitting here and she
+# misses me she should say something to me about it, not lock her program"). What happened at 14:44: he came back to
+# the desk, matched once (0.461), the frame was empty for a beat, then two readings of HIS face at 0.387 and 0.365 —
+# under the 0.40 bar by a hair — while presence still said "away" (chat idle 183 min, which says nothing about the
+# desk) → 8 s "steady" → every screen covered. A stranger is a person who ARRIVED at an empty desk while the camera
+# has had no match for him in minutes, and whose face is CLEARLY not his — never a near-miss, never chat idleness.
+STRANGER_MIN_UNSEEN_MS = 3 * 60000  # the camera must have had no match for him this long — presence 'away' never counts
+STRANGER_MAX_MATCH = 0.25         # a face scoring at or above this against his enrollment is uncertain, not someone else
+# THE REACH: wanting his word while he is right there is spoken to him, never acted on the screens.
+REACH_WANT = 0.7                  # wants_his_word at or above this
+REACH_MIN_QUIET_MS = 30 * 60000   # and no word from him this long (since boot if none yet)
+REACH_COOLDOWN_MS = 45 * 60000
+REACH_SEEN_MS = 2 * 60000         # the camera has him now
 BOOT_GRACE_MS = 90000             # boot_p309's first minute: his own face at match 0.013→0.65 as he settled read as a stranger
                                   # because the loop had never seen him; no stranger act until the loop is this old
 PERFORM_BUDGET_MS = 20000         # the slow loop's first cloud call aborted at 8 s on p309
@@ -53,6 +66,7 @@ BROWSE_CURIOSITY = 0.75
 WONDER_MISSING = 0.45
 WONDER_MIN_AWAY_MS = 20 * 60000
 WONDER_COOLDOWN_MS = 40 * 60000
+ARRIVAL_MIN_AWAY_MS = 20 * 60000   # his return after this long unseen is a moment of hers (design §4.5b's sibling)
 
 
 def initial_state(now_ms=0):
@@ -61,15 +75,16 @@ def initial_state(now_ms=0):
         "at": now_ms,
         "born": now_ms,
         "drives": {"stimulation": 0.6, "social": 0.2, "curiosity": 0.4, "energy": 0.8, "progress": 0.5},
-        "clock": {"his_last_word_at": None, "her_last_say_at": None, "last_saw_him_at": None, "last_novel_at": None, "last_seen_as": None},
+        "clock": {"his_last_word_at": None, "her_last_say_at": None, "last_saw_him_at": None, "last_novel_at": None, "last_seen_as": None, "last_empty_at": None},
         "presence": {"state": "here", "since": now_ms},
-        "face": {"present": False, "is_him": False, "known": None, "since": None},   # the steady reading
+        "face": {"present": False, "is_him": False, "known": None, "since": None, "match": None},   # the steady reading (+ the latest score against his enrollment)
         "shield": {"on": False, "since": None, "who": None, "asked_at": None, "greeted": False},
         "people": {},                       # name → {"relation": …} — enrolled by HIS word only (the app sends `register`)
-        "cooldowns": {"look": 0, "listen": 0, "browse": 0, "wonder": 0},
+        "cooldowns": {"look": 0, "listen": 0, "browse": 0, "wonder": 0, "reach": 0},
         "reason_seq": 0,
         "recent": [],                       # the last few appraised percepts, for the state strip
         "thoughts_of_him": [],              # the wonderings she had while he was gone (the arrival may name one)
+        "arrival": None,                    # set when his face returns after ARRIVAL_MIN_AWAY_MS; consumed by one perform request
     }
 
 
@@ -94,9 +109,16 @@ def _appraise(state, p, now):
         f = state["face"]
         same = f["present"] == present and f["is_him"] == is_him and f.get("known") == known
         if not same:
-            state["face"] = {"present": present, "is_him": is_him, "known": known, "since": now}
+            state["face"] = {"present": present, "is_him": is_him, "known": known, "since": now, "match": None}
             novelty = 0.15 if present else 0.05
+        m = p.get("match")
+        state["face"]["match"] = float(m) if isinstance(m, (int, float)) else None   # the latest score, never resets `since`
+        if not present:
+            state["clock"]["last_empty_at"] = now                                    # the desk was empty — a stranger arrives after this
         if present and is_him:
+            prev_seen = state["clock"]["last_saw_him_at"]
+            if prev_seen is not None and (now - prev_seen) >= ARRIVAL_MIN_AWAY_MS and not state.get("arrival"):
+                state["arrival"] = {"at": now, "unseen_min": int((now - prev_seen) // 60000)}   # THE ARRIVAL: his return, an act of this loop
             state["clock"]["last_saw_him_at"] = now
         expr = p.get("expression")
         if expr and expr != f.get("expression"):
@@ -153,12 +175,29 @@ def _advance(state, now, hour_local=None):
     return state
 
 
+ABSENT_MIN_MS = 20 * 60000   # missing needs ABSENCE: he is away by presence, or the camera has not had him this long
+
+
+def _absent(state, now):
+    """Absence is the CAMERA's word first (14:44: presence said 'away' from chat idleness while he sat at the desk).
+    Remote by his word is absence; with no camera match ever, presence decides; else: unseen this long."""
+    if state["presence"]["state"] == "remote":
+        return True
+    last = state["clock"]["last_saw_him_at"]
+    if last is None:
+        return state["presence"]["state"] == "away"
+    return (now - last) >= ABSENT_MIN_MS
+
+
 def appraisals(state, now):
+    """missing_him (his word, 15:20: "if missing him is related to the camera its broken because I am here") is the
+    social need ONLY under absence; in the room the same number is wants_his_word — you do not miss someone beside you."""
     d = state["drives"]
-    away = state["presence"]["state"] in ("away", "remote")
+    absent = _absent(state, now)
     return {
         "boredom": round(1.0 - d["stimulation"], 3),
-        "missing_him": round(d["social"] * (1.0 if away else 0.5), 3),
+        "missing_him": round(d["social"], 3) if absent else 0.0,
+        "wants_his_word": 0.0 if absent else round(d["social"], 3),
         "curiosity": round(d["curiosity"], 3),
         "energy": round(d["energy"], 3),
     }
@@ -175,10 +214,15 @@ def _acts(state, now):
     f, sh = state["face"], state["shield"]
     last_him = state["clock"]["last_saw_him_at"]
     him_away = state["presence"]["state"] in ("away", "remote") or last_him is None or (now - last_him) > 60000
-    # THE FIRST ACT — someone else at the desk (§4.5b)
+    # THE FIRST ACT — someone else at the desk (§4.5b), under THE DESK RULES (14:50, see the constants)
+    unseen_ms = (now - last_him) if last_him is not None else None
+    gone_from_desk = unseen_ms is None or unseen_ms >= STRANGER_MIN_UNSEEN_MS          # by the camera, never by chat idleness
+    last_empty = state["clock"].get("last_empty_at")
+    desk_changed = last_empty is not None and (last_him is None or last_empty > last_him)   # the frame was EMPTY after he was last matched
+    clearly_not_him = f.get("match") is not None and f["match"] < STRANGER_MAX_MATCH     # a near-miss of his own face is not a stranger
     someone_else = f["present"] and not f["is_him"] and f["since"] is not None and (now - f["since"]) >= STRANGER_STEADY_MS
     settled = (now - (state.get("born") if state.get("born") is not None else now)) >= BOOT_GRACE_MS
-    if someone_else and him_away and settled and not sh["on"]:
+    if someone_else and clearly_not_him and gone_from_desk and desk_changed and settled and not sh["on"]:
         who = f.get("known")
         sh.update({"on": True, "since": now, "who": who, "asked_at": None, "greeted": False})
         out.append({"kind": "act", "act": "shield", "why": f"someone at the desk who is not him ({who or 'unknown'})", "at": now})
@@ -195,11 +239,30 @@ def _acts(state, now):
     if sh["on"] and f["present"] and f["is_him"]:
         sh.update({"on": False, "since": None, "who": None, "asked_at": None, "greeted": False})
         out.append({"kind": "act", "act": "unshield", "why": "he is back", "at": now})
-    # MISSING HIM → a wondering (a reflect request), when the need is real and he has been gone a while
+    # THE ARRIVAL (his word, 15:20: "she didn't say anything or react to my returning"): his face is back after a real
+    # absence → ONE perform request; the model writes her one or two sentences (with what she wondered) or nothing.
+    # No gate, no importance bar: the loop decides the moment, the model writes the words.
+    arr = state.get("arrival")
+    if arr and not sh["on"]:
+        state["arrival"] = None
+        hw = state["clock"]["his_last_word_at"]
+        out.append(_reason(state, "perform", {"act": "arrival", "unseen_min": arr["unseen_min"], "thoughts": [t["text"] for t in state["thoughts_of_him"][-2:]], "since_his_word_min": int((now - hw) // 60000) if hw is not None else None}, PERFORM_BUDGET_MS))
+        state["thoughts_of_him"] = []
     a = appraisals(state, now)
     cd = state["cooldowns"]
-    last_him = state["clock"]["last_saw_him_at"]
-    unseen_ms = (now - last_him) if last_him is not None else None
+    # THE REACH (his word, 14:50: "If I am sitting here and she misses me she should say something to me about it,
+    # not lock her program"): the camera has him, he has been quiet a long while, the need for his word is high →
+    # ONE perform request; the model writes her one or two sentences to him, or nothing. Spent on the asking.
+    hw = state["clock"]["his_last_word_at"]
+    quiet_ms = now - (hw if hw is not None else (state.get("born") if state.get("born") is not None else now))
+    seen_now = last_him is not None and (now - last_him) <= REACH_SEEN_MS
+    if (not sh["on"] and seen_now and a["wants_his_word"] >= REACH_WANT and quiet_ms >= REACH_MIN_QUIET_MS and now >= cd.get("reach", 0)):
+        cd["reach"] = now + REACH_COOLDOWN_MS
+        state["drives"]["social"] = _clamp(state["drives"]["social"] - 0.25)
+        out.append(_reason(state, "perform", {"act": "reach", "since_his_word_min": int(quiet_ms // 60000), "wants_his_word": a["wants_his_word"],
+                                              "last_seen_as": state["clock"].get("last_seen_as") or None,
+                                              "thoughts": [t["text"] for t in state["thoughts_of_him"][-2:]]}, PERFORM_BUDGET_MS))
+    # MISSING HIM → a wondering (a reflect request), when the need is real and he has been gone a while
     if (him_away and a["missing_him"] >= WONDER_MISSING and unseen_ms is not None and unseen_ms >= WONDER_MIN_AWAY_MS and now >= cd["wonder"]):
         cd["wonder"] = now + WONDER_COOLDOWN_MS
         hw = state["clock"]["his_last_word_at"]
