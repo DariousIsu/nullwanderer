@@ -264,6 +264,27 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
         try { const r = require('./security_remediate').routeOpenFindings({}); return send(200, { ok: true, ...r, at: Date.now() }); }
         catch (e) { return send(500, { ok: false, error: (e && e.message) || String(e) }); }
       }
+      // POST /cowork/import → the Cowork port P1 (2026-09-04). Body {apply:false} (default) = the DRY RUN plan
+      // (reads the Cowork spaces, writes nothing); {apply:true} = bind/create the project objects, land the laws
+      // as global directives and the memory files as directives/facts. Idempotent (marker + dedup). Loopback,
+      // non-GET → already past the token/cross-origin gate; importing his laws is deliberate, never scheduled.
+      if (req.method === 'POST' && req.url.startsWith('/cowork/import')) {
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
+        req.on('end', async () => {
+          try {
+            const { apply = false } = JSON.parse(body || '{}');
+            const CI = require('./cowork_import');
+            const read = CI.readCoworkSpaces(null, {});
+            if (!read.ok) return send(500, { ok: false, error: read.why });
+            const plan = CI.buildPlan(read.spaces, { imported: Object.keys(CI.readMarker(require('./db'))) });
+            if (!apply) return send(200, { ok: true, dryRun: true, totals: plan.totals, summary: CI.summarize(plan), at: Date.now() });
+            const r = await CI.applyPlan(plan, {});
+            return send(200, { ok: true, dryRun: false, totals: plan.totals, ...r, at: Date.now() });
+          } catch (e) { return send(500, { ok: false, error: (e && e.message) || String(e) }); }
+        });
+        return;
+      }
       // POST /pen/allow-constitutional → Lucas's EXPLICIT out-of-band go for a boundary change (stage 5.2).
       // Arms a ONE-SHOT (meta pen.allow_constitutional) that the next approved constitutional proposal
       // consumes at apply. Loopback + non-GET, so it already cleared the token/cross-origin gate above; a
