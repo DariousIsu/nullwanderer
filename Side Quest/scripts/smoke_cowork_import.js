@@ -100,6 +100,35 @@ ok(CI.discoverDir({ fs: fakeFs, env: { COWORK_DIR: 'X' } }) === 'X', 'COWORK_DIR
   // idempotent: a second plan built from the marker skips both
   const plan2 = CI.buildPlan(spaces, { imported: Object.keys(mk) });
   ok(plan2.totals.toCreate === 0 && plan2.totals.toSkip === 2, 'a second pass skips every imported space (idempotent by marker)');
+  // the p298 lesson: a deferred RETRY must redo only the binding — a fact already stored is skipped, never re-stored
+  const facts3 = [];
+  const r3 = await CI.applyPlan(CI.buildPlan(spaces, {}), { deps: { ...deps, memory: { store: async (rec) => { facts3.push(rec); return { id: 1 }; } }, factExists: () => true, db: { getMeta: () => '{}', setMeta: () => {} } } });
+  ok(r3.facts === 0 && r3.factsSkipped === 1 && facts3.length === 0, 'retry: a fact already in the store is SKIPPED (factsSkipped=1, 0 stored) — no duplicate rows on a deferred retry');
+  ok(r.facts === 1 && r.factsSkipped === 0, 'first pass: the fact is stored once (factExists false)');
+  const src2 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'cowork_import.js'), 'utf8');
+  ok(/source='cowork-import' AND provenance LIKE \? AND provenance LIKE \?/.test(src2), 'the default factExists reads the store by Cowork provenance (space + file), not by content');
+  // the plan carries the memory FILE name so provenance can key on it (p298: it was dropped, so the pre-check could never match)
+  ok(CI.buildPlan(spaces, {}).create[0].facts[0].file === 'feedback_no_em_dashes.md', 'buildPlan carries the memory file name into the fact (provenance key)');
+  ok(facts.length && facts[0].provenance.file === 'project_datacenter.md', 'the stored fact provenance carries file + space + project');
+
+  // dedupFacts: the repair door — 3 duplicate pairs → retire the OLDER of each, keep the newest; never delete
+  const kRows = [
+    { id: 1, content: 'A\n\nbody', provenance: JSON.stringify({ cowork_space: 's1', project: null }) },            // older, pre-`file` (falls back to content head)
+    { id: 4, content: 'A\n\nbody', provenance: JSON.stringify({ cowork_space: 's1', project: 'P' }) },             // newer twin
+    { id: 2, content: 'B\n\nbody', provenance: JSON.stringify({ cowork_space: 's2', file: 'f.md', project: null }) },
+    { id: 5, content: 'B\n\nbody', provenance: JSON.stringify({ cowork_space: 's2', file: 'f.md', project: 'Q' }) },
+    { id: 3, content: 'C solo', provenance: JSON.stringify({ cowork_space: 's3', file: 'g.md' }) },                // no twin — untouched
+    { id: 9, content: 'A\n\nbody', provenance: JSON.stringify({ cowork_space: 's1', superseded: true }) },         // already retired — ignored
+  ];
+  const retiredIds = [];
+  const fakeDb = { prepare: () => ({ all: () => kRows }) };
+  const dd = CI.dedupFacts({ deps: { db: fakeDb, retire: (id) => { retiredIds.push(id); return true; } } });
+  ok(dd.retired === 2 && retiredIds.sort().join() === '1,2' && dd.kept.sort().join() === '4,5', `dedupFacts retires the OLDER copy of each pair (1,2), keeps the newest (4,5), leaves the solo + the already-retired alone (${JSON.stringify(dd)})`);
+  const src3 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'cowork_import.js'), 'utf8');
+  ok(/retireVerifiedFact\(id, \{ by: 'cowork-import-dedup' \}\)/.test(src3) && !/DELETE FROM knowledge/.test(src3), 'the repair RETIRES through the standard superseded door — it never DELETEs (the append-only law)');
+  const tpSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'test_port.js'), 'utf8');   // read here — `tp` is declared later in this block
+  ok(/dedup = false/.test(tpSrc) && /dedupFacts\(\{\}\)/.test(tpSrc), 'POST /cowork/import {dedup:true} runs the repair through the app, never a hand script');
+
   // fail-soft: the suit down → laws still land, the binding is DEFERRED (not marked), nothing throws
   const laws2 = [];
   const r2 = await CI.applyPlan(CI.buildPlan(spaces, {}), { deps: { ...deps, dispatch: async () => null, directives: { record: (x) => { laws2.push(x); return { id: 1 }; } }, db: { getMeta: () => '{}', setMeta: () => {} } } });

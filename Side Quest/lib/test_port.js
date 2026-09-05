@@ -273,8 +273,11 @@ function start({ runChatTurn, antifabCorrect = null, bookPromises = null, port =
         req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
         req.on('end', async () => {
           try {
-            const { apply = false } = JSON.parse(body || '{}');
+            const { apply = false, dedup = false } = JSON.parse(body || '{}');
             const CI = require('./cowork_import');
+            // {dedup:true} → the repair door: retire the older copy of any duplicated cowork-import fact (the
+            // p298 race). A repair through the app's own db, never a hand script on the live file.
+            if (dedup) return send(200, { ok: true, dedup: true, ...CI.dedupFacts({}), at: Date.now() });
             const read = CI.readCoworkSpaces(null, {});
             if (!read.ok) return send(500, { ok: false, error: read.why });
             const plan = CI.buildPlan(read.spaces, { imported: Object.keys(CI.readMarker(require('./db'))) });

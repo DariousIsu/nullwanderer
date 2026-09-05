@@ -86,7 +86,7 @@ function buildPlan(spaces, { imported = [] } = {}) {
     const action = {
       spaceId: s.id, name: s.name, folders: s.folders,
       law: s.instructions || null,             // his verbatim instruction → a project-scoped law (never paraphrased)
-      facts: s.memory.map((m) => ({ name: m.name, description: m.description || null, bytes: Buffer.byteLength(m.body || '', 'utf8'), body: m.body })),
+      facts: s.memory.map((m) => ({ file: m.file, name: m.name, description: m.description || null, bytes: Buffer.byteLength(m.body || '', 'utf8'), body: m.body })),   // `file` rides into provenance (the p298 dedup lesson: it was dropped here)
     };
     (done.has(s.id) ? skip : create).push(action);
   }
@@ -133,6 +133,16 @@ function matchProject(spaceName, projects) {
   return names.find((p) => _norm(p) === n) || names.find((p) => { const m = _norm(p); return m.length >= 6 && (n.startsWith(m) || m.startsWith(n)); }) || null;
 }
 function readMarker(db) { try { return JSON.parse(db.getMeta(IMPORT_META) || '{}') || {}; } catch { return {}; } }
+// Has this Cowork memory file already been stored as a fact? (provenance carries the space id + file.) The
+// first live apply (p298) raced the suit attach: the binding deferred, the facts landed, and the retry
+// stored them AGAIN — memory.store's dedup did not fold them. A deferred retry must redo ONLY the binding.
+function _factExists(space, file) {
+  try {
+    const d = require('./db').getDb();
+    return !!d.prepare("SELECT 1 FROM knowledge WHERE source='cowork-import' AND provenance LIKE ? AND provenance LIKE ? LIMIT 1")
+      .get(`%"cowork_space":"${space}"%`, `%"file":"${file}"%`);
+  } catch { return false; }
+}
 
 /**
  * Apply the plan. `deps`: dispatch (echo_suit.dispatch — null when the suit is down), directives,
@@ -144,7 +154,8 @@ async function applyPlan(plan, { deps = {} } = {}) {
   const memory = deps.memory || require('./memory');
   const db = deps.db || require('./db');
   const nowMs = deps.now || Date.now();
-  const out = { bound: 0, created: 0, laws: 0, ruleFacts: 0, facts: 0, deferred: 0, notes: [], perSpace: [] };
+  const factExists = deps.factExists || _factExists;
+  const out = { bound: 0, created: 0, laws: 0, ruleFacts: 0, facts: 0, factsSkipped: 0, deferred: 0, notes: [], perSpace: [] };
   const marker = readMarker(db);
 
   // one read of the existing Echo projects — the binding target
@@ -178,6 +189,7 @@ async function applyPlan(plan, { deps = {} } = {}) {
       const isRule = /^feedback_/i.test(f.file || '') || /^(never|always|do not|don't)\b/i.test(f.name || '');
       try {
         if (isRule) { if (directives.record(`${f.name}: ${f.body}`.slice(0, 400), { turnId: null, now: nowMs })) out.ruleFacts++; }
+        else if (factExists(a.spaceId, f.file)) { out.factsSkipped++; }   // already stored — a deferred retry redoes only the binding
         else { const r = await memory.store({ kind: 'fact', content: `${f.name}\n\n${f.body}`, source: 'cowork-import', importance: 0.7, level: 'fact', provenance: { cowork_space: a.spaceId, file: f.file, project: row.project } }); if (r) out.facts++; }
       } catch (e) { out.notes.push(`${a.name}: fact ${f.name} ${e.message}`); }
     }
@@ -189,4 +201,33 @@ async function applyPlan(plan, { deps = {} } = {}) {
   return out;
 }
 
-module.exports = { readCoworkSpaces, buildPlan, summarize, discoverDir, applyPlan, matchProject, inferProjectType, readMarker, IMPORT_META, _frontmatter };
+/**
+ * THE REPAIR DOOR. The first live apply (p298) raced the suit attach and a retry stored each fact twice.
+ * Retire the OLDER copy of every duplicate cowork-import fact — RETIRE, never delete (the append-only law):
+ * importance → 0.2 + provenance.superseded through learning.retireVerifiedFact, the same door every other
+ * superseded fact uses. The NEWEST copy is kept (it carries the bound project). Groups by Cowork space +
+ * file, falling back to the content head for rows written before `file` rode into provenance. Runs
+ * through the app's own db — a repair door, never a hand-run script against the live file.
+ */
+function dedupFacts({ deps = {} } = {}) {
+  const d = deps.db || require('./db').getDb();
+  const retire = deps.retire || ((id) => require('./learning').retireVerifiedFact(id, { by: 'cowork-import-dedup' }));
+  const rows = d.prepare("SELECT id, content, provenance FROM knowledge WHERE source='cowork-import' ORDER BY id").all();
+  const groups = new Map();
+  for (const r of rows) {
+    let p = {}; try { p = JSON.parse(r.provenance || '{}') || {}; } catch {}
+    if (p.superseded) continue;   // already retired — never counted again
+    const k = `${p.cowork_space || ''}|${p.file || String(r.content || '').slice(0, 60)}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r.id);
+  }
+  let retired = 0; const kept = [];
+  for (const ids of groups.values()) {
+    if (ids.length < 2) continue;
+    kept.push(ids[ids.length - 1]);                       // the newest carries the bound project
+    for (const id of ids.slice(0, -1)) { try { if (retire(id)) retired++; } catch {} }
+  }
+  return { groups: groups.size, duplicates: retired, retired, kept };
+}
+
+module.exports = { readCoworkSpaces, buildPlan, summarize, discoverDir, applyPlan, dedupFacts, matchProject, inferProjectType, readMarker, IMPORT_META, _frontmatter };
