@@ -28,11 +28,18 @@ function visionTier() { try { return db.getMeta('vision.tier') || 'auto'; } catc
 // A dedicated, top-tier model for a specific vision PURPOSE (e.g. 'excavate' — forensic browsing needs the
 // best vision+logic we can get, and shouldn't share screen-see's model). Falls back to the global vision
 // model/tier when no purpose-specific override is set. Returns { model, tier }.
+// PURPOSE DEFAULTS (Lucas 09-05 17:05: "are we using the glm model or the best smaller cheaper model for image reads?"
+// → "do the camera switch too we can give that a try"): the camera's expression read is a 20-word line about posture,
+// gaze, mouth and brow, one every 20 s while he is in frame — 369 reads on minimax-m3 (weight 200) cost 39.7k compute
+// on 09-05; the same reads on gemma4:31b (weight 31, the fleet's fast multimodal workhorse) cost 6.2k. The global pin
+// (model.vision, his July word: "the screenshot should fire to a really good vision model") stays for screenshots,
+// excavation and dropped files. meta model.vision.<purpose> still overrides; face_sense runs an A/B on the switch.
+const PURPOSE_DEFAULTS = Object.freeze({ face: 'gemma4:31b-cloud' });
 function visionModelFor(purpose) {
   let model = null, tier = null;
   try { model = db.getMeta(`model.vision.${purpose}`) || null; } catch {}
   try { tier = db.getMeta(`vision.tier.${purpose}`) || null; } catch {}
-  return { model: model || visionModel(), tier: tier || visionTier() };
+  return { model: model || PURPOSE_DEFAULTS[purpose] || visionModel(), tier: tier || visionTier() };
 }
 function generationEnabled() { return process.env.ZOE_IMAGE_GEN_ENABLED === '1'; }
 
@@ -227,5 +234,5 @@ module.exports = {
   describe, generate, parseGenTags, stripGenTags,
   visionModel, visionTier, visionModelFor, generationEnabled,
   imageProvider, comfyBase, comfyReachable, comfyCheckpoint,
-  GEN_TAG_RE, DEFAULT_VISION_PROMPT, _stripDataUrl, _pickSource
+  GEN_TAG_RE, DEFAULT_VISION_PROMPT, _stripDataUrl, _pickSource, PURPOSE_DEFAULTS,
 };

@@ -55,7 +55,7 @@ ok(/no enrollment yet/.test(FS.line(r3, { now: 2000 })), 'without an enrollment 
   const two = await FS.enroll('x', { deps: { db, embed: async () => ({ ok: true, results: [{ ...face(HIM), faces: 2 }] }), log: () => {} } });
   ok(!two.ok && /2 faces/.test(two.error), 'enrollment refuses a frame with two faces');
   let t = 100000;   // past the describe cadence (20 s) so the first present frame earns a cloud read
-  const deps = () => ({ db, embed: mk(HIM), obsBus: bus, log: (m) => logs.push(m), now: t, onGaze: (gz) => gazes.push(gz), describe: async () => ({ ok: true, text: 'Leaning in, eyes on the screen, slight smile.\nFocused', model: 'vision-test' }) });
+  const deps = () => ({ db, embed: mk(HIM), obsBus: bus, log: (m) => logs.push(m), now: t, onGaze: (gz) => gazes.push(gz), visionModels: { face: 'vision-test', global: null }, describe: async () => ({ ok: true, text: 'Leaning in, eyes on the screen, slight smile.\nFocused', model: 'vision-test' }) });
   const f1 = await FS.onFrame('frame', { deps: deps() });
   ok(f1.ok && f1.reading.is_him === true && f1.changed === true && events.length === 1 && events[0].lane === 'presence' && events[0].kind === 'face', 'the first frame reads him and emits ONE presence/face event');
   t += 100; const f2 = await FS.onFrame('frame', { deps: deps() });
@@ -72,6 +72,25 @@ ok(/no enrollment yet/.test(FS.line(r3, { now: 2000 })), 'without an enrollment 
   meta['camera.describe'] = '0'; const before = logs.filter((l) => /describe\(cloud/.test(l)).length;
   t += 60000; await FS.onFrame('frame', { deps: deps() }); await new Promise((r) => setTimeout(r, 20));
   ok(logs.filter((l) => /describe\(cloud/.test(l)).length === before, 'camera.describe=0 → no cloud read');
+  // ── THE CAMERA SWITCH + ITS A/B (Lucas 09-05 17:05: "do the camera switch too we can give that a try") ──────────
+  {
+    const V = require('../lib/vision');
+    ok(V.PURPOSE_DEFAULTS.face === 'gemma4:31b-cloud' && /PURPOSE_DEFAULTS\[purpose\] \|\| visionModel\(\)/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'vision.js'), 'utf8')), 'the face read defaults to the cheap multimodal model; meta model.vision.face still overrides; the global pin is untouched');
+    FS._reset(); delete meta['camera.describe']; const abLogs = []; let t2 = 900000; const calls = [];
+    const two = async (b64, model) => { calls.push(model); return model === 'minimax-test' ? { ok: true, text: 'Slumped, eyes down.\nTired', model } : { ok: true, text: 'Leaning in, eyes on the screen.\nFocused', model }; };
+    const dAB = () => ({ db, embed: mk(HIM), obsBus: bus, log: (m) => abLogs.push(m), now: t2, describe: two, visionModels: { face: 'gemma-test', global: 'minimax-test' }, abPairs: 2 });
+    await FS.onFrame('frame', { deps: dAB() }); await new Promise((r) => setTimeout(r, 30));
+    ok(calls.join(',') === 'gemma-test,minimax-test' && abLogs.some((l) => /describe A\/B 1\/2 — face=gemma-test "focused: Leaning in, eyes on the screen\." \| global=minimax-test "tired: Slumped, eyes down\." — differ/.test(l)) && FS.current().expression === 'focused', `both models read the same frame, side by side in the log, and the face model's line is the reading (${FS.current().expression})`);
+    t2 += 30000; await FS.onFrame('frame', { deps: dAB() }); await new Promise((r) => setTimeout(r, 30));
+    ok(abLogs.some((l) => /describe A\/B done — 0\/2 agreed/.test(l)), 'after the trial\'s pairs the tally prints');
+    t2 += 30000; calls.length = 0; await FS.onFrame('frame', { deps: dAB() }); await new Promise((r) => setTimeout(r, 30));
+    ok(calls.join(',') === 'gemma-test', 'past the trial only the face model reads');
+    FS._reset(); calls.length = 0; meta['camera.describe_ab'] = '0'; t2 += 30000; await FS.onFrame('frame', { deps: dAB() }); await new Promise((r) => setTimeout(r, 30));
+    ok(calls.join(',') === 'gemma-test', 'camera.describe_ab=0 → no trial, the face model alone'); delete meta['camera.describe_ab'];
+    FS._reset(); const failFirst = async (b64, model) => (model === 'gemma-test' ? { ok: false, reason: 'no answer' } : { ok: true, text: 'Slumped, eyes down.\nTired', model });
+    t2 += 30000; await FS.onFrame('frame', { deps: { ...dAB(), describe: failFirst } }); await new Promise((r) => setTimeout(r, 30));
+    ok(FS.current().expression === 'tired', 'when the cheap read fails during the trial the global\'s line is the reading');
+  }
   process.env.ZOE_FACE_SENSE = '0';
   ok(!(await FS.onFrame('frame', { deps: deps() })).ok && !(await FS.enroll('x', { deps: deps() })).ok, 'ZOE_FACE_SENSE=0 reads nothing and enrolls nothing');
   delete process.env.ZOE_FACE_SENSE;

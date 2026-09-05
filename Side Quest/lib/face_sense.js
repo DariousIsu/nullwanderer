@@ -102,6 +102,12 @@ function line(reading, { now = Date.now(), name = 'Lucas' } = {}) {
 
 // ── the organ (state + doors), deps-injected ─────────────────────────────────────────────────────────
 let _last = null, _lastLogAt = 0, _lastFrameAt = 0, _lastDescribeAt = 0, _describing = false, _lastPersistAt = 0;
+// THE CAMERA SWITCH A/B (his word 09-05 17:05: "we can give that a try"; the eval law: a model change is measured):
+// while the face purpose model differs from the global vision model, the first AB_PAIRS reads of a boot go to BOTH,
+// side by side in the log with the expression labels' agreement; the face model's line is the reading (the global's
+// only when the face read failed). Then it stops and prints the tally. meta camera.describe_ab='0' turns it off.
+const AB_PAIRS = 40;
+let _abPairs = 0, _abAgree = 0;
 function current() { return _last; }
 function _db(deps) { return deps.db || require('./db'); }
 function owner(deps = {}) { try { const v = _db(deps).getMeta(OWNER_KEY); return v ? JSON.parse(v) : null; } catch { return null; } }
@@ -178,8 +184,22 @@ async function onFrame(frameB64, { deps = {} } = {}) {
   const everyMs = Number((() => { try { return db.getMeta('camera.describe_every_ms'); } catch { return null; } })()) || 20000;
   if (reading.present && describeOn && !_describing && now - _lastDescribeAt >= everyMs) {
     _describing = true; _lastDescribeAt = now;
-    const describe = deps.describe || ((b64) => require('./vision').describe({ imageBase64: b64, prompt: DESCRIBE_PROMPT }));
-    Promise.resolve().then(() => describe(frameB64)).then((d) => {
+    const describe = deps.describe || ((b64, model) => require('./vision').describe({ imageBase64: b64, prompt: DESCRIBE_PROMPT, ...(model ? { model } : {}) }));
+    const vm = deps.visionModels || (() => { try { const v = require('./vision'); return { face: v.visionModelFor('face').model, global: v.visionModel() }; } catch { return { face: null, global: null }; } })();
+    const abLimit = Number(deps.abPairs) > 0 ? Number(deps.abPairs) : AB_PAIRS;
+    let abOn = false; try { abOn = db.getMeta('camera.describe_ab') !== '0' && !!vm.face && !!vm.global && vm.face !== vm.global && _abPairs < abLimit; } catch {}
+    Promise.resolve().then(() => describe(frameB64, vm.face || undefined)).then(async (d0) => {
+      let d = d0;
+      if (abOn) {
+        let g = null; try { g = await describe(frameB64, vm.global); } catch (e) { g = { ok: false, reason: e.message }; }
+        _abPairs++;
+        const pf = d && d.ok ? parseDescribe(d.text) : null, pg = g && g.ok ? parseDescribe(g.text) : null;
+        const agree = !!(pf && pg && pf.expression && pf.expression === pg.expression);
+        if (agree) _abAgree++;
+        (deps.log || console.log)(`[face] describe A/B ${_abPairs}/${abLimit} — face=${vm.face} "${pf ? `${pf.expression || '?'}: ${pf.note || ''}` : `failed (${(d && d.reason) || 'no answer'})`}" | global=${vm.global} "${pg ? `${pg.expression || '?'}: ${pg.note || ''}` : `failed (${(g && g.reason) || 'no answer'})`}" — ${agree ? 'AGREE' : 'differ'}`);
+        if (_abPairs >= abLimit) (deps.log || console.log)(`[face] describe A/B done — ${_abAgree}/${abLimit} agreed on the expression label; the face read stays on ${vm.face} (meta model.vision.face decides; camera.describe_ab=0 silences the trial)`);
+        if ((!d || !d.ok) && g && g.ok) d = g;   // the cheap read failed → the global's line is the reading this once
+      }
       _describing = false;
       if (!d || !d.ok) { (deps.log || console.log)(`[face] describe(cloud) failed: ${(d && d.reason) || 'no answer'}`); return; }
       const parsed = parseDescribe(d.text);
@@ -233,7 +253,7 @@ function status({ deps = {}, now = Date.now() } = {}) {
 /** The stored reading (for a fresh process / the presence fuse). */
 function stored(deps = {}) { try { const v = _db(deps).getMeta(FACE_KEY); return v ? JSON.parse(v) : null; } catch { return null; } }
 function awarenessLine({ deps = {}, now = Date.now() } = {}) { return line(_last || stored(deps), { now }); }
-function _reset() { _last = null; _lastLogAt = 0; _lastFrameAt = 0; _lastDescribeAt = 0; _describing = false; _lastPersistAt = 0; }
+function _reset() { _last = null; _lastLogAt = 0; _lastFrameAt = 0; _lastDescribeAt = 0; _describing = false; _lastPersistAt = 0; _abPairs = 0; _abAgree = 0; }
 
 module.exports = { readingFrom, lookingFromKps, gazeFromBox, changed, parseDescribe, line, cosine, enroll, enrollPerson, people, knownFrom, onFrame, look, status, current, stored, owner, awarenessLine, enabled,
-  OWNER_KEY, FACE_KEY, PEOPLE_KEY, SAME_FACE_THRESHOLD, FRESH_MS, EXPRESSIONS, DESCRIBE_PROMPT, _reset };
+  OWNER_KEY, FACE_KEY, PEOPLE_KEY, SAME_FACE_THRESHOLD, FRESH_MS, EXPRESSIONS, DESCRIBE_PROMPT, AB_PAIRS, _reset };
