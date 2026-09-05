@@ -21,8 +21,9 @@ const sum = (w) => Object.values(w).reduce((s, v) => s + v, 0);
 // ── applyTone ─────────────────────────────────────────────────────────────────────────────────────
 const zoe = { weights: { af_bella: 0.318, af_nicole: 0.273, bf_isabella: 0.409 }, lang: 'b', speed: 1.13 };
 const warm = voices.applyTone(zoe, 'warm');
-ok(near(warm.recipe.speed, 1.08) && near(warm.recipe.weights.af_nicole, 0.423, 0.01) && near(sum(warm.recipe.weights), 1) && warm.recipe.lang === 'b', `warm: speed −0.05, a 15-point lean toward the softer voice, weights renormalized (${JSON.stringify(warm.recipe.weights)} @ ${warm.recipe.speed})`);
-ok(warm.recipe.weights.af_bella < zoe.weights.af_bella && warm.recipe.weights.bf_isabella < zoe.weights.bf_isabella, 'the lean is taken proportionally from the other voices');
+ok(near(warm.recipe.speed, 1.10) && near(warm.recipe.weights.af_bella, 0.468, 0.01) && warm.recipe.weights.af_nicole < zoe.weights.af_nicole && near(sum(warm.recipe.weights), 1) && warm.recipe.lang === 'b', `warm: speed −0.03, a 15-point lean toward the ANIMATED voice (af_bella), never the whisper — weights renormalized (${JSON.stringify(warm.recipe.weights)} @ ${warm.recipe.speed})`);
+ok(voices.applyTone(zoe, 'low').recipe.weights.af_nicole > zoe.weights.af_nicole && voices.applyTone(zoe, 'quick').recipe.weights.af_bella > zoe.weights.af_bella, 'low is the one place the whisper belongs; quick leans animated too');
+ok(warm.recipe.weights.af_nicole < zoe.weights.af_nicole && warm.recipe.weights.bf_isabella < zoe.weights.bf_isabella && near((zoe.weights.af_nicole - warm.recipe.weights.af_nicole) / (zoe.weights.bf_isabella - warm.recipe.weights.bf_isabella), zoe.weights.af_nicole / zoe.weights.bf_isabella, 0.05), 'the lean is taken proportionally from the other voices');
 ok(near(voices.applyTone(zoe, 'quick').recipe.speed, 1.23) && near(voices.applyTone(zoe, 'low').recipe.speed, 1.03) && near(voices.applyTone(zoe, 'dry').recipe.speed, 1.16), 'quick +0.10, low −0.10, dry +0.03 on her baseline');
 ok(voices.applyTone(zoe, 'dry').recipe.weights.af_nicole === zoe.weights.af_nicole, 'dry leaves the blend alone');
 const p = voices.applyTone(zoe, 'pause');
@@ -31,7 +32,7 @@ const unknown = voices.applyTone(zoe, 'operatic');
 ok(unknown.recipe === zoe && unknown.tone === null && unknown.pauseMs === 0, 'an unknown tone changes nothing');
 ok(voices.applyTone(zoe, 'warm').recipe.speed === warm.recipe.speed, 'pure: the same input gives the same delta');
 const twice = voices.applyTone(warm.recipe, 'warm');
-ok(twice.recipe.speed === warm.recipe.speed && twice.recipe.weights.af_nicole === warm.recipe.weights.af_nicole, 'idempotent: a recipe already carrying the tone is not compounded');
+ok(twice.recipe.speed === warm.recipe.speed && twice.recipe.weights.af_bella === warm.recipe.weights.af_bella, 'idempotent: a recipe already carrying the tone is not compounded');
 const fast = voices.applyTone({ ...zoe, speed: 1.45 }, 'quick');
 ok(fast.recipe.speed <= 1.5, 'the hard speed ceiling holds (1.5)');
 const quickThenLow = voices.applyTone(voices.applyTone(zoe, 'quick').recipe, 'low');
@@ -43,7 +44,22 @@ ok(voices.baselineFromState(zoe, { energy: 1 }, { enabled: false }).speed === zo
 ok(near(voices.baselineFromState(zoe, { energy: 1 }).speed, 1.16) && near(voices.baselineFromState(zoe, { energy: 0 }).speed, 1.10), 'energy alone shifts speed by up to ±0.03 (rested faster, exhausted slower)');
 const live = { mv: 4, drives: { energy: 0.81, curiosity: 0.7 }, vad: { v: 0.76, a: 0.75, d: 0.66 } };   // the LIVE vector on 09-05 08:40 (lib/internal_state's shape)
 const bl = voices.baselineFromState(zoe, live);
-ok(near(bl.speed, 1.159) && near(bl._baseline.dSpeed, 0.029) && /af_nicole\+10/.test(bl._baseline.lean) && near(sum(bl.weights), 1) && bl.weights.af_nicole > zoe.weights.af_nicole, `the live shape: rested + keyed-up → +0.03, warm valence → the softer voice +10 pts (${JSON.stringify(bl._baseline)})`);
+ok(near(bl.speed, 1.159) && near(bl._baseline.dSpeed, 0.029) && /af_bella\+10/.test(bl._baseline.lean) && near(sum(bl.weights), 1) && bl.weights.af_bella > zoe.weights.af_bella && bl.weights.af_nicole < zoe.weights.af_nicole, `the live shape: rested + keyed-up → +0.03, warm valence → the ANIMATED voice +10 pts (${JSON.stringify(bl._baseline)})`);
+// RHYTHM — a tempo and a pause per sentence (his ear: "still sounded really flat"); pure, deterministic, bounded
+const P = (text, o) => tts.prosody({ text, ...(o || {}) });
+ok(P('Did you get the file?').dSpeed <= 0 && P('Did you get the file?').pauseAfterMs === 240 && /question/.test(P('Did you get the file?').why), 'a question slows a touch and waits');
+ok(P('That went through!').dSpeed >= 0.03 && P('That went through!').pauseAfterMs === 160, 'an exclamation quickens');
+ok(P('I suppose we could…').pauseAfterMs === 480 && P('I suppose we could…').dSpeed <= -0.01 && P('Or not...').pauseAfterMs === 480, 'a trailing thought slows and leaves a long gap (… and ...)');
+ok(P('Fine.', { index: 3, prevLen: 120 }).dSpeed >= 0.01 && P('Fine.', { index: 3, prevLen: 120 }).pauseAfterMs >= 260 && /beat/.test(P('Fine.', { index: 3, prevLen: 120 }).why), 'a short line after a long one comes as a quick beat');
+ok(P('Fine.', { index: 0, prevLen: 0 }).why !== 'beat' && P('First, the ledger,').pauseAfterMs === 90, 'no beat on the first line; a clause ending barely pauses');
+const longS = 'The ledger shows the three runs you asked about landed before nine, the fourth one stalled on the same lock we saw last night, and the fifth is still queued behind it waiting on the backup.';
+ok(P(longS).pauseAfterMs === 280 && /long/.test(P(longS).why), 'a long sentence runs a little and rests after');
+const tempos = new Set(['One.', 'Two.', 'Three.', 'Four.', 'Five.', 'Six.', 'Seven.', 'Eight.', 'Nine.', 'Ten.', 'Eleven.', 'Twelve.'].map((s) => P(s).dSpeed));
+ok(tempos.size >= 7 && [...tempos].every((d) => Math.abs(d) <= 0.08), `a deterministic drift: no two plain sentences share a tempo (${tempos.size} of 12 distinct), all within ±0.08`);
+ok(P('Did you get the file?').dSpeed === P('Did you get the file?').dSpeed && Math.abs(P('Yes!!!', { index: 2, prevLen: 200 }).dSpeed) <= 0.08, 'pure and clamped');
+const mainSrcR = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+ok(/tts\.prosody\(\{ text: clean, index: _breath\.index, prevLen: _breath\.prevLen \}\)/.test(mainSrcR) && /pauseMs: pauseAfter/.test(mainSrcR) && /voice\.prosody'\) !== '0'/.test(mainSrcR) && /rhythm=/.test(mainSrcR), 'the speech manager gives every sentence its tempo and its pause (off: meta voice.prosody=0) and the log names it');
+ok(/_breath\.lastAt = nowMs; _breath\.index\+\+; _breath\.prevLen = clean\.length;/.test(mainSrcR) && !/} else if \(clips\.length\) \{ _breath\.since = 0/.test(mainSrcR), 'the sentence memory is tracked on every sentence, not only when the breath rule is on');
 const top = voices.baselineFromState(zoe, { drives: { energy: 1 }, vad: { v: 0.5, a: 1 } });
 ok(near(top.speed, 1.18) && top._baseline.dSpeed === 0.05 && top._baseline.lean === null, 'the ceiling: +0.05 at full energy and arousal; neutral valence leans nothing');
 const low = voices.baselineFromState(zoe, { drives: { energy: 0 }, vad: { v: 0.2, a: 0 } });

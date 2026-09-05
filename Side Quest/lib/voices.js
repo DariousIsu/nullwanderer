@@ -251,13 +251,17 @@ function _reg() { if (!_singleton) _singleton = createRegistry({}); return _sing
 
 // ── TONE — the wants project, cut 9 tier A (her wish zero: "modulate my voice"; 2026-09-05) ─────────
 // A tone is a BOUNDED DELTA on her recipe, never a different voice: a speed shift within ±0.15 of her
-// baseline and a lean of at most 20 points of blend weight toward the softer (af_nicole) or crisper
-// (bf_isabella) voice. Pure and idempotent (a recipe already carrying this tone is returned as is), so a
-// consumer can never compound deltas. A voice-IDENTITY change is a personality-register change, not a tone.
+// baseline and a lean of at most 20 points of blend weight. Pure and idempotent (a recipe already carrying
+// this tone is returned as is), so a consumer can never compound deltas. A voice-IDENTITY change is a
+// personality-register change, not a tone.
+// THE LEAN TARGETS (his ear, 09-05: "she still sounded really flat"): warm used to lean toward af_nicole —
+// Kokoro's whisper-styled voice — so every warm moment made her BREATHIER and flatter, on a blend that is
+// already 27 % nicole + 41 % calm bf_isabella. The animated voice in her blend is af_bella: warm and quick lean
+// there; low (quiet) is the one place the whisper belongs.
 const TONES = {
-  warm:  { speed: -0.05, lean: { af_nicole: 0.15 } },
+  warm:  { speed: -0.03, lean: { af_bella: 0.15 } },
   dry:   { speed: +0.03 },
-  quick: { speed: +0.10 },
+  quick: { speed: +0.10, lean: { af_bella: 0.05 } },
   low:   { speed: -0.10, lean: { af_nicole: 0.08 } },
   pause: { pauseMs: 400 },
 };
@@ -309,8 +313,8 @@ function baselineFromState(recipe, internalState, { enabled = true } = {}) {
   const speed = Math.max(SPEED_HARD[0], Math.min(SPEED_HARD[1], (Number(base.speed) || 1.0) + dSpeed));
   let weights = { ...(base.weights || {}) }, lean = null;
   if (v != null && Object.keys(weights).length) {
-    const pts = Math.max(-0.10, Math.min(0.10, (Math.max(0, Math.min(1, v)) - 0.5) * 0.4));   // v 0.75 → +10 soft; v 0.25 → +10 crisp
-    const toward = pts >= 0 ? 'af_nicole' : 'bf_isabella';
+    const pts = Math.max(-0.10, Math.min(0.10, (Math.max(0, Math.min(1, v)) - 0.5) * 0.4));   // v 0.75 → +10 animated; v 0.25 → +10 flat/crisp
+    const toward = pts >= 0 ? 'af_bella' : 'bf_isabella';   // warm valence → the animated voice (never the whisper: his ear 09-05)
     const shift = Math.abs(pts);
     if (shift >= 0.01 && toward in weights) {
       const others = Object.keys(weights).filter((k) => k !== toward);

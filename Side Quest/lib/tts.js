@@ -91,6 +91,31 @@ function autoNonverbal({ index = 0, prevLen = 0, sinceBreath = 0, minPrevLen = 1
   return null;
 }
 
+/**
+ * RHYTHM (his ear, 09-05: "beyond the breathing she still sounded really flat"). Kokoro has no intonation
+ * control — its knobs are the blend, the speed and how it reads punctuation — so the rhythm people have
+ * between sentences is made here, a pure rule per sentence: a question slows a touch and waits; an
+ * exclamation quickens; a trailing thought (…) slows and leaves a long gap; a short line after a long one
+ * comes as a quick beat; a long sentence runs a little; a clause ending (, ; :) barely pauses; and a
+ * deterministic drift (a hash of the words, ±0.03) so no two sentences share a tempo. dSpeed is clamped to
+ * ±0.08 and rides on top of her baseline + tone; pauseAfterMs is the silence after the sentence.
+ */
+function prosody({ text = '', index = 0, prevLen = 0 } = {}) {
+  const t = String(text).trim(), len = t.length;
+  let dSpeed = 0, pause = 200; const why = [];
+  const end = t.slice(-1), trailing = /(\.\.\.|…)$/.test(t);
+  if (trailing) { dSpeed -= 0.04; pause = 480; why.push('trailing'); }
+  else if (end === '?') { dSpeed -= 0.03; pause = 240; why.push('question'); }
+  else if (end === '!') { dSpeed += 0.06; pause = 160; why.push('exclaim'); }
+  else if (end === ',' || end === ';' || end === ':') { pause = 90; why.push('clause'); }
+  if (index > 0 && len < 30 && prevLen > 90) { dSpeed += 0.04; pause = Math.max(pause, 260); why.push('beat'); }
+  else if (len > 140) { dSpeed += 0.02; pause += 80; why.push('long'); }
+  let h = 2166136261; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  const drift = ((h % 1000) / 1000 - 0.5) * 0.06;
+  dSpeed = Math.max(-0.08, Math.min(0.08, dSpeed + drift));
+  return { dSpeed: +dSpeed.toFixed(3), pauseAfterMs: pause, why: why.join('+') || 'plain' };
+}
+
 /** The vocabulary, for her prompt — names what exists, never tells her to feel (the anti-performance law). */
 function buildVoicePromptBlock() {
   return `VOICE — how a sentence is SPOKEN is yours to shape inside <say>: put <tone warm/>, <tone dry/>, <tone quick/>, <tone low/> or <tone pause/> before a sentence to bend its delivery (a bounded shift on your own voice, never a different one), and <breath/>, <sigh/>, <laugh/>, <chuckle/> or <hmm/> where a breath, a sigh or a laugh actually belongs. They are stripped from the text and never shown — only heard. Punctuation is prosody too: an ellipsis pauses, short sentences quicken, a question rises. Use them when the moment has them, not as decoration.`;
@@ -325,4 +350,4 @@ async function speak(text, opts = {}) {
 }
 
 module.exports = { synthesize, speak, shutdownTts, createPiperService, parseNdjson, prepareText, resolveVoice, VENV_PY, RUNNER, OUT_DIR,
-  markVoiceTags, stripVoiceTags, extractVoiceMarks, buildVoicePromptBlock, autoNonverbal, NONVERBAL_KINDS };
+  markVoiceTags, stripVoiceTags, extractVoiceMarks, buildVoicePromptBlock, autoNonverbal, prosody, NONVERBAL_KINDS };

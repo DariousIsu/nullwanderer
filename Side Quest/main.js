@@ -750,18 +750,26 @@ const _speech = (() => {
     // few sentences without one; never the first sentence of a reply; only when she wrote no mark of her own.
     // OFF unless meta voice.auto_breath='1' — his verdict on the first clip (09-05: "someone blowing into a mic");
     // the clip is rebuilt (nonverbal v2) and her own <breath/> mark still plays it; the rule waits for his ear.
+    // the per-reply sentence memory (index, the previous sentence's length, sentences since a breath) — always
+    const nowMs = Date.now();
+    if (nowMs - _breath.lastAt > 8000) { _breath.index = 0; _breath.since = 0; _breath.prevLen = 0; }   // a new reply after a pause
+    // RHYTHM (his ear, 09-05: "she still sounded really flat"): a tempo and a pause per sentence, the way people
+    // have them — Kokoro carries speed and silence, so that is where the rhythm is made. Off: meta voice.prosody='0'.
+    let pr = null;
+    try { if (process.env.ZOE_PROSODY !== '0' && db.getMeta('voice.prosody') !== '0') pr = tts.prosody({ text: clean, index: _breath.index, prevLen: _breath.prevLen }); } catch {}
+    if (pr && pr.dSpeed) {
+      const baseR = recipe || (() => { try { return require('./lib/voices').activeRecipe(); } catch { return null; } })();
+      if (baseR) recipe = { ...baseR, speed: +Math.max(0.7, Math.min(1.5, (Number(baseR.speed) || 1) + pr.dSpeed)).toFixed(3) };
+    }
     let auto = null;
     const autoOn = (() => { try { return db.getMeta('voice.auto_breath') === '1'; } catch { return false; } })();
-    if (nv && autoOn && !marks.before.length && !marks.after.length) {
-      const now = Date.now();
-      if (now - _breath.lastAt > 8000) { _breath.index = 0; _breath.since = 0; _breath.prevLen = 0; }   // a new reply after a pause
-      auto = tts.autoNonverbal({ index: _breath.index, prevLen: _breath.prevLen, sinceBreath: _breath.since });
-      _breath.lastAt = now; _breath.index++; _breath.prevLen = clean.length; _breath.since = auto ? 0 : _breath.since + 1;
-    } else if (clips.length) { _breath.since = 0; _breath.index++; _breath.prevLen = clean.length; _breath.lastAt = Date.now(); }
-    console.log(`[voice] enqueue +${clean.length}ch "${clean.slice(0, 28).replace(/\n/g, ' ')}${clean.length > 28 ? '…' : ''}"${marks.tone ? ` tone=${marks.tone}` : ''}${recipe ? ` speed=${recipe.speed}` : ''}${baseNote}${clips.length ? ` nv=${clips.join(',')}` : ''}${auto ? ` auto=${auto}` : ''}${marks.pauseMs ? ` pause=${marks.pauseMs}ms` : ''}`);
+    if (nv && autoOn && !marks.before.length && !marks.after.length) auto = tts.autoNonverbal({ index: _breath.index, prevLen: _breath.prevLen, sinceBreath: _breath.since });
+    _breath.lastAt = nowMs; _breath.index++; _breath.prevLen = clean.length; _breath.since = (auto || clips.length) ? 0 : _breath.since + 1;
+    const pauseAfter = marks.pauseMs || (pr ? pr.pauseAfterMs : 0);
+    console.log(`[voice] enqueue +${clean.length}ch "${clean.slice(0, 28).replace(/\n/g, ' ')}${clean.length > 28 ? '…' : ''}"${marks.tone ? ` tone=${marks.tone}` : ''}${recipe ? ` speed=${recipe.speed}` : ''}${baseNote}${pr ? ` rhythm=${pr.dSpeed >= 0 ? '+' : ''}${pr.dSpeed}/${pr.pauseAfterMs}ms(${pr.why})` : ''}${clips.length ? ` nv=${clips.join(',')}` : ''}${auto ? ` auto=${auto}` : ''}${marks.pauseMs ? ` pause=${marks.pauseMs}ms` : ''}`);
     if (auto) _enqueueItem({ clip: auto });
     if (nv) for (const k of marks.before) _enqueueItem({ clip: k });
-    if (clean && clean.length >= 2) _enqueueItem({ text: clean, recipe, pauseMs: marks.pauseMs });
+    if (clean && clean.length >= 2) _enqueueItem({ text: clean, recipe, pauseMs: pauseAfter });
     if (nv) for (const k of marks.after) _enqueueItem({ clip: k });
   }
   const _breath = { lastAt: 0, index: 0, since: 0, prevLen: 0 };   // the respiration rule's small memory (per reply)
