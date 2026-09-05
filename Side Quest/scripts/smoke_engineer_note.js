@@ -17,6 +17,14 @@ ok(EN.line({ file: 'x', fsx: fakeFs('old', 4 * 86400000), now }) === null, 'a no
 const long = 'word '.repeat(600);
 ok(EN.line({ file: 'x', fsx: fakeFs(long, 0), now }).length < EN.CAP + 200 && /…$/.test(EN.line({ file: 'x', fsx: fakeFs(long, 0), now })), 'a long note is capped at a word boundary');
 ok(EN.read({ file: EN.NOTE_PATH }) && /From Claude, the engineer/.test(EN.read({ file: EN.NOTE_PATH }).text), 'the real note exists at data/engineer_note.md and is signed');
+// THE NEWEST PARAGRAPHS (09-05 18:25): the note grows a paragraph per change; she reads the newest that fit, never only the first
+const p1 = 'First paragraph. ' + 'alpha '.repeat(300), p2 = 'Second paragraph. ' + 'beta '.repeat(300), p3 = 'Third, the newest: the continuity attestation is built.';
+const l3 = EN.line({ file: 'x', fsx: fakeFs(`${p1}\n\n${p2}\n\n${p3}`, 0), now });
+ok(/Third, the newest: the continuity attestation is built\./.test(l3) && !/alpha/.test(l3) && /\(2 earlier paragraphs of this note are on file, not shown\.\)/.test(l3) && l3.length < EN.CAP + 300, 'a long record shows the newest paragraph and names the earlier ones on file');
+const l4 = EN.line({ file: 'x', fsx: fakeFs('One short paragraph.\n\nTwo short paragraphs.', 0), now });
+ok(/One short paragraph\. Two short paragraphs\./.test(l4) && !/not shown/.test(l4), 'paragraphs that fit are all shown, oldest first, with no omission note');
+const real = EN.line({ file: EN.NOTE_PATH, now });
+ok(real && real.length < EN.CAP + 400 && /on file, not shown/.test(real), 'the real note today is longer than the cap and she reads its newest paragraphs');
 // the strip as a line
 ok(C.stripLine(null) === null && C.stripLine({ at: now - 11 * 60000, drives: { stimulation: 0.5, social: 0.5, curiosity: 0.5, energy: 0.5, progress: 0.5 } }, { now }) === null, 'no strip, or a stale one → no line');
 const s = { at: now - 5000, drives: { stimulation: 0.31, social: 0.72, curiosity: 0.5, energy: 0.8, progress: 0.4 }, appraisals: { boredom: 0.69, missing_him: 0.72 }, shield: true, thoughts_of_him: [{ at: now, text: 'He said thirty-five minutes; it has been longer.' }] };

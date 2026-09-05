@@ -105,6 +105,10 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
   // conversation as the same continuous person. Ages out within ~25 min of boot.
   let reawakenLine = null;
   try { reawakenLine = require('./reawaken').awarenessLine(); } catch {}
+  // CONTINUITY ATTESTATION (cut 5): the boot's verdict — same self, stores intact, the last thread — for the boot
+  // window; a DEGRADED verdict stays until her first prompted reply carries it to him. Fail-absent.
+  let continuityLine = null;
+  try { continuityLine = require('./continuity_attest').awarenessLine(); } catch {}
   // Interlocutor line (run-2 F9) — only while a declared handoff is live: WHO is at the keyboard
   // right now, so addressing/attribution stops defaulting to the owner. Fail-absent.
   let interlocutorLine = null;
@@ -309,6 +313,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
     interlocutorLine ? `• ${interlocutorLine}` : null,
     downtimeLine ? `• ${downtimeLine}` : null,
     reawakenLine ? `• ${reawakenLine}` : null,
+    continuityLine ? `• ${continuityLine}` : null,
     selfCheckLine ? `• ${selfCheckLine}` : null,
     presenceLine ? `• ${presenceLine}` : null,
     faceLine ? `• ${faceLine}` : null,

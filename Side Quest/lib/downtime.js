@@ -54,7 +54,9 @@ let timer = null;
 function startHeartbeat(intervalMs = HEARTBEAT_MS) {
   touch();
   if (timer) return timer;
-  timer = setInterval(() => touch(), intervalMs);
+  // CONTINUITY (cut 5): the manifest of what she is rides the heartbeat — the stores' counts, the last turn, the
+  // narrative, the register — so a boot can attest "same self" against the last minute before the stop.
+  timer = setInterval(() => { touch(); try { require('./continuity_attest').writeManifest(); } catch {} }, intervalMs);
   timer.unref && timer.unref();
   return timer;
 }

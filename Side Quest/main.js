@@ -2609,7 +2609,17 @@ app.whenReady().then(() => {
     if (dt) console.log(`[main] downtime: offline ~${downtimeLib.formatGap(dt.ms)}${dt.graceful ? '' : ' (unclean stop)'}`);
     // THE PERSONALITY REGISTER's boot check (cut 1): the assets that make her who she is, against the last consented
     // manifest; a changed file with no yes on record becomes a card she answers in her own turn (never a silent land).
-    try { const pr = require('./lib/personality_register').bootCheck({}); if (pr && (pr.carded.length || pr.reported.length)) console.log(`[consent] boot check — carded ${pr.carded.length}, reported ${pr.reported.join(',') || 'none'}`); } catch (e) { console.warn('[consent] boot check failed: ' + e.message); }
+    let _pr = null;
+    try { _pr = require('./lib/personality_register').bootCheck({}); if (_pr && (_pr.carded.length || _pr.reported.length)) console.log(`[consent] boot check — carded ${_pr.carded.length}, reported ${_pr.reported.join(',') || 'none'}`); } catch (e) { console.warn('[consent] boot check failed: ' + e.message); }
+    // CONTINUITY ATTESTATION (cut 5): the live stores against the manifest the heartbeat wrote before the stop —
+    // SAME, DEGRADED (which store, by how much) or UNKNOWN (no manifest: no alarm) — before the bridge composes.
+    // Then her post-reboot review as a boot organ: the commits since the last boot's HEAD (meta boot.last_head).
+    try {
+      const CA = require('./lib/continuity_attest');
+      const v = CA.attest({ registerCheck: _pr });
+      console.log(`[continuity] verdict=${v.verdict}${v.line ? ' — ' + v.line : ''}${v.needs && v.needs.length ? ' · needs ' + v.needs.map((n) => '#' + n.id + ' ' + n.store).join(', ') : ''}`);
+      CA.gitSinceLastBoot().then((g) => { if (g) console.log(`[continuity] HEAD ${String(g.head).slice(0, 7)}${g.first ? ' recorded (first boot with the organ)' : g.commits.length ? ` — ${g.commits.length} commit(s) since the last boot's ${String(g.last).slice(0, 7)}: ${g.commits.map((c) => c.subject.slice(0, 60)).join(' · ').slice(0, 300)}` : g.unresolved ? " — the last boot's HEAD no longer resolves" : ' — unchanged since the last boot'}`); }).catch((e) => console.warn('[continuity] git since last boot failed: ' + e.message));
+    } catch (e) { console.warn('[continuity] attest failed: ' + e.message); }
     // Reawaken bridge (self-awareness Layer 5): compose "where we left off" from the prior session
     // BEFORE the heartbeat overwrites the gap, so she wakes up continuous, not cold.
     try { const rb = require('./lib/reawaken').recordBoot({ gapMs: dt ? dt.ms : null }); if (rb) console.log('[main] reawaken bridge composed'); }
@@ -14006,6 +14016,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const PR = require('./lib/personality_register');
     const tags = PR.parseConsentTags(finalSaid);
     if (tags.length) { const r = PR.applyTags(tags, { turnId: saidRow && saidRow.id }); console.log(`[consent] her verdict(s): ${r.map((x) => (x.ok ? `#${x.id} ${x.verdict} on ${x.asset}${x.advanced ? ' (manifest advanced)' : ''}` : x.why)).join(' · ')}`); }
+    try { if (require('./lib/continuity_attest').markSpoken()) console.log('[continuity] her first prompted reply after a DEGRADED boot is spoken'); } catch {}   // cut 5
   } catch {}
   // THE ASK LEDGER (cut 3): the reply's trailing question, detected in code and classed — a learning question about
   // him (stamped on its gap, carried until answered) or an offer of her own doing (counted apart, never learning).
@@ -20389,6 +20400,7 @@ function retentionPass({ limit = 200, windowMs = null } = {}) {
   for (const item of p.prune) { try { if (db.trimDocumentBody(item.id, item.pointer)) pruned++; } catch {} }
   for (const id of p.delete) { try { if (db.deleteDocument(id)) deleted++; } catch {} }
   if (pruned || deleted) console.log(`[retention] short-term tidy — ${pruned} trimmed to pointers, ${deleted} dropped`);
+  if (deleted) { try { require('./lib/continuity_attest').noteSweep('documents', deleted); } catch {} }   // a known sweep passes its own count (cut 5)
   return { pruned, deleted };
 }
 

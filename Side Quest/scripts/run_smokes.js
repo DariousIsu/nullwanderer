@@ -828,6 +828,8 @@ const smokes = [
   'smoke_personality_register.js',
   // THE REFUSAL DOOR (cut 4, 09-05): the shapes, the work orders that never trip, the event, the wipe card, the wiring
   'smoke_integrity.js',
+  // CONTINUITY ATTESTATION (cut 5, 09-05): the manifest round trip, DEGRADED names the store, the named tolerance, UNKNOWN without alarm, git since the last boot
+  'smoke_continuity_attest.js',
   'smoke_core_dataset.js',
   // The core's probe (design §6/§8/§16): scores a candidate local model on the frozen holdout — the loose
   // JSON parser, the agreement scorer, the voice contract, the one-shot prompt — with an injected call.
