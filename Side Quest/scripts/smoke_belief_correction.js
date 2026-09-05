@@ -59,6 +59,21 @@ const NOW = Date.parse('2026-07-03T12:00:00Z');
   // no extractor wired → safe no-op
   ok((await C.captureCorrection({ userMessage: 'No, Bondi resigned in April 2026.' })).skipped === 'no-extractor', 'capture: no extractFn → safe no-op');
 
+  // ── LEG D: cueRefutes — a FALSITY cue refutes into known_incorrect; a TEMPORAL cue only retires ──
+  ok(C.cueRefutes('wrong') && C.cueRefutes('incorrect') && C.cueRefutes("that's not") && C.cueRefutes('not right') && C.cueRefutes('inaccurate'),
+    'cueRefutes: an explicit falsity cue (wrong / incorrect / not right / that\'s not) REFUTES');
+  ok(!C.cueRefutes('no longer') && !C.cueRefutes('as of') && !C.cueRefutes("it's now") && !C.cueRefutes('anymore') && !C.cueRefutes('update:'),
+    'cueRefutes: a TEMPORAL update (no longer / as of / now) does NOT refute — refuted is not stale');
+  ok(!C.cueRefutes('no,') && !C.cueRefutes('actually,') && !C.cueRefutes(''), 'cueRefutes: an ambiguous/generic cue does NOT refute (conservative — a missed refute is safe, a wrong one breaks the law)');
+
+  // ── the chat-door wiring: onSupersede refutes on a falsity cue + the correction-event seam ──────
+  const fs = require('fs'), path = require('path');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/_bc\.cueRefutes\(_cue\)/.test(main) && /known_incorrect'\)\.record\(/.test(main), 'chat door: onSupersede refutes the superseded value into known_incorrect on a falsity cue');
+  ok(/lane: 'correction', kind: 'correction', data: \{ class: 'fact'/.test(main)
+    && /data: \{ class: 'rule'/.test(main) && /data: \{ class: 'capability'/.test(main),
+    'the correction-event seam (cut 6) fires on all three doors: fact + rule + capability');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

@@ -9515,16 +9515,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (_rule) {
       const _r = require('./lib/directives').record(_rule, { turnId: null });
       if (_r) console.log(`[directive] ${_r.duplicate ? 'reinforced' : 'RECORDED'} (${_via}): "${_rule.slice(0, 90)}"`);
+      try { require('./lib/obs_bus').emit({ lane: 'correction', kind: 'correction', data: { class: 'rule', via: _via } }); } catch {}   // leg-D/cut-6 seam
     } else {
       // LEG D — the correction router's CAPABILITY arm: a correction that names a capability she LACKS
       // ("you should be able to read my calendar") is not a rule — it becomes a NEED, the same card the
       // self-watch organ files, surfaced to Lucas for his yes/no. Only when the directive nets missed (a
-      // rule and a capability gap are different shapes). The fact-correction arm (→ known_incorrect) needs
-      // entity resolution and lands separately.
+      // rule and a capability gap are different shapes). The fact-correction arm (→ verified_fact +
+      // known_incorrect inoculation) is the belief_correction capture below (leg D, this file ~9607).
       const _gap = require('./lib/capability_need').detectCapabilityGap(userMessage);
       if (_gap) {
         const _n = require('./lib/capability_need').record(_gap, { bornFrom: `correction:${sessionId}` });
         if (_n && _n.id) console.log(`[directive] capability gap → need #${_n.id}${_n.deduped ? ' (reinforced)' : ''}: "${_gap.slice(0, 80)}"`);
+        try { require('./lib/obs_bus').emit({ lane: 'correction', kind: 'correction', data: { class: 'capability' } }); } catch {}   // leg-D/cut-6 seam
       }
     }
   } catch (e) { console.error('[directive] capture failed:', e.message); }
@@ -9610,8 +9612,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         extractFn: (msg, { priorAnswer }) => _learning.extractClaims({ query: priorAnswer || msg, content: msg }),
         writeFact: (rec) => _mem.store(rec),
         lookupIncumbent: (k) => _learning.verifiedFactBySlot(k),                        // reconcile vs what we hold
-        onSupersede: (ref) => _learning.retireVerifiedFact(ref, { by: 'chat-correction' }), // retire the stale one
-      })).then(r => { if (r && r.captured) console.log(`[main] chat-correction: banked ${r.captured} verified fact(s) (cue: ${r.cue})`); })
+        onSupersede: (ref, rec, incumbent) => {
+          _learning.retireVerifiedFact(ref, { by: 'chat-correction' });                 // retire the stale one
+          // LEG D fact arm: if the correction asserts the old value is FALSE (not merely stale), INOCULATE —
+          // refute it into known_incorrect so a re-encounter can never re-win it ("refuted is not stale").
+          try {
+            const _cue = _bc.detectCorrection(userMessage, {}).cue || '';
+            if (_bc.cueRefutes(_cue) && incumbent && incumbent.value) {
+              const _subj = (rec && rec.provenance && rec.provenance.subject_key) || 'chat-correction';
+              require('./lib/known_incorrect').record({ objectKey: _subj, claimClass: 'fact', claimValue: String(incumbent.value).slice(0, 300),
+                reason: `${userName || 'Lucas'} corrected this in chat (${_cue}); the standing value is now "${String((rec && rec.content) || '').slice(0, 120)}"`, refutedBy: 'chat-correction' });
+              console.log(`[main] chat-correction: REFUTED the superseded value into known_incorrect (${_subj})`);
+            }
+          } catch {}
+        },
+      })).then(r => {
+        if (r && r.captured) { console.log(`[main] chat-correction: banked ${r.captured} verified fact(s) (cue: ${r.cue})`);
+          try { require('./lib/obs_bus').emit({ lane: 'correction', kind: 'correction', data: { class: 'fact' } }); } catch {} }   // leg-D/cut-6 seam
+      })
         .catch(e => console.error('[main] chat-correction capture failed:', e && e.message));
     }
   } catch (e) { console.error('[main] chat-correction detect failed:', e && e.message); }

@@ -72,4 +72,16 @@ async function captureCorrection({ userMessage, priorAnswer = '', extractFn = nu
   return { captured: out.filter(r => r && r.wrote).length, cue: det.cue, outcomes: out };
 }
 
-module.exports = { detectCorrection, buildCorrectionClaim, captureCorrection, _CORRECTION_RE };
+// LEG D — the fact arm's INOCULATION gate. A chat correction supersedes an incumbent belief; but does the
+// old value become FALSE (refute it into known_incorrect so it can never re-win) or merely STALE (retire it;
+// it was true when written)? "REFUTED IS NOT STALE" (known_incorrect §5a): a temporal update ("no longer",
+// "as of", "now") retires only; a falsity cue ("wrong", "incorrect", "not right") refutes. CONSERVATIVE by
+// construction — an unmatched cue does NOT refute (a missed refute is safe; a wrong refute breaks the law).
+const _STALE_CUE = /no\s+longer|any\s?more|as\s+of\b|it'?s\s+now\b|out\s+of\s+date|outdated|update:/i;
+function cueRefutes(cue) {
+  const c = String(cue || '').toLowerCase().trim();
+  if (!c || _STALE_CUE.test(c)) return false;   // a temporal update is not a refutation
+  return /\bwrong\b|incorrect|inaccurate|not\s+(?:right|correct|true)|that'?s\s+not/.test(c);
+}
+
+module.exports = { detectCorrection, buildCorrectionClaim, captureCorrection, cueRefutes, _CORRECTION_RE, _STALE_CUE };
