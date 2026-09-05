@@ -28,6 +28,18 @@ const R = (text) => ({ ok: true, text });
   ok(!m.isInvalidatingWrite('search_entities'), 'a read is not a write');
   // the overlap trap: these START with a write prefix but ARE reads, so they must not invalidate
   ok(!m.isInvalidatingWrite('get_entity') && !m.isInvalidatingWrite('search_facts'), 'reads never classed as writes');
+  // THE p300 HOLE (2026-09-05): create_* never counted as a write, so create_project repaired a project's
+  // path and the next get_project — memoized 28 s earlier — served the pre-write row for its whole TTL.
+  ok(m.isInvalidatingWrite('create_project') && m.isInvalidatingWrite('create_contact') && m.isInvalidatingWrite('create_account'), 'create_* is a write (create_project / create_contact / create_account invalidate)');
+  {
+    ok(m.isMemoizable('get_project'), 'get_project is a memoized read (the p300 stale answer came from here)');
+    const memo = m.createMemo({ hashFn });
+    memo.put('get_project', { project_name: 'Proposal' }, R('{"project_name":"Proposal","path":"C:/Users/x/Documents/Claude/Projects/Proposal"}'), 5);
+    ok(memo.get('get_project', { project_name: 'Proposal' }), 'the pre-write row is cached');
+    const n = memo.invalidate(m.writeArgsOf({ kind: 'do', name: 'create_project', args: { project_name: 'Proposal', project_type: 'research_topic', path: 'Vault/Proposal' } }));
+    ok(n === 1 && memo.get('get_project', { project_name: 'Proposal' }) === null, 'create_project {project_name} drops the cached get_project for that project — the next read is fresh');
+    ok(memo.get('get_project', { project_name: 'North Dakota' }) === null, 'unrelated projects were never cached here (no cross-talk)');
+  }
 
   // ── fingerprint (drives invalidation) ────────────────────────────────────────────────────────
   {

@@ -66,7 +66,10 @@ function isMemoizable(tool) { return isCoalescable(tool); }
 
 // A write that can change what a read would return. Mirrors echo_tier's mutation surface; the
 // test is on the NAME because that is all dispatch gives us before the call runs.
-const WRITE_RE = /^(propose_|merge_|promote_|approve_|decide_|resolve_entity_|resolve_or_mint|add_|update_|save_|delete_|prune_|revert_|restamp_|set_|import_|ingest_|archive_|move_|rename_|run_|auto_promote)/;
+// `create_` joined on 2026-09-05 (boot_p300): create_project (the Cowork door) repaired a project's
+// path and the very next get_project — memoized 28 s earlier — served the pre-write row back for
+// its whole TTL; the same hole covered create_contact/create_account since the memo shipped.
+const WRITE_RE = /^(create_|propose_|merge_|promote_|approve_|decide_|resolve_entity_|resolve_or_mint|add_|update_|save_|delete_|prune_|revert_|restamp_|set_|import_|ingest_|archive_|move_|rename_|run_|auto_promote)/;
 function isInvalidatingWrite(tool) {
   return typeof tool === 'string' && WRITE_RE.test(tool) && !READ_TOOLS.has(tool);
 }

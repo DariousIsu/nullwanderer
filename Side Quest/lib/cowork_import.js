@@ -444,8 +444,15 @@ async function applyFilePlan(plan, { deps = {} } = {}) {
       if (proj.domain) args.domain = proj.domain;
       const r = await call('create_project', args);
       const body = r ? _parseBody(r) : null;
-      if (body && body.action && body.action !== 'rejected' && !_isAbsolute(body.path)) { out.normalized++; out.notes.push(`${name}: path normalized ${proj.path} → ${body.path}`); }
-      else { out.notes.push(`${name}: absolute path could not be normalized — its files wait (never filed outside the Vault)`); continue; }
+      if (!(body && body.action && body.action !== 'rejected' && !_isAbsolute(body.path))) { out.notes.push(`${name}: absolute path could not be normalized — its files wait (never filed outside the Vault)`); continue; }
+      // READ IT BACK — the door's answer is not the proof; the stored row is. On p300 a cache between
+      // us and the engine (the suit's route memo, before `create_` joined its write set) served the
+      // pre-write row here on the next batch; a file must never be filed on a path that only the
+      // door's reply says is safe.
+      const g2 = await call('get_project', { project_name: name });
+      const back = g2 ? _parseBody(g2) : null;
+      if (!back || back.error || _isAbsolute(back.path)) { out.notes.push(`${name}: path still reads absolute after the repair (a stale read) — its files wait (never filed outside the Vault)`); continue; }
+      out.normalized++; out.notes.push(`${name}: path normalized ${proj.path} → ${back.path}`);
     }
     safe.add(name);
   }

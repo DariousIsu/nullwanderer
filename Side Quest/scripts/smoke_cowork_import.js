@@ -171,27 +171,37 @@ ok(CI.discoverDir({ fs: fakeFs, env: { COWORK_DIR: 'X' } }) === 'X', 'COWORK_DIR
   // create door before a file lands), the two claude.ai Projects are CREATED; ingest answers per file
   const calls = [];
   const mkDb = () => { const m = {}; return { getMeta: (k) => m[k], setMeta: (k, v) => { m[k] = v; }, _m: m }; };
-  const fdeps = {
-    dispatch: async (tag) => {
-      calls.push(tag);
-      const echo = { 'Op-Eds': { project_name: 'Op-Eds', project_type: 'output_library', path: 'C:/Users/x/Documents/Claude/Projects/Op-Eds', domain: 'rainey' } };
-      if (tag.name === 'list_projects') return { ok: true, text: JSON.stringify({ result: Object.values(echo) }) };
-      if (tag.name === 'get_project') return { ok: true, text: JSON.stringify(echo[tag.args.project_name] || { project_name: tag.args.project_name, path: `Vault/${tag.args.project_name}` }) };
-      if (tag.name === 'create_project') return { ok: true, text: JSON.stringify({ result: { action: tag.args.source_folder ? 'updated' : 'created', path: tag.args.path } }) };
-      if (tag.name === 'ingest_file') {
-        const n = path.basename(tag.args.source_path);
-        if (/\.pdf$/.test(n)) return { ok: true, text: JSON.stringify({ action: 'unsupported', error: 'no extractor', ext: '.pdf' }) };
-        if (n === 'OpEd_1.docx') return null;                                                     // a transport failure — never recorded
-        return { ok: true, text: JSON.stringify({ action: 'ingested', doc_id: 100 + calls.length, project_name: tag.args.project_name }) };
-      }
-      if (tag.name === 'extract_entities_from_doc') return { ok: true, text: '{"ok":true}' };
-      return null;
-    },
-    memory: { store: async (rec) => ({ id: 42, rec }) },
-    skills: { register: (a) => { calls.push({ name: 'skills.register', args: a }); return { ok: true, name: 'cowork-op-ed-writing' }; } },
-    db: mkDb(), now: 7000, limit: 25,
+  // a STATEFUL fake store: create_project updates the row, so a read-back after the repair sees the write
+  const mkFdeps = () => {
+    const echo = { 'Op-Eds': { project_name: 'Op-Eds', project_type: 'output_library', path: 'C:/Users/x/Documents/Claude/Projects/Op-Eds', domain: 'rainey' } };
+    return {
+      echo,
+      dispatch: async (tag) => {
+        calls.push(tag);
+        if (tag.name === 'list_projects') return { ok: true, text: JSON.stringify({ result: Object.values(echo) }) };
+        if (tag.name === 'get_project') return { ok: true, text: JSON.stringify(echo[tag.args.project_name] || { project_name: tag.args.project_name, path: `Vault/${tag.args.project_name}` }) };
+        if (tag.name === 'create_project') {
+          const row = echo[tag.args.project_name] || (echo[tag.args.project_name] = { project_name: tag.args.project_name, project_type: tag.args.project_type });
+          const existed = !!row.path; row.path = tag.args.path;
+          return { ok: true, text: JSON.stringify({ result: { action: existed ? 'updated' : 'created', path: tag.args.path } }) };
+        }
+        if (tag.name === 'ingest_file') {
+          const n = path.basename(tag.args.source_path);
+          if (/\.pdf$/.test(n)) return { ok: true, text: JSON.stringify({ action: 'unsupported', error: 'no extractor', ext: '.pdf' }) };
+          if (n === 'OpEd_1.docx') return null;                                                     // a transport failure — never recorded
+          return { ok: true, text: JSON.stringify({ action: 'ingested', doc_id: 100 + calls.length, project_name: tag.args.project_name }) };
+        }
+        if (tag.name === 'extract_entities_from_doc') return { ok: true, text: '{"ok":true}' };
+        return null;
+      },
+      memory: { store: async (rec) => ({ id: 42, rec }) },
+      skills: { register: (a) => { calls.push({ name: 'skills.register', args: a }); return { ok: true, name: 'cowork-op-ed-writing' }; } },
+      db: mkDb(), now: 7000, limit: 25,
+    };
   };
+  const fdeps = mkFdeps();
   const fr = await CI.applyFilePlan(CI.buildFilePlan(fPlanArgs), { deps: fdeps });
+  ok(fdeps.echo['Op-Eds'].path === 'Vault/Op-Eds' && calls.filter((c) => c.name === 'get_project' && c.args.project_name === 'Op-Eds').length === 2, 'the repair is READ BACK from the store (2 get_project reads: before + after) — the door\'s reply alone never makes a project safe');
   ok(fr.created === 2 && fr.bound === 0 && fr.normalized === 1, `apply: the claude.ai Projects are CREATED (2), Op-Eds' absolute path is NORMALIZED before any file lands (${JSON.stringify({ created: fr.created, normalized: fr.normalized })})`);
   const norm = calls.find((c) => c.name === 'create_project' && c.args.project_name === 'Op-Eds');
   ok(norm && norm.args.path === 'Vault/Op-Eds' && /Projects\/Op-Eds$/.test(norm.args.source_folder) && norm.args.project_type === 'output_library', 'THE PATH LAW pre-flight re-upserts Vault/<name> through the create door (same type), keeping the folder as source_folder');
@@ -218,8 +228,8 @@ ok(CI.discoverDir({ fs: fakeFs, env: { COWORK_DIR: 'X' } }) === 'X', 'COWORK_DIR
   const fr4 = await CI.applyFilePlan(CI.buildFilePlan(fPlanArgs), { deps: { ...fdeps, dispatch: async () => null, db: { getMeta: () => '{}', setMeta: () => { throw new Error('must not write'); } } } });
   ok(fr4.deferred === 6 && fr4.ingested === 0 && fr4.templates === 0 && /not reachable/.test(fr4.notes.join(' ')), 'suit down: everything deferred (5 files + 1 template), nothing marked, honest note');
   // a project whose absolute path CANNOT be normalized never receives a file
-  const calls5 = [];
-  const fr5 = await CI.applyFilePlan(CI.buildFilePlan(fPlanArgs), { deps: { ...fdeps, db: mkDb(), dispatch: async (tag) => { calls5.push(tag); if (tag.name === 'create_project' && tag.args.source_folder) return { ok: true, text: JSON.stringify({ result: { action: 'rejected', error: 'no' } }) }; return fdeps.dispatch(tag); } } });
+  const calls5 = [], d5 = mkFdeps();
+  const fr5 = await CI.applyFilePlan(CI.buildFilePlan(fPlanArgs), { deps: { ...d5, dispatch: async (tag) => { calls5.push(tag); if (tag.name === 'create_project' && tag.args.source_folder) return { ok: true, text: JSON.stringify({ result: { action: 'rejected', error: 'no' } }) }; return d5.dispatch(tag); } } });
   ok(!calls5.some((c) => c.name === 'ingest_file' && c.args.project_name === 'Op-Eds') && calls5.some((c) => c.name === 'ingest_file') && /never filed outside the Vault/.test(fr5.notes.join(' ')) && fr5.remaining === 2, `a target whose absolute path cannot be normalized gets NO file (its 2 items stay remaining); the other projects still file — nothing lands outside the Vault (remaining ${fr5.remaining})`);
   // exact-only binding for the claude.ai Projects: a prefix twin must NOT bind (34 briefings filed under a stranger)
   ok(CI.matchProject('Policy Briefings', [{ project_name: 'Policy' }], { exact: true }) === null && CI.matchProject('Policy Briefings', [{ project_name: 'policy briefings' }], { exact: true }) === 'policy briefings' && CI.matchProject('Live Events &  Webinars', [{ project_name: 'live-events' }]) === 'live-events', 'matchProject {exact}: a prefix twin never binds a claude.ai Project, only the same name does; the space rule keeps its prefix bind');
@@ -227,6 +237,10 @@ ok(CI.discoverDir({ fs: fakeFs, env: { COWORK_DIR: 'X' } }) === 'X', 'COWORK_DIR
   ok(bplan.bindings.length === 2 && bplan.bindings.find((b) => b.name === 'Op-Ed Writing').action === 'create' && bplan.bindings.find((b) => b.name === 'China and the 5 year plan').action === 'bind' && bplan.items.find((i) => i.name === 'plan.pdf').project === 'China and the 5 Year Plan' && /→ CREATE as output_library/.test(CI.summarizeFiles(bplan)) && /→ bind "China/.test(CI.summarizeFiles(bplan)), 'the plan names each claude.ai Project binding (bind by exact name / create + type) for review before the apply; a bound one\'s items know their project at plan time');
   ok(CI.buildFilePlan(fPlanArgs).bindings.every((b) => b.action === 'unread') && /unread \(suit down\)/.test(CI.summarizeFiles(CI.buildFilePlan(fPlanArgs))), 'without the projects read the bindings are honestly "unread" — decided at apply');
   ok(CI.inferProjectType('Policy Briefings') === 'output_library' && CI.inferProjectType('China and the 5 year plan') === 'research_topic', 'a briefings project is an output library; a research project a research topic');
+  // THE STALE READ (p300): a store whose read-back ignores the write — the repair is NOT trusted, nothing files there
+  const dS = mkFdeps(), callsS = [];
+  const frS = await CI.applyFilePlan(CI.buildFilePlan(fPlanArgs), { deps: { ...dS, dispatch: async (tag) => { callsS.push(tag); if (tag.name === 'get_project' && tag.args.project_name === 'Op-Eds') return { ok: true, text: JSON.stringify({ project_name: 'Op-Eds', project_type: 'output_library', path: 'C:/Users/x/Documents/Claude/Projects/Op-Eds' }) }; return dS.dispatch(tag); } } });
+  ok(frS.normalized === 0 && !callsS.some((c) => c.name === 'ingest_file' && c.args.project_name === 'Op-Eds') && callsS.some((c) => c.name === 'ingest_file') && /still reads absolute/.test(frS.notes.join(' ')) && frS.remaining === 2, `a repair whose READ-BACK is still absolute (a stale read) marks nothing normalized and files NOTHING into that project; the others still file (remaining ${frS.remaining})`);
   // a time budget bounds the batch (China's 11 PDFs are 31 MB — extraction is slow)
   const slowDeps = { ...fdeps, db: mkDb(), timeBudgetMs: 1, dispatch: async (tag) => { if (tag.name === 'ingest_file') await new Promise((r) => setTimeout(r, 8)); return fdeps.dispatch(tag); } };
   const frB = await CI.applyFilePlan(CI.buildFilePlan(fPlanArgs), { deps: slowDeps });
