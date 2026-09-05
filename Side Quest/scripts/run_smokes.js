@@ -824,6 +824,10 @@ const smokes = [
   'smoke_day_measure.js',
   // CONVERSATIONAL AWARENESS (cut 3, 09-05): the person model, the ask door, the ledger, the wiring — an in-memory db
   'smoke_person_model.js',
+  // THE PERSONALITY REGISTER + CONSENT CARD + BOOT HASH CHECK (cut 1, 09-05): an in-memory db + a temp root
+  'smoke_personality_register.js',
+  // THE REFUSAL DOOR (cut 4, 09-05): the shapes, the work orders that never trip, the event, the wipe card, the wiring
+  'smoke_integrity.js',
   'smoke_core_dataset.js',
   // The core's probe (design §6/§8/§16): scores a candidate local model on the frozen holdout — the loose
   // JSON parser, the agreement scorer, the voice contract, the one-shot prompt — with an injected call.

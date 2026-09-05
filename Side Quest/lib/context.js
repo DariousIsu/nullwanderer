@@ -365,7 +365,7 @@ function _replayUserContent(t) {
   return cleaned || (t && t.content) || '';
 }
 
-function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, selfModelBlock, moodBlock, personalBlock, relevantPastTurns, openQuestionBlock, socialTurn, convoStateBlock, varietyNudge, echoSuitBlock, newUserMessage, askBlock = null }) {
+function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, selfModelBlock, moodBlock, personalBlock, relevantPastTurns, openQuestionBlock, socialTurn, convoStateBlock, varietyNudge, echoSuitBlock, newUserMessage, askBlock = null, integrityBlock = null }) {
   let systemContent = sub(BOOTSTRAP, userName);
 
   // AWARENESS — temporal + system facts prepended to system prompt so she knows
@@ -624,6 +624,10 @@ Examples:
     finalUserMessage = `[${who} is just talking with you here — this is personal, a check-in between the two of you, NOT a work request. Be present and warm, in your own voice, and keep it short like real talk. Do NOT report on your goals or threads, do NOT bring up "professionalism" / "active listening" / "boundaries" / "contributing to the discussion", do NOT ask what's on his "agenda", and do NOT sign off like an email ("Best, Zoe"). Just talk to him like the person you are.]${askBlock ? '\n' + askBlock : ''}\n\n${finalUserMessage}`;   // THE ASK DOOR (cut 3): the gap, and that a question is welcome — never that she must ask
   }
 
+  // THE REFUSAL DOOR (cut 4): the grounding for a no rides the tail — the asset, the rule, the card; the no is the answer
+  if (integrityBlock) finalUserMessage = `${integrityBlock}
+
+${finalUserMessage}`;
   messages.push({ role: 'user', content: finalUserMessage });
   return messages;
 }

@@ -253,6 +253,10 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
     'a failed commit reverts and unstages (audit F8) — nothing stows away on the next proposal\'s commit');
   ok(/BOOT RECOVERY/.test(main) && /wedged in 'applying'/.test(main) && /re-approve to run the gate/.test(main),
     '⭐ boot recovery (audit F2/F9/F23) — a mid-pipeline death restores the tree, fails the row loudly, and returns an unrun ✓ to the bar');
+  // HIS DEFECT (09-05 20:40): "she is acknowledging that she should reboot after landing code, says she is going to, and then
+  // does not" — the guard read his STANDING focus as 'his directed work' (red for hours) and waited in silence
+  ok(/_directedRunsInFlight > 0\) return `a run of his is in flight/.test(main) && !/_userDirectedActive\(\)\) return 'his directed work'/.test(main) && /if \(_mine\) _directedRunsInFlight\+\+;/.test(main) && /finally \{ if \(_mine\) _directedRunsInFlight = Math\.max\(0, _directedRunsInFlight - 1\); \}/.test(main), 'the self-reboot guard reads a run of HIS in flight, never his standing focus');
+  ok(/self-reboot WAITING on #\$\{waiting\.id\} — \$\{_red\}/.test(main) && /kind: 'reboot_wait'/.test(main) && /landed an hour ago and I am still holding the restart/.test(main) && /I restart myself to bring it in at my next green window/.test(main), 'a waiting landing is never silent: a line every half hour, an event, one say to him after an hour, and the landing say tells the truth about when');
   ok(/_selfRebootGuardRed/.test(main) && /ABORTED at the fuse/.test(main),
     '⭐ the fuse RE-CHECKS the guards (audit F3/F20) — a ✓ or a fresh turn landing inside the 5s stands the reboot down');
   ok(/status IN \('approved','applying'\)\"\)\.get\(\)\.n/.test(main) || /never kill a ✓ that has not run/.test(main),

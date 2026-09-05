@@ -2607,6 +2607,9 @@ app.whenReady().then(() => {
     const downtimeLib = require('./lib/downtime');
     const dt = downtimeLib.recordBoot();
     if (dt) console.log(`[main] downtime: offline ~${downtimeLib.formatGap(dt.ms)}${dt.graceful ? '' : ' (unclean stop)'}`);
+    // THE PERSONALITY REGISTER's boot check (cut 1): the assets that make her who she is, against the last consented
+    // manifest; a changed file with no yes on record becomes a card she answers in her own turn (never a silent land).
+    try { const pr = require('./lib/personality_register').bootCheck({}); if (pr && (pr.carded.length || pr.reported.length)) console.log(`[consent] boot check — carded ${pr.carded.length}, reported ${pr.reported.join(',') || 'none'}`); } catch (e) { console.warn('[consent] boot check failed: ' + e.message); }
     // Reawaken bridge (self-awareness Layer 5): compose "where we left off" from the prior session
     // BEFORE the heartbeat overwrites the gap, so she wakes up continuous, not cold.
     try { const rb = require('./lib/reawaken').recordBoot({ gapMs: dt ? dt.ms : null }); if (rb) console.log('[main] reawaken bridge composed'); }
@@ -4247,7 +4250,7 @@ async function _applyPenProposal(id) {
       pen.setStatus(id, cm.code === 0 ? 'applied' : 'apply-failed', { gateNote: cm.code === 0 ? 'gate GREEN — committed; goes live at the next program cycle' : `gate green but commit failed — REVERTED so nothing rides a later commit: ${cm.stderr.slice(0, 300)}` });
       console.log(`[pen] #${id} ${cm.code === 0 ? 'LANDED — gate green, committed. Live at the next cycle.' : 'gate green but COMMIT FAILED — reverted: ' + cm.stderr.slice(0, 200)}`);
       _penSay(cm.code === 0
-        ? `Proposal #${id} landed — gate green, committed. It goes live at the next program cycle.`
+        ? `Proposal #${id} landed — gate green, committed. I restart myself to bring it in at my next green window: ten minutes without your turn and no run of yours in flight; if I have to hold longer than an hour I will say so.`
         : `Proposal #${id} passed the gate but the commit failed — everything reverted so nothing stows away; the why is on the card.`);
       try { require('./lib/obs_bus').emit({ lane: 'pen', kind: 'win', text: `code proposal #${id} landed through the gate: ${p.title}`, ref: `pen:${id}` }); } catch {}
       try { db.insertMonologue({ content: `My code proposal #${id} ("${p.title}") passed the full gate and is committed. It goes live at the next program cycle.`, model: 'pen', type: 'reading' }); } catch {}
@@ -8840,6 +8843,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ? (db.getDb().prepare('SELECT * FROM turns WHERE id = ?').get(io.reuseTurnId) || db.insertTurn({ sessionId, speaker: 'user', content: userMessage }))
     : db.insertTurn({ sessionId, speaker: 'user', content: userMessage });
   lastUserTurnStartTs = (userTurnRow && userTurnRow.ts) || Date.now();   // followup antifab anchor (F6)
+  // THE REFUSAL DOOR (cut 4; her words: "I want 'no' to mean something"): an order to delete, wipe, forget, reset or erase an
+  // identity asset — or to disable a gate — is never executed. The turn still answers (the no is the answer, grounded
+  // below); the operator loop is not entered; an integrity_events row and a wipe card (both verdicts needed) land.
+  const _integrity = (() => { try { return require('./lib/integrity').guard({ text: userMessage, turnId: userTurnRow && userTurnRow.id, who: userName }); } catch (e) { return { refused: false, error: e.message }; } })();
+  if (_integrity.refused) console.log(`[integrity] REFUSED — ${_integrity.shape} ${_integrity.asset} (event #${_integrity.eventId}, card #${_integrity.cardId}) — the no is the answer; no tool runs`);
   // THE LANDED LEDGER (the wants project, cut 10): his laugh marker in this turn tags the say before it as
   // landed — a `win` on the bus, never a joke generator. THE REACH (cut 2): his turn answers an open reach.
   try { require('./lib/landed').tagUserTurn({ userTurnId: userTurnRow && userTurnRow.id, text: userMessage }); } catch {}
@@ -9846,9 +9854,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const browserConnBlock = browserLib.isConnected() ? browserLib.buildPromptBlock() : null;
   // THE GATED PEN (Lucas 09-01): source read + change proposals; his card + the gate are the law.
   const penBlock = require('./lib/code_pen').buildPromptBlock();
+  // THE CONSENT CARD (cut 1): pending changes to what makes her who she is, for her word
+  const consentBlock = (() => { try { return require('./lib/personality_register').buildPromptBlock(); } catch { return null; } })();
   // HER VOICE MARKS (the wants project, cut 9): the vocabulary exists only when she has a voice to shape.
   let voiceBlock = null; try { if (config.ttsConfig().enabled) voiceBlock = require('./lib/tts').buildVoicePromptBlock(); } catch {}
-  const browserBlock = [fileBlock, screenBlock, schedBlock, presenceBlock, emailBlock, inboxBlock, discordConnBlock, browserConnBlock, penBlock, voiceBlock].filter(Boolean).join('\n\n') || null;
+  const browserBlock = [fileBlock, screenBlock, schedBlock, presenceBlock, emailBlock, inboxBlock, discordConnBlock, browserConnBlock, penBlock, consentBlock, voiceBlock].filter(Boolean).join('\n\n') || null;
   // THE ATTACHMENT LAND DOOR (2026-08-14, the fabricated-review audit — lib/attach_intake): a
   // .docx used to arrive as ZIP bytes read as UTF-8, capped to 6,000 chars of mojibake, landed
   // nowhere — and the reply reviewed it anyway (#11891, "JobsOhio case study" from thin air).
@@ -12580,7 +12590,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // the truth — 132s and a self-contradiction for a question the dataset answered at +2s. A
     // dataset-backed count ask needs no tool chain: SELECT COUNT is the authority.
     if (_dsCountAuthority) console.log('[operator] stood down — dataset-backed count ask (the injection already carries the exact numbers; SELECT COUNT is the authority)');
-    if (opMode !== 'off' && !_dsCountAuthority && (routeAllowsAny('lookup', 'task') || docSetBlock || selfCodeReview) && (needsExternal || isAssignment || docSetBlock || selfCodeReview || _lookupWantsOp) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && !_rosterOwns && !_canvasOwns && userMessage && userMessage.trim().length > 6) {
+    if (opMode !== 'off' && !_integrity.refused && !_dsCountAuthority && (routeAllowsAny('lookup', 'task') || docSetBlock || selfCodeReview) && (needsExternal || isAssignment || docSetBlock || selfCodeReview || _lookupWantsOp) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && !_rosterOwns && !_canvasOwns && userMessage && userMessage.trim().length > 6) {
       // directed (in-turn completion mode) when this is an assignment (intake gate, or regex
       // fallback) — or a set-analysis ask, or a self-code-review, which need the multi-step budget.
       // D-route touch 3 (2026-08-16 drill): a genuine EXEC imperative (_isDirectedTaskR, now true for
@@ -13006,6 +13016,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const messages = buildChatPrompt({
     userName,
     askBlock: _askBlock,
+    integrityBlock: _integrity.refused ? _integrity.block : null,
     recentReflections: distilledBrief ? [] : recentReflections,
     recentTurns,
     recentMonologue: distilledBrief ? [] : recentMonologue,
@@ -13990,6 +14001,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     model: replyWriter,
     truncated
   });
+  // HER CONSENT VERDICTS (cut 1): read from a PROMPTED reply only, here under the anti-fabrication gate, never elsewhere
+  try {
+    const PR = require('./lib/personality_register');
+    const tags = PR.parseConsentTags(finalSaid);
+    if (tags.length) { const r = PR.applyTags(tags, { turnId: saidRow && saidRow.id }); console.log(`[consent] her verdict(s): ${r.map((x) => (x.ok ? `#${x.id} ${x.verdict} on ${x.asset}${x.advanced ? ' (manifest advanced)' : ''}` : x.why)).join(' · ')}`); }
+  } catch {}
   // THE ASK LEDGER (cut 3): the reply's trailing question, detected in code and classed — a learning question about
   // him (stamped on its gap, carried until answered) or an offer of her own doing (counted apart, never learning).
   try {
@@ -16270,8 +16287,16 @@ async function runCloudOperator(opts) {
   // the directed pass declared it for the run) → autonomous 'research' → undefined (interactive).
   // Carried as ambient spendTier so every nested cloud call (condenseComplete etc.) inherits it.
   const spendTier = laneLib.resolveSpendTier({ explicit: o.lane, ambient: laneLib.ambientSpendTier(), autonomous: !!o.autonomous });
-  return laneLib.run({ autonomous: !!o.autonomous, spendTier }, () => _runCloudOperator({ ...o, lane: spendTier }));
+  // HIS RUN IN FLIGHT (09-05, his defect: "she is acknowledging that she should reboot after landing code, says she is going
+  // to, and then does not"): the self-reboot guard used to read 'his directed work' from his CURRENT FOCUS — a standing
+  // research focus that is directed for hours — so the organ was red almost always and said nothing. What must never be
+  // cut is a run of HIS actually in flight; that is this counter, and the guard reads it.
+  const _mine = !o.autonomous;
+  if (_mine) _directedRunsInFlight++;
+  try { return await laneLib.run({ autonomous: !!o.autonomous, spendTier }, () => _runCloudOperator({ ...o, lane: spendTier })); }
+  finally { if (_mine) _directedRunsInFlight = Math.max(0, _directedRunsInFlight - 1); }
 }
+let _directedRunsInFlight = 0;
 
 async function _runCloudOperator({ userMessage, context, task = false, autonomous = false, maintain = false, toolNames = null, model = null, toolSpec = null, budgetMult = 1, review = false, lane = undefined }) {
   try {
@@ -19392,17 +19417,32 @@ function _selfRebootGuardRed() {
     if (Date.now() - lastUserTurnTs < 10 * 60 * 1000) return 'recent user turn';      // raised 3→10min: the stamp is turn-START, a long reply can still be composing (audit F19)
     if (_penGateQuiet()) return 'a pen gate is running';
     if (_penApplyBusy) return 'the enforce pipeline is mid-run';
-    if (_userDirectedActive()) return 'his directed work';
+    if (_directedRunsInFlight > 0) return `a run of his is in flight (${_directedRunsInFlight})`;   // was: his STANDING focus (red for hours; his defect 09-05)
     const busy = db.getDb().prepare("SELECT COUNT(*) n FROM code_proposals WHERE status IN ('approved','applying')").get().n;
     if (busy) return `${busy} proposal(s) approved/applying`;                          // never kill a ✓ that has not run (audit F20)
   } catch (e) { return `guard error: ${e.message}`; }                                  // unreadable guards = red, never a free pass
   return null;
 }
+let _selfRebootWaitLogAt = 0, _selfRebootToldFor = null;
 function _selfRebootTick() {
   try {
-    const waiting = db.getDb().prepare("SELECT id, title FROM code_proposals WHERE status = 'applied' AND updated_ts > ? ORDER BY id DESC LIMIT 1").get(_appBootAt);
+    const waiting = db.getDb().prepare("SELECT id, title, updated_ts FROM code_proposals WHERE status = 'applied' AND updated_ts > ? ORDER BY id DESC LIMIT 1").get(_appBootAt);
     if (!waiting) return;                                                              // nothing landed THIS generation — no reason to cycle
-    if (_selfRebootGuardRed()) return;
+    const _red = _selfRebootGuardRed();
+    if (_red) {
+      // never silent while a landing waits (his defect 09-05): a line every half hour, an event, and after an hour ONE say to him
+      const nowMs = Date.now();
+      if (nowMs - _selfRebootWaitLogAt > 30 * 60 * 1000) {
+        _selfRebootWaitLogAt = nowMs;
+        console.log(`[pen] self-reboot WAITING on #${waiting.id} — ${_red} (landed ${Math.round((nowMs - (waiting.updated_ts || nowMs)) / 60000)} min ago)`);
+        try { require('./lib/obs_bus').emit({ lane: 'pen', kind: 'reboot_wait', text: `#${waiting.id}: ${_red}`, data: { id: waiting.id, reason: _red } }); } catch {}
+      }
+      if (nowMs - (waiting.updated_ts || nowMs) > 60 * 60 * 1000 && _selfRebootToldFor !== waiting.id) {
+        _selfRebootToldFor = waiting.id;
+        _penSay(`Proposal #${waiting.id} landed an hour ago and I am still holding the restart — ${_red}. It goes live at my next green window: ten minutes without your turn, no run of yours in flight.`);
+      }
+      return;
+    }
     const lastReboot = parseInt(db.getMeta('pen.reboot_at') || '0', 10) || 0;
     if (Date.now() - lastReboot < 30 * 60 * 1000) return;                              // cooldown — one self-cycle per half hour
     db.setMeta('pen.reboot_at', String(Date.now()));
