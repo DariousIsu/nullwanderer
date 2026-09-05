@@ -801,6 +801,10 @@ const _speech = (() => {
       const pauseO = marks.pauseMs || (prO ? prO.pauseAfterMs : 0);
       const tagsO = (marks.before.length || marks.after.length) ? ` tags=${[...marks.before, ...marks.after].join(',')}` : '';
       console.log(`[voice] enqueue +${clean.length}ch "${clean.slice(0, 28).replace(/\n/g, ' ')}${clean.length > 28 ? '…' : ''}" engine=orpheus${tagsO}${prO ? ` pause=${prO.pauseAfterMs}ms(${prO.why})` : ''}`);
+      // HER FINE-TUNED VOICE speaks one sentence per request (it was taught on single sentences, and its pitch holds
+      // on its own); the base voice keeps the paragraph grouping that held its pitch. meta voice.orpheus_group overrides.
+      let groupOn = true; try { const g = db.getMeta('voice.orpheus_group'); groupOn = g != null ? g !== '0' : !/zoe/i.test(String(process.env.ZOE_ORPHEUS_MODEL || require('./lib/voice_orpheus').MODEL || '')); } catch {}
+      if (!groupOn) { _enqueueItem({ text: prepared, recipe: null, pauseMs: pauseO }); return; }
       _group.parts.push(prepared); _group.chars += clean.length; _group.pauseMs = pauseO;
       if (_group.timer) clearTimeout(_group.timer);
       if (_group.chars >= ORPHEUS_GROUP_CHARS || (prO && /trailing|question/.test(prO.why) && _group.chars >= 60)) _flushGroup();

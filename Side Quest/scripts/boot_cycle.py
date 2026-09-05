@@ -35,6 +35,7 @@ SYNCHRONIZE = 0x00100000
 WAIT_TIMEOUT = 0x00000102
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000   # 09-05: the app died with the harness that launched its cycle (a job object took the tree); break away
 
 
 def log(msg):
@@ -132,7 +133,7 @@ def launch():
     err = open(err_path, 'ab')
     p = subprocess.Popen(
         [ELECTRON, '.'], cwd=REPO, stdout=out, stderr=err,
-        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
     )
     log(f'launched generation p{gen} (root pid {p.pid}) -> boot_p{gen}.log')
     return p.pid, gen

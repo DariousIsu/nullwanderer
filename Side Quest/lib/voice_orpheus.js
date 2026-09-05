@@ -48,7 +48,8 @@ function requestBody(text, voice, { maxTokens = 2400 } = {}) {
   return {
     model: MODEL, raw: true, stream: false, keep_alive: -1,
     prompt: `<|audio|>${voice}: ${String(text).trim()}<|eot_id|>`,
-    options: { temperature: temperature(), top_p: 0.9, repeat_penalty: 1.1, num_predict: maxTokens },
+    // stop at end_of_speech (<custom_token_2>): her fine-tuned voice ends a line there and would run on without it
+    options: { temperature: temperature(), top_p: 0.9, repeat_penalty: 1.1, num_predict: maxTokens, stop: ['<custom_token_2>'] },
   };
 }
 

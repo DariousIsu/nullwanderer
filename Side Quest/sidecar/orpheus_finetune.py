@@ -49,8 +49,13 @@ def load_meta(data_dir):
     return rows
 
 
-def read_wav_24k(path):
-    """16-bit mono 24 kHz wav → float32 tensor [1, T] (no torchaudio: the dataset is ours and uniform)."""
+TAIL_SILENCE_S = 0.4   # run 2 (15:30): clips ended on the last phoneme, so the model never saw "silence, then the end"
+                       # and ran on into an eleven-second second take; a silent tail before the end marker is the cue
+
+
+def read_wav_24k(path, tail_silence_s=TAIL_SILENCE_S):
+    """16-bit mono 24 kHz wav → float32 tensor [1, T] (no torchaudio: the dataset is ours and uniform), with a
+    silent tail so the end of speech is a thing the model can hear coming."""
     import numpy as np
     import torch
     with open(path, "rb") as f:
@@ -59,6 +64,8 @@ def read_wav_24k(path):
     if sr != 24000 or ch != 1:
         raise RuntimeError(f"{path}: expected 24 kHz mono, got {sr} Hz {ch} ch")
     pcm = np.frombuffer(b[44:], dtype="<i2").astype(np.float32) / 32768.0
+    if tail_silence_s > 0:
+        pcm = np.concatenate([pcm, np.zeros(int(sr * tail_silence_s), dtype=np.float32)])
     return torch.from_numpy(pcm).unsqueeze(0)
 
 
@@ -110,6 +117,37 @@ class PadCollator:
         return {"input_ids": ids, "labels": lab, "attention_mask": att}
 
 
+END_WEIGHT = 5.0   # run 2: the end marker appears once per sequence against ~57 audio frames × 7 tokens and was
+                   # learned weakly; its loss is weighted so the end of a line is learned as firmly as its sounds
+
+
+def weighted_lm_loss(model, inputs, return_outputs=False, num_items_in_batch=None, end_weight=END_WEIGHT):
+    """Token-level cross-entropy with the end-of-speech and end-of-ai targets weighted END_WEIGHT×."""
+    import torch
+    import torch.nn.functional as F
+    labels = inputs["labels"]
+    out = model(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"])
+    logits = out.logits[:, :-1, :].float()
+    tgt = labels[:, 1:]
+    loss_tok = F.cross_entropy(logits.reshape(-1, logits.size(-1)), tgt.reshape(-1), ignore_index=-100, reduction="none").view(tgt.shape)
+    w = torch.ones_like(tgt, dtype=loss_tok.dtype)
+    w = torch.where((tgt == END_OF_SPEECH) | (tgt == END_OF_AI), torch.full_like(w, end_weight), w)
+    w = torch.where(tgt == -100, torch.zeros_like(w), w)
+    loss = (loss_tok * w).sum() / w.sum().clamp(min=1.0)
+    return (loss, out) if return_outputs else loss
+
+
+class WeightedTrainer:
+    """Built lazily so the module imports without transformers."""
+
+    @staticmethod
+    def make(Trainer):
+        class _T(Trainer):
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                return weighted_lm_loss(model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch)
+        return _T
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True)
@@ -126,6 +164,7 @@ def main():
     ap.add_argument("--rank", type=int, default=64)
     ap.add_argument("--encode-only", action="store_true")
     ap.add_argument("--require-device", default="7900", help="refuse to run unless the selected GPU's name contains this")
+    ap.add_argument("--snac-device", default="cpu", help="where SNAC encodes (cpu: the ROCm nightly's conv kernels return garbage)")
     a = ap.parse_args()
 
     import torch
@@ -144,8 +183,16 @@ def main():
     print(f"dataset: {len(rows)} clips")
     tok = AutoTokenizer.from_pretrained(a.base)
     t0 = time.time()
-    snac = SNAC.from_pretrained("hubertsiuzdak/snac_24khz").eval().to(device)
-    examples, total_frames, skipped = build_examples(rows, tok, snac, device, a.voice, a.max_len)
+    # THE ENCODER RUNS ON THE CPU (14:30): on the nightly ROCm kernels SNAC's encode returned garbage — huge random
+    # ints and zeros, 0 % agreement with the CPU — which fed out-of-range ids to the model and a loss of exactly 0
+    # for a whole run. The encoder is small; the CPU is right and fast enough. The card is for the model.
+    snac_device = a.snac_device
+    snac = SNAC.from_pretrained("hubertsiuzdak/snac_24khz").eval().to(snac_device)
+    examples, total_frames, skipped = build_examples(rows, tok, snac, snac_device, a.voice, a.max_len)
+    bad = [e for e in examples if max(e["input_ids"]) >= len(tok) or min(e["input_ids"]) < 0]
+    if bad:
+        raise SystemExit(f"{len(bad)} examples carry ids outside the vocabulary ({len(tok)}) — the encoder is wrong; refusing to train")
+    print(f"ids in range for all {len(examples)} examples (vocab {len(tok)})")
     print(f"examples: {len(examples)} | skipped {skipped} | audio frames {total_frames} (~{total_frames / 12 / 60:.1f} min) | {time.time() - t0:.0f}s")
     del snac
     if a.encode_only:
@@ -170,7 +217,8 @@ def main():
                              num_train_epochs=a.epochs, learning_rate=a.lr, warmup_steps=10, logging_steps=10, save_steps=200, save_total_limit=2,
                              bf16=bf16, fp16=(device == "cuda" and not bf16), optim="adamw_torch", weight_decay=0.01, lr_scheduler_type="linear",
                              report_to="none", remove_unused_columns=False, dataloader_pin_memory=False)
-    trainer = Trainer(model=model, args=args, train_dataset=ds, data_collator=PadCollator(tok.pad_token_id if tok.pad_token_id is not None else END_OF_TEXT))
+    trainer = WeightedTrainer.make(Trainer)(model=model, args=args, train_dataset=ds, data_collator=PadCollator(tok.pad_token_id if tok.pad_token_id is not None else END_OF_TEXT))
+    print(f"end-of-speech weight {END_WEIGHT}x · tail silence {TAIL_SILENCE_S}s · epochs {a.epochs}")
     t1 = time.time()
     trainer.train()
     print(f"trained in {(time.time() - t1) / 60:.1f} min")

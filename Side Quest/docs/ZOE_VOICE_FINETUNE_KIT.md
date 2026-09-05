@@ -34,6 +34,16 @@ cd Desktop\Core\orpheus && ollama create orpheus-zoe -q q4_K_M -f Modelfile.zoe-
 sidecar/orpheus_eval.py --model orpheus-zoe --voice zoe   # → data/voices/eval_2026-09-05/orpheus_zoe_reel.wav (overwrites the base-zoe reel)
 ```
 
+## What the first two runs taught (14:00–14:30)
+
+- Run 1 trained on the Ryzen's integrated GPU (HIP device 0) and segfaulted at the first kernel: the gfx110X wheels carry no code for that chip. The trainer now selects the 7900 XT before torch loads and refuses any device whose name lacks "7900".
+- Run 2 trained on the 7900 XT for 5.9 minutes at a loss of exactly zero. The SNAC encoder on the nightly's convolution kernels returns garbage (huge random integers, zeros, no agreement with the CPU), so every audio id was out of range. The encoder runs on the CPU now (`--snac-device cpu`, the default) and the trainer refuses ids outside the vocabulary. The model's own kernels are consistent: one example's loss is 4.288 in bf16 and 4.286 in fp32.
+- A loss of exactly zero is a broken input, never a result.
+
+## Run 2's verdict (15:20) and run 3
+
+Run 2 (three epochs, loss 4.06 → 2.49, 35 min beside the live app) is her pitch: 175–203 Hz across the eight lines against her own Kokoro lines at 157–209, line by line within a few hertz, where the base zoe voice sat at 169–175 and the clones wandered 87–261. Its fault is the end of a line: the end-of-speech marker appears once per sequence against hundreds of audio tokens and was learned weakly, so some sentences run on into eleven seconds of continued speech. Sampling does not change it (six settings, same length); a stop on `<custom_token_2>` helps only the sentences that already end. Run 3 targets the end directly: 0.4 s of silence appended to every clip so the model hears "silence, then the end"; the end markers weighted 5× in the loss; four epochs. The app speaks one sentence per request for this voice, since it was taught on single sentences and its pitch now holds without grouping.
+
 ## What decides it
 
 The reel: does it sound like her, with Orpheus's ease? The number beside your ear: the pitch of the fine-tuned lines against her 218 Hz reference, and the drift across sentences (the base model swung 162–261; hers should hold). If it holds, the switch is one setting and streaming is already built under it. If it does not, the dataset can grow (her voice renders any transcript for free) and the epochs can rise; both are minutes.

@@ -41,9 +41,11 @@ DEFAULT_LINES = [
 def generate_tokens(text, voice, host, model, temperature=0.6, top_p=0.9, repeat_penalty=1.1, max_tokens=1200, timeout=600):
     """One raw completion through Ollama; returns the response text (custom-token strings) and timing."""
     prompt = f"<|audio|>{voice}: {text}<|eot_id|>"
+    # STOP at end_of_speech (<custom_token_2>): the fine-tuned model ends a line there and, with no stop, runs on
+    # into a second take (six of eight lines came back at twice their length, 15:20). Harmless for the base model.
     body = json.dumps({
         "model": model, "prompt": prompt, "raw": True, "stream": False,
-        "options": {"temperature": temperature, "top_p": top_p, "repeat_penalty": repeat_penalty, "num_predict": max_tokens},
+        "options": {"temperature": temperature, "top_p": top_p, "repeat_penalty": repeat_penalty, "num_predict": max_tokens, "stop": ["<custom_token_2>"]},
     }).encode("utf-8")
     req = urllib.request.Request(f"{host}/api/generate", data=body, headers={"Content-Type": "application/json"})
     t0 = time.time()
