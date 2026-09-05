@@ -79,6 +79,36 @@ function extractVoiceMarks(text) {
   return out;
 }
 /**
+ * THE ENGINE (2026-09-05, his ear on the A/B: "the zoe voice is the one, switch her over"): 'orpheus' unless meta
+ * voice.model = 'kokoro' (the way back) or env ZOE_VOICE_MODEL says otherwise. Orpheus performs her marks in
+ * the voice itself, so marksToOrpheus turns the private markers into the model's own tags: laugh/chuckle/sigh
+ * → <laugh> <chuckle> <sigh>; hmm → the word; breath → nothing (the model breathes); a tone → nothing (no
+ * speed knob on this voice; the rhythm's pauses still apply). Kokoro stays the fallback when Ollama is down.
+ */
+function engine() {
+  const env = String(process.env.ZOE_VOICE_MODEL || '').toLowerCase();
+  if (env === 'kokoro' || env === 'orpheus') return env;
+  try { const m = String(require('./db').getMeta('voice.model') || '').toLowerCase(); if (m === 'kokoro' || m === 'orpheus') return m; } catch {}
+  return 'orpheus';
+}
+const ORPHEUS_TAGS = { laugh: '<laugh>', chuckle: '<chuckle>', sigh: '<sigh>', hmm: 'Hmm.', breath: '' };
+function marksToOrpheus(text) {
+  return String(text || '')
+    .replace(/⟦t:[a-z]+⟧/g, ' ')
+    .replace(/⟦nv:([a-z]+)⟧/g, (_m, k) => ` ${ORPHEUS_TAGS[k] !== undefined ? ORPHEUS_TAGS[k] : ''} `)
+    .replace(/\s+/g, ' ').replace(/\s+([,.!?;:])/g, '$1').trim();
+}
+async function _synthesizeOrpheus({ prepared, out, wallMs }) {
+  try {
+    const vo = require('./voice_orpheus');
+    const r = await vo.synthesize(marksToOrpheus(prepared), { out, timeoutMs: wallMs });
+    if (r && r.ok) return r;
+    console.warn('[tts] orpheus synth failed (' + String(r && r.error).slice(0, 120) + ') — falling back to kokoro');
+  } catch (e) { console.warn('[tts] orpheus path error (' + e.message + ') — falling back to kokoro'); }
+  return null;
+}
+
+/**
  * RESPIRATION (2026-09-05): a breath is not a feeling — people breathe between long stretches of speech. A
  * pure rule the speech manager applies when she wrote no mark of her own on a chunk: a breath before a
  * sentence that follows a long one (≥ minPrevLen chars) or after `every` sentences without one; never on
@@ -307,9 +337,24 @@ async function _synthesizeKokoro({ clean, out, wallMs, recipe = null }) {
 function synthesize(text, opts = {}) {
   return new Promise((resolve) => {
     // the ONE synth door: her voice marks are extracted here too, so no path can ever speak a marker
-    const marks = extractVoiceMarks(prepareText(text, { maxChars: opts.maxChars }));
+    const prepared = prepareText(text, { maxChars: opts.maxChars });
+    const marks = extractVoiceMarks(prepared);
     const clean = marks.text;
     if (!clean) return resolve({ ok: false, error: 'empty text' });
+    // Orpheus takes the Kokoro slot (her configured voice); a piper install with no voice model still answers
+    // "no voice model configured" and never reaches for a model (a smoke has no network).
+    if (engine() === 'orpheus' && _provider() === 'kokoro' && !opts.oneShot && !opts.python) {
+      const out0 = _resolveOut(opts);
+      const wall0 = Number.isFinite(opts.wallMs) ? opts.wallMs : 60000;
+      return _synthesizeOrpheus({ prepared, out: out0, wallMs: wall0 }).then((r) => {
+        if (r) return resolve(r);
+        // the fallback: her Kokoro blend, exactly as before the switch
+        let recipe = opts.recipe || null;
+        if (!recipe && marks.tone && process.env.ZOE_TONE_TAG !== '0') { try { const voices = require('./voices'); const base = voices.activeRecipe(); if (base) recipe = voices.applyTone(base, marks.tone).recipe; } catch {} }
+        if (_provider() === 'kokoro') return _synthesizeKokoro({ clean, out: out0, wallMs: wall0, recipe }).then(resolve);
+        return _service().request({ text: clean, voice: resolveVoice(opts), out: out0, speaker: null }, wall0).then(resolve);
+      });
+    }
     let recipe = opts.recipe || null;
     if (!recipe && marks.tone && process.env.ZOE_TONE_TAG !== '0') {
       try { const voices = require('./voices'); const base = voices.activeRecipe(); if (base) recipe = voices.applyTone(base, marks.tone).recipe; } catch {}
@@ -350,4 +395,4 @@ async function speak(text, opts = {}) {
 }
 
 module.exports = { synthesize, speak, shutdownTts, createPiperService, parseNdjson, prepareText, resolveVoice, VENV_PY, RUNNER, OUT_DIR,
-  markVoiceTags, stripVoiceTags, extractVoiceMarks, buildVoicePromptBlock, autoNonverbal, prosody, NONVERBAL_KINDS };
+  markVoiceTags, stripVoiceTags, extractVoiceMarks, buildVoicePromptBlock, autoNonverbal, prosody, engine, marksToOrpheus, ORPHEUS_TAGS, NONVERBAL_KINDS };

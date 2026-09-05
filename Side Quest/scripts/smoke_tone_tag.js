@@ -119,7 +119,8 @@ const rend = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'chat.js'), 
 ok(/cleanLiveSay[\s\S]{0,900}<tone\\s\+\[a-z\]\+/.test(rend) && /breath\|sigh\|laugh\|chuckle\|hmm\|pause/.test(rend), 'the renderer strips her voice marks from the live bubble');
 const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 ok(/stripVoiceTags\(sayStripped\)/.test(mainSrc), 'the final say strip chain strips them too');
-ok(/extractVoiceMarks\(prepareText\(text/.test(fs.readFileSync(path.join(__dirname, '..', 'lib', 'tts.js'), 'utf8')), 'synthesize() extracts the marks at the ONE synth door — no path can speak a marker');
+const ttsSrcDoor = fs.readFileSync(path.join(__dirname, '..', 'lib', 'tts.js'), 'utf8');
+ok(/const prepared = prepareText\(text, \{ maxChars: opts\.maxChars \}\);\s*const marks = extractVoiceMarks\(prepared\);/.test(ttsSrcDoor) && /marksToOrpheus\(prepared\)/.test(ttsSrcDoor), 'synthesize() extracts the marks at the ONE synth door (and maps them for Orpheus there) — no path can speak a marker');
 
 // ── the prompt block: names what exists, never tells her to feel ───────────────────────────────────
 const block = tts.buildVoicePromptBlock();

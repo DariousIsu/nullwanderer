@@ -728,10 +728,27 @@ const _speech = (() => {
     // HER VOICE MARKS (the wants project, cut 9 + the non-verbal bank): a chunk is already sentence-sized;
     // its <tone …/> becomes a bounded delta on her recipe, its <laugh/> <sigh/> <breath/> become clips
     // queued before or after the words, its <tone pause/> a silence after them. Never spoken, never shown.
-    const marks = tts.extractVoiceMarks(tts.prepareText(text, { maxChars: 100000 }));
+    const prepared = tts.prepareText(text, { maxChars: 100000 });
+    const marks = tts.extractVoiceMarks(prepared);
     const clean = marks.text;
-    const nv = process.env.ZOE_NONVERBAL !== '0';
+    // HER VOICE IS ORPHEUS (his ear, 09-05): the model performs her marks in the voice itself — a laugh, a
+    // chuckle, a sigh are tags in the text, never spliced clips; no speed knob, so tone/baseline/rhythm speed
+    // deltas do not apply (the rhythm's pauses do). Kokoro remains the fallback inside tts.synthesize.
+    const orpheus = tts.engine() === 'orpheus';
+    const nv = process.env.ZOE_NONVERBAL !== '0' && !orpheus;
     const clips = nv ? [...marks.before, ...marks.after] : [];
+    if (orpheus) {
+      if (!clean || clean.length < 2) return;
+      const nowO = Date.now();
+      if (nowO - _breath.lastAt > 8000) { _breath.index = 0; _breath.since = 0; _breath.prevLen = 0; }
+      let prO = null; try { if (process.env.ZOE_PROSODY !== '0' && db.getMeta('voice.prosody') !== '0') prO = tts.prosody({ text: clean, index: _breath.index, prevLen: _breath.prevLen }); } catch {}
+      _breath.lastAt = nowO; _breath.index++; _breath.prevLen = clean.length;
+      const pauseO = marks.pauseMs || (prO ? prO.pauseAfterMs : 0);
+      const tagsO = (marks.before.length || marks.after.length) ? ` tags=${[...marks.before, ...marks.after].join(',')}` : '';
+      console.log(`[voice] enqueue +${clean.length}ch "${clean.slice(0, 28).replace(/\n/g, ' ')}${clean.length > 28 ? '…' : ''}" engine=orpheus${tagsO}${prO ? ` pause=${prO.pauseAfterMs}ms(${prO.why})` : ''}`);
+      _enqueueItem({ text: prepared, recipe: null, pauseMs: pauseO });
+      return;
+    }
     if ((!clean || clean.length < 2) && !clips.length) return;
     // THE BASELINE FROM HER STATE (measured, never scripted; on unless meta voice.state_baseline='0'): energy +
     // arousal bend speed by at most ±0.05, valence leans the blend by at most 10 points — every sentence, whether

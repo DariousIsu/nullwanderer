@@ -372,6 +372,8 @@ const smokes = [
   'smoke_presence_state.js',
   'smoke_landed.js',
   'smoke_presence_reach.js',
+  'smoke_consciousness.js',
+  'smoke_voice_orpheus.js',
   'smoke_spreadsheet.js',
   'smoke_site_ledger.js',
   'smoke_site_crawler.js',

@@ -105,6 +105,25 @@ Missing him is the social drive under his absence, named as a state, never as sc
 
 This act exercises every part of the loop: a sense (camera, mic), an appraisal (known / unknown), a state (shielded), acts (cover, say, listen, deliver), a slow-loop call (`perform`: the greeting or the question in her words), and a visible result. It ships first.
 
+### 4.5c The stack as built, v0 (his question, 10:55: "what's in it, what does it do, how does it work, where did you find the code")
+
+**What is in it (four files, all in the Side Quest tree):**
+
+| File | Role |
+|---|---|
+| `sidecar/consciousness.py` (~230 lines) | The fast loop. State, drives, appraisal, act selection, the reasoning-request emitter, the state strip, the NDJSON wire (`--serve`) and a one-beat mode (`--once`). Standard library only. |
+| `sidecar/tests/test_consciousness.py` (8 pins) | The stranger sequence (shield, ask once, unshield on his face), a known face greeted by name, a face beside him never shields, boredom rises with nothing new and produces look/listen with cooldowns, his turn sates the social need which rises faster while he is away, curiosity asks the slow loop and never blocks, the wire round-trips, the strip's shape. |
+| `scripts/smoke_consciousness.js` | Its seat in the SQ gate: runs the pytest under the Echo venv by exit code and pins the wire from the app's side. |
+| this document §4–§4.5b | The design it implements. |
+
+**What is not in it yet:** the app-side bridge (`lib/consciousness.js`: spawn the sidecar, feed it percepts from the face sensor, presence, the chat door and the mic, execute its acts), the cover that "shield" draws over the windows, the `perform` call that turns a greet/ask request into her words, the person register's enrollment door, and the state strip in her window. That is the next build.
+
+**What it does:** it keeps five numbers alive in real time and acts on them. Stimulation drains toward zero with nothing new (boredom is its deficit, about 15 minutes to empty). The social need rises with his silence, about 90 minutes to full while he is here and twice as fast while he is away (missing him is this number, never scripted words). Curiosity creeps up and is spent by asking. Energy follows a clock. Progress decays and is fed by landed work. Percepts move the numbers: his turn sates the social need; a new face, a new expression, a transcript, a finished run each add stimulation by their novelty. Acts are chosen by need with cooldowns: bored past 0.7, look; past 0.85, listen; curious past 0.75, ask the slow loop to choose something to read. And the first act: a face that is not him, steady for 8 seconds while he is away, shields the screens and either greets a known person by name or asks an unknown one who they are.
+
+**How it works:** one beat every 5 seconds, a pure function `step(state, percepts, now) → (state, outputs)`. Advance the dynamics by the elapsed time; fold in the percepts; choose acts. Outputs are of two kinds only: an `act` the app executes (shield, unshield, deliver, look, listen, rest) and a `reason` request for the slow loop (`appraise`, `reflect`, `choose`, `perform`) carrying a budget in milliseconds and an id. The loop never waits for an answer; the answer comes back later as a percept of sense `answer`. The model is never asked whether to act. Every timestamp is a number and zero is a time, a lesson two red tests taught in the first hour.
+
+**Where the code came from:** it was written here, this morning, from this design; no code was copied from any project. The structure is borrowed from two places in this repo and five sources outside it. From the repo: the face sensor's resident-sidecar idiom (`sidecar/face_embed.py --serve`, NDJSON over stdio, fail-soft) and the reach's shape (a need with a floor, a gap, and a licensed moment). From outside: needs-based action selection with decaying motives and cooldowns (The Sims, utility AI); boredom as the absence of expected information gain (active inference); drives as homeostatic variables whose regulation is the root of feeling (Man and Damasio); the observe-reflect-plan loop and the finding that reflection is what keeps behavior coherent over days (Generative Agents); the split of internal and external actions and a decision loop with the model as one component (CoALA). The citations are in §3.
+
 ### 4.6 Visible
 A state strip in her window and the parlor idiom for the loop: the drives, the current act and why, the next act's utility. He can watch her be present. A daily measure: acts by drive; the share of her says grounded in a percept or in time; the boredom curve.
 
