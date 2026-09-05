@@ -71,5 +71,52 @@ const dk = PS.markDeskTurn({ deps: deps({ now: now + 360000 }) });
 ok(dk && dk.remote === false && JSON.parse(meta[PS.STATE_KEY]).state === 'here', 'a desk turn clears the Discord-inferred remote');
 PS.recordHisWord("I'm remoting in from Baton Rouge", { turnId: 79, deps: deps({ now: now + 400000 }) });
 ok(PS.markDeskTurn({ deps: deps({ now: now + 401000 }) }) === null && JSON.parse(meta[PS.STATE_KEY]).state === 'remote', 'his WORD ("remoting in from…") is not cleared by keystrokes — it holds until he says otherwise');
+// THE ARRIVAL (his word 09-05): the camera sees him back after a real absence → one `arrived` event + a marker
+{
+  const m2 = {}; const db2 = { getMeta: (k) => m2[k], setMeta: (k, v) => { m2[k] = v; } };
+  const ev2 = [], lg2 = [];
+  const d2 = (o) => ({ db: db2, log: (m) => lg2.push(m), obsBus: { emit: (e) => ev2.push(e) }, availability: { isAway: () => false, awayReason: () => null }, remoteSession: () => ({ active: false }), face: () => null, lastUserTurnTs: now - 2 * 3600e3, now, ...o });
+  PS.tick({ deps: d2({}) });                                                      // away (idle 2 h)
+  ok(JSON.parse(m2[PS.STATE_KEY]).state === 'away', 'setup: away by idleness');
+  PS.tick({ deps: d2({ now: now + 25 * 60000, face: () => ({ present: true, is_him: true, looking_at_screen: true, at: now + 25 * 60000 - 500 }) }) });
+  const arr = PS.arrival({ deps: { db: db2 }, now: now + 25 * 60000 + 1000 });
+  ok(arr && !arr.seen && arr.from === 'away' && arr.awayMs >= 20 * 60000 && ev2.some((e) => e.kind === 'arrived') && lg2.some((l) => /\[presence\] arrived/.test(l)), `the camera sees him after 25 min away → an arrival (${JSON.stringify(arr)})`);
+  ok(PS.markArrivalSeen({ deps: { db: db2 } }).seen === true && PS.arrival({ deps: { db: db2 }, now: now + 25 * 60000 + 2000 }) === null, 'consumed once');
+  ok(PS.arrival({ deps: { db: db2 }, now: now + 25 * 60000 + 11 * 60000 }) === null, 'an arrival goes stale after 10 min');
+  // a keyboard-only return is NOT an arrival; a short gap is not either
+  const m3 = {}; const db3 = { getMeta: (k) => m3[k], setMeta: (k, v) => { m3[k] = v; } }; const ev3 = [];
+  const d3 = (o) => ({ db: db3, log: () => {}, obsBus: { emit: (e) => ev3.push(e) }, availability: { isAway: () => false, awayReason: () => null }, remoteSession: () => ({ active: false }), face: () => null, lastUserTurnTs: now - 2 * 3600e3, now, ...o });
+  PS.tick({ deps: d3({}) }); PS.tick({ deps: d3({ now: now + 25 * 60000, lastUserTurnTs: now + 25 * 60000 - 1000 }) });
+  ok(JSON.parse(m3[PS.STATE_KEY]).state === 'here' && !ev3.some((e) => e.kind === 'arrived') && !m3[PS.ARRIVAL_KEY], 'a keyboard-only return → here, but NOT an arrival');
+  const m4 = {}; const db4 = { getMeta: (k) => m4[k], setMeta: (k, v) => { m4[k] = v; } }; const ev4 = [];
+  const d4 = (o) => ({ db: db4, log: () => {}, obsBus: { emit: (e) => ev4.push(e) }, availability: { isAway: () => false, awayReason: () => null }, remoteSession: () => ({ active: false }), face: () => null, lastUserTurnTs: now - 2 * 3600e3, now, ...o });
+  PS.tick({ deps: d4({}) }); PS.tick({ deps: d4({ now: now + 5 * 60000, face: () => ({ present: true, is_him: true, at: now + 5 * 60000 - 500 }) }) });
+  ok(!ev4.some((e) => e.kind === 'arrived'), 'a 5-minute gap is not an arrival (20 min floor)');
+  // THE EMPTY CHAIR: the camera is what knows he left — at a bar that never routes a DM to a man at his own desk
+  const m5 = {}; const db5 = { getMeta: (k) => m5[k], setMeta: (k, v) => { m5[k] = v; } }; const ev5 = [];
+  const nobodyAt = (t) => ({ present: false, is_him: false, faces: 0, at: t - 500 });
+  const d5 = (o) => ({ db: db5, log: () => {}, obsBus: { emit: (e) => ev5.push(e) }, availability: { isAway: () => false, awayReason: () => null }, remoteSession: () => ({ active: false }), face: () => null, lastUserTurnTs: now - 60000, now, ...o });
+  PS.tick({ deps: d5({ face: () => ({ present: true, is_him: true, at: now - 500 }) }) });
+  ok(JSON.parse(m5[PS.STATE_KEY]).state === 'here', 'setup: here by the camera');
+  let t = now + 60000; PS.tick({ deps: d5({ now: t, face: () => nobodyAt(t) }) });
+  let s5 = JSON.parse(m5[PS.STATE_KEY]) ; const s5live = PS.fuse({ now: t, lastUserTurnTs: now - 60000, face: nobodyAt(t), prev: s5 });
+  ok(s5.state === 'here' && s5live.emptySince === t, 'an empty frame starts the clock (emptySince) but he is still here');
+  t = now + 4 * 60000; PS.tick({ deps: d5({ now: t, face: () => nobodyAt(t) }) });
+  ok(JSON.parse(m5[PS.STATE_KEY]).state === 'here', '3 minutes of an empty chair is not away (a lean back, a stretch)');
+  t = now + 12 * 60000; PS.tick({ deps: d5({ now: t, face: () => nobodyAt(t) }) });
+  s5 = JSON.parse(m5[PS.STATE_KEY]);
+  ok(s5.state === 'away' && /^camera: no one for 1[01]m/.test(s5.reason) && s5.emptySince === now + 60000, `an empty chair for 10+ min with no chat turn → away by the camera (${s5.reason})`);
+  // a chat turn 2 minutes ago holds him here even with an empty frame (he is typing out of shot)
+  const m6 = {}; const db6 = { getMeta: (k) => m6[k], setMeta: (k, v) => { m6[k] = v; } };
+  const d6 = (o) => ({ db: db6, log: () => {}, obsBus: { emit: () => {} }, availability: { isAway: () => false, awayReason: () => null }, remoteSession: () => ({ active: false }), face: () => null, lastUserTurnTs: now, now, ...o });
+  PS.tick({ deps: d6({ face: () => nobodyAt(now) }) });
+  PS.tick({ deps: d6({ now: now + 12 * 60000, lastUserTurnTs: now + 10 * 60000, face: () => nobodyAt(now + 12 * 60000) }) });
+  ok(JSON.parse(m6[PS.STATE_KEY]).state === 'here', 'an empty frame with a chat turn 2 min ago → still here (never a DM to his own desk)');
+  // the 35-minute errand: gone at +0, away by the camera at +10, back at +35 → the arrival counts from the moment the camera lost him
+  t = now + 35 * 60000; PS.tick({ deps: d5({ now: t, face: () => ({ present: true, is_him: true, looking_at_screen: true, at: t - 500 }) }) });
+  const arr5 = PS.arrival({ deps: { db: db5 }, now: t + 1000 });
+  ok(arr5 && Math.round(arr5.awayMs / 60000) === 34 && ev5.some((e) => e.kind === 'arrived'), `the 35-minute errand → an arrival measured from the empty chair (${arr5 && Math.round(arr5.awayMs / 60000)}m), not from the flip`);
+  ok(JSON.parse(m5[PS.STATE_KEY]).emptySince === null, 'his face resets the empty-chair clock');
+}
 console.log(`\nsmoke_presence_state: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

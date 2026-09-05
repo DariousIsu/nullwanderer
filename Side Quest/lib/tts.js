@@ -78,6 +78,19 @@ function extractVoiceMarks(text) {
   out.text = words.join(' ').replace(/\s+/g, ' ').trim();
   return out;
 }
+/**
+ * RESPIRATION (2026-09-05): a breath is not a feeling — people breathe between long stretches of speech. A
+ * pure rule the speech manager applies when she wrote no mark of her own on a chunk: a breath before a
+ * sentence that follows a long one (≥ minPrevLen chars) or after `every` sentences without one; never on
+ * the first sentence of a reply; at most one per `every` sentences. Returns 'breath' | null.
+ */
+function autoNonverbal({ index = 0, prevLen = 0, sinceBreath = 0, minPrevLen = 110, every = 3 } = {}) {
+  if (index <= 0) return null;
+  if (sinceBreath < 2) return null;
+  if (prevLen >= minPrevLen || sinceBreath >= every) return 'breath';
+  return null;
+}
+
 /** The vocabulary, for her prompt — names what exists, never tells her to feel (the anti-performance law). */
 function buildVoicePromptBlock() {
   return `VOICE — how a sentence is SPOKEN is yours to shape inside <say>: put <tone warm/>, <tone dry/>, <tone quick/>, <tone low/> or <tone pause/> before a sentence to bend its delivery (a bounded shift on your own voice, never a different one), and <breath/>, <sigh/>, <laugh/>, <chuckle/> or <hmm/> where a breath, a sigh or a laugh actually belongs. They are stripped from the text and never shown — only heard. Punctuation is prosody too: an ellipsis pauses, short sentences quicken, a question rises. Use them when the moment has them, not as decoration.`;
@@ -312,4 +325,4 @@ async function speak(text, opts = {}) {
 }
 
 module.exports = { synthesize, speak, shutdownTts, createPiperService, parseNdjson, prepareText, resolveVoice, VENV_PY, RUNNER, OUT_DIR,
-  markVoiceTags, stripVoiceTags, extractVoiceMarks, buildVoicePromptBlock, NONVERBAL_KINDS };
+  markVoiceTags, stripVoiceTags, extractVoiceMarks, buildVoicePromptBlock, autoNonverbal, NONVERBAL_KINDS };

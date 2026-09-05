@@ -53,10 +53,16 @@ function readRemoteSession({ env = process.env, queryOut = null } = {}) {
 }
 
 /** The fuse. Every input optional; his word outranks the sensors; meeting > remote > away > here. */
-function fuse({ now = Date.now(), lastUserTurnTs = 0, guard = null, calendarBusy = false, remoteSession = null, face = null, hisWord = null, prev = null, idleAwayMs = IDLE_AWAY_MS } = {}) {
+function fuse({ now = Date.now(), lastUserTurnTs = 0, guard = null, calendarBusy = false, remoteSession = null, face = null, hisWord = null, prev = null, idleAwayMs = IDLE_AWAY_MS, cameraAwayMs = CAMERA_AWAY_MS } = {}) {
   const idleMs = lastUserTurnTs ? Math.max(0, now - lastUserTurnTs) : Infinity;
   const faceFresh = face && face.at && now - face.at <= FACE_FRESH_MS;
   const himHere = !!(faceFresh && face.present && face.is_him !== false);
+  // THE EMPTY CHAIR (09-05): the camera is what knows he left. A fresh reading with no one in frame starts a
+  // clock (emptySince, kept across ticks while the frame stays empty; any face resets it). It makes him AWAY only
+  // at a high bar — no one for cameraAwayMs AND no chat turn for as long — because a false "away" would route a
+  // Discord DM to a man sitting at his own desk (his law: only when he is genuinely not at the desk).
+  const nobody = !!(faceFresh && !face.present);
+  const emptySince = nobody ? ((prev && prev.emptySince) || now) : null;
   const location = (hisWord && hisWord.location) || (prev && prev.location) || null;
   let state, reason;
   if (guard && guard.paused && /meet|teams|zoom|call|calendar|meeting/i.test(String(guard.reason || '')) || calendarBusy) { state = 'meeting'; reason = guard && guard.paused ? `voice guard: ${guard.reason}` : 'calendar busy'; }
@@ -65,10 +71,11 @@ function fuse({ now = Date.now(), lastUserTurnTs = 0, guard = null, calendarBusy
   else if (remoteSession && remoteSession.active) { state = 'remote'; reason = `remote session (${remoteSession.source}: ${remoteSession.name})`; }
   else if (himHere) { state = 'here'; reason = face.looking_at_screen ? 'camera: him, looking at the screen' : 'camera: him'; }
   else if (faceFresh && face.present && face.is_him === false) { state = idleMs < idleAwayMs ? 'here' : 'away'; reason = 'camera: someone else is in front of the camera'; }
-  else if (idleMs < idleAwayMs) { state = 'here'; reason = `active ${Math.round(idleMs / 60000)}m ago${faceFresh && !face.present ? ', no one on camera' : ''}`; }
-  else { state = 'away'; reason = idleMs === Infinity ? 'no turn yet' : `idle ${Math.round(idleMs / 60000)}m${faceFresh && !face.present ? ', no one on camera' : ''}`; }
+  else if (nobody && now - emptySince >= cameraAwayMs && idleMs >= cameraAwayMs) { state = 'away'; reason = `camera: no one for ${Math.round((now - emptySince) / 60000)}m`; }
+  else if (idleMs < idleAwayMs) { state = 'here'; reason = `active ${Math.round(idleMs / 60000)}m ago${nobody ? ', no one on camera' : ''}`; }
+  else { state = 'away'; reason = idleMs === Infinity ? 'no turn yet' : `idle ${Math.round(idleMs / 60000)}m${nobody ? ', no one on camera' : ''}`; }
   const since = prev && prev.state === state && prev.since ? prev.since : now;
-  return { state, since, reason, location: location || null, idleMs: idleMs === Infinity ? null : idleMs, at: now };
+  return { state, since, reason, location: location || null, idleMs: idleMs === Infinity ? null : idleMs, emptySince, at: now };
 }
 
 function channelFor(state) { return state === 'meeting' ? 'queue' : (state === 'remote' || state === 'away') ? 'discord' : 'desktop'; }
@@ -134,12 +141,34 @@ function tick({ deps = {} } = {}) {
   const lastUserTurnTs = Number(deps.lastUserTurnTs !== undefined ? deps.lastUserTurnTs : (() => { try { return Number(db.getMeta('last_user_turn_ts')) || 0; } catch { return 0; } })()) || 0;
   const next = fuse({ now, lastUserTurnTs, guard, calendarBusy, remoteSession, face, hisWord, prev });
   const changed = !prev || prev.state !== next.state || (prev.location && prev.location.place) !== (next.location && next.location.place);
-  if (changed || !prev || now - (prev.at || 0) > 5 * 60 * 1000) { try { db.setMeta(STATE_KEY, JSON.stringify(next)); } catch {} }
+  const clockMoved = !!prev && (prev.emptySince || null) !== (next.emptySince || null);   // the empty-chair clock starts or resets
+  if (changed || clockMoved || !prev || now - (prev.at || 0) > 5 * 60 * 1000) { try { db.setMeta(STATE_KEY, JSON.stringify(next)); } catch {} }
   if (changed) {
     (deps.log || console.log)(`[presence] state=${next.state} (${next.reason})${next.location && next.location.place ? ` · location: ${next.location.place}` : ''}`);
     try { (deps.obsBus || require('./obs_bus')).emit({ lane: 'presence', kind: 'state', text: `${next.state}: ${next.reason}`, data: { state: next.state, from: prev && prev.state, location: next.location && next.location.place } }); } catch {}
+    // THE ARRIVAL (Lucas 09-05: "she also only seems to be using the camera when prompted"): the camera sees HIM
+    // sit back down after a real absence → one `arrived` event and a marker the reach's machinery may answer
+    // with one unprompted moment (lib/reach, kind 'arrival'). A keyboard-only return is not an arrival.
+    // The absence is measured from the moment the camera LOST him (emptySince) when it has one, else from the flip.
+    const awayFrom = prev && (prev.emptySince || prev.since);
+    if (prev && prev.state !== 'here' && next.state === 'here' && /camera: him/.test(String(next.reason || '')) && awayFrom && now - awayFrom >= ARRIVAL_MIN_AWAY_MS) {
+      const arrival = { at: now, awayMs: now - awayFrom, from: prev.state, seen: false };
+      try { db.setMeta(ARRIVAL_KEY, JSON.stringify(arrival)); } catch {}
+      (deps.log || console.log)(`[presence] arrived — the camera saw him back after ${Math.round(arrival.awayMs / 60000)}m ${prev.state}`);
+      try { (deps.obsBus || require('./obs_bus')).emit({ lane: 'presence', kind: 'arrived', text: `back after ${Math.round(arrival.awayMs / 60000)}m ${prev.state}`, data: { awayMs: arrival.awayMs, from: prev.state } }); } catch {}
+    }
   }
   return next;
+}
+const ARRIVAL_KEY = 'presence.arrival';
+const ARRIVAL_MIN_AWAY_MS = 20 * 60 * 1000;
+const CAMERA_AWAY_MS = 10 * 60 * 1000;   // an empty frame for this long, with no chat turn for as long, = he left
+/** The unseen arrival, if fresh (≤ 10 min) — the reach's machinery consumes it once. */
+function arrival({ deps = {}, now = Date.now() } = {}) {
+  try { const a = JSON.parse(_db(deps).getMeta(ARRIVAL_KEY) || 'null'); if (!a || a.seen || now - a.at > 10 * 60 * 1000) return null; return a; } catch { return null; }
+}
+function markArrivalSeen({ deps = {} } = {}) {
+  try { const a = JSON.parse(_db(deps).getMeta(ARRIVAL_KEY) || 'null'); if (!a) return null; a.seen = true; _db(deps).setMeta(ARRIVAL_KEY, JSON.stringify(a)); return a; } catch { return null; }
 }
 
 /** The manifest line: where he is and how she knows. Never "here" when he is remote. */
@@ -154,4 +183,4 @@ function awarenessLine({ deps = {}, now = Date.now(), name = 'Lucas' } = {}) {
   return `PRESENCE: ${name} is HERE at the desk (${s.reason}${ago != null ? `, for ${ago}m` : ''})${loc && loc !== 'at the desk' ? ` — ${loc}` : ''}.`;
 }
 
-module.exports = { detectLocationStatement, readRemoteSession, fuse, channelFor, recordHisWord, markRemoteViaDiscord, markDeskTurn, tick, stored, storedLocation, awarenessLine, STATES, STATE_KEY, LOCATION_KEY, IDLE_AWAY_MS, FACE_FRESH_MS };
+module.exports = { detectLocationStatement, readRemoteSession, fuse, channelFor, recordHisWord, markRemoteViaDiscord, markDeskTurn, tick, stored, storedLocation, awarenessLine, arrival, markArrivalSeen, STATES, STATE_KEY, LOCATION_KEY, ARRIVAL_KEY, ARRIVAL_MIN_AWAY_MS, CAMERA_AWAY_MS, IDLE_AWAY_MS, FACE_FRESH_MS };

@@ -289,15 +289,42 @@ function applyTone(recipe, tone) {
   }
   return { recipe: { ...base, weights, speed: +speed.toFixed(3), _tone: tone, _baseSpeed: baseline }, pauseMs: t.pauseMs || 0, tone };
 }
-// The baseline from her state (measured, never scripted): energy shifts speed by at most ±0.05 —
-// rested a touch faster, exhausted a touch slower. Off unless meta voice.state_baseline = '1'.
-function baselineFromState(recipe, internalState, { enabled = false } = {}) {
+// The baseline from her state (measured, never scripted; 2026-09-05 his word "what about her tone modulation"):
+// the live vector is { drives: { energy… }, vad: { v, a, d } } (lib/internal_state). Energy + arousal shift
+// speed by at most ±0.05 together (rested and keyed-up a touch faster; exhausted and flat a touch slower);
+// valence leans the blend by at most 10 points — high toward the softer voice, low toward the crisper one.
+// ON unless meta voice.state_baseline = '0' (it shipped off; the flat Kokoro he heard this morning was the cost).
+function baselineFromState(recipe, internalState, { enabled = true } = {}) {
   const base = recipe && typeof recipe === 'object' ? recipe : { weights: {}, lang: 'a', speed: 1.0 };
-  if (!enabled || !internalState || !Number.isFinite(internalState.energy)) return base;
-  const e = Math.max(0, Math.min(1, internalState.energy));
-  const delta = Math.max(-0.05, Math.min(0.05, (e - 0.5) * 0.1));
-  const speed = Math.max(SPEED_HARD[0], Math.min(SPEED_HARD[1], (Number(base.speed) || 1.0) + delta));
-  return { ...base, speed: +speed.toFixed(3), _baseSpeed: Number(base.speed) || 1.0 };
+  if (!enabled || !internalState) return base;
+  const st = internalState;
+  const energy = Number.isFinite(st.energy) ? st.energy : (st.drives && Number.isFinite(st.drives.energy) ? st.drives.energy : null);
+  const a = st.vad && Number.isFinite(st.vad.a) ? st.vad.a : null;
+  const v = st.vad && Number.isFinite(st.vad.v) ? st.vad.v : null;
+  if (energy == null && a == null && v == null) return base;
+  let dSpeed = 0;
+  if (energy != null) dSpeed += (Math.max(0, Math.min(1, energy)) - 0.5) * 0.06;
+  if (a != null) dSpeed += (Math.max(0, Math.min(1, a)) - 0.5) * 0.04;
+  dSpeed = Math.max(-0.05, Math.min(0.05, dSpeed));
+  const speed = Math.max(SPEED_HARD[0], Math.min(SPEED_HARD[1], (Number(base.speed) || 1.0) + dSpeed));
+  let weights = { ...(base.weights || {}) }, lean = null;
+  if (v != null && Object.keys(weights).length) {
+    const pts = Math.max(-0.10, Math.min(0.10, (Math.max(0, Math.min(1, v)) - 0.5) * 0.4));   // v 0.75 → +10 soft; v 0.25 → +10 crisp
+    const toward = pts >= 0 ? 'af_nicole' : 'bf_isabella';
+    const shift = Math.abs(pts);
+    if (shift >= 0.01 && toward in weights) {
+      const others = Object.keys(weights).filter((k) => k !== toward);
+      const pool = others.reduce((s, k) => s + (weights[k] || 0), 0);
+      if (pool > 0) {
+        for (const k of others) weights[k] = Math.max(0, (weights[k] || 0) - shift * ((weights[k] || 0) / pool));
+        weights[toward] = (weights[toward] || 0) + shift;
+        const sum = Object.values(weights).reduce((s, x) => s + x, 0) || 1;
+        for (const k of Object.keys(weights)) weights[k] = +(weights[k] / sum).toFixed(4);
+        lean = `${toward}+${Math.round(shift * 100)}`;
+      }
+    }
+  }
+  return { ...base, weights, speed: +speed.toFixed(3), _baseSpeed: Number(base.speed) || 1.0, _baseline: { dSpeed: +dSpeed.toFixed(3), lean } };
 }
 /** Her active recipe from the registry (null when none) — the base every tone is a delta on. */
 function activeRecipe() {

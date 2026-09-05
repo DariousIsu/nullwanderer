@@ -252,7 +252,7 @@ async function maybeHeartbeat() {
     cumulativeMs: db.getCumulativeSessionTime()
   });
   // a licensed reach grounds the say: the why, the gap, the last reach and its silence, the channel
-  if (reachCtx) { try { awareness = `${awareness || ''}\n• ${require('./reach').manifest({ ev: reachCtx, lastUserTurnTs: lastUserActivityTs })}`; console.log(`[reach] licensed — ${reachCtx.why} → ${reachCtx.channel}`); } catch {} }
+  if (reachCtx) { try { awareness = `${awareness || ''}\n• ${require('./reach').manifest({ ev: reachCtx, lastUserTurnTs: lastUserActivityTs })}`; console.log(`[reach] ${reachCtx.kind === 'arrival' ? 'arrival moment' : 'licensed'} — ${reachCtx.why} → ${reachCtx.channel}`); } catch {} }
 
   const protocols = db.getActiveProtocols();
   const pendingInbounds = db.getPendingInbounds(6);
@@ -606,7 +606,7 @@ async function maybeHeartbeat() {
       if (reachCtx) {
         // the DM itself rides THE ROUTE (lib/delivery_router, subscribed to the store's unprompted-say event) —
         // one door for every delivery, so a reach reaches him exactly the way any other say would
-        try { require('./reach').recordReach({ text: trimmedSay, channel: reachCtx.channel }); } catch (e) { console.error('[reach] record failed:', e.message); }
+        try { require('./reach').recordReach({ text: trimmedSay, channel: reachCtx.channel, kind: reachCtx.kind || 'reach' }); } catch (e) { console.error('[reach] record failed:', e.message); }
       }
       // write-bottom: an unprompted utterance goes on the shared timeline (kind
       // 'utterance' = a MessageAction to the user). Lets the StuckDetector catch

@@ -44,15 +44,26 @@ function evaluate({ deps = {}, now = Date.now() } = {}) {
   try { const cur = (deps.internalState || require('./internal_state')).current({ nowMs: now }); social = cur && cur.drives && Number.isFinite(cur.drives.social) ? cur.drives.social : null; } catch {}
   let presence = 'here', pState = null;
   try { pState = (deps.presence || require('./presence_state')).stored(); presence = (pState && pState.state) || 'here'; } catch {}
+  // THE ARRIVAL (his word 09-05): the camera saw him sit back down after a real absence → ONE unprompted moment
+  // is licensed while he is here (voice allowed — he is at the desk). Not a reach: never counted unanswered.
+  if (enabled() && presence === 'here') {
+    let arr = null; try { arr = (deps.presence || require('./presence_state')).arrival({ deps, now }); } catch {}
+    if (arr) return { reach: true, kind: 'arrival', why: `the camera saw him back after ${Math.round(arr.awayMs / 60000)}m ${arr.from}`, social, presence, state: s, channel: 'desktop', arrival: arr };
+  }
   const d = shouldReach({ social, presence, lastReachAt: s.lastAt || 0, unanswered: s.unanswered || 0, now, floor: c.socialFloor, minGapMs: c.minGapMs, maxUnanswered: c.maxUnanswered, enabled: enabled() });
   // the channel = THE ROUTE's strict rule (a Discord DM only when he is genuinely not at the desk; plain idleness → the desktop)
   let channel = 'desktop'; try { channel = deps.route ? deps.route(pState) : require('./delivery_router').routeChannel({ presence: pState }); } catch {}
-  return { ...d, social, presence, state: s, channel };
+  return { ...d, kind: 'reach', social, presence, state: s, channel };
 }
 
 /** The manifest line for the say — grounding, never a script. */
 function manifest({ deps = {}, now = Date.now(), name = 'Lucas', lastUserTurnTs = 0, ev = null } = {}) {
   const s = state(deps); const e = ev || evaluate({ deps, now });
+  if (e.kind === 'arrival' && e.arrival) {
+    const mins = Math.round(e.arrival.awayMs / 60000);
+    const gap = lastUserTurnTs ? ` His last turn was ${Math.round(((now - lastUserTurnTs) / 3600e3) * 10) / 10} h ago.` : '';
+    return `ARRIVAL — the camera just saw ${name} sit back down after ${mins >= 60 ? `${Math.floor(mins / 60)} h ${mins % 60} min` : `${mins} min`} ${e.arrival.from}.${gap} This is one unprompted moment, yours: if there is something for him from that gap, or something true about the moment, say it — short, in your own words; if there is nothing, silence is fine.`;
+  }
   const gapH = lastUserTurnTs ? Math.round(((now - lastUserTurnTs) / 3600e3) * 10) / 10 : null;
   const parts = [`REACH — you are reaching for ${name} on your own, unprompted: ${e.why}.`];
   if (gapH != null) parts.push(`His last turn was ${gapH} h ago; presence reads ${e.presence}.`);
@@ -61,8 +72,14 @@ function manifest({ deps = {}, now = Date.now(), name = 'Lucas', lastUserTurnTs 
   return parts.join(' ');
 }
 
-function recordReach({ text = '', channel = 'desktop', deps = {}, now = Date.now() } = {}) {
+function recordReach({ text = '', channel = 'desktop', kind = 'reach', deps = {}, now = Date.now() } = {}) {
   const s = state(deps);
+  if (kind === 'arrival') {   // an arrival moment is consumed once and never waits for an answer
+    try { (deps.presence || require('./presence_state')).markArrivalSeen({ deps }); } catch {}
+    try { (deps.obsBus || require('./obs_bus')).emit({ lane: 'presence', kind: 'arrival_said', text: String(text).slice(0, 80), ref: now }); } catch {}
+    (deps.log || console.log)(`[reach] arrival moment (${channel}): "${String(text).slice(0, 60)}"`);
+    return { ...s, lastArrivalAt: now };
+  }
   const next = { ...s, lastAt: now, lastText: String(text).slice(0, 200), channel, unanswered: (s.unanswered || 0) + 1, lastUnansweredAt: null, answeredAt: null };
   _save(deps, next);
   try { (deps.obsBus || require('./obs_bus')).emit({ lane: 'presence', kind: 'reach', text: `reached (${channel}): ${String(text).slice(0, 80)}`, ref: now, data: { channel, unanswered: next.unanswered } }); } catch {}

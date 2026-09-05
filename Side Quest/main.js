@@ -732,23 +732,36 @@ const _speech = (() => {
     const nv = process.env.ZOE_NONVERBAL !== '0';
     const clips = nv ? [...marks.before, ...marks.after] : [];
     if ((!clean || clean.length < 2) && !clips.length) return;
-    let recipe = null;
-    if (marks.tone && process.env.ZOE_TONE_TAG !== '0') {
-      try {
-        const voices = require('./lib/voices');
-        let base = voices.activeRecipe();
-        if (base) {
-          let st = null; try { st = JSON.parse(db.getMeta('internal_state') || 'null'); } catch {}
-          base = voices.baselineFromState(base, st, { enabled: db.getMeta('voice.state_baseline') === '1' });
-          recipe = voices.applyTone(base, marks.tone).recipe;
-        }
-      } catch {}
-    }
-    console.log(`[voice] enqueue +${clean.length}ch "${clean.slice(0, 28).replace(/\n/g, ' ')}${clean.length > 28 ? '…' : ''}"${marks.tone ? ` tone=${marks.tone}${recipe ? ` speed=${recipe.speed}` : ''}` : ''}${clips.length ? ` nv=${clips.join(',')}` : ''}${marks.pauseMs ? ` pause=${marks.pauseMs}ms` : ''}`);
+    // THE BASELINE FROM HER STATE (measured, never scripted; on unless meta voice.state_baseline='0'): energy +
+    // arousal bend speed by at most ±0.05, valence leans the blend by at most 10 points — every sentence, whether
+    // or not she wrote a tone. A tone is a further bounded delta on that baseline.
+    let recipe = null, baseNote = '';
+    try {
+      const voices = require('./lib/voices');
+      let base = voices.activeRecipe();
+      if (base) {
+        let st = null; try { st = JSON.parse(db.getMeta('internal_state') || 'null'); } catch {}
+        const withState = voices.baselineFromState(base, st, { enabled: db.getMeta('voice.state_baseline') !== '0' });
+        if (withState._baseline) { recipe = withState; baseNote = ` baseline=${withState._baseline.dSpeed >= 0 ? '+' : ''}${withState._baseline.dSpeed}${withState._baseline.lean ? '/' + withState._baseline.lean : ''}`; }
+        if (marks.tone && process.env.ZOE_TONE_TAG !== '0') recipe = voices.applyTone(withState, marks.tone).recipe;
+      }
+    } catch {}
+    // RESPIRATION: a breath where a person would take one — before a sentence that follows a long one, or after a
+    // few sentences without one; never the first sentence of a reply; only when she wrote no mark of her own.
+    let auto = null;
+    if (nv && !marks.before.length && !marks.after.length) {
+      const now = Date.now();
+      if (now - _breath.lastAt > 8000) { _breath.index = 0; _breath.since = 0; _breath.prevLen = 0; }   // a new reply after a pause
+      auto = tts.autoNonverbal({ index: _breath.index, prevLen: _breath.prevLen, sinceBreath: _breath.since });
+      _breath.lastAt = now; _breath.index++; _breath.prevLen = clean.length; _breath.since = auto ? 0 : _breath.since + 1;
+    } else if (clips.length) { _breath.since = 0; _breath.index++; _breath.prevLen = clean.length; _breath.lastAt = Date.now(); }
+    console.log(`[voice] enqueue +${clean.length}ch "${clean.slice(0, 28).replace(/\n/g, ' ')}${clean.length > 28 ? '…' : ''}"${marks.tone ? ` tone=${marks.tone}` : ''}${recipe ? ` speed=${recipe.speed}` : ''}${baseNote}${clips.length ? ` nv=${clips.join(',')}` : ''}${auto ? ` auto=${auto}` : ''}${marks.pauseMs ? ` pause=${marks.pauseMs}ms` : ''}`);
+    if (auto) _enqueueItem({ clip: auto });
     if (nv) for (const k of marks.before) _enqueueItem({ clip: k });
     if (clean && clean.length >= 2) _enqueueItem({ text: clean, recipe, pauseMs: marks.pauseMs });
     if (nv) for (const k of marks.after) _enqueueItem({ clip: k });
   }
+  const _breath = { lastAt: 0, index: 0, since: 0, prevLen: 0 };   // the respiration rule's small memory (per reply)
   function flush() { gen++; }   // barge-in: skip everything currently pending (the renderer stops the audible clip itself)
   return { enqueue, isBusy: () => queued > 0, flush };
 })();

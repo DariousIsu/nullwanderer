@@ -38,10 +38,28 @@ const quickThenLow = voices.applyTone(voices.applyTone(zoe, 'quick').recipe, 'lo
 ok(near(quickThenLow.recipe.speed, 1.03), 'a second tone is a delta on HER baseline, not on the previous tone (baseline carried)');
 ok(voices.toneNames().join() === 'warm,dry,quick,low,pause', 'the five tones of the design, no more');
 
-// ── the state baseline (measured never scripted; off by default) ───────────────────────────────────
-ok(voices.baselineFromState(zoe, { energy: 1 }).speed === zoe.speed, 'the baseline shift is OFF unless enabled');
-ok(near(voices.baselineFromState(zoe, { energy: 1 }, { enabled: true }).speed, 1.18) && near(voices.baselineFromState(zoe, { energy: 0 }, { enabled: true }).speed, 1.08), 'enabled: energy shifts speed by at most ±0.05 (rested faster, exhausted slower)');
-ok(voices.baselineFromState(zoe, {}, { enabled: true }).speed === zoe.speed && voices.baselineFromState(zoe, null, { enabled: true }).speed === zoe.speed, 'no energy reading → no shift');
+// ── the state baseline (measured never scripted; ON unless meta voice.state_baseline='0') ──────────
+ok(voices.baselineFromState(zoe, { energy: 1 }, { enabled: false }).speed === zoe.speed, 'the baseline shift can be switched off');
+ok(near(voices.baselineFromState(zoe, { energy: 1 }).speed, 1.16) && near(voices.baselineFromState(zoe, { energy: 0 }).speed, 1.10), 'energy alone shifts speed by up to ±0.03 (rested faster, exhausted slower)');
+const live = { mv: 4, drives: { energy: 0.81, curiosity: 0.7 }, vad: { v: 0.76, a: 0.75, d: 0.66 } };   // the LIVE vector on 09-05 08:40 (lib/internal_state's shape)
+const bl = voices.baselineFromState(zoe, live);
+ok(near(bl.speed, 1.159) && near(bl._baseline.dSpeed, 0.029) && /af_nicole\+10/.test(bl._baseline.lean) && near(sum(bl.weights), 1) && bl.weights.af_nicole > zoe.weights.af_nicole, `the live shape: rested + keyed-up → +0.03, warm valence → the softer voice +10 pts (${JSON.stringify(bl._baseline)})`);
+const top = voices.baselineFromState(zoe, { drives: { energy: 1 }, vad: { v: 0.5, a: 1 } });
+ok(near(top.speed, 1.18) && top._baseline.dSpeed === 0.05 && top._baseline.lean === null, 'the ceiling: +0.05 at full energy and arousal; neutral valence leans nothing');
+const low = voices.baselineFromState(zoe, { drives: { energy: 0 }, vad: { v: 0.2, a: 0 } });
+ok(near(low.speed, 1.08) && /bf_isabella\+10/.test(low._baseline.lean), 'the floor: exhausted, flat, low valence → −0.05 and the crisper voice +10 (clamped)');
+ok(voices.baselineFromState(zoe, { drives: { energy: 0.5 }, vad: { v: 0.5, a: 0.5 } }).speed === zoe.speed && voices.baselineFromState(zoe, { drives: { energy: 0.5 }, vad: { v: 0.5, a: 0.5 } })._baseline.lean === null, 'a neutral vector changes nothing');
+ok(voices.baselineFromState(zoe, {}).speed === zoe.speed && !voices.baselineFromState(zoe, {})._baseline && voices.baselineFromState(zoe, null).speed === zoe.speed, 'no reading → no shift (fail-absent)');
+ok(near(voices.applyTone(bl, 'quick').recipe.speed, 1.23), 'a tone is a delta on HER baseline, not on the state-shifted speed (the baseline carries _baseSpeed)');
+
+// ── respiration: a breath where a person would take one (a rule, not a feeling) ──────────────────────
+ok(tts.autoNonverbal({ index: 0, prevLen: 300, sinceBreath: 5 }) === null, 'never on the first sentence of a reply');
+ok(tts.autoNonverbal({ index: 1, prevLen: 130, sinceBreath: 2 }) === 'breath', 'after a long sentence (≥110 chars) → a breath');
+ok(tts.autoNonverbal({ index: 2, prevLen: 40, sinceBreath: 2 }) === null && tts.autoNonverbal({ index: 3, prevLen: 40, sinceBreath: 3 }) === 'breath', 'short sentences: a breath after three without one');
+ok(tts.autoNonverbal({ index: 1, prevLen: 300, sinceBreath: 1 }) === null, 'at most one breath per few sentences (never two in a row)');
+const mainSrcEarly = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+ok(/autoNonverbal\(\{ index: _breath\.index/.test(mainSrcEarly) && /if \(auto\) _enqueueItem\(\{ clip: auto \}\)/.test(mainSrcEarly) && /!marks\.before\.length && !marks\.after\.length/.test(mainSrcEarly), 'the speech manager applies it only when she wrote no mark of her own');
+ok(/baselineFromState\(base, st, \{ enabled: db\.getMeta\('voice\.state_baseline'\) !== '0' \}\)/.test(mainSrcEarly) && /baseline=/.test(mainSrcEarly), 'every sentence rides the state baseline (on unless meta voice.state_baseline=0) and the log names it');
 
 // ── the marks survive prepareText; extractVoiceMarks splits them ───────────────────────────────────
 const prepared = tts.prepareText('<think>private</think><say>Well. <tone warm/> Take your time. <laugh/> <tone pause/></say>', { maxChars: 1000 });
@@ -71,6 +89,13 @@ ok(/<tone warm\/>/.test(block) && /<tone pause\/>/.test(block) && /<laugh\/>/.te
 ok(!/\bfeel\b|emotional|sound alive|be funny|\bact\b|\bperform\b/i.test(block) && /not as decoration/.test(block), 'anti-performance: no instruction to feel or perform');
 ok(/Punctuation is prosody/.test(block), 'tier B: punctuation as prosody, one paragraph');
 ok(/voiceBlock/.test(mainSrc) && /ttsConfig\(\)\.enabled\) voiceBlock = require\('\.\/lib\/tts'\)\.buildVoicePromptBlock/.test(mainSrc), 'the block rides the tag blocks only when she has a voice');
+// 25 voiced lines on boot_p304 used no mark: the vocabulary sat only in the tag blocks. It is now named where she
+// writes a say (the FORMAT rules), with one example of the SHAPE — still no instruction to feel.
+const ctxSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'context.js'), 'utf8');
+const fmtAt = ctxSrc.indexOf('FORMAT — EVERY response');
+const fmtNear = ctxSrc.slice(fmtAt, fmtAt + 1400);
+const insideAt = fmtNear.indexOf('Inside <say>');
+ok(fmtAt > -1 && insideAt > -1 && /<tone warm\/>/.test(fmtNear) && /<laugh\/>/.test(fmtNear) && /<tone dry\/> Sure\. <chuckle\/>/.test(fmtNear) && !/\bfeel\b|emotional/i.test(fmtNear.slice(insideAt, insideAt + 420)), 'the marks are named beside the <say> format rules with one shape example, no instruction to feel');
 
 // ── the speech manager ────────────────────────────────────────────────────────────────────────────
 ok(/function _enqueueItem\(item\)/.test(mainSrc) && /item\.clip\) return require\('\.\/lib\/nonverbal'\)\.ensureClip/.test(mainSrc) && /recipe: item\.recipe/.test(mainSrc) && /item\.pauseMs > 0/.test(mainSrc), 'enqueue: items — a clip or a toned sentence with a pause — on the same serial chains');

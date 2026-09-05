@@ -58,6 +58,20 @@ ok(/Lucas is back/.test(line2) && /1 h 30 min until now/.test(line2), `the retur
 ok(R.awarenessLine({ deps: deps(0.8, 'here'), now: now + 40 * H }) === null, 'a day and a half later the line is gone');
 // a second reach is licensed again once the cadence passes and the count is clear
 ok(R.evaluate({ deps: deps(0.8, 'away'), now: now + 6 * H }).reach === true, 'after 6 h, away, answered → a reach is licensed again');
+// THE ARRIVAL (his word 09-05): a fresh unseen arrival while he is here licenses ONE moment — not a reach, never unanswered
+{
+  let arrivalRow = { at: now, awayMs: 25 * 60000, from: 'away', seen: false };
+  const dA = (presence) => ({ ...deps(0.1, presence), presence: { stored: () => ({ state: presence, reason: presence === 'here' ? 'camera: him' : presence }), arrival: () => (arrivalRow && !arrivalRow.seen ? arrivalRow : null), markArrivalSeen: () => { arrivalRow.seen = true; return arrivalRow; } } });
+  const a1 = R.evaluate({ deps: dA('here'), now: now + 1000 });
+  ok(a1.reach && a1.kind === 'arrival' && a1.channel === 'desktop' && /camera saw him back after 25m away/.test(a1.why), 'a fresh arrival while he is here → one licensed moment (kind arrival, the desktop, voice allowed)');
+  const manA = R.manifest({ deps: dA('here'), now: now + 1000, ev: a1, lastUserTurnTs: now - 3 * 3600e3 });
+  ok(/^ARRIVAL — the camera just saw Lucas sit back down after 25 min away/.test(manA) && /silence is fine/.test(manA) && !/I missed you|say hi|greet/i.test(manA), 'the arrival manifest names the moment and leaves the words (and silence) to her');
+  const before = R.state(dA('here')).unanswered || 0; const evBefore = events.length;
+  R.recordReach({ text: 'There you are.', channel: 'desktop', kind: 'arrival', deps: dA('here'), now: now + 2000 });
+  ok(arrivalRow.seen === true && (R.state(dA('here')).unanswered || 0) === before && events[events.length - 1].kind === 'arrival_said' && events.length === evBefore + 1, 'an arrival moment is consumed once and never counted as unanswered');
+  ok(!R.evaluate({ deps: dA('here'), now: now + 3000 }).reach, 'once seen, no second moment');
+  ok(R.evaluate({ deps: dA('away'), now: now + 6 * H }).kind === 'reach', 'the ordinary path still reports kind reach');
+}
 // the switch
 process.env.ZOE_REACH = '0';
 ok(!R.evaluate({ deps: deps(0.9, 'away'), now: now + 6 * H }).reach && R.checkUnanswered({ deps: deps(0.8, 'away'), now: now + 7 * H }) === null, 'ZOE_REACH=0: no reach, no timer');
