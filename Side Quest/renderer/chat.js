@@ -415,6 +415,7 @@ window.sq.onSayToken((token, stream) => {
 });
 
 window.sq.onComplete((info) => {
+  try { window.sq.avatarLook && window.sq.avatarLook('at_him'); } catch {}   // the look words: she looks at him when she speaks to him
   // Discriminated autonomous completion → flush ITS stream buffer to the sheep rail; the
   // prompted-reply state is never touched (this can no longer shunt or reset a pending reply).
   if (info && info.s && info.s !== 'reply') {
@@ -578,6 +579,7 @@ window.sq.onReflectionFired(() => {
 
 window.sq.onMonologueTick((info) => {
   appendSheep(info);
+  try { if (window.sq.avatarLook && info && /^(thought|reading)$/.test(String(info.type || 'thought'))) window.sq.avatarLook('away'); } catch {}   // the look words: she looks away when she thinks
 });
 
 if (window.sq.onInboundArrived) {

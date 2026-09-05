@@ -70,7 +70,9 @@
   try {
     let gazeFlip = 1; window.sq.getMeta('avatar.gaze_flip').then((v) => { gazeFlip = v === '1' ? -1 : 1; }).catch(() => {});
     let gazeLogged = false;
-    window.sq.onCompanionGaze((g) => {
+    // THE LOOK WORDS (cut 13's gaze half): 'away' holds her eyes aside while she thinks; 'at_him' follows the camera face.
+    let lookMode = null, lookUntil = 0;
+    const applyLook = (g) => {
       try {
         const vrm = face._state && face._state.vrm; if (!vrm || !vrm.lookAt || !g) return;
         const head = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode && vrm.humanoid.getNormalizedBoneNode('head');
@@ -82,6 +84,16 @@
         const target = p.clone().add(fwd.multiplyScalar(1.4)).add(right.multiplyScalar(-g.x * 0.6 * gazeFlip)); target.y -= g.y * 0.35;
         vrm.lookAt.lookAt(target);
         if (!gazeLogged) { gazeLogged = true; console.log('[gaze] following the camera face', g); }
+      } catch {}
+    };
+    window.sq.onCompanionGaze((g) => { if (lookMode === 'away' && Date.now() < lookUntil) return; applyLook(g); });
+    if (window.sq.onAvatarLook) window.sq.onAvatarLook((m) => {
+      try {
+        if (!m || !m.look) return;
+        lookMode = m.look; lookUntil = Date.now() + (m.look === 'away' ? 6000 : 8000);
+        if (m.look === 'away') applyLook({ x: -0.55, y: -0.35 });
+        else if (m.gaze) applyLook(m.gaze);
+        else applyLook({ x: 0, y: 0 });
       } catch {}
     });
   } catch {}

@@ -38,6 +38,15 @@
     // set the resting expression from her mood `feeling` text (eases toward it in the render loop).
     setFeeling(feeling) { this.setExpression(AS.moodToExpression(feeling)); }
     setExpression(name) { this.target = { ...AS.expressionPreset(name) }; this.expression = name; return this; }
+    // THE LOOK WORDS (cut 13's gaze half): 'at_him' → toward the face the camera sees (or ahead), 'away' → aside and up;
+    // held for a moment, then the eyes return to the expression's resting gaze.
+    setLook({ look, gaze = null, at = 0, holdMs = null } = {}) {
+      const t = AS.gazeTarget({ look, faceGaze: gaze, faceAt: at, now: Date.now() });
+      if (!t) return this;
+      this.target.gazeX = t.gazeX; this.target.gazeY = t.gazeY;
+      this._lookUntil = performance.now() + (holdMs || (look === 'away' ? 6000 : 8000));
+      return this;
+    }
     // 3-state host bridge (parity with __openhumanSetMood). 'talking' leaves expression, moves the mouth.
     setMood(mood) { const e = MOOD_TO_EXPR[mood]; if (e) this.setExpression(e); return this; }
 
@@ -79,7 +88,8 @@
       const { ctx, canvas } = this;
       const W = canvas.width, H = canvas.height;
       // ease current expression toward target
-      for (const k of ['brow', 'eye', 'mouthCurve', 'gazeY']) this.cur[k] = lerp(this.cur[k], this.target[k], 0.12);
+      if (this._lookUntil && now > this._lookUntil) { const p = AS.expressionPreset(this.expression); this.target.gazeX = p.gazeX || 0; this.target.gazeY = p.gazeY || 0; this._lookUntil = 0; }   // the look releases
+      for (const k of ['brow', 'eye', 'mouthCurve', 'gazeX', 'gazeY']) this.cur[k] = lerp(this.cur[k] || 0, this.target[k] || 0, 0.12);
       // if audio is attached, sample it; else let the mouth relax closed
       if (this._analyser) this._sampleAudio();
       else if (now - this._lastAmpAt > 120) this.mouthOpen = AS.amplitudeToMouth(0, this.mouthOpen);
@@ -103,6 +113,7 @@
       const eyeY = cy - R * 0.12;
       const eyeDX = R * 0.38;
       const gaze = this.cur.gazeY * R * 0.06;
+      const gazeX = (this.cur.gazeX || 0) * R * 0.05;   // the look words: the pupils slide toward where she looks
       const eyeOpen = Math.max(0.06, this.cur.eye * blink);
 
       // eyes
@@ -116,11 +127,11 @@
         // iris/pupil (accent), follows gaze
         ctx.fillStyle = this.accent;
         ctx.beginPath();
-        ctx.ellipse(ex, eyeY + gaze, R * 0.085, R * 0.085 * Math.max(0.2, eyeOpen), 0, 0, Math.PI * 2);
+        ctx.ellipse(ex + gazeX, eyeY + gaze, R * 0.085, R * 0.085 * Math.max(0.2, eyeOpen), 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.fillStyle = '#12121a';
         ctx.beginPath();
-        ctx.ellipse(ex, eyeY + gaze, R * 0.04, R * 0.04 * Math.max(0.2, eyeOpen), 0, 0, Math.PI * 2);
+        ctx.ellipse(ex + gazeX, eyeY + gaze, R * 0.04, R * 0.04 * Math.max(0.2, eyeOpen), 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       }

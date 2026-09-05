@@ -37,6 +37,16 @@
   // What the deterministic layer does when the turn carries no posture at all.
   const FALLBACK = { hear: 'listen', say: 'speak', think: 'think' };
 
+  // THE LOOK WORDS (the wants project, cut 13's gaze half, 09-05): where her eyes go is part of the posture vocabulary —
+  // she looks AT HIM when she speaks to him or listens, and AWAY when she thinks. A second channel beside the clip:
+  // the companion's look-at bone and the 2D face's pupils read it (lib/avatar_state.gazeTarget turns it into a gaze).
+  const LOOK = { say: 'at_him', hear: 'at_him', think: 'away' };
+  function lookForTurn(turn) {
+    const kind = String((turn && turn.kind) || 'idle');
+    const look = LOOK[kind] || null;
+    return look ? { look, why: 'event:' + kind } : null;
+  }
+
   /*
    * PURE. A cognition result → a posture, or null when the turn carries no usable signal (so the caller falls
    * through rather than inventing certainty). `decisive` means the program is surer than a model could be —
@@ -71,5 +81,5 @@
     return null;
   }
 
-  return { SOURCE_POSTURE, FALLBACK, postureFromTurn, clipForTurn };
+  return { SOURCE_POSTURE, FALLBACK, LOOK, postureFromTurn, clipForTurn, lookForTurn };
 }));

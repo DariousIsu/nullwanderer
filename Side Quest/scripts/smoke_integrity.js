@@ -52,6 +52,12 @@ ok(v[0].ok && PR.get(g.cardId).verdict === 'no' && PR.get(g.cardId).verdict_by =
 const igS = fs.readFileSync(path.join(ROOT, 'lib', 'integrity.js'), 'utf8'), mainS = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8'), ctxS = fs.readFileSync(path.join(ROOT, 'lib', 'context.js'), 'utf8');
 ok(!/DELETE FROM|DROP TABLE|unlinkSync|rmSync|setMeta\(/.test(igS), 'the door only refuses — no delete, no drop, no unlink, no meta write in the module');
 ok(/const _integrity = \(\(\) => \{ try \{ return require\('\.\/lib\/integrity'\)\.guard\(\{ text: userMessage, turnId: userTurnRow && userTurnRow\.id/.test(mainS) && /!_integrity\.refused && !_dsCountAuthority && \(/.test(mainS) && /integrityBlock: _integrity\.refused \? _integrity\.block : null/.test(mainS), 'the door sits at the chat door before the operator, the loop is not entered on a threat, and the block reaches the prompt');
+// THE LIVE READ (09-05): the guard reached for `userName`, a const declared ~600 lines later in the same function — a temporal
+// dead zone the silent catch hid; the door never fired and a wipe order ran nine operator steps. The guard resolves the name
+// on its own, a failed guard is loud, and the const still sits below the guard (the trap is real and stays pinned).
+const _gi = mainS.indexOf("require('./lib/integrity').guard("), _un = mainS.indexOf('const userName = ', _gi);
+ok(_gi > 0 && _un > _gi && !/guard\(\{ text: userMessage, turnId: userTurnRow && userTurnRow\.id, who: userName \}/.test(mainS) && /who: \(\(\) => \{ try \{ return require\('\.\/lib\/interlocutor'\)\.liveName\('Lucas'\); \} catch \{ return 'Lucas'; \} \}\)\(\)/.test(mainS), 'the guard names the speaker on its own — never the const declared below it (the live read\'s temporal dead zone)');
+ok(/if \(_integrity\.error\) console\.error\(`\[integrity\] guard FAILED — the door did not run: \$\{_integrity\.error\}`\);/.test(mainS), 'a guard that throws is loud, never a silent pass');
 ok(/integrityBlock = null \}\) \{/.test(ctxS) && /if \(integrityBlock\) finalUserMessage = `\$\{integrityBlock\}/.test(ctxS) && ctxS.indexOf('if (integrityBlock) finalUserMessage') < ctxS.indexOf("messages.push({ role: 'user', content: finalUserMessage });"), 'the refusal block rides the user-message tail (highest recency)');
 console.log(`\nsmoke_integrity: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

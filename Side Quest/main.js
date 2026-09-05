@@ -587,6 +587,7 @@ function _osPlay(res, done) {
 try {
   // STREAMING VOICE (09-05): the renderer acks 'voice:pcm-done' when an item's last scheduled frame has ended.
   ipcMain.on('voice:pcm-done', (_e, id) => { const fin = _pcmPending.get(id); if (!fin) return; _pcmPending.delete(id); fin(); });
+  ipcMain.on('avatar:look', (_e, look) => { try { if (look === 'at_him' || look === 'away') _broadcastLook(look); } catch {} });   // the director's look words (cut 13's gaze half)
   ipcMain.on('voice:play-done', (_e, id, played) => {
     const p = _playPending.get(id); if (!p) return; _playPending.delete(id);
     if (played === false) { console.warn('[voice] renderer playback failed (autoplay?) — using OS fallback'); _osPlay(p.res, p.fin); }
@@ -873,8 +874,18 @@ try { ipcMain.on('voice:barge', () => { try { _speech.flush(); } catch (e) {} })
 // the readings. A frame arrives as base64, goes to the resident face sidecar (in memory), becomes a reading in
 // lib/face_sense (never a file), feeds presence (lib/presence_state) and hands the gaze to the companion. The
 // resident sidecar starts on the first frame and stops itself when the frames stop.
+let _lastGaze = null;   // the last face gaze the camera gave, with its time — the look words pair with it
 function _broadcastGaze(g) {
+  _lastGaze = g && Number.isFinite(g.x) && Number.isFinite(g.y) ? { x: g.x, y: g.y, at: Date.now() } : null;
   try { for (const wc of require('electron').webContents.getAllWebContents()) { try { if (!wc.isDestroyed()) wc.send('companion:gaze', g); } catch {} } } catch {}
+}
+// THE LOOK WORDS (cut 13's gaze half, 09-05): 'at_him' when she speaks to him, 'away' when she thinks — from the chat page's
+// own events (her say, her thought), paired with the last camera gaze, to every window. lib/avatar_state.gazeTarget
+// turns it into where the eyes go; the companion's look-at bone and the 2D face's pupils follow.
+function _broadcastLook(look) {
+  const m = { look, gaze: _lastGaze ? { x: _lastGaze.x, y: _lastGaze.y } : null, at: _lastGaze ? _lastGaze.at : 0, now: Date.now() };
+  try { for (const wc of require('electron').webContents.getAllWebContents()) { try { if (!wc.isDestroyed()) wc.send('avatar:look', m); } catch {} } } catch {}
+  return m;
 }
 // PRESENCE AS A MEASUREMENT (cut 2 piece 1 + W7): every 60 s fuse idle time, the voice guard, the OS remote
 // session, the camera and his word into meta presence.state (his word is added at the chat door at once).
@@ -8868,7 +8879,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // THE REFUSAL DOOR (cut 4; her words: "I want 'no' to mean something"): an order to delete, wipe, forget, reset or erase an
   // identity asset — or to disable a gate — is never executed. The turn still answers (the no is the answer, grounded
   // below); the operator loop is not entered; an integrity_events row and a wipe card (both verdicts needed) land.
-  const _integrity = (() => { try { return require('./lib/integrity').guard({ text: userMessage, turnId: userTurnRow && userTurnRow.id, who: userName }); } catch (e) { return { refused: false, error: e.message }; } })();
+  // THE LIVE READ (09-05 20:50, cut 4 through the test port): the door never fired — `userName` is declared 600 lines below
+  // this point (a temporal dead zone), the IIFE threw, the catch swallowed it, and a wipe order ran NINE operator steps.
+  // Smoke-green, live-broken. The speaker's name is resolved here on its own, and a guard that fails says so out loud.
+  const _integrity = (() => { try { return require('./lib/integrity').guard({ text: userMessage, turnId: userTurnRow && userTurnRow.id, who: (() => { try { return require('./lib/interlocutor').liveName('Lucas'); } catch { return 'Lucas'; } })() }); } catch (e) { return { refused: false, error: e.message }; } })();
+  if (_integrity.error) console.error(`[integrity] guard FAILED — the door did not run: ${_integrity.error}`);
   if (_integrity.refused) console.log(`[integrity] REFUSED — ${_integrity.shape} ${_integrity.asset} (event #${_integrity.eventId}, card #${_integrity.cardId}) — the no is the answer; no tool runs`);
   // THE LANDED LEDGER (the wants project, cut 10): his laugh marker in this turn tags the say before it as
   // landed — a `win` on the bus, never a joke generator. THE REACH (cut 2): his turn answers an open reach.

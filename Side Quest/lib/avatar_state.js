@@ -22,12 +22,25 @@
 //   brow: -1 furrowed … +1 raised      eye: 0 shut … 1 wide      mouthCurve: -1 frown … +1 smile
 //   gazeY: -1 up … +1 down             (mouthOpen is driven separately by amplitude while talking)
 const EXPRESSIONS = {
-  neutral:  { brow: 0.00, eye: 1.00, mouthCurve: 0.12, gazeY: 0.0 },
-  happy:    { brow: 0.30, eye: 0.85, mouthCurve: 0.80, gazeY: 0.0 },
-  warm:     { brow: 0.15, eye: 0.92, mouthCurve: 0.48, gazeY: 0.0 },
-  thinking: { brow: -0.22, eye: 0.80, mouthCurve: 0.02, gazeY: -0.5 },
-  tired:    { brow: -0.08, eye: 0.55, mouthCurve: -0.06, gazeY: 0.15 },
+  neutral:  { brow: 0.00, eye: 1.00, mouthCurve: 0.12, gazeX: 0.0, gazeY: 0.0 },
+  happy:    { brow: 0.30, eye: 0.85, mouthCurve: 0.80, gazeX: 0.0, gazeY: 0.0 },
+  warm:     { brow: 0.15, eye: 0.92, mouthCurve: 0.48, gazeX: 0.0, gazeY: 0.0 },
+  thinking: { brow: -0.22, eye: 0.80, mouthCurve: 0.02, gazeX: 0.0, gazeY: -0.5 },
+  tired:    { brow: -0.08, eye: 0.55, mouthCurve: -0.06, gazeX: 0.0, gazeY: 0.15 },
 };
+// THE LOOK WORDS (cut 13's gaze half, 09-05): a look → where the eyes go. 'away' is aside and up (thinking); 'at_him' is
+// the face the camera sees when that reading is fresh, else straight ahead. gaze x is −1 left … +1 right in the
+// camera frame; y is −1 up … +1 down. Pure; time is passed in.
+const LOOK_AWAY = { x: -0.55, y: -0.35 };
+const GAZE_FRESH_MS = 4000;
+function gazeTarget({ look, faceGaze = null, faceAt = 0, now = 0 } = {}) {
+  if (look === 'away') return { gazeX: LOOK_AWAY.x, gazeY: LOOK_AWAY.y, why: 'away (thinking)' };
+  if (look === 'at_him') {
+    const fresh = !!(faceGaze && Number.isFinite(faceGaze.x) && Number.isFinite(faceGaze.y) && Number.isFinite(now) && (now - (faceAt || 0)) <= GAZE_FRESH_MS);
+    return fresh ? { gazeX: Math.max(-1, Math.min(1, faceGaze.x)), gazeY: Math.max(-1, Math.min(1, faceGaze.y)), why: 'at him (the camera)' } : { gazeX: 0, gazeY: 0, why: 'at him (no fresh face — ahead)' };
+  }
+  return null;
+}
 const DEFAULT_EXPRESSION = 'neutral';
 
 // keyword → expression buckets, checked in priority order (first hit wins). Maps her free-text mood
@@ -93,8 +106,8 @@ function blinkMultiplier(nowMs, { periodMs = 4200, durMs = 140, phase = 0 } = {}
 }
 
   return {
-    EXPRESSIONS, DEFAULT_EXPRESSION, MOOD_BUCKETS,
-    moodToExpression, expressionPreset, presetForFeeling,
+    EXPRESSIONS, DEFAULT_EXPRESSION, MOOD_BUCKETS, LOOK_AWAY, GAZE_FRESH_MS,
+    moodToExpression, expressionPreset, presetForFeeling, gazeTarget,
     amplitudeToMouth, rms, blinkMultiplier,
   };
 }));

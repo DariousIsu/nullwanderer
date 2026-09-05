@@ -407,6 +407,8 @@ const smokes = [
   'smoke_brainstorm.js',
   'smoke_usage_meter.js',
   'smoke_avatar_state.js',
+  // THE LOOK WORDS (cut 13's gaze half, 09-05): at him when she speaks, away when she thinks — the vocabulary, the gaze target, the wiring
+  'smoke_avatar_look.js',
   'smoke_vrm_state.js',
   'smoke_excavate.js',
   'smoke_staleness.js',

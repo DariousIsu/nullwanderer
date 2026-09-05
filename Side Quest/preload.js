@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld('sq', {
   cameraState: (on) => ipcRenderer.invoke('camera:state', !!on),
   faceStatus: () => ipcRenderer.invoke('face:status'),   // { enrolled, live } — for the one-time "tap 👤" nudge
   onCompanionGaze: (cb) => ipcRenderer.on('companion:gaze', (_e, g) => cb(g)),
+  // THE LOOK WORDS (cut 13's gaze half): the chat page says when she speaks to him (at_him) or thinks (away); main
+  // pairs the look with the last camera gaze and hands it to every window (the companion's look-at, the 2D face).
+  avatarLook: (look) => ipcRenderer.send('avatar:look', look),
+  onAvatarLook: (cb) => ipcRenderer.on('avatar:look', (_e, m) => cb(m)),
   getRecentHistory: () => ipcRenderer.invoke('history:recent'),
   sendMessage: (text, attachments) => ipcRenderer.invoke('chat:send', text, attachments || []),
   sttTranscribe: (audioBuf, opts) => ipcRenderer.invoke('stt:transcribe', audioBuf, opts || null),   // two-way voice input: audio bytes → { ok, text }; opts.handsFree arms the addressed gate
