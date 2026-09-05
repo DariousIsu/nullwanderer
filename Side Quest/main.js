@@ -7715,6 +7715,7 @@ async function buildReportFromHeld({ io, channel, sessionId, userName, topic }) 
     const _proj = (() => { try { return require('./lib/deliverable_projects').findProject(t); } catch { return null; } })();
     const _verdictA = _da.audit({
       topic: t, body: md,
+      strict: (() => { try { return require('./lib/correction_classes').raised('delivery-claim'); } catch { return false; } })(),   // cut 6: the raised bar on delivery claims
       dsRows: (() => { try { return require('./lib/dataset_store').rowsFor(slug); } catch { return []; } })(),
       dataShaped: !!_renderDims,
       doneScope: _proj ? _proj.scope.filter((s) => s.status === 'done').map((s) => s.item) : [],
@@ -9831,7 +9832,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (_rule) {
       const _r = require('./lib/directives').record(_rule, { turnId: null });
       if (_r) console.log(`[directive] ${_r.duplicate ? 'reinforced' : 'RECORDED'} (${_via}): "${_rule.slice(0, 90)}"`);
-      try { require('./lib/obs_bus').emit({ lane: 'correction', kind: 'correction', data: { class: 'rule', via: _via } }); } catch {}   // leg-D/cut-6 seam
+      try { require('./lib/correction_classes').note({ cls: 'rule', via: _via, turnId: userTurnRow && userTurnRow.id, text: _rule }); } catch {}   // cut 6: the correction as an event (a row + the bus event WITH text — the bare emit here carried none and the bus dropped it)
     } else {
       // LEG D — the correction router's CAPABILITY arm: a correction that names a capability she LACKS
       // ("you should be able to read my calendar") is not a rule — it becomes a NEED, the same card the
@@ -9842,7 +9843,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       if (_gap) {
         const _n = require('./lib/capability_need').record(_gap, { bornFrom: `correction:${sessionId}` });
         if (_n && _n.id) console.log(`[directive] capability gap → need #${_n.id}${_n.deduped ? ' (reinforced)' : ''}: "${_gap.slice(0, 80)}"`);
-        try { require('./lib/obs_bus').emit({ lane: 'correction', kind: 'correction', data: { class: 'capability' } }); } catch {}   // leg-D/cut-6 seam
+        try { require('./lib/correction_classes').note({ cls: 'capability', via: 'chat', turnId: userTurnRow && userTurnRow.id, text: _gap }); } catch {}   // cut 6
       }
     }
   } catch (e) { console.error('[directive] capture failed:', e.message); }
@@ -9924,6 +9925,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     const _bc = require('./lib/belief_correction');
     if (_bc.detectCorrection(userMessage, {}).isCorrection) {
+      try { require('./lib/correction_classes').note({ cls: 'fact', via: 'chat', turnId: userTurnRow && userTurnRow.id, text: userMessage }); } catch {}   // cut 6: a belief correction is an event she carries
       const _priorSay = (recentTurns.filter(t => t.speaker === 'ai_said').slice(-1)[0] || {}).content || '';
       const _learning = require('./lib/learning'), _mem = require('./lib/memory');
       Promise.resolve().then(() => _bc.captureCorrection({
@@ -9943,12 +9945,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               require('./lib/known_incorrect').record({ objectKey: _subj, claimClass: 'fact', claimValue: String(incumbent.value).slice(0, 300),
                 reason: `${userName || 'Lucas'} corrected this in chat (${_cue}); the standing value is now "${String((rec && rec.content) || '').slice(0, 120)}"`, refutedBy: 'chat-correction' });
               console.log(`[main] chat-correction: REFUTED the superseded value into known_incorrect (${_subj})`);
+              try { require('./lib/correction_classes').note({ cls: 'fact', via: 'chat', landed: 'known_incorrect', turnId: userTurnRow && userTurnRow.id, text: userMessage }); } catch {}   // cut 6: the fact arm landed it
             }
           } catch {}
         },
       })).then(r => {
         if (r && r.captured) { console.log(`[main] chat-correction: banked ${r.captured} verified fact(s) (cue: ${r.cue})`);
-          try { require('./lib/obs_bus').emit({ lane: 'correction', kind: 'correction', data: { class: 'fact' } }); } catch {} }   // leg-D/cut-6 seam
+          try { require('./lib/correction_classes').note({ cls: 'fact', via: 'chat', landed: 'verified_fact', turnId: userTurnRow && userTurnRow.id, text: userMessage }); } catch {} }   // cut 6: the banked fact marks the same correction landed
       })
         .catch(e => console.error('[main] chat-correction capture failed:', e && e.message));
     }
@@ -20699,7 +20702,11 @@ function _antifabCorrect(say, turnStartTs = 0, evidence = '') {
     });
     if (!av.ok) {
       const corr = _mc.artifactCorrection(av.violations);
-      if (corr) { console.warn(`[antifab] claimed an artifact that isn't there → corrected: ${av.violations.map((v) => v.kind + ':' + v.claim).join(', ').slice(0, 180)}`); out += corr; }
+      if (corr) {
+        console.warn(`[antifab] claimed an artifact that isn't there → corrected: ${av.violations.map((v) => v.kind + ':' + v.claim).join(', ').slice(0, 180)}`); out += corr;
+        // cut 6: a delivery she claimed and did not make is a correction she carries (class delivery-claim; the say's turn start is the ref — a say outside a turn, like a delivery announce, gets its own moment so corrections never fold into one row)
+        try { require('./lib/correction_classes').note({ cls: 'delivery-claim', via: 'antifab', ref: `say:${turnStartTs || Date.now()}`, text: av.violations.map((v) => v.kind + ':' + v.claim).join(', ') }); } catch {}
+      }
     }
     // (3) SPINE 2 — ABSENCE (false-blank): a "couldn't find it / none listed" claim is only honest if a gather
     // ACTUALLY RAN this turn. Probe = echo_suit.lastGatherTs() (stamped centrally in dispatch). Fails OPEN.

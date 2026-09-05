@@ -135,7 +135,7 @@ ok(A.st['drive_gauge'] === undefined && C.st['drive_gauge'] === undefined, 'DARK
   ok(is.appraiseEvents([{ kind: 'answered', lane: 'presence', ref: '9' }]).dv > 0, 'v4: his answer after a reach is a small +v');
   ok(is.appraiseEvents([{ kind: 'released', lane: 'presence', ref: '1' }, { kind: 'reach', lane: 'presence', ref: '2' }]).dv === 0, 'v4: released and the reach itself are neutral');
   ok(is.appraiseEvents([{ kind: 'held', lane: 'watch', ref: '1' }]).dv === 0, 'v4: a `held` on another lane is not the meeting hold');
-  ok(is.MODEL_VERSION === 4, 'v4: the model version bumped (the journal resets by design)');
+  ok(is.MODEL_VERSION === 5, 'v5: the model version bumped for the correction appraisal (the journal resets by design)');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

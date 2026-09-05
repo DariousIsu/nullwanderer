@@ -71,7 +71,8 @@ async function closeOut(contractId, deps = {}) {
   const body = renderArtifact(c, slots, { nowMs: now() });
   const audit = deps.audit || require('./delivery_audit').audit;
   const filled = slots.filter((s) => s.status === 'filled');
-  const verdict = audit({ topic: `${c.title} ${c.askVerbatim}`, body, dsRows: [], dataShaped: false, doneScope: filled.map((s) => s.description) });
+  const strict = (() => { try { return (deps.correctionClasses || require('./correction_classes')).raised('delivery-claim'); } catch { return false; } })();   // cut 6: the raised bar
+  const verdict = audit({ topic: `${c.title} ${c.askVerbatim}`, body, dsRows: [], dataShaped: false, doneScope: filled.map((s) => s.description), strict });
   if (!verdict.ok) {
     const detail = require('./delivery_audit').describe(verdict.violations);
     store.setStatus(contractId, 'open');

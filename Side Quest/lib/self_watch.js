@@ -33,6 +33,12 @@ const STATUS_FLUSH_MS = 5 * 60e3;
 const SIG_WINDOW_MS = 24 * 3600e3;
 const SIG_RESTORE_MS = 3600e3;      // a recurring signature re-lands on the bus at most 1/hr
 const MINT_THRESHOLD = 3;
+// THE RAISED BAR (cut 6, the correction as an event): when she has been corrected on capabilities at or past the bar this
+// month (lib/correction_classes), a recurring failure becomes a need card on its FIRST recurrence (2 hits) instead of its
+// third. deps.correctionRaised is injectable for the smoke; any failure reads as the plain threshold.
+function _mintThreshold(deps) {
+  try { const r = deps && deps.correctionRaised ? deps.correctionRaised('capability') : require('./correction_classes').raised('capability'); return r ? 2 : MINT_THRESHOLD; } catch { return MINT_THRESHOLD; }
+}
 const MAX_OPEN_WATCH_NEEDS = 2;
 const AUDIT_EVERY_MS = 12 * 3600e3; // the DB-exhaust audit cadence (build plan 1.5)
 const AUDIT_TS_KEY = 'watch.last_audit_ts';
@@ -151,7 +157,7 @@ function observe(line, level = 'info', { deps = {}, nowMs = Date.now() } = {}) {
       } else {
         _counts.set(`${c.prefix}!`, (_counts.get(`${c.prefix}!`) || 0) + 1);
       }
-      if (st.hits.length >= MINT_THRESHOLD && !st.minted) _maybeMintNeed(sig, line, st, { deps, nowMs });
+      if (st.hits.length >= _mintThreshold(deps) && !st.minted) _maybeMintNeed(sig, line, st, { deps, nowMs });
     }
     if (nowMs - _lastStatusTs >= STATUS_FLUSH_MS) {
       _flushStatus({ deps, nowMs });
@@ -295,4 +301,4 @@ function install({ deps = {}, nowMs = Date.now() } = {}) {
   return true;
 }
 
-module.exports = { classify, signatureOf, observe, install, runExhaustAudit, inBootWindow, _reset, _persistSigs, _loadSigs, MINT_THRESHOLD, MAX_OPEN_WATCH_NEEDS, AUDIT_EVERY_MS, BOOT_GRACE_MS, SIGNAL_LANES };
+module.exports = { classify, signatureOf, observe, install, runExhaustAudit, inBootWindow, _reset, _persistSigs, _loadSigs, MINT_THRESHOLD, _mintThreshold, MAX_OPEN_WATCH_NEEDS, AUDIT_EVERY_MS, BOOT_GRACE_MS, SIGNAL_LANES };

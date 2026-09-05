@@ -122,15 +122,22 @@ function retire(id) { try { return db.retireDirective(id); } catch { return fals
  * The prompt block. ALWAYS rendered in full — never sampled, never ranked against her personality,
  * never allowed to fade. Newest last, so the most recent correction is the freshest thing she reads.
  */
-function buildBlock({ userName = 'Lucas', rows = null } = {}) {
+function buildBlock({ userName = 'Lucas', rows = null, deps = {} } = {}) {
   const list = (rows || active()).slice(-MAX_ACTIVE);
-  if (!list.length) return null;
+  // THE CORRECTION AS AN EVENT (cut 6): the month's corrections by class ride beside the rules — a raised bar is the
+  // verification she owes before the claim (delivery claims → the strict audit; facts → a source inline; capabilities →
+  // the need card on the first recurrence). Fail-absent; rendered even when no rule stands.
+  let weak = null;
+  try { weak = (deps.correctionClasses || require('./correction_classes')).weakClassesLine(); } catch {}
+  const weakPara = weak ? `WHERE YOU HAVE BEEN CORRECTED THIS MONTH (a reading, not a scolding — the ledger does not fade): ${weak}.` : null;
+  if (!list.length) return weakPara;
   const tz = (() => { try { return require('./tz'); } catch { return null; } })();
   const when = (ts) => (tz ? tz.dateShort(ts) : new Date(ts).toISOString().slice(0, 10));
   const lines = list.map((d) => `  • ${d.rule}${d.created_ts ? `   — ${userName}, ${when(d.created_ts)}` : ''}`);
-  return `STANDING INSTRUCTIONS FROM ${userName.toUpperCase()} — he told you these directly and they hold until he says otherwise. `
+  const base = `STANDING INSTRUCTIONS FROM ${userName.toUpperCase()} — he told you these directly and they hold until he says otherwise. `
     + `They are NOT your own preferences and you do not get to outgrow them; if one now seems wrong, say so and ask, do not quietly stop following it:\n`
     + lines.join('\n');
+  return weakPara ? `${base}\n\n${weakPara}` : base;
 }
 
 module.exports = { detect, detectExplicit, record, active, retire, buildBlock, MAX_ACTIVE, MAX_LEN, _PERSIST, _AT_HER, _BEHAVIOUR, _EXPLICIT };

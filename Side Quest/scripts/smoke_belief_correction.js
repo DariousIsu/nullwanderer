@@ -70,9 +70,9 @@ const NOW = Date.parse('2026-07-03T12:00:00Z');
   const fs = require('fs'), path = require('path');
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/_bc\.cueRefutes\(_cue\)/.test(main) && /known_incorrect'\)\.record\(/.test(main), 'chat door: onSupersede refutes the superseded value into known_incorrect on a falsity cue');
-  ok(/lane: 'correction', kind: 'correction', data: \{ class: 'fact'/.test(main)
-    && /data: \{ class: 'rule'/.test(main) && /data: \{ class: 'capability'/.test(main),
-    'the correction-event seam (cut 6) fires on all three doors: fact + rule + capability');
+  ok(/correction_classes'\)\.note\(\{ cls: 'fact'/.test(main)
+    && /note\(\{ cls: 'rule'/.test(main) && /note\(\{ cls: 'capability'/.test(main),
+    'the correction-event seam (cut 6) fires on all three doors through the ledger (correction_classes.note): fact + rule + capability');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

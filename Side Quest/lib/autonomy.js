@@ -276,6 +276,15 @@ function buildManifest({ db = null, now = Date.now(), skip = [], deps = {} } = {
     return `• CAPABILITY GAPS SHE HAS NAMED (open a rehearsal with the rehearse move, target the [need #N]):\n${lines.join('\n')}`;
   });
 
+  grab('corrections', () => {
+    // THE CORRECTION AS AN EVENT (cut 6): where she has been corrected this month, by class, and which bars are raised —
+    // the brief reads it so a move on weak ground carries the verification it now owes (lib/correction_classes).
+    const line = (deps.correctionClasses || require('./correction_classes')).weakClassesLine({ now });
+    if (!line) return '';
+    counts.correctionLine = 1;
+    return `• WHERE YOU HAVE BEEN CORRECTED THIS MONTH (the ledger does not fade; a raised bar is a verification you owe before the claim): ${line}`;
+  });
+
   grab('harvest', () => {
     // O0.h — materials mined from promoted conversations (his tangents are FEEDSTOCK, never
     // noise). Each entry carries the [dN] handle back to the conversation it came from; leads

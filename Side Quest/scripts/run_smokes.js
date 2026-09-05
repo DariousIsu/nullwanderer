@@ -830,6 +830,8 @@ const smokes = [
   'smoke_integrity.js',
   // CONTINUITY ATTESTATION (cut 5, 09-05): the manifest round trip, DEGRADED names the store, the named tolerance, UNKNOWN without alarm, git since the last boot
   'smoke_continuity_attest.js',
+  // THE CORRECTION AS AN EVENT (cut 6, 09-05): the ledger, the doors, the appraisal, the raised bars, the brief and grounding lines
+  'smoke_correction_event.js',
   'smoke_core_dataset.js',
   // The core's probe (design §6/§8/§16): scores a candidate local model on the frozen holdout — the loose
   // JSON parser, the agreement scorer, the voice contract, the one-shot prompt — with an injected call.

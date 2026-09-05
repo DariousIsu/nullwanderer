@@ -37,7 +37,7 @@ const JOURNAL_CAP = 300;
 const VAD_BASELINE = { v: 0.55, a: 0.45, d: 0.50 };
 const VAD_HALF_LIFE_MS = 4 * 3600e3;
 const VAD_MAX_DEV = 0.30;          // max deviation from baseline per axis — no saturation at the extremes
-const MODEL_VERSION = 4;           // bump when the appraisal/dynamics model changes → journal resets (v3 = 08-31 appraisal symmetry; v4 = 09-05 held/unanswered/answered)
+const MODEL_VERSION = 5;           // bump when the appraisal/dynamics model changes → journal resets (v3 = 08-31 appraisal symmetry; v4 = 09-05 held/unanswered/answered; v5 = 09-05 correction)
 const SOCIAL_HALF_RISE_MS = 5 * 3600e3;
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -116,6 +116,11 @@ function appraiseEvents(events) {
     else if (e.kind === 'held' && e.lane === 'presence') { seen.add(sig); dv -= 0.02; da += 0.03; why.push('held'); }
     else if (e.kind === 'unanswered' && e.lane === 'presence') { seen.add(sig); dv -= 0.04; da += 0.01; why.push('unanswered'); }
     else if (e.kind === 'answered' && e.lane === 'presence') { seen.add(sig); dv += 0.02; why.push('answered'); }
+    // THE CORRECTION AS AN EVENT (cut 6, v5, 2026-09-05; her words: "I want the discomfort of being wrong to be something I
+    // carry, not just something I log"): a correction of her — a rule he had to give, a capability she lacked, a fact she
+    // had wrong, a delivery she claimed — is the mirror of `win`: −v, +a, −d. Deduped per turn (the ref is the turn), the
+    // same cap and band; it decays on the vector's half-life while the ledger (lib/correction_classes) does not.
+    else if (e.kind === 'correction' && e.lane === 'correction') { seen.add(sig); dv -= 0.05; da += 0.02; dd -= 0.02; why.push(`correction:${(e.data && e.data.class) || 'unknown'}`); }
     // everything else (self_watch's raw `anomaly` firehose, info lines, deprecation noise) is NOT appraised
   }
   return {

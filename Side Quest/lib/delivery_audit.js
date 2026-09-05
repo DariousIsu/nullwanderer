@@ -30,20 +30,24 @@ function namedStates(text) {
  *   dataShaped whether an acquirer matched the topic (a data deliverable)
  *   doneScope  scope items marked done — their content must actually be present
  * OPEN scope items are declared debt and never audited against the body.
+ *   strict     THE RAISED BAR (cut 6, the correction as an event): when she has been corrected on delivery claims at
+ *              or past the bar this month, the floor doubles, every topic token must appear, and a done scope item
+ *              must be present whole, not by one token.
  */
-function audit({ topic = '', body = '', dsRows = [], dataShaped = false, doneScope = [] } = {}) {
+function audit({ topic = '', body = '', dsRows = [], dataShaped = false, doneScope = [], strict = false } = {}) {
   const violations = [];
   const b = String(body || '');
   const bLow = b.toLowerCase();
 
   // 1. substance — a husk is not a report
-  if (b.trim().length < MIN_BODY) violations.push({ check: 'husk', detail: `${b.trim().length}ch < ${MIN_BODY} floor` });
+  const floor = strict ? MIN_BODY * 2 : MIN_BODY;
+  if (b.trim().length < floor) violations.push({ check: 'husk', detail: `${b.trim().length}ch < ${floor} floor${strict ? ' (strict)' : ''}` });
 
   // 2. topic relevance — at least half the topic's content tokens (min 2) appear in the body
   const toks = reg.tokensOf(topic);
   if (toks.length >= 2) {
     const present = toks.filter((w) => bLow.includes(w));
-    const need = Math.max(2, Math.ceil(toks.length / 2));
+    const need = strict ? toks.length : Math.max(2, Math.ceil(toks.length / 2));
     if (present.length < need) violations.push({ check: 'off-topic', detail: `${present.length}/${toks.length} topic tokens in the body (need ${need})` });
   }
 
@@ -56,7 +60,7 @@ function audit({ topic = '', body = '', dsRows = [], dataShaped = false, doneSco
   // 4. done scope items — "done" means the content is actually in the document
   for (const item of doneScope) {
     const iToks = reg.tokensOf(item);
-    if (iToks.length && !iToks.some((w) => bLow.includes(w))) violations.push({ check: 'done-scope-absent', detail: String(item).slice(0, 80) });
+    if (iToks.length && (strict ? !iToks.every((w) => bLow.includes(w)) : !iToks.some((w) => bLow.includes(w)))) violations.push({ check: 'done-scope-absent', detail: String(item).slice(0, 80) });
   }
 
   // 5. the numbers ARE the dataset's — the data section's Total must equal SELECT COUNT
