@@ -838,6 +838,8 @@ const smokes = [
   'smoke_self_changes.js',
   // THE ORGAN ATLAS (cut 11, 09-05): the scan, the seeded table, stale entries as findings, which-organ lookups, the rank boost, the wiring
   'smoke_organ_atlas.js',
+  // THE WORKSHOP (cut 12, 09-05): the weekly slot, the craft critic with no citation requirement, origin isolation, the pass cap, his read as the judge
+  'smoke_workshop.js',
   'smoke_core_dataset.js',
   // The core's probe (design §6/§8/§16): scores a candidate local model on the frozen holdout — the loose
   // JSON parser, the agreement scorer, the voice contract, the one-shot prompt — with an injected call.

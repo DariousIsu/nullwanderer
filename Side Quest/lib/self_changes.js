@@ -21,10 +21,10 @@
  *   pendingAnnounce() / markAnnounced()       — a change with no announced_turn_id surfaces once, one line in her
  *                                               voice, through the exploration share outbox in a lull (main.js).
  * Doors: self_explore · persona_attend · prompted_turn (an explicit first-person statement in her own reply) ·
- * preferences · told. Any other caller is refused. Pure where it can be; the store is injectable for the smoke.
+ * preferences · told · workshop (cut 12: a finished piece). Any other caller is refused. Pure where it can be; the store is injectable for the smoke.
  */
 
-const DOORS = Object.freeze(['self_explore', 'persona_attend', 'prompted_turn', 'preferences', 'told']);
+const DOORS = Object.freeze(['self_explore', 'persona_attend', 'prompted_turn', 'preferences', 'told', 'workshop']);   // workshop: cut 12 — a finished piece is experienced work of hers
 const KINDS = Object.freeze(['new', 'revise', 'retire', 'position']);
 
 // ── the store (injectable) ─────────────────────────────────────────────────────────────────────────────────

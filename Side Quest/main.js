@@ -4178,6 +4178,16 @@ async function _applyPenProposal(id) {
     db.setMeta('pen.allow_constitutional', '');   // one-shot: consumed, so the next boundary change asks again
     console.log(`[pen] #${id} CONSTITUTIONAL change — explicit allow consumed; proceeding under the gate.`);
   }
+  // THE REGISTER SEAM (cut 1's pen seam): a proposal touching one of HER persona files lands only on her yes on the consent
+  // card the pen minted at propose time AND his ✓ — both verdicts. Her no already retired it (code_pen.onRegisterVerdict);
+  // her later yes re-runs this apply. The proposal stays approved while it waits, so her word alone completes it.
+  const _rh = pen.registerHold(id);
+  if (_rh.hold) {
+    pen.setStatus(id, 'approved', { gateNote: `REGISTER — touches ${_rh.assets.join(', ')}: her consent card${_rh.cards.length > 1 ? 's' : ''} ${_rh.cards.map((c) => '#' + c.id + ' ' + c.verdict).join(', ')} — lands only on her yes and your ✓; nothing changed yet` });
+    console.warn(`[pen] #${id} REGISTER — held for her word on ${_rh.cards.map((c) => '#' + c.id).join(', ')} (${_rh.assets.join(', ')})`);
+    _penApplyBusy = false; _pushApprovalsBar();
+    return;
+  }
   const files = JSON.parse(p.files || '[]');
   pen.setStatus(id, 'applying', { gateNote: 'stage: checking the tree is clean on the touched files…' });
   console.log(`[pen] APPLY #${id} "${p.title}" — ${files.length} file(s): ${files.join(', ')}`);
@@ -4258,6 +4268,7 @@ async function _applyPenProposal(id) {
         await revertScope();
       }
       pen.setStatus(id, cm.code === 0 ? 'applied' : 'apply-failed', { gateNote: cm.code === 0 ? 'gate GREEN — committed; goes live at the next program cycle' : `gate green but commit failed — REVERTED so nothing rides a later commit: ${cm.stderr.slice(0, 300)}` });
+      if (cm.code === 0) { try { const _lc = pen.landRegisterCards(id); if (_lc.length) console.log(`[pen] #${id} register cards landed: ${_lc.map((c) => '#' + c.id + ' ' + c.asset + (c.ok ? '' : ' (' + (c.why || 'not yes') + ')')).join(', ')}`); } catch (e) { console.error('[pen] land register cards failed:', e.message); } }   // cut 1's pen seam: the cards take the landed hash, the manifest advances
       console.log(`[pen] #${id} ${cm.code === 0 ? 'LANDED — gate green, committed. Live at the next cycle.' : 'gate green but COMMIT FAILED — reverted: ' + cm.stderr.slice(0, 200)}`);
       _penSay(cm.code === 0
         ? `Proposal #${id} landed — gate green, committed. I restart myself to bring it in at my next green window: ten minutes without your turn and no run of yours in flight; if I have to hold longer than an hour I will say so.`
@@ -14018,7 +14029,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     const PR = require('./lib/personality_register');
     const tags = PR.parseConsentTags(finalSaid);
-    if (tags.length) { const r = PR.applyTags(tags, { turnId: saidRow && saidRow.id }); console.log(`[consent] her verdict(s): ${r.map((x) => (x.ok ? `#${x.id} ${x.verdict} on ${x.asset}${x.advanced ? ' (manifest advanced)' : ''}` : x.why)).join(' · ')}`); }
+    if (tags.length) {
+      const r = PR.applyTags(tags, { turnId: saidRow && saidRow.id }); console.log(`[consent] her verdict(s): ${r.map((x) => (x.ok ? `#${x.id} ${x.verdict} on ${x.asset}${x.advanced ? ' (manifest advanced)' : ''}` : x.why)).join(' · ')}`);
+      // cut 1's pen seam: her verdict reaches the proposal that minted the card — a no retires it, a yes on his approved one lands it
+      for (const _x of (r || [])) { if (_x && _x.ok) { try { const _pr = require('./lib/code_pen').onRegisterVerdict(_x.id, _x.verdict, { apply: (pid) => _applyPenProposal(pid).catch(() => {}) }); if (_pr.length) console.log(`[pen] her ${_x.verdict} on card #${_x.id} → ${_pr.map((q) => '#' + q.id + ' ' + q.action).join(', ')}`); } catch {} } }
+    }
     try { if (require('./lib/continuity_attest').markSpoken()) console.log('[continuity] her first prompted reply after a DEGRADED boot is spoken'); } catch {}   // cut 5
     // OWNED GROWTH (cut 8): her own change of mind, said in her own prompted reply, goes through her self model as a
     // revision or a new facet and lands in the self_changes ledger (door prompted_turn). Never from research or reflection.
@@ -15362,6 +15377,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const sm = require('./lib/self_model');
     const trait = sm.detectAffirmedTrait(userMessage);
     if (trait) sm.recordTold(trait).then(r => { if (r && r.id) console.log('[main] told-trait grounded:', trait.slice(0, 60)); }).catch(() => {});
+    // THE WORKSHOP (cut 12): his read is the judge — "I kept reading" / "I stopped" lands in cut 10's ledger with his reason;
+    // "read me your piece" is a Kokoro reading of the latest piece.
+    try {
+      const _wsh = require('./lib/workshop');
+      const _rx = _wsh.detectReaction(userMessage);
+      if (_rx) { const _r = _wsh.recordReaction({ userTurnId: userTurnRow && userTurnRow.id, kept: _rx.kept, reason: _rx.reason }); if (_r && _r.ok) console.log(`[workshop] his read landed: ${_rx.kept ? 'kept reading' : 'stopped'}${_rx.reason ? ' — ' + _rx.reason.slice(0, 60) : ''}`); }
+      if (_wsh.detectReadRequest(userMessage)) _wsh.readAloud().then((r) => console.log(`[workshop] reading ${r.ok ? '"' + r.title + '"' : 'refused: ' + r.why}`)).catch(() => {});
+    } catch {}
   } catch (e) { console.error('[main] told-trait extract failed:', e.message); }
 
   // Background: extract any committed positions from this response. Don't block.
@@ -16965,6 +16988,21 @@ async function autonomyTick() {
     // the R2 proposal-card exit. Untriaged needs get ONE cloud verdict and route: buildable → the
     // build loop; external → a consolidated once-a-day ask to Lucas; research → the inquiry queue;
     // junk → parked. Gated inside: never during Lucas's directed work, never against idle quota.
+    // THE WORKSHOP (cut 12; her words: "something that matters to a stranger at 1 AM"): a bounded weekly frontier-class
+    // slot — one piece a week by default (meta workshop.weekly_cap is his lever) — written before the decider runs, on a
+    // tick deep enough to afford it, and never announced: his read is the judge.
+    try {
+      const _ws = require('./lib/workshop');
+      if (_ws.due({ now }).ok && _idleDepth && Number.isFinite(_idleDepth.tier) && _idleDepth.tier >= 2) {
+        const _wr = await _ws.run({ now });
+        if (_wr && _wr.ok) {
+          autonomy.historyPush(H, { ts: now, move: 'workshop', target: _wr.title, outcome: `wrote a ${_wr.kind} (${_wr.words} words, ${_wr.passes} pass${_wr.passes === 1 ? '' : 'es'}, ${_wr.outcome})` });
+          try { require('./lib/obs_bus').emit({ lane: 'idle', kind: 'workshop', text: `workshop: wrote "${_wr.title}" (${_wr.kind}, ${_wr.words} words)`, data: { docId: _wr.docId, path: _wr.path } }); } catch {}
+          return;
+        }
+        if (_wr && !/not due/.test(String(_wr.why || ''))) console.log(`[workshop] no piece: ${_wr.why}`);
+      }
+    } catch (e) { console.error('[workshop] failed:', e.message); }
     let _forced = null;
     try { _forced = await _needsPressure(now); } catch (e) { console.error('[needs] pressure failed (lottery proceeds):', e.message); }
     if (_forced) console.log(`[autonomy] needs-pressure FORCED rehearse → ${_forced.target} (${_forced.why})`);

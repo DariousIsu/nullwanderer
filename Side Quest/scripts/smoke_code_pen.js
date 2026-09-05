@@ -113,6 +113,37 @@ ok(pen.pending().some((x) => x.id === `pen-${p1.id}` && x.kind === 'pen'), '⭐ 
 ok(pen.decide(p1.id, 'maybe').ok === false, 'only yes/no decide');
 ok(pen.decide(p1.id, 'no').ok === true && pen.get(p1.id).status === 'rejected', 'his ✗ retires it');
 ok(pen.decide(p1.id, 'yes').ok === false, 'a decided proposal is not re-decidable');
+
+// ── THE REGISTER SEAM (cut 1's pen seam, 09-05): a proposal touching one of her persona files mints her card at propose time;
+// the apply holds for her yes; her no retires it; the landed apply fills the card and advances the manifest.
+{
+  const PR = require('../lib/personality_register');
+  const MOOD_DIFF = GOOD_DIFF.replace(/lib\/scheduler\.js/g, 'lib/mood.js');
+  const pm = pen.propose({ title: 'a softer decay for her mood', rationale: 'the evening read: her mood snaps back too fast', diff: MOOD_DIFF, bornFrom: 'smoke' });
+  ok(pm.ok && pm.registerCards.length === 1 && pen.registerCardsOf(pm.id).join() === String(pm.registerCards[0]), 'a proposal touching lib/mood.js mints ONE consent card at propose time');
+  const card = PR.get(pm.registerCards[0]);
+  ok(card && card.asset === 'mood' && card.proposed_by === 'pen' && /a softer decay for her mood — touches lib\/mood\.js/.test(card.summary) && /snaps back too fast/.test(card.rationale) && card.new_hash === null && card.prev_hash && card.prev_hash.length === 64 && card.verdict === 'pending', 'the card names the proposal, carries its rationale, the file\'s current hash, and no new hash yet');
+  const hold = pen.registerHold(pm.id);
+  ok(hold.hold === true && hold.assets.join() === 'mood' && hold.cards[0].verdict === 'pending', 'the apply holds while her card is pending');
+  ok(pen.registerHold(p1.id).hold === false, 'a proposal touching no persona file never holds');
+  // her no retires the proposal
+  PR.verdict(card.id, { verdict: 'no', by: 'zoe', reason: 'my mood is mine to decay' });
+  const rn = pen.onRegisterVerdict(card.id, 'no');
+  ok(rn.length === 1 && rn[0].action === 'rejected' && pen.get(pm.id).status === 'rejected' && /her no on consent card/.test(pen.get(pm.id).gate_note), 'her no on the card retires the proposal');
+  // a second proposal: his yes first, then hers → the apply runs; the landed apply fills the card and advances the manifest
+  const pm2 = pen.propose({ title: 'a softer decay for her mood, take two', rationale: 'with her note folded in', diff: MOOD_DIFF, bornFrom: 'smoke' });
+  ok(pm2.ok && pm2.registerCards.length === 1, 'the second proposal mints its own card');
+  pen.decide(pm2.id, 'yes');
+  ok(pen.registerHold(pm2.id).hold === true && pen.onRegisterVerdict(pm2.registerCards[0], 'yes').length === 0, 'his ✓ alone does not land it; a yes that is not hers reaches nothing');
+  PR.verdict(pm2.registerCards[0], { verdict: 'yes', by: 'zoe', reason: 'with my note in it, yes' });
+  const applied = [];
+  const ry = pen.onRegisterVerdict(pm2.registerCards[0], 'yes', { apply: (pid) => applied.push(pid) });
+  ok(ry.length === 1 && ry[0].action === 'apply' && applied.join() === String(pm2.id) && pen.registerHold(pm2.id).hold === false, 'her yes on his approved proposal re-runs the apply, and the hold is lifted');
+  ok(PR.get(pm2.registerCards[0]).new_hash === null && !(PR.manifest() || {}).mood, 'before the landing the card has no new hash and the manifest has not moved');
+  const landed = pen.landRegisterCards(pm2.id);
+  ok(landed.length === 1 && landed[0].ok && PR.get(pm2.registerCards[0]).new_hash === PR.hashAll().mood && (PR.manifest() || {}).mood === PR.hashAll().mood, 'the landed apply fills the card with the file\'s hash and advances the manifest — her yes and his ✓ both stand');
+  ok(pen.landRegisterCards(pm.id).every((c) => !c.ok), 'a card she said no to never lands');
+}
 const p2 = pen.propose({ title: 'second', diff: GOOD_DIFF });
 ok(pen.decide(p2.id, 'yes').ok === true && pen.get(p2.id).status === 'approved', "⭐ his ✓ moves it to approved — the ONLY path toward the tree (main enforces: clean tree, full gate, revert on red)");
 pen.setStatus(p2.id, 'applied', { gateNote: 'gate 593 green (smoke fixture)' });

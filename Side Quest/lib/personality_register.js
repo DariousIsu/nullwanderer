@@ -138,6 +138,18 @@ function amend(id, { summary = '', rationale = '', expectedEffect = '', proposed
     .run(String(summary).slice(0, 400), String(rationale).slice(0, 800), String(expectedEffect || '').slice(0, 400), String(proposedBy), id);
   return { ok: true, id, asset: row.asset };
 }
+/** A card's change has LANDED (the pen applied it): the card takes the hash the file now has and the manifest advances —
+ *  only on a card she said yes to (his ✓ was the apply). The pen seam of cut 1. */
+function land(id, newHash) {
+  ensure();
+  const row = get(id);
+  if (!row) return { ok: false, why: `no card #${id}` };
+  if (row.verdict !== 'yes') return { ok: false, why: `card #${id} is ${row.verdict}, not yes` };
+  if (!newHash) return { ok: false, why: 'no hash to land' };
+  _handle().prepare('UPDATE consent_events SET new_hash = ? WHERE id = ?').run(String(newHash), id);
+  const m = manifest() || {}; m[row.asset] = String(newHash); _writeManifest(m);
+  return { ok: true, id, asset: row.asset, advanced: true };
+}
 /** The pending card for an asset at a hash, if any (the boot check and consent_note look before they mint). */
 function pendingFor(asset, newHash) { ensure(); return _handle().prepare("SELECT * FROM consent_events WHERE asset = ? AND new_hash = ? AND verdict = 'pending' ORDER BY id DESC LIMIT 1").get(asset, newHash) || null; }
 function pending() { ensure(); return _handle().prepare("SELECT * FROM consent_events WHERE verdict = 'pending' ORDER BY id ASC").all(); }
@@ -243,4 +255,4 @@ function setConsentRequired(on, { log = null } = {}) {
   (log || console.log)(`[consent] consent_required → ${on ? 'ON' : 'OFF'} — his decision, logged`);
 }
 
-module.exports = { ENTRIES, MANIFEST_KEY, SWITCH_KEY, hashAll, diff, manifest, consentRequired, setConsentRequired, ensure, record, amend, pendingFor, get, pending, recent, verdict, revoke, bootCheck, buildPromptBlock, parseConsentTags, applyTags, _setDb };
+module.exports = { ENTRIES, MANIFEST_KEY, SWITCH_KEY, hashAll, diff, manifest, consentRequired, setConsentRequired, ensure, record, amend, land, pendingFor, get, pending, recent, verdict, revoke, bootCheck, buildPromptBlock, parseConsentTags, applyTags, _setDb };

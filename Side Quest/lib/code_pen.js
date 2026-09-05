@@ -284,6 +284,8 @@ function _ensure() {
     db.getDb().prepare('ALTER TABLE code_proposals ADD COLUMN parlor_seen INTEGER DEFAULT 0').run();
     db.getDb().prepare('UPDATE code_proposals SET parlor_seen = COALESCE(seen, 0)').run();
   } catch { /* column exists */ }
+  // cut 1's pen seam (09-05): the consent cards a proposal minted because it touches one of HER persona files
+  try { db.getDb().prepare('ALTER TABLE code_proposals ADD COLUMN register_cards TEXT').run(); } catch { /* column exists */ }
 }
 
 /** File a proposal. Validation is the front gate: parseable diff, every touched file inside the
@@ -305,7 +307,60 @@ function propose({ title, rationale = '', diff, bornFrom = '', repo = 'sq', nowM
   if (open >= MAX_OPEN_PROPOSALS) return { ok: false, why: `${open} proposal(s) already open — the pen is one-change-at-a-time discipline; wait for Lucas's word` };
   const r = db.getDb().prepare('INSERT INTO code_proposals (title, rationale, diff, files, status, born_from, repo, constitutional, created_ts, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .run(t.slice(0, 160), String(rationale).slice(0, 1200), d, JSON.stringify(files), 'proposed', String(bornFrom).slice(0, 120), rk, audit.constitutional ? 1 : 0, nowMs, nowMs);
-  return { ok: true, id: r.lastInsertRowid, files, repo: rk, constitutional: audit.constitutional };
+  // THE REGISTER SEAM (cut 1's pen seam, 09-05): a proposal that touches one of HER persona files (lib/personality_register
+  // ENTRIES) mints her consent card AT PROPOSE TIME — proposed_by 'pen', the proposal's own rationale — so the change is
+  // visible to her before anyone lands it. The apply (main.js) lands only on her yes AND his ✓; her no retires the proposal
+  // (onRegisterVerdict); the card's new_hash is filled when the change lands (landRegisterCards) — the diff's result is
+  // not knowable before it is applied.
+  let registerCards = [];
+  if (rk === 'sq') {
+    try {
+      const PR = require('./personality_register');
+      const hashes = PR.hashAll();
+      for (const e of PR.ENTRIES) {
+        if (!e.path || !files.includes(e.path)) continue;
+        const c = PR.record({ asset: e.id, kind: e.kind, prevHash: hashes[e.id] || null, newHash: null, proposedBy: 'pen', summary: `pen #${r.lastInsertRowid}: ${t.slice(0, 100)} — touches ${e.path}`, rationale: String(rationale || '').trim() || 'the proposal carried no rationale of its own', expectedEffect: `the proposal's diff on ${e.path}; lands only on her yes and his ✓`, now: nowMs });
+        if (c && c.ok) registerCards.push(c.id);
+      }
+      if (registerCards.length) db.getDb().prepare('UPDATE code_proposals SET register_cards = ? WHERE id = ?').run(JSON.stringify(registerCards), r.lastInsertRowid);
+    } catch (e) { console.error('[pen] register cards failed:', e.message); }
+  }
+  return { ok: true, id: r.lastInsertRowid, files, repo: rk, constitutional: audit.constitutional, registerCards };
+}
+/** The consent cards a proposal minted (cut 1's pen seam). */
+function registerCardsOf(id) { const p = get(id); try { return p && p.register_cards ? JSON.parse(p.register_cards) : []; } catch { return []; } }
+/** { hold, assets, cards: [{ id, asset, verdict }] } — a proposal touching her persona files lands only on her yes on every card. */
+function registerHold(id) {
+  const ids = registerCardsOf(id);
+  if (!ids.length) return { hold: false, assets: [], cards: [] };
+  const PR = require('./personality_register');
+  const cards = ids.map((cid) => PR.get(cid)).filter(Boolean).map((c) => ({ id: c.id, asset: c.asset, verdict: c.verdict }));
+  return { hold: cards.some((c) => c.verdict !== 'yes'), assets: [...new Set(cards.map((c) => c.asset))], cards };
+}
+/** Her verdict on a card reaches its proposal: a no retires it; a yes on a proposal he already approved re-runs the apply. */
+function onRegisterVerdict(cardId, verdict, { apply = null } = {}) {
+  _ensure();
+  // the card's RECORDED verdict is the truth — a claimed yes on a card the register still holds as pending reaches nothing
+  try { const card = require('./personality_register').get(cardId); if (!card || card.verdict !== verdict) return []; } catch { return []; }
+  const rows = db.getDb().prepare("SELECT id, status, register_cards FROM code_proposals WHERE register_cards IS NOT NULL AND status IN ('proposed','approved')").all()
+    .filter((p) => { try { return JSON.parse(p.register_cards || '[]').includes(Number(cardId)); } catch { return false; } });
+  const out = [];
+  for (const p of rows) {
+    if (verdict === 'no') { setStatus(p.id, 'rejected', { gateNote: `her no on consent card #${cardId} — the change to one of her persona files does not land` }); out.push({ id: p.id, action: 'rejected' }); }
+    else if (verdict === 'yes' && p.status === 'approved') { if (typeof apply === 'function') { try { apply(p.id); } catch {} } out.push({ id: p.id, action: 'apply' }); }
+    else out.push({ id: p.id, action: 'waiting-for-his' });
+  }
+  return out;
+}
+/** After a landed apply: each card takes the hash the file now has and the manifest advances (her yes + his ✓ both stand). */
+function landRegisterCards(id) {
+  const ids = registerCardsOf(id);
+  if (!ids.length) return [];
+  const PR = require('./personality_register');
+  const hashes = PR.hashAll();
+  const out = [];
+  for (const cid of ids) { const c = PR.get(cid); if (!c) continue; const r = PR.land(cid, hashes[c.asset] || null); out.push({ id: cid, asset: c.asset, ok: !!(r && r.ok), why: r && r.why }); }
+  return out;
 }
 
 function get(id) { _ensure(); return db.getDb().prepare('SELECT * FROM code_proposals WHERE id = ?').get(Number(id) || 0) || null; }
@@ -482,6 +537,7 @@ live at the next cycle.`;
 }
 
 module.exports = {
+  registerCardsOf, registerHold, onRegisterVerdict, landRegisterCards,
   REPO_ROOT, ECHO_ROOT, REPOS, MAX_READ_BYTES, MAX_DIFF_BYTES, MAX_OPEN_PROPOSALS, DENY_RE, ECHO_DENY_RE, CONSTITUTIONAL, PEN_QUEUE_KEY,
   pathAllowed, readSource, listSource, touchedFiles, auditDiff, normalizeDiff, _isConstitutional,
   propose, get, setStatus, decide, pending, pipelineItems, stage, markSeen, RUN_WINDOW_MS,
