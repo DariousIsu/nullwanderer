@@ -708,7 +708,8 @@ const _speech = (() => {
     playChain = playChain.then(async () => {
       if (gen !== myGen) return;   // barged since enqueue → skip
       const res = await synthP;
-      if (res && res.ok && gen === myGen) { try { await _playWavFile(res); } catch (e) {} }
+      if (res && res.ok && res.silenceMs && gen === myGen) { await new Promise((r) => setTimeout(r, Math.min(2000, res.silenceMs))); }   // a beat (the breath, until the voice model breathes)
+      else if (res && res.ok && gen === myGen) { try { await _playWavFile(res); } catch (e) {} }
       if (item.pauseMs > 0 && gen === myGen) await new Promise((r) => setTimeout(r, Math.min(2000, item.pauseMs)));   // <tone pause/>
     }).finally(() => { queued--; if (queued === 0) scheduleOff(); });
   }

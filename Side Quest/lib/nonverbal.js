@@ -21,7 +21,9 @@ const SR = 24000;   // the tuner's rate, so a clip splices beside a sentence wit
 
 // The bank. spoken → through Kokoro (her recipe + a tone); dsp → synthesized here.
 const KINDS = {
-  breath:  { dsp: 'breath',  ms: 340 },
+  // his ear on v2 (09-05 ~10:00): "the breathing is worse" — a synthesized breath is a closed road. Until the
+  // voice model renders breaths itself (the Orpheus eval), <breath/> is a beat of silence, never a noise.
+  breath:  { silenceMs: 260 },
   sigh:    { dsp: 'sigh',    ms: 950 },
   laugh:   { spoken: 'Ha ha ha!',  tone: 'quick' },
   chuckle: { spoken: 'Heh heh.',   tone: 'warm' },
@@ -105,7 +107,7 @@ function peak(samples) { let p = 0; for (let i = 0; i < samples.length; i++) p =
 // ── the bank ────────────────────────────────────────────────────────────────────────────────────────
 function _hash(o) { return crypto.createHash('sha1').update(JSON.stringify(o)).digest('hex').slice(0, 10); }
 function clipPath(kind, recipe, { dir = DIR } = {}) {
-  const spec = KINDS[kind]; if (!spec) return null;
+  const spec = KINDS[kind]; if (!spec || spec.silenceMs) return null;
   const key = spec.dsp ? _hash({ kind, dsp: spec.dsp, ms: spec.ms, v: 2 }) : _hash({ kind, spoken: spec.spoken, tone: spec.tone, recipe: recipe && { w: recipe.weights, l: recipe.lang, s: recipe.speed }, v: 1 });
   return path.join(dir, `${kind}.${key}.wav`);
 }
@@ -119,6 +121,7 @@ async function ensureClip(kind, { deps = {} } = {}) {
   const spec = KINDS[kind];
   if (!spec) return { ok: false, error: `unknown non-verbal: ${kind}` };
   if (process.env.ZOE_NONVERBAL === '0') return { ok: false, error: 'ZOE_NONVERBAL=0' };
+  if (spec.silenceMs) return { ok: true, silenceMs: spec.silenceMs, kind, cached: true };   // a beat, not a clip
   const fsx = deps.fs || fs;
   const dir = deps.dir || DIR;
   const recipe = deps.recipe !== undefined ? deps.recipe : (() => { try { return require('./voices').activeRecipe(); } catch { return null; } })();

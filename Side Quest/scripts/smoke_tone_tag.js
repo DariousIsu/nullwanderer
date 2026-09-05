@@ -90,7 +90,10 @@ ok(/db\.getMeta\('voice\.auto_breath'\) === '1'/.test(mainSrcEarly) && /nv && au
   ok(dB(rms) > -41 && dB(rms) < -35 && dB(pk) <= -22, `its level is a decision: rms ${dB(rms).toFixed(1)} dBFS, peak ${dB(pk).toFixed(1)} (≈18 dB under speech)`);
   ok(lf / tot < 0.03, `no rumble below 150 Hz (${(100 * lf / tot).toFixed(1)}%)`);
   ok(pkHead < 0.4 * pk && pkTail < 0.3 * pk, `it rises and falls — no plateau, no blow (head ${(pkHead / pk).toFixed(2)}, tail ${(pkTail / pk).toFixed(2)} of peak)`);
-  ok(nvb.KINDS.breath.ms === 340 && /breath\.(?!41db694866)/.test(path.basename(nvb.clipPath('breath', null))), 'the bank names the new length and the cached v1 clip is left behind (a new hash)');
+  // his ear on v2 ("the breathing is worse"): the mark is a beat of silence until the voice model breathes itself
+  ok(nvb.KINDS.breath.silenceMs === 260 && !nvb.KINDS.breath.dsp && nvb.clipPath('breath', null) === null, 'the bank: <breath/> is a 260 ms beat, no clip, no file');
+  const mainSrcB = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/res\.ok && res\.silenceMs && gen === myGen\) \{ await new Promise\(\(r\) => setTimeout\(r, Math\.min\(2000, res\.silenceMs\)\)\); \}/.test(mainSrcB), 'the speech manager plays a beat as silence, never as a wav');
   const sg = nvb.synthSigh(); let sgHead = 0, sgPk = 0; for (let i = 0; i < sg.length; i++) sgPk = Math.max(sgPk, Math.abs(sg[i])); for (let i = 0; i < sg.length * 0.2; i++) sgHead = Math.max(sgHead, Math.abs(sg[i]));
   ok(sg.length === Math.round(sr * 0.95) && sgHead > 0.5 * sgPk, 'a sigh is an exhale: it starts near full and falls');
 }
@@ -148,9 +151,11 @@ ok(wav.toString('ascii', 0, 4) === 'RIFF' && wav.toString('ascii', 8, 12) === 'W
 ok(NV.kinds().join() === 'breath,sigh,laugh,chuckle,hmm' && tts.NONVERBAL_KINDS.join() === NV.kinds().join(), 'the bank and the tag vocabulary agree');
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq_nv_'));
-  const c1 = await NV.ensureClip('breath', { deps: { dir, recipe: null } });
-  ok(c1.ok && fs.existsSync(c1.out) && c1.cached === false && c1.sampleRate === NV.SR && c1.bytes > 44, 'ensureClip(breath): synthesized to the bank');
-  const c2 = await NV.ensureClip('breath', { deps: { dir, recipe: null } });
+  const beat = await NV.ensureClip('breath', { deps: { dir, recipe: null, fs: { existsSync: () => { throw new Error('never touches disk'); } } } });
+  ok(beat.ok && beat.silenceMs === 260 && !beat.out, `ensureClip(breath) answers a beat of silence without touching disk (${JSON.stringify(beat)})`);
+  const c1 = await NV.ensureClip('sigh', { deps: { dir, recipe: null } });
+  ok(c1.ok && fs.existsSync(c1.out) && c1.cached === false && c1.sampleRate === NV.SR && c1.bytes > 44, 'ensureClip(sigh): synthesized to the bank');
+  const c2 = await NV.ensureClip('sigh', { deps: { dir, recipe: null } });
   ok(c2.ok && c2.cached === true && c2.out === c1.out, 'the second ask is served from the cache');
   const calls = [];
   const fakeSynth = async (text, recipe, o) => { calls.push({ text, recipe }); fs.writeFileSync(o.out, NV.wavBytes(NV.synthBreath({ ms: 100 }))); return { ok: true, out: o.out }; };
@@ -158,7 +163,7 @@ ok(NV.kinds().join() === 'breath,sigh,laugh,chuckle,hmm' && tts.NONVERBAL_KINDS.
   ok(laugh.ok && calls.length === 1 && calls[0].text === 'Ha ha ha!' && near(calls[0].recipe.speed, 1.23) && laugh.sampleRate === NV.SR, `a laugh is HER recipe at the quick tone ("${calls[0].text}" @ ${calls[0].recipe.speed})`);
   const hmm = await NV.ensureClip('hmm', { deps: { dir, recipe: zoe, synth: fakeSynth } });
   ok(hmm.ok && calls[1].text === 'Hmm.' && near(calls[1].recipe.speed, 1.03), 'an hmm is her recipe at the low tone');
-  ok(NV.clipPath('laugh', zoe, { dir }) !== NV.clipPath('laugh', { ...zoe, speed: 1.0 }, { dir }) && NV.clipPath('breath', zoe, { dir }) === NV.clipPath('breath', null, { dir }), 'spoken clips are keyed by her recipe (a new voice regenerates them); DSP clips are not');
+  ok(NV.clipPath('laugh', zoe, { dir }) !== NV.clipPath('laugh', { ...zoe, speed: 1.0 }, { dir }) && NV.clipPath('sigh', zoe, { dir }) === NV.clipPath('sigh', null, { dir }), 'spoken clips are keyed by her recipe (a new voice regenerates them); DSP clips are not');
   const dead = await NV.ensureClip('chuckle', { deps: { dir, recipe: zoe, synth: async () => ({ ok: false, error: 'tuner down' }) } });
   ok(!dead.ok && /tuner down/.test(dead.error), 'a clip that cannot be made answers ok:false — the words still play');
   ok(!(await NV.ensureClip('sneeze', { deps: { dir } })).ok, 'an unknown kind is refused');

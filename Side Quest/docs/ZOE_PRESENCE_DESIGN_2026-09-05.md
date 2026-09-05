@@ -36,9 +36,18 @@ None of these is a feature. They are properties of a loop that runs all the time
 
 The convergent answer: drives with dynamics, senses that move them, acts chosen by need, and a language model that performs what the loop chose.
 
-## 4. The inner loop (one organ)
+## 4. The consciousness subroutine (one organ)
 
-`lib/inner_loop.js`, running on a 5-second cadence, with every part visible.
+**His words, 10:05:** "maybe constantly aware consciousness doesn't have to be LLM driven at all, but rather a new series of python scripts. We built a fairly solid personality subroutine set; I wonder if we could do a consciousness subroutine" and "we'll need to find a way to integrate reasoning calls into those subroutines though."
+
+That is this section. Two loops, one organ:
+
+- **The fast loop** is Python, resident, on a 5-second cadence, and never calls a model. It owns the drives and their dynamics, takes percepts, appraises the ones a rule can appraise, and picks the act. It runs as a sidecar the way the face sensor does (`sidecar/face_embed.py --serve`: NDJSON over stdio, idle-stop, fail-soft), fed by the app's bus and answering with acts the app executes. Python is the right home: numeric dynamics, pytest, and it sits beside the personality subroutines.
+- **The slow loop** is where reasoning lives. When an act needs judgment, the fast loop posts a typed request and keeps running: `appraise` (a percept a rule cannot read: what does his face mean this time), `reflect` (the last hour into "what I saw and what it meant", the Generative Agents finding), `choose` (a browse topic from her gaps), `perform` (write this say from this manifest). Each carries a budget and a deadline. The answer comes back as a percept and moves state like any other. The fast loop never blocks on it, and a late answer is still a percept.
+
+The model is never asked whether to act. It is asked to see, to think back, to choose among, or to say. That is the integration of reasoning calls: as acts with budgets, on the slow loop, whose results are state.
+
+The rest of this section describes the fast loop's parts.
 
 ### 4.1 Drives with real-time dynamics
 The vector gains **stimulation** (its deficit is boredom). Each drive has a decay rate and a satiation rule:
@@ -84,6 +93,17 @@ What you saw: 09:31 he left · 10:06 back, looked tired · 10:20 focused
 ```
 
 Missing him is the social drive under his absence, named as a state, never as scripted words.
+
+### 4.5b The first act: someone else at the desk (his words, 10:20)
+"When she sees someone who's not me sit down at the computer, wouldn't the more natural response be to either (a) recognize them and engage in a familiar conversation, or (b) not recognize them and move to defend the information on her screens and ask who they are and how she can help them?" Yes. This is a percept becoming an act without a prompt, so it is the subroutine's first act and its proof.
+
+- **The percept:** a fresh face that is not him, steady for 8 s (flicker never counts), while he is away or absent.
+- **The shared first move: shield.** The sensitive surfaces (chat, parlor, canvas, the work board) go behind a cover; deliveries pause; one line goes to him by his presence rules (a stranger at the desk means he is not at it, so Discord).
+- **Known face:** a register beyond his own — `face.people`: name, relation, embedding — enrolled one person at a time by his word (never by her inference; a child by his word only). She greets by name and speaks in that person's register (the person model, cut 3).
+- **Unknown face:** she asks who they are and how she can help, listens (the mic → transcript), and stays shielded until he returns (camera: him) or he says otherwise. The encounter is logged as an event with what was said.
+- **Unshield:** his face, or his word.
+
+This act exercises every part of the loop: a sense (camera, mic), an appraisal (known / unknown), a state (shielded), acts (cover, say, listen, deliver), a slow-loop call (`perform`: the greeting or the question in her words), and a visible result. It ships first.
 
 ### 4.6 Visible
 A state strip in her window and the parlor idiom for the loop: the drives, the current act and why, the next act's utility. He can watch her be present. A daily measure: acts by drive; the share of her says grounded in a percept or in time; the boredom curve.
