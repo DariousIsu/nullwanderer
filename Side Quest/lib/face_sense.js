@@ -107,6 +107,41 @@ function _db(deps) { return deps.db || require('./db'); }
 function owner(deps = {}) { try { const v = _db(deps).getMeta(OWNER_KEY); return v ? JSON.parse(v) : null; } catch { return null; } }
 function enabled() { return process.env.ZOE_FACE_SENSE !== '0'; }
 
+/**
+ * THE REGISTER OF KNOWN PEOPLE (the stranger act, design §4.5b): faces she may recognize beyond his — enrolled
+ * one at a time BY HIS WORD ("remember this face as Raegan, my kid"), never by her inference. meta face.people =
+ * [{ name, relation, embedding, at }] (vectors, never images). A reading that is not him carries `known` = the
+ * best match at or above the threshold, else null.
+ */
+const PEOPLE_KEY = 'face.people';
+let _lastFrameB64 = null;
+function people(deps = {}) { try { const v = _db(deps).getMeta(PEOPLE_KEY); const a = v ? JSON.parse(v) : []; return Array.isArray(a) ? a : []; } catch { return []; } }
+function knownFrom(embedding, list, { threshold = SAME_FACE_THRESHOLD } = {}) {
+  if (!embedding || !Array.isArray(list) || !list.length) return null;
+  let best = null, bestSim = threshold - 1e-9;
+  for (const p of list) { if (!p || !p.embedding) continue; const s = cosine(embedding, p.embedding); if (s >= bestSim) { bestSim = s; best = p; } }
+  return best ? { name: best.name, relation: best.relation || null, sim: +bestSim.toFixed(3) } : null;
+}
+/** Enroll a person by his word from the last frame the camera saw (one face in frame). */
+async function enrollPerson(name, relation = null, { deps = {} } = {}) {
+  if (!enabled()) return { ok: false, error: 'ZOE_FACE_SENSE=0' };
+  const nm = String(name || '').trim(); if (!nm) return { ok: false, error: 'no name' };
+  const frame = deps.frameB64 || _lastFrameB64;
+  if (!frame) return { ok: false, error: 'no recent frame — the camera has not seen anyone' };
+  const embed = deps.embed || ((items) => require('./face_match').resident().embed(items));
+  const res = await embed([{ id: 'enroll-person', b64: frame }]);
+  const r = res && res.ok && res.results && res.results[0];
+  if (!r || !r.ok) return { ok: false, error: (r && r.reason) || (res && res.error) || 'no face' };
+  if (r.faces > 1) return { ok: false, error: `${r.faces} faces in the frame — enroll with one person in front of the camera` };
+  const own = owner(deps);
+  if (own && cosine(r.embedding, own) >= SAME_FACE_THRESHOLD) return { ok: false, error: 'that is you — a person must be someone else' };
+  const list = people(deps).filter((p) => p && p.name && p.name.toLowerCase() !== nm.toLowerCase());
+  list.push({ name: nm, relation: relation ? String(relation).trim() : null, embedding: r.embedding, at: deps.now || Date.now() });
+  try { _db(deps).setMeta(PEOPLE_KEY, JSON.stringify(list)); } catch (e) { return { ok: false, error: e.message }; }
+  (deps.log || console.log)(`[face] enrolled ${nm}${relation ? ` (${relation})` : ''} by his word — ${list.length} known (vectors only)`);
+  return { ok: true, name: nm, relation: relation || null, known: list.length };
+}
+
 /** Enroll HIS face: the largest face in this frame becomes his embedding (a vector, never an image). */
 async function enroll(frameB64, { deps = {} } = {}) {
   if (!enabled()) return { ok: false, error: 'ZOE_FACE_SENSE=0' };
@@ -135,7 +170,9 @@ async function onFrame(frameB64, { deps = {} } = {}) {
   let res = null;
   try { res = await embed([{ id: 'f', b64: frameB64 }]); } catch (e) { res = { ok: false, error: e.message }; }
   const r = res && res.ok && res.results && res.results[0];
+  _lastFrameB64 = frameB64;   // for an enrollment by his word ("remember this face as …"); never written anywhere
   const reading = readingFrom(r || { ok: false, reason: (res && res.error) || 'sidecar' }, { owner: owner(deps), now });
+  if (reading.present && reading.is_him === false) { const k = knownFrom(r && r.embedding, deps.people || people(deps)); reading.known = k ? k.name : null; reading.known_relation = k ? k.relation : null; }
   // the expression: the cloud read on a slow cadence, only for a present face, only with the switch on
   let describeOn = true; try { describeOn = db.getMeta('camera.describe') !== '0'; } catch {}
   const everyMs = Number((() => { try { return db.getMeta('camera.describe_every_ms'); } catch { return null; } })()) || 20000;
@@ -198,5 +235,5 @@ function stored(deps = {}) { try { const v = _db(deps).getMeta(FACE_KEY); return
 function awarenessLine({ deps = {}, now = Date.now() } = {}) { return line(_last || stored(deps), { now }); }
 function _reset() { _last = null; _lastLogAt = 0; _lastFrameAt = 0; _lastDescribeAt = 0; _describing = false; _lastPersistAt = 0; }
 
-module.exports = { readingFrom, lookingFromKps, gazeFromBox, changed, parseDescribe, line, cosine, enroll, onFrame, look, status, current, stored, owner, awarenessLine, enabled,
-  OWNER_KEY, FACE_KEY, SAME_FACE_THRESHOLD, FRESH_MS, EXPRESSIONS, DESCRIBE_PROMPT, _reset };
+module.exports = { readingFrom, lookingFromKps, gazeFromBox, changed, parseDescribe, line, cosine, enroll, enrollPerson, people, knownFrom, onFrame, look, status, current, stored, owner, awarenessLine, enabled,
+  OWNER_KEY, FACE_KEY, PEOPLE_KEY, SAME_FACE_THRESHOLD, FRESH_MS, EXPRESSIONS, DESCRIBE_PROMPT, _reset };

@@ -31,12 +31,24 @@ function voiceName() {
   return 'zoe';
 }
 
-/** The raw prompt and request body the reference uses — pure, so a smoke can pin the shape. */
-function requestBody(text, voice, { maxTokens = 1200 } = {}) {
+/**
+ * The raw prompt and request body — pure, so a smoke can pin the shape. SAMPLING (his ear on the live app,
+ * 09-05 ~11:50: "rough and not Zoe's voice … slow mo"): the eval spoke long lines at the reference's 0.6 and
+ * held one voice; live she speaks short sentences, each a fresh sample, and the pitch swung 162–261 Hz across
+ * them (the reel: 169–175). A lower temperature holds the voice; the speech manager also groups her sentences
+ * into one request. meta voice.orpheus_temp / env ZOE_ORPHEUS_TEMP override.
+ */
+function temperature() {
+  const env = parseFloat(process.env.ZOE_ORPHEUS_TEMP || '');
+  if (Number.isFinite(env) && env > 0 && env <= 1.5) return env;
+  try { const m = parseFloat(require('./db').getMeta('voice.orpheus_temp') || ''); if (Number.isFinite(m) && m > 0 && m <= 1.5) return m; } catch {}
+  return 0.4;
+}
+function requestBody(text, voice, { maxTokens = 2400 } = {}) {
   return {
     model: MODEL, raw: true, stream: false, keep_alive: -1,
     prompt: `<|audio|>${voice}: ${String(text).trim()}<|eot_id|>`,
-    options: { temperature: 0.6, top_p: 0.9, repeat_penalty: 1.1, num_predict: maxTokens },
+    options: { temperature: temperature(), top_p: 0.9, repeat_penalty: 1.1, num_predict: maxTokens },
   };
 }
 
@@ -63,6 +75,7 @@ function _post(urlBase, pathName, body, timeoutMs, { httpMod = http } = {}) {
 function createDecoder({ python = DECODER_PY, script = DECODER_SCRIPT, idleMs = IDLE_MS, spawnFn = spawn, log = console.log } = {}) {
   let child = null, ready = null, buf = '', seq = 0, idleTimer = null;
   const waiting = new Map();
+  const streamIds = new Set();
   function stop() { if (idleTimer) clearTimeout(idleTimer); idleTimer = null; if (child) { try { child.kill(); } catch {} } child = null; ready = null; for (const [, w] of waiting) w({ ok: false, error: 'decoder stopped' }); waiting.clear(); }
   function touch() { if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(stop, idleMs); if (idleTimer.unref) idleTimer.unref(); }
   function ensure() {
@@ -80,7 +93,8 @@ function createDecoder({ python = DECODER_PY, script = DECODER_SCRIPT, idleMs = 
           if (!line) continue;
           let msg; try { msg = JSON.parse(line); } catch { continue; }
           if (msg.kind === 'ready') { settle(!!msg.ok); if (msg.ok) log(`[voice-orpheus] decoder ready in ${msg.load_s}s`); else log(`[voice-orpheus] decoder failed: ${msg.error}`); continue; }
-          const w = waiting.get(msg.id); if (w) { waiting.delete(msg.id); w(msg); }
+          // a whole-line request has ONE reply (the waiter goes); a stream has many (its waiter stays until done)
+          const w = waiting.get(msg.id); if (w) { if (!streamIds.has(msg.id)) waiting.delete(msg.id); w(msg); }
         }
       });
       child.stderr.on('data', () => {});
@@ -101,7 +115,81 @@ function createDecoder({ python = DECODER_PY, script = DECODER_SCRIPT, idleMs = 
       try { child.stdin.write(JSON.stringify({ id, text, out }) + '\n'); } catch (e) { clearTimeout(t); waiting.delete(id); resolve({ ok: false, error: e.message }); }
     });
   }
-  return { decode, stop, alive: () => !!child };
+  /** A stream: append raw token text as it arrives; PCM frames come back through onChunk; done() flushes. */
+  async function openStream({ onChunk, onDone }) {
+    const up = await ensure();
+    if (!up || !child) return null;
+    touch();
+    const id = ++seq;
+    let closed = false;
+    streamIds.add(id);
+    waiting.set(id, (msg) => {
+      if (msg.pcm) { try { onChunk({ seq: msg.seq, pcm: Buffer.from(msg.pcm, 'base64'), samples: msg.samples }); } catch {} return; }
+      if (msg.done) { waiting.delete(id); streamIds.delete(id); closed = true; try { onDone(msg); } catch {} }
+    });
+    const send = (o) => { try { child.stdin.write(JSON.stringify({ id, stream: true, ...o }) + '\n'); return true; } catch { return false; } };
+    return {
+      id,
+      append: (text) => { if (!closed) { touch(); send({ append: text }); } },
+      done: () => { if (!closed) send({ done: true }); },
+      abort: () => { if (!closed) { closed = true; waiting.delete(id); streamIds.delete(id); send({ abort: true }); } },
+    };
+  }
+  return { decode, openStream, stop, alive: () => !!child };
+}
+
+/**
+ * STREAMING (his word: "streaming"): a raw completion with stream:true; every Ollama chunk's text goes to the
+ * decoder's stream, which answers with 2048-sample PCM frames as soon as a frame has its context (≈ 28 tokens
+ * ≈ 0.2 s of generation). onChunk({ seq, pcm, samples }) fires per frame; the promise resolves at the end with
+ * { ok, frames, samples, seconds, firstChunkMs, genMs } or { ok:false, error }. abort() stops both ends.
+ */
+function synthesizeStream(text, { voice = null, onChunk, timeoutMs = 90000, deps = {} } = {}) {
+  const v = voice || voiceName();
+  const t0 = Date.now();
+  let firstChunkMs = null, aborted = false, req = null, stream = null;
+  const p = new Promise((resolve) => {
+    let done = false;
+    const finish = (r) => { if (!done) { done = true; resolve(r); } };
+    const killer = setTimeout(() => { try { if (req) req.destroy(new Error('timeout')); } catch {} try { if (stream) stream.abort(); } catch {} finish({ ok: false, error: 'timeout' }); }, timeoutMs);
+    (async () => {
+      const dec = deps.decoder || decoder();
+      stream = await dec.openStream({
+        onChunk: (c) => { if (firstChunkMs === null) firstChunkMs = Date.now() - t0; try { onChunk && onChunk(c); } catch {} },
+        onDone: (m) => { clearTimeout(killer); finish(m.ok === false ? { ok: false, error: m.error || 'decoder' } : { ok: true, frames: m.frames, samples: m.samples, seconds: +((m.samples || 0) / 24000).toFixed(2), firstChunkMs, genMs: Date.now() - t0, voice: v }); },
+      });
+      if (!stream) { clearTimeout(killer); return finish({ ok: false, error: 'decoder not up' }); }
+      const body = { ...requestBody(text, v), stream: true };
+      const httpMod = deps.http || http;
+      let sawToken = false;
+      try {
+        const u = new URL('/api/generate', OLLAMA);
+        const data = Buffer.from(JSON.stringify(body));
+        req = httpMod.request({ hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': data.length } }, (res) => {
+          if (res.statusCode !== 200) { clearTimeout(killer); stream.abort(); return finish({ ok: false, error: 'ollama: ' + res.statusCode }); }
+          let buf = '';
+          res.on('data', (d) => {
+            if (aborted) return;
+            buf += d.toString('utf8');
+            let i;
+            while ((i = buf.indexOf('\n')) >= 0) {
+              const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+              if (!line) continue;
+              let o; try { o = JSON.parse(line); } catch { continue; }
+              if (o.response) { if (/<custom_token_\d+>/.test(o.response)) sawToken = true; stream.append(o.response); }
+              if (o.done) { if (!sawToken) { clearTimeout(killer); stream.abort(); return finish({ ok: false, error: 'no audio tokens in the response' }); } stream.done(); }
+            }
+          });
+          res.on('end', () => { if (!aborted && !sawToken) { clearTimeout(killer); stream.abort(); finish({ ok: false, error: 'no audio tokens in the response' }); } });
+          res.on('error', (e) => { clearTimeout(killer); stream.abort(); finish({ ok: false, error: e.message }); });
+        });
+        req.on('error', (e) => { clearTimeout(killer); if (stream) stream.abort(); finish({ ok: false, error: 'ollama: ' + e.message }); });
+        req.end(data);
+      } catch (e) { clearTimeout(killer); if (stream) stream.abort(); finish({ ok: false, error: e.message }); }
+    })();
+  });
+  p.abort = () => { aborted = true; try { if (req) req.destroy(new Error('aborted')); } catch {} try { if (stream) stream.abort(); } catch {} };
+  return p;
 }
 let _decoder = null;
 function decoder() { if (!_decoder) _decoder = createDecoder({}); return _decoder; }
@@ -145,4 +233,4 @@ async function synthesize(text, { voice = null, out, timeoutMs = 60000, deps = {
 
 function shutdown() { if (_decoder) { _decoder.stop(); _decoder = null; } }
 
-module.exports = { synthesize, available, requestBody, voiceName, createDecoder, shutdown, VOICES, MODEL, OLLAMA, DECODER_PY, DECODER_SCRIPT };
+module.exports = { synthesize, synthesizeStream, available, requestBody, voiceName, createDecoder, decoder, shutdown, VOICES, MODEL, OLLAMA, DECODER_PY, DECODER_SCRIPT };

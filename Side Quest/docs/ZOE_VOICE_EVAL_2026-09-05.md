@@ -1,5 +1,7 @@
 # The voice-model eval — Kokoro vs Orpheus (2026-09-05)
 
+**Where this stands (12:10):** switched to Orpheus zoe on his ear at 10:50. Live, each short sentence was a fresh sample and the pitch swung 162–261 Hz across sentences (the reel held 169–175), so she sounded rough and not like the reel; and Orpheus's eight voices cannot carry her tuned blend. His word: "I want to clone the proper voice and get the more natural feel from Orpheus if we can get it to work." So: her Kokoro blend is the live voice again by default (`meta voice.model = orpheus` opts back in), the rig keeps the fixes that hold one voice (temperature 0.4, sentences grouped into one request, true frame streaming with the first frame ~1 s), and **the next eval is cloning: her own Kokoro reel as the reference, its transcript, the pretrained Orpheus model continuing in her voice.**
+
 **Your word:** "go on the voice model upgrade, the breathing is worse maybe the upgrade would fix it."
 
 ## What to listen to

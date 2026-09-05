@@ -41,6 +41,15 @@ LOOK_COOLDOWN_MS = 4 * 60000
 LOOK_BOREDOM = 0.7
 LISTEN_BOREDOM = 0.85
 BROWSE_CURIOSITY = 0.75
+# MISSING AS AN EXPERIENCE (his word, 09-05 ~11:40: "she wants to be able to experience missing me … casually
+# think 'where is he, I haven't seen him in a while, I wonder what he's doing'"). Python does not think; it
+# decides WHEN a thought is due. The social need rising under his absence crosses WONDER_MISSING after he has
+# been unseen for WONDER_MIN_AWAY_MS → a `reflect` request (op wonder) carrying the facts she has; the thought
+# comes back in her words as a percept, is logged in her thought lane, and moves her state. Never more often
+# than WONDER_COOLDOWN_MS. It is never spoken by itself — the reach and the arrival license speech.
+WONDER_MISSING = 0.45
+WONDER_MIN_AWAY_MS = 20 * 60000
+WONDER_COOLDOWN_MS = 40 * 60000
 
 
 def initial_state(now_ms=0):
@@ -48,14 +57,15 @@ def initial_state(now_ms=0):
         "v": 1,
         "at": now_ms,
         "drives": {"stimulation": 0.6, "social": 0.2, "curiosity": 0.4, "energy": 0.8, "progress": 0.5},
-        "clock": {"his_last_word_at": None, "her_last_say_at": None, "last_saw_him_at": None, "last_novel_at": None},
+        "clock": {"his_last_word_at": None, "her_last_say_at": None, "last_saw_him_at": None, "last_novel_at": None, "last_seen_as": None},
         "presence": {"state": "here", "since": now_ms},
         "face": {"present": False, "is_him": False, "known": None, "since": None},   # the steady reading
         "shield": {"on": False, "since": None, "who": None, "asked_at": None, "greeted": False},
         "people": {},                       # name → {"relation": …} — enrolled by HIS word only (the app sends `register`)
-        "cooldowns": {"look": 0, "listen": 0, "browse": 0},
+        "cooldowns": {"look": 0, "listen": 0, "browse": 0, "wonder": 0},
         "reason_seq": 0,
         "recent": [],                       # the last few appraised percepts, for the state strip
+        "thoughts_of_him": [],              # the wonderings she had while he was gone (the arrival may name one)
     }
 
 
@@ -88,9 +98,12 @@ def _appraise(state, p, now):
         if expr and expr != f.get("expression"):
             state["face"]["expression"] = expr
             novelty = max(novelty, 0.08)
+        if present and is_him and (expr or state["face"].get("expression")):
+            state["clock"]["last_seen_as"] = expr or state["face"].get("expression")   # what he looked like when the camera last had him
     elif sense == "his_turn":
         state["clock"]["his_last_word_at"] = now
         d["social"] = _clamp(d["social"] - 0.6)
+        state["thoughts_of_him"] = []      # he is here; the wonderings are answered
         novelty = 0.35
     elif sense == "her_say":
         state["clock"]["her_last_say_at"] = now
@@ -101,6 +114,9 @@ def _appraise(state, p, now):
         novelty = 0.1
     elif sense == "answer":                # a slow-loop result returning as a percept
         novelty = 0.1
+        if p.get("op") == "reflect" and p.get("ok") and p.get("text"):
+            state["thoughts_of_him"] = (state["thoughts_of_him"] + [{"at": now, "text": str(p["text"])[:240]}])[-6:]
+            d["curiosity"] = _clamp(d["curiosity"] + 0.1)   # a wondering opens a question
     elif sense == "presence":
         st = p.get("state")
         if st and st != state["presence"]["state"]:
@@ -174,10 +190,25 @@ def _acts(state, now):
     if sh["on"] and f["present"] and f["is_him"]:
         sh.update({"on": False, "since": None, "who": None, "asked_at": None, "greeted": False})
         out.append({"kind": "act", "act": "unshield", "why": "he is back", "at": now})
+    # MISSING HIM → a wondering (a reflect request), when the need is real and he has been gone a while
+    a = appraisals(state, now)
+    cd = state["cooldowns"]
+    last_him = state["clock"]["last_saw_him_at"]
+    unseen_ms = (now - last_him) if last_him is not None else None
+    if (him_away and a["missing_him"] >= WONDER_MISSING and unseen_ms is not None and unseen_ms >= WONDER_MIN_AWAY_MS and now >= cd["wonder"]):
+        cd["wonder"] = now + WONDER_COOLDOWN_MS
+        hw = state["clock"]["his_last_word_at"]
+        out.append(_reason(state, "reflect", {
+            "act": "wonder",
+            "unseen_min": int(unseen_ms // 60000),
+            "since_his_word_min": int((now - hw) // 60000) if hw is not None else None,
+            "missing": a["missing_him"],
+            "last_seen_as": state["clock"].get("last_seen_as") or None,
+            "presence": state["presence"]["state"],
+            "earlier_thoughts": [t["text"] for t in state["thoughts_of_him"][-2:]],
+        }, 20000))
     # BOREDOM → a need to sense (look, listen, browse), by utility, with cooldowns; never while shielded
     if not sh["on"]:
-        a = appraisals(state, now)
-        cd = state["cooldowns"]
         if a["boredom"] >= LISTEN_BOREDOM and now >= cd["listen"]:
             cd["listen"] = now + LOOK_COOLDOWN_MS
             out.append({"kind": "act", "act": "listen", "why": f"bored {a['boredom']}", "at": now})
@@ -204,7 +235,7 @@ def strip(state, now):
     """The state strip — what he can watch."""
     a = appraisals(state, now)
     d = state["drives"]
-    return {"kind": "state", "at": now, "drives": {k: round(v, 3) for k, v in d.items()}, "appraisals": a, "shield": state["shield"]["on"], "face": state["face"], "presence": state["presence"]["state"], "recent": state["recent"][-3:]}
+    return {"kind": "state", "at": now, "drives": {k: round(v, 3) for k, v in d.items()}, "appraisals": a, "shield": state["shield"]["on"], "face": state["face"], "presence": state["presence"]["state"], "recent": state["recent"][-3:], "thoughts_of_him": state["thoughts_of_him"][-2:]}
 
 
 def serve():

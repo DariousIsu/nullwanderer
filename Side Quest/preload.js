@@ -16,6 +16,12 @@ contextBridge.exposeInMainWorld('sq', {
   speak: (text) => ipcRenderer.invoke('voice:speak', text),   // speak an unprompted utterance aloud (utterances only, never her thoughts)
   onVoicePlay: (cb) => ipcRenderer.on('voice:play', (_e, info) => cb(info)),   // S3: play her voice IN this renderer (AEC reference + instant cancel)
   voicePlayDone: (id, played) => ipcRenderer.send('voice:play-done', id, played),   // ack: clip finished (played=true) or couldn't play (false → OS fallback)
+  // STREAMING VOICE (09-05): PCM frames of her Orpheus voice, scheduled on one WebAudio clock in this renderer
+  onVoicePcm: (cb) => ipcRenderer.on('voice:pcm', (_e, p) => cb(p)),           // { id, seq, pcm: ArrayBuffer|Uint8Array, sampleRate }
+  onVoicePcmEnd: (cb) => ipcRenderer.on('voice:pcm-end', (_e, p) => cb(p)),   // { id } — no more frames for this item
+  onVoicePcmStop: (cb) => ipcRenderer.on('voice:pcm-stop', () => cb()),       // a barge-in: drop everything scheduled
+  voicePcmDone: (id, played) => ipcRenderer.send('voice:pcm-done', id, played),
+  onConsciousnessState: (cb) => ipcRenderer.on('consciousness:state', (_e, s) => cb(s)),   // the state strip
   voiceBarge: () => ipcRenderer.send('voice:barge'),                            // user talked over her → flush the rest of what she was saying
   speakerEnroll: (audioBuf) => ipcRenderer.invoke('speaker:enroll', audioBuf),  // add one enrollment sample of the operator's voice → { ok, count }
   speakerStatus: () => ipcRenderer.invoke('speaker:status'),                     // { enrolled, count, threshold, gate, ... } for the voice-ID gate

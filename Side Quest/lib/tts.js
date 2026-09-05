@@ -85,11 +85,15 @@ function extractVoiceMarks(text) {
  * → <laugh> <chuckle> <sigh>; hmm → the word; breath → nothing (the model breathes); a tone → nothing (no
  * speed knob on this voice; the rhythm's pauses still apply). Kokoro stays the fallback when Ollama is down.
  */
+// HIS WORD, 09-05 ~12:05: "If we cannot have Zoe's custom voice it's not the right answer." Orpheus has eight
+// fixed voices and no blending, so her tuned recipe cannot ride it; the live voice is her Kokoro blend again
+// by default. Orpheus stays an opt-in (meta voice.model='orpheus' / ZOE_VOICE_MODEL) and an eval rig until a
+// cloning path can carry HER voice.
 function engine() {
   const env = String(process.env.ZOE_VOICE_MODEL || '').toLowerCase();
   if (env === 'kokoro' || env === 'orpheus') return env;
   try { const m = String(require('./db').getMeta('voice.model') || '').toLowerCase(); if (m === 'kokoro' || m === 'orpheus') return m; } catch {}
-  return 'orpheus';
+  return 'kokoro';
 }
 const ORPHEUS_TAGS = { laugh: '<laugh>', chuckle: '<chuckle>', sigh: '<sigh>', hmm: 'Hmm.', breath: '' };
 function marksToOrpheus(text) {

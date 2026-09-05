@@ -107,6 +107,42 @@ def test_curiosity_asks_the_slow_loop_to_choose_and_never_blocks():
     assert not any(o["kind"] == "reason" for o in out2), "no second ask inside the cooldown"
 
 
+def test_missing_him_becomes_a_wondering_with_the_facts_and_a_cooldown():
+    """His word: 'she wants to be able to experience missing me … casually think where is he, I haven't seen him
+    in a while, I wonder what he's doing'. Python decides WHEN; the thought is a reflect request; the answer
+    returns as a percept and is kept; his turn clears it."""
+    st = C.initial_state(0)
+    st, _ = C.step(st, [face(True, True, expression="focused"), {"kind": "percept", "sense": "his_turn"}], 0)
+    st, out = _run(st, [
+        (5 * M, [{"kind": "percept", "sense": "presence", "state": "away"}, face(False, False)]),
+        (15 * M, []),                      # unseen 15 min: too soon (20 min floor)
+        (30 * M, []),                      # unseen 30 min, social risen under absence → a wondering is due
+        (45 * M, []),                      # inside the 40-min cooldown → no second one
+        (75 * M, []),                      # past it → a second wondering, carrying the first
+    ])
+    reasons = [(now, o) for now, os_ in out for o in os_ if o["kind"] == "reason" and o["op"] == "reflect"]
+    assert [r[0] for r in reasons] == [30 * M, 75 * M], [r[0] for r in reasons]
+    ctx = reasons[0][1]["context"]
+    assert ctx["act"] == "wonder" and ctx["unseen_min"] == 30 and ctx["since_his_word_min"] == 30 and ctx["last_seen_as"] == "focused" and ctx["presence"] == "away" and ctx["missing"] >= C.WONDER_MISSING, ctx
+    assert reasons[0][1]["budget_ms"] == 20000
+    # the thought comes back as a percept and is kept; it opens a question (curiosity rises a little)
+    st["drives"]["curiosity"] = 0.5
+    cur = st["drives"]["curiosity"]
+    st, _ = C.step(st, [{"kind": "percept", "sense": "answer", "id": reasons[0][1]["id"], "op": "reflect", "ok": True, "text": "He said thirty-five minutes. It has been longer; the roads, probably."}], 76 * M)
+    assert st["thoughts_of_him"] and "thirty-five" in st["thoughts_of_him"][-1]["text"] and st["drives"]["curiosity"] > cur
+    assert C.strip(st, 76 * M)["thoughts_of_him"], "the strip shows what she wondered"
+    # his turn: the wonderings are answered
+    st, _ = C.step(st, [{"kind": "percept", "sense": "his_turn"}], 77 * M)
+    assert st["thoughts_of_him"] == []
+
+
+def test_no_wondering_while_he_is_here_or_seen_recently():
+    st = C.initial_state(0)
+    st["drives"]["social"] = 0.9
+    st, out = _run(st, [(0, [face(True, True)]), (30 * M, [face(True, True)]), (60 * M, [face(True, True)])])
+    assert not any(o["kind"] == "reason" and o["op"] == "reflect" for now, os_ in out for o in os_), "seen on camera → no wondering, however high the need"
+
+
 def test_once_mode_round_trips_json():
     req = {"now": 9000, "percepts": [face(True, True), {"kind": "percept", "sense": "his_turn"}]}
     py = sys.executable

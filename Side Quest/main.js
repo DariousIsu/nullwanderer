@@ -585,6 +585,8 @@ function _osPlay(res, done) {
 // The chat renderer acks each clip: played=true (it played, possibly cut short by barge) advances the
 // queue; played=false (autoplay-blocked etc.) → OS fallback so she stays audible + a visible warning.
 try {
+  // STREAMING VOICE (09-05): the renderer acks 'voice:pcm-done' when an item's last scheduled frame has ended.
+  ipcMain.on('voice:pcm-done', (_e, id) => { const fin = _pcmPending.get(id); if (!fin) return; _pcmPending.delete(id); fin(); });
   ipcMain.on('voice:play-done', (_e, id, played) => {
     const p = _playPending.get(id); if (!p) return; _playPending.delete(id);
     if (played === false) { console.warn('[voice] renderer playback failed (autoplay?) — using OS fallback'); _osPlay(p.res, p.fin); }
@@ -596,6 +598,46 @@ try {
 // instant cancel); fans a SILENT copy to every OTHER surface for lip-sync amplitude. OS fallback when there
 // is no chat window or the renderer can't play. Resolves when playback finishes. Does NOT touch
 // voice:speaking — the caller owns that so it can span a whole (possibly multi-chunk) utterance.
+// STREAMING VOICE (his word, 09-05: "streaming"): her Orpheus voice, frame by frame. The model's tokens stream
+// from Ollama; the resident decoder answers 2048-sample PCM frames as each gets its context (≈ 0.2 s in);
+// every frame goes straight to the chat renderer, which schedules it on one WebAudio clock — so a sentence
+// starts a few hundred ms after she decides to say it, and the next sentence's frames (generated while this
+// one plays) queue gaplessly behind. Resolves when the renderer acks the last frame. Returns false (so the
+// caller takes the file path) when the stream cannot start; a stream that fails mid-way resolves anyway.
+const _pcmPending = new Map();
+let _pcmSeq = 1, _curStream = null;
+function _playStream(prepared, { onStarted } = {}) {
+  return new Promise((resolve) => {
+    const hasChat = mainWindow && !mainWindow.isDestroyed();
+    if (!hasChat) return resolve(false);
+    const vo = require('./lib/voice_orpheus');
+    const tts = require('./lib/tts');
+    const id = _pcmSeq++;
+    let chunks = 0, ended = false, finished = false;
+    const fin = (v) => { if (!finished) { finished = true; _pcmPending.delete(id); _curStream = null; resolve(v); } };
+    _pcmPending.set(id, () => fin(true));
+    const p = vo.synthesizeStream(tts.marksToOrpheus(prepared), {
+      onChunk: ({ seq, pcm }) => {
+        chunks++;
+        if (chunks === 1 && onStarted) { try { onStarted(); } catch {} }
+        try { mainWindow.webContents.send('voice:pcm', { id, seq, pcm, sampleRate: 24000 }); } catch {}
+      },
+    });
+    _curStream = p;
+    p.then((r) => {
+      ended = true;
+      if (!r || !r.ok) {
+        if (chunks === 0) { console.warn(`[voice] stream could not start (${r && r.error}) — taking the file path`); return fin(false); }
+        console.warn(`[voice] stream ended early (${r && r.error}) after ${chunks} frames`);
+      } else if (chunks > 0) console.log(`[voice] streamed ${r.frames} frames · first frame at ${r.firstChunkMs} ms · ${r.seconds}s of speech in ${r.genMs} ms`);
+      if (chunks === 0) return fin(true);
+      try { mainWindow.webContents.send('voice:pcm-end', { id }); } catch { return fin(true); }
+      setTimeout(() => fin(true), Math.max(3000, ((r && r.seconds) || 8) * 1000 + 4000));   // safety: never wedge the queue
+    }).catch(() => fin(chunks > 0));
+  });
+}
+function _stopStream() { try { if (_curStream && _curStream.abort) _curStream.abort(); } catch {} _curStream = null; try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('voice:pcm-stop'); } catch {} for (const [, fin] of _pcmPending) { try { fin(); } catch {} } _pcmPending.clear(); }
+function _streamOn() { try { if (process.env.ZOE_VOICE_STREAM === '0') return false; if (db.getMeta('voice.stream') === '0') return false; } catch {} return true; }
 function _playWavFile(res) {
   return new Promise((resolve) => {
     let done = false; const fin = () => { if (done) return; done = true; resolve(); };
@@ -697,17 +739,27 @@ const _speech = (() => {
     const myGen = gen;   // captured at enqueue; a barge-in (gen++) makes this item stale → skipped
     setOn();
     queued++;
+    // STREAMING: an Orpheus sentence streams frame-by-frame to the renderer; generation (the synth step) and
+    // playback are one promise, serialized on both chains (the renderer's clock queues the next sentence's
+    // frames behind this one). If the stream cannot start, the file path below takes over for this item.
+    const streaming = !!(item.text && !item.clip && _streamOn() && String(tc.provider || '').toLowerCase() === 'kokoro' && tts.engine() === 'orpheus');
+    let streamP = null;
+    if (streaming) {
+      streamP = synthChain.then(() => (gen !== myGen ? false : _playStream(item.text)));
+      synthChain = streamP.then(() => {}, () => {});
+    }
     // start synth immediately (pipelined — does NOT wait for prior playback); keep synth strictly serial.
-    const synthP = synthChain.then(() => {
+    const synthP = streaming ? streamP.then((played) => (played ? { ok: true, streamed: true } : (gen !== myGen ? null : tts.synthesize(item.text, { voice: tc.voice, speaker: tc.speaker, wallMs: tc.wallMs, recipe: item.recipe || null }).catch(() => null)))) : synthChain.then(() => {
       if (gen !== myGen) return null;
       if (item.clip) return require('./lib/nonverbal').ensureClip(item.clip, {}).catch(() => null);
       return tts.synthesize(item.text, { voice: tc.voice, speaker: tc.speaker, wallMs: tc.wallMs, recipe: item.recipe || null }).catch(() => null);
     });
-    synthChain = synthP.then(() => {}, () => {});
+    if (!streaming) synthChain = synthP.then(() => {}, () => {});
     // play strictly in order: after the previous item's playback AND once this item's wav is ready.
     playChain = playChain.then(async () => {
       if (gen !== myGen) return;   // barged since enqueue → skip
       const res = await synthP;
+      if (res && res.streamed) { if (item.pauseMs > 0 && gen === myGen) await new Promise((r) => setTimeout(r, Math.min(2000, item.pauseMs))); return; }
       if (res && res.ok && res.silenceMs && gen === myGen) { await new Promise((r) => setTimeout(r, Math.min(2000, res.silenceMs))); }   // a beat (the breath, until the voice model breathes)
       else if (res && res.ok && gen === myGen) { try { await _playWavFile(res); } catch (e) {} }
       if (item.pauseMs > 0 && gen === myGen) await new Promise((r) => setTimeout(r, Math.min(2000, item.pauseMs)));   // <tone pause/>
@@ -739,6 +791,9 @@ const _speech = (() => {
     const clips = nv ? [...marks.before, ...marks.after] : [];
     if (orpheus) {
       if (!clean || clean.length < 2) return;
+      // ONE VOICE ACROSS A REPLY (his ear, 09-05: "rough and not Zoe's voice"): each request is a fresh sample,
+      // so short sentences drifted in pitch. Sentences are grouped into one request — up to ORPHEUS_GROUP_CHARS
+      // or a short quiet after the last sentence — and streaming means a longer request costs no latency.
       const nowO = Date.now();
       if (nowO - _breath.lastAt > 8000) { _breath.index = 0; _breath.since = 0; _breath.prevLen = 0; }
       let prO = null; try { if (process.env.ZOE_PROSODY !== '0' && db.getMeta('voice.prosody') !== '0') prO = tts.prosody({ text: clean, index: _breath.index, prevLen: _breath.prevLen }); } catch {}
@@ -746,7 +801,10 @@ const _speech = (() => {
       const pauseO = marks.pauseMs || (prO ? prO.pauseAfterMs : 0);
       const tagsO = (marks.before.length || marks.after.length) ? ` tags=${[...marks.before, ...marks.after].join(',')}` : '';
       console.log(`[voice] enqueue +${clean.length}ch "${clean.slice(0, 28).replace(/\n/g, ' ')}${clean.length > 28 ? '…' : ''}" engine=orpheus${tagsO}${prO ? ` pause=${prO.pauseAfterMs}ms(${prO.why})` : ''}`);
-      _enqueueItem({ text: prepared, recipe: null, pauseMs: pauseO });
+      _group.parts.push(prepared); _group.chars += clean.length; _group.pauseMs = pauseO;
+      if (_group.timer) clearTimeout(_group.timer);
+      if (_group.chars >= ORPHEUS_GROUP_CHARS || (prO && /trailing|question/.test(prO.why) && _group.chars >= 60)) _flushGroup();
+      else { _group.timer = setTimeout(_flushGroup, ORPHEUS_GROUP_QUIET_MS); if (_group.timer.unref) _group.timer.unref(); }
       return;
     }
     if ((!clean || clean.length < 2) && !clips.length) return;
@@ -791,7 +849,17 @@ const _speech = (() => {
     if (nv) for (const k of marks.after) _enqueueItem({ clip: k });
   }
   const _breath = { lastAt: 0, index: 0, since: 0, prevLen: 0 };   // the respiration rule's small memory (per reply)
-  function flush() { gen++; }   // barge-in: skip everything currently pending (the renderer stops the audible clip itself)
+  const ORPHEUS_GROUP_CHARS = 240, ORPHEUS_GROUP_QUIET_MS = 450;
+  const _group = { parts: [], chars: 0, pauseMs: 0, timer: null };
+  function _flushGroup() {
+    if (_group.timer) { clearTimeout(_group.timer); _group.timer = null; }
+    if (!_group.parts.length) return;
+    const text = _group.parts.join(' '), pauseMs = _group.pauseMs, n = _group.parts.length;
+    _group.parts = []; _group.chars = 0; _group.pauseMs = 0;
+    console.log(`[voice] group → ${n} sentence(s), ${text.length}ch, one request`);
+    _enqueueItem({ text, recipe: null, pauseMs });
+  }
+  function flush() { gen++; _stopStream(); }   // barge-in: skip everything pending (the renderer stops the audible clip; the stream is aborted here)
   return { enqueue, isBusy: () => queued > 0, flush };
 })();
 // Barge-in: the chat renderer detected the user talking over her → drop the rest of what she was saying.
@@ -833,6 +901,19 @@ setTimeout(() => { try { require('./lib/presence_state').tick({ deps: _presenceD
 // THE DELIVERY ROUTE (cut 2 + W7): one subscription routes every unprompted say she lands — a Discord DM
 // only when he is genuinely not at the desk (his word, a remote session, or the camera seeing no one).
 try { if (require('./lib/delivery_router').attach({})) console.log('[delivery] route attached — Discord only when he is not at the desk'); } catch {}
+// THE CONSCIOUSNESS SUBROUTINE (his word, 09-05): the fast loop runs beside the app; the bridge feeds it and
+// executes its acts. A `perform` answer is spoken to the ROOM through the one aloud door (never routed to him);
+// a `reflect` answer is her thought lane. Kill switch: ZOE_CONSCIOUSNESS=0 / meta consciousness.on=0.
+try {
+  const consc = require('./lib/consciousness');
+  if (consc.enabled()) {
+    consc.instance({
+      speak: (text) => { try { _speech.enqueue(text); } catch {} },
+      logThought: (text) => { try { const sid = (typeof currentSessionId === 'function' ? currentSessionId() : null) || db.getMeta('current_session_id') || null; if (sid) db.insertTurn({ sessionId: sid, speaker: 'ai_thought', content: `<think>${text}</think>`, unprompted: 1 }); } catch {} },
+      onState: (s) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('consciousness:state', s); } catch {} },
+    }).start();
+  } else console.log('[consciousness] off (ZOE_CONSCIOUSNESS=0 / meta consciousness.on=0)');
+} catch (e) { console.warn('[consciousness] bridge not started: ' + e.message); }
 
 // Split an ALREADY-COMPLETE text into sentences (mirrors _lastSentenceEnd's boundary rule).
 function _splitSentences(s) {
@@ -8703,6 +8784,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // landed — a `win` on the bus, never a joke generator. THE REACH (cut 2): his turn answers an open reach.
   try { require('./lib/landed').tagUserTurn({ userTurnId: userTurnRow && userTurnRow.id, text: userMessage }); } catch {}
   try { require('./lib/reach').markAnswered({}); } catch {}
+  // the consciousness subroutine hears his turn; and his word may enroll a face she may recognize
+  try {
+    const consc = require('./lib/consciousness');
+    if (consc.enabled()) {
+      consc.instance().noteHisTurn(userMessage);
+      const m = /^(?:remember|enroll)\s+(?:this|that|the)\s+(?:face|person)\s+as\s+([A-Z][\w'-]{1,30})(?:,?\s+(?:my|his|her|our)\s+([\w ]{2,30}?))?\s*[.!]?$/i.exec(String(userMessage || '').trim());
+      if (m) {
+        require('./lib/face_sense').enrollPerson(m[1], m[2] || null, {}).then((r) => {
+          console.log(`[face] enroll person ${m[1]}${m[2] ? ` (${m[2]})` : ''} → ${r && r.ok ? 'ok' : (r && r.error)}`);
+          if (r && r.ok) consc.instance().register(m[1], m[2] || null);
+        }).catch(() => {});
+      }
+    }
+  } catch {}
   // CONVERSATION AS AN ENCOUNTER STREAM (C1) — the objects Lucas names become encounters, so the one
   // input stream that never decomposed into objects finally does. Written with authority 'stated',
   // which carries ZERO evidentiary weight: it creates the object and then we go looking for a real

@@ -128,6 +128,7 @@ function attach({ deps = {} } = {}) {
       // turn row by ref (a capped snippet must never be what reaches his phone), else the event's own text
       let d = ev.data; if (typeof d === 'string') { try { d = JSON.parse(d); } catch { d = null; } }
       if (d && d.speech_class === 'replay') return;   // a replay-railed say never leaves the box
+      if (d && d.speech_class === 'room') return;     // a line spoken to whoever is in the ROOM (the stranger act) is never his DM
       let text = null;
       try { const db = _db(deps); if (ev.ref && db.getDb) { const row = db.getDb().prepare('SELECT content FROM turns WHERE id = ?').get(Number(ev.ref)); if (row && row.content) text = row.content; } } catch {}
       if (!text) text = (d && d.full) || ev.text;

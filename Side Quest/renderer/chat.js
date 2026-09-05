@@ -771,6 +771,48 @@ function stopCurrentVoice(ack = true) {
   try { if (curVoiceAudio) curVoiceAudio.pause(); } catch {}
   const id = curVoiceId; curVoiceAudio = null; curVoiceId = null;
   if (ack && id != null) { try { window.sq.voicePlayDone(id, true); } catch {} }
+  pcmStopAll(ack);
+}
+
+// --- STREAMING VOICE (09-05, her Orpheus voice) --------------------------------------------------------
+// main streams 2048-sample PCM frames per sentence as the model produces them; every frame is scheduled on
+// ONE AudioContext clock right after the previous one, so frames of the next sentence (which main synthesizes
+// while this one plays) queue gaplessly behind it. voicePcmDone(id) acks when an item's last frame has ended.
+let pcmCtx = null, pcmNext = 0;
+const pcmItems = new Map();   // id → { lastEnd, ended:bool, srcs:Set }
+function pcmContext() {
+  if (!pcmCtx) { try { pcmCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; } }
+  if (pcmCtx.state === 'suspended') { try { pcmCtx.resume(); } catch {} }
+  return pcmCtx;
+}
+function pcmStopAll(ack = true) {
+  for (const [id, it] of pcmItems) { for (const s of it.srcs) { try { s.stop(); } catch {} } if (ack && !it.ended) { try { window.sq.voicePcmDone(id, true); } catch {} } }
+  pcmItems.clear(); pcmNext = 0;
+}
+if (window.sq && window.sq.onVoicePcm) {
+  window.sq.onVoicePcm(({ id, seq, pcm, sampleRate }) => {
+    const ctx = pcmContext(); if (!ctx) { try { window.sq.voicePcmDone(id, false); } catch {} return; }
+    const bytes = pcm instanceof ArrayBuffer ? new Uint8Array(pcm) : (pcm && pcm.buffer ? new Uint8Array(pcm.buffer, pcm.byteOffset || 0, pcm.byteLength) : new Uint8Array(pcm));
+    const n = Math.floor(bytes.length / 2); if (!n) return;
+    const i16 = new Int16Array(bytes.buffer, bytes.byteOffset, n);
+    const sr = sampleRate || 24000;
+    const buf = ctx.createBuffer(1, n, sr); const ch = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) ch[i] = i16[i] / 32768;
+    const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination);
+    const at = Math.max(ctx.currentTime + 0.03, pcmNext);
+    src.start(at); pcmNext = at + n / sr;
+    let it = pcmItems.get(id); if (!it) { it = { lastEnd: 0, ended: false, srcs: new Set() }; pcmItems.set(id, it); }
+    it.srcs.add(src); it.lastEnd = pcmNext;
+    src.onended = () => { it.srcs.delete(src); if (it.ended && it.srcs.size === 0) { pcmItems.delete(id); try { window.sq.voicePcmDone(id, true); } catch {} } };
+    if (seq === 1) console.log('[voice] streaming', id);
+  });
+  window.sq.onVoicePcmEnd(({ id }) => {
+    const it = pcmItems.get(id);
+    if (!it) { try { window.sq.voicePcmDone(id, true); } catch {} return; }   // nothing was scheduled (an empty item)
+    it.ended = true;
+    if (it.srcs.size === 0) { pcmItems.delete(id); try { window.sq.voicePcmDone(id, true); } catch {} }
+  });
+  window.sq.onVoicePcmStop(() => pcmStopAll(false));
 }
 
 // --- Full hands-free conversation mode (two-way, Slice 2 + Slice 3 barge-in) ---
