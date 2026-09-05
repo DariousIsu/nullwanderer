@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('sq', {
   sttTranscribe: (audioBuf, opts) => ipcRenderer.invoke('stt:transcribe', audioBuf, opts || null),   // two-way voice input: audio bytes → { ok, text }; opts.handsFree arms the addressed gate
   onVoiceSpeaking: (cb) => ipcRenderer.on('voice:speaking', (_e, info) => cb(info)),   // conversation mode: {on} — suspend/reopen the ear while she speaks
   speak: (text) => ipcRenderer.invoke('voice:speak', text),   // speak an unprompted utterance aloud (utterances only, never her thoughts)
+  onListenWindow: (cb) => ipcRenderer.on('voice:listen-window', (_e, o) => cb(o)),   // THE LISTEN ACT: the loop asks for a short ambient mic window {id, ms}
+  listenWindowDone: (id, audioBuf, reason) => ipcRenderer.send('voice:listen-window-done', id, audioBuf || null, reason || null),   // the audio bytes back (or a reason); text only leaves main
   onVoicePlay: (cb) => ipcRenderer.on('voice:play', (_e, info) => cb(info)),   // S3: play her voice IN this renderer (AEC reference + instant cancel)
   voicePlayDone: (id, played) => ipcRenderer.send('voice:play-done', id, played),   // ack: clip finished (played=true) or couldn't play (false → OS fallback)
   // STREAMING VOICE (09-05): PCM frames of her Orpheus voice, scheduled on one WebAudio clock in this renderer

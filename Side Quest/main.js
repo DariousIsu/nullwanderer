@@ -905,6 +905,42 @@ setTimeout(() => { try { require('./lib/presence_state').tick({ deps: _presenceD
 // THE DELIVERY ROUTE (cut 2 + W7): one subscription routes every unprompted say she lands — a Discord DM
 // only when he is genuinely not at the desk (his word, a remote session, or the camera seeing no one).
 try { if (require('./lib/delivery_router').attach({})) console.log('[delivery] route attached — Discord only when he is not at the desk'); } catch {}
+// THE LISTEN DOOR (the loop's listen act, 09-05): a short ambient mic window, only when (1) the camera switch is on
+// this session — the loop's senses follow his one switch — (2) meta mic.ambient is not '0', (3) the voice guard is
+// not holding the room, (4) she is not speaking. The renderer records the window with the mic indicator lit, main
+// transcribes it locally (lib/stt) and deletes the audio; only the text goes anywhere.
+const _listenPending = new Map(); let _listenSeq = 0;
+function _listenWindow(ms) {
+  return new Promise((resolve) => {
+    try {
+      if (db.getMeta('mic.ambient') === '0') return resolve({ ok: false, reason: 'mic.ambient=0' });
+      let live = false; try { live = !!require('./lib/face_sense').status().live; } catch {}
+      if (!live) return resolve({ ok: false, reason: 'the camera switch is off this session (the loop\'s senses follow it)' });
+      try { const g = _voiceGuard.state(); if (g && g.paused) return resolve({ ok: false, reason: `voice guard: ${g.reason}` }); } catch {}
+      try { if (_speech.isBusy()) return resolve({ ok: false, reason: 'she is speaking' }); } catch {}
+      if (!mainWindow || mainWindow.isDestroyed()) return resolve({ ok: false, reason: 'no window' });
+      const id = ++_listenSeq;
+      const timer = setTimeout(() => { if (_listenPending.delete(id)) resolve({ ok: false, reason: 'timeout' }); }, ms + 20000);
+      _listenPending.set(id, { resolve, timer });
+      mainWindow.webContents.send('voice:listen-window', { id, ms });
+    } catch (e) { resolve({ ok: false, reason: e.message }); }
+  });
+}
+try {
+  ipcMain.on('voice:listen-window-done', async (_e, id, audioBuf, reason) => {
+    const p = _listenPending.get(id); if (!p) return; _listenPending.delete(id); clearTimeout(p.timer);
+    if (!audioBuf) return p.resolve({ ok: false, reason: reason || 'no audio' });
+    const fs = require('fs'), os = require('os'); let tmp = null;
+    try {
+      const bytes = Buffer.isBuffer(audioBuf) ? audioBuf : Buffer.from(audioBuf);
+      if (!bytes.length) return p.resolve({ ok: false, reason: 'empty audio' });
+      tmp = path.join(os.tmpdir(), `zoe_listen_${Date.now()}_${process.pid}.webm`); fs.writeFileSync(tmp, bytes);
+      const res = await require('./lib/stt').transcribe(tmp, { wallMs: 30000 });
+      p.resolve(res && res.ok ? { ok: true, text: String(res.text || '').trim() } : { ok: false, reason: (res && res.error) || 'transcription failed' });
+    } catch (e) { p.resolve({ ok: false, reason: e.message }); }
+    finally { try { if (tmp) fs.unlinkSync(tmp); } catch {} }   // the audio never persists
+  });
+} catch {}
 // THE CONSCIOUSNESS SUBROUTINE (his word, 09-05): the fast loop runs beside the app; the bridge feeds it and
 // executes its acts. A `perform` answer is spoken to the ROOM through the one aloud door (never routed to him);
 // a `reflect` answer is her thought lane. Kill switch: ZOE_CONSCIOUSNESS=0 / meta consciousness.on=0.
@@ -913,6 +949,7 @@ try {
   if (consc.enabled()) {
     consc.instance({
       speak: (text) => { try { _speech.enqueue(text); } catch {} },
+      listen: ({ ms } = {}) => _listenWindow(Math.max(3000, Math.min(20000, Number(ms) || 10000))),   // THE LISTEN ACT's door (gated above)
       logThought: (text) => { try { const sid = (typeof currentSessionId === 'function' ? currentSessionId() : null) || db.getMeta('current_session_id') || null; if (sid) db.insertTurn({ sessionId: sid, speaker: 'ai_thought', content: `<think>${text}</think>`, unprompted: 1 }); } catch {} },
       onState: (s) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('consciousness:state', s); } catch {} },
       // THE ARRIVAL's words are hers to him: a turn in the chat (unprompted, model 'consciousness') and the window's

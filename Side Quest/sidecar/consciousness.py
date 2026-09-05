@@ -135,6 +135,15 @@ def _appraise(state, p, now):
         state["clock"]["her_last_say_at"] = now
     elif sense == "transcript":
         novelty = 0.2
+    elif sense == "heard":                 # THE LISTEN ACT's window: text of what the room said (never audio); silence is a percept too
+        words = int(p.get("words") or 0)
+        novelty = 0.2 if words >= 3 else 0.02
+        if words >= 3:
+            state["heard"] = (state.get("heard", []) + [{"at": now, "text": str(p.get("text") or "")[:240]}])[-4:]
+    elif sense == "read":                  # THE BROWSE ACT landed: a topic and her gist of what she read — curiosity sated, something new
+        d["curiosity"] = _clamp(d["curiosity"] - 0.3)
+        novelty = 0.25
+        state["reads"] = (state.get("reads", []) + [{"at": now, "topic": str(p.get("topic") or "")[:120], "text": str(p.get("text") or "")[:300]}])[-4:]
     elif sense == "work":
         d["progress"] = _clamp(d["progress"] + float(p.get("delta", 0.1)))
         novelty = 0.1
@@ -316,7 +325,7 @@ def strip(state, now):
         "since_novel_min": _ago_min(now, c.get("last_novel_at")),
         "last_seen_as": c.get("last_seen_as"),
     }
-    return {"kind": "state", "at": now, "drives": {k: round(v, 3) for k, v in d.items()}, "appraisals": a, "clock": clock, "shield": state["shield"]["on"], "face": state["face"], "presence": state["presence"]["state"], "recent": state["recent"][-3:], "thoughts_of_him": state["thoughts_of_him"][-2:]}
+    return {"kind": "state", "at": now, "reads": state.get("reads", [])[-2:], "heard": state.get("heard", [])[-2:], "drives": {k: round(v, 3) for k, v in d.items()}, "appraisals": a, "clock": clock, "shield": state["shield"]["on"], "face": state["face"], "presence": state["presence"]["state"], "recent": state["recent"][-3:], "thoughts_of_him": state["thoughts_of_him"][-2:]}
 
 
 def serve():

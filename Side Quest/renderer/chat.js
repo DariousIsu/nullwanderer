@@ -747,6 +747,24 @@ if (micBtn && !(window.sq && window.sq.sttTranscribe)) {
   }
 
   micBtn.addEventListener('click', () => (micRecording ? micStop() : micStart()));
+  // THE LISTEN ACT (09-05): the loop asks for a short ambient window; refused while he is talking to her through the
+  // mic; the mic button is the indicator for the whole window; the bytes go to main, which transcribes and deletes.
+  if (window.sq && window.sq.onListenWindow) window.sq.onListenWindow(async ({ id, ms }) => {
+    if (micRecording || sending) { try { window.sq.listenWindowDone(id, null, 'busy'); } catch {} return; }
+    let stream = null, rec = null; const chunks = [];
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { try { window.sq.listenWindowDone(id, null, 'mic denied'); } catch {} return; }
+    try { rec = new MediaRecorder(stream); } catch { try { stream.getTracks().forEach((t) => t.stop()); } catch {} try { window.sq.listenWindowDone(id, null, 'capture unavailable'); } catch {} return; }
+    const prevText = micBtn.textContent;
+    micBtn.textContent = `● listening (ambient, ${Math.round(ms / 1000)} s)`; micBtn.classList.add('recording'); micBtn.style.color = '#e5484d';
+    rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunks.push(ev.data); };
+    rec.onstop = async () => {
+      try { stream.getTracks().forEach((t) => t.stop()); } catch {}
+      micBtn.textContent = prevText; micBtn.classList.remove('recording'); micBtn.style.color = '';
+      try { const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' }); const buf = blob.size ? await blob.arrayBuffer() : null; window.sq.listenWindowDone(id, buf, buf ? null : 'no audio'); }
+      catch (e) { try { window.sq.listenWindowDone(id, null, e.message); } catch {} }
+    };
+    rec.start(); setTimeout(() => { try { rec.stop(); } catch {} }, Math.max(1000, Number(ms) || 10000));
+  });
 }
 
 // --- Her voice plays in THIS renderer (two-way, Slice 3) ---

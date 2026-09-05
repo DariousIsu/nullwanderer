@@ -68,7 +68,8 @@ function fakeLoop() {
     face: () => ({ present: true, is_him: false, known: 'Raegan', expression: 'neutral' }), presence: () => ({ state: 'away' }),
     shield: { cover: async (o) => { calls.cover.push(o.who); }, uncover: async () => { calls.uncover++; } },
     deliver: async (o) => { calls.deliver.push(o); }, speak: async (t) => { calls.speak.push(t); }, logThought: (t) => calls.thoughts.push(t),
-    slowLoop: async (req) => { calls.slow.push(req); return req.op === 'perform' ? { kind: 'percept', sense: 'answer', id: req.id, op: 'perform', ok: true, text: 'Hi Raegan — your dad stepped out. What brings you by?' } : { kind: 'percept', sense: 'answer', id: req.id, op: 'reflect', ok: true, text: 'He said thirty-five minutes; it has been longer.' }; },
+    browse: async (q) => { calls.browsed = (calls.browsed || []).concat(q); return [{ title: 'Parishes of Louisiana', url: 'https://example.org/parishes', text: 'Louisiana is divided into 64 parishes, a legacy of church districts.' }]; },
+    slowLoop: async (req) => { calls.slow.push(req); if (req.op === 'choose') return { kind: 'percept', sense: 'answer', id: req.id, op: 'choose', ok: true, act: 'browse', text: 'the Louisiana parish map' }; if (req.op === 'perform' && (req.context || {}).act === 'read') return { kind: 'percept', sense: 'answer', id: req.id, op: 'perform', ok: true, act: 'read', text: 'The parishes came from church districts, sixty-four of them.' }; return req.op === 'perform' ? { kind: 'percept', sense: 'answer', id: req.id, op: 'perform', ok: true, text: 'Hi Raegan — your dad stepped out. What brings you by?' } : { kind: 'percept', sense: 'answer', id: req.id, op: 'reflect', ok: true, text: 'He said thirty-five minutes; it has been longer.' }; },
     onState: (s) => calls.states.push(s), tickMs: 3600000,
   } });
   bridge.start();
@@ -92,6 +93,44 @@ function fakeLoop() {
   child.say({ kind: 'reason', id: 2, op: 'reflect', budget_ms: 20000, context: { act: 'wonder', unseen_min: 30 } });
   await new Promise((r) => setTimeout(r, 20));
   ok(calls.thoughts.length === 1 && /thirty-five/.test(calls.thoughts[0]) && calls.speak.length === 1, 'a wondering goes to her thought lane and is never spoken by itself');
+  // THE BROWSE ACT (his word: boredom "should come with an autonomous need to … browse the web"): choose → a topic → a
+  // bounded read → her gist → a `read` percept back to the loop and a line in her thought lane; never spoken, never sent
+  const nBefore = child.received.length, spokeB = calls.speak.length;
+  await bridge.handle({ kind: 'reason', id: 5, op: 'choose', budget_ms: 20000, context: { act: 'browse', why: 'curious 0.8' } });
+  await new Promise((r) => setTimeout(r, 40)); bridge.tick();   // percepts ride the next beat
+  const readP = child.received.slice(nBefore).find((m) => m.kind === 'percept' && m.sense === 'read');
+  const readReq = calls.slow.find((r) => r.op === 'perform' && (r.context || {}).act === 'read');
+  ok(calls.browsed && calls.browsed[0] === 'the Louisiana parish map' && readReq && readReq.context.snippets.length === 1 && /64 parishes/.test(readReq.context.snippets[0].text), 'a chosen topic is searched and read (bounded), and the pages go to the slow loop for her gist');
+  ok(readP && readP.topic === 'the Louisiana parish map' && /church districts/.test(readP.text) && readP.pages === 1, `the read returns to the loop as a percept (${readP && readP.topic})`);
+  ok(calls.thoughts.length === 2 && /^I read about the Louisiana parish map: The parishes came/.test(calls.thoughts[1]) && calls.speak.length === spokeB && calls.deliver.length === 1, 'the gist is hers — her thought lane, never spoken, never delivered (the anticipation boundary)');
+  const SLp = require(path.join(ROOT, 'lib', 'slow_loop'));
+  ok(/you looked up "the parish map" and read these/.test(SLp.promptFor({ act: 'read', topic: 'the parish map', snippets: [{ title: 'x', text: 'y' }] })) && /output an empty line/.test(SLp.promptFor({ act: 'read', topic: 't', snippets: [] })), 'the read prompt asks for what she actually learned, or nothing');
+  const chosen = await SLp.run({ kind: 'reason', id: 9, op: 'choose', budget_ms: 1000, context: { act: 'browse' } }, { deps: { pursuits: [], seeds: ['He said thirty-five minutes; it has been longer.'] } });
+  ok(chosen.ok && chosen.text === 'He said thirty-five minutes; it has been longer.', 'with no pursuit the topic is a seed from her own strip; a pursuit still wins when there is one');
+  const none = await SLp.run({ kind: 'reason', id: 10, op: 'choose', budget_ms: 1000, context: { act: 'browse' } }, { deps: { pursuits: [], seeds: [] } });
+  ok(!none.ok && !none.text, 'with nothing to go on the answer is an honest nothing, never an invented topic');
+  // THE LISTEN ACT (his word: "listen to the mic"): a short window through the app's door → the TEXT is the percept
+  const heardCalls = []; const childL = fakeLoop();
+  const bridgeL = C.create({ deps: { spawn: () => childL, now: () => clock, log: (m) => heardCalls.push(m), obsBus: { subscribe: () => {}, emit: () => {} }, logThought: (t) => heardCalls.push('THOUGHT ' + t), listen: async ({ ms }) => { heardCalls.push('WINDOW ' + ms); return { ok: true, text: 'someone said the mower is out of gas' }; }, tickMs: 3600000 } });
+  bridgeL.start(); childL.say({ kind: 'ready', v: 1 });
+  await bridgeL.handle({ kind: 'act', act: 'listen', why: 'bored 0.9' }); await new Promise((r) => setTimeout(r, 20)); bridgeL.tick();
+  const heardP = childL.received.find((m) => m.kind === 'percept' && m.sense === 'heard');
+  ok(heardCalls.some((l) => /^WINDOW 10000$/.test(l)) && heardP && heardP.words === 8 && /mower/.test(heardP.text) && heardCalls.some((l) => /^THOUGHT I heard: someone said the mower/.test(l)) && heardCalls.some((l) => /listen \(10 s\) → "someone said the mower is out of gas" \(8 words\)/.test(l)), `a listen window's words come back as a heard percept, a thought, and a logged use (${heardP && heardP.words} words)`);
+  const childS = fakeLoop(); const sLogs = [];
+  const bridgeS = C.create({ deps: { spawn: () => childS, now: () => clock, log: (m) => sLogs.push(m), obsBus: { subscribe: () => {}, emit: () => {} }, logThought: (t) => sLogs.push('THOUGHT ' + t), listen: async () => ({ ok: true, text: '' }), tickMs: 3600000 } });
+  bridgeS.start(); childS.say({ kind: 'ready', v: 1 });
+  await bridgeS.handle({ kind: 'act', act: 'listen' }); await new Promise((r) => setTimeout(r, 20)); bridgeS.tick();
+  const silentP = childS.received.find((m) => m.kind === 'percept' && m.sense === 'heard');
+  ok(silentP && silentP.words === 0 && silentP.text === '' && !sLogs.some((l) => /^THOUGHT/.test(l)) && sLogs.some((l) => /listen \(10 s\) → silence/.test(l)), 'silence is a percept too — and never a thought');
+  const childN = fakeLoop(); const nLogs = [];
+  const bridgeN = C.create({ deps: { spawn: () => childN, now: () => clock, log: (m) => nLogs.push(m), obsBus: { subscribe: () => {}, emit: () => {} }, listen: async () => ({ ok: false, reason: 'the camera switch is off this session' }), tickMs: 3600000 } });
+  bridgeN.start(); childN.say({ kind: 'ready', v: 1 });
+  await bridgeN.handle({ kind: 'act', act: 'listen' }); await new Promise((r) => setTimeout(r, 20)); bridgeN.tick();
+  ok(!childN.received.some((m) => m.kind === 'percept' && m.sense === 'heard') && nLogs.some((l) => /listen — not now \(the camera switch is off/.test(l)), 'a refused window is logged and yields no percept');
+  // the door in the app: gated on his switch, the meta, the guard and her speech; the audio is deleted; the indicator lights
+  const mainL = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8'), preL = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8'), chatL = fs.readFileSync(path.join(ROOT, 'renderer', 'chat.js'), 'utf8');
+  ok(/listen: \(\{ ms \} = \{\}\) => _listenWindow\(/.test(mainL) && /db\.getMeta\('mic\.ambient'\) === '0'/.test(mainL) && /face_sense'\)\.status\(\)\.live/.test(mainL) && /_voiceGuard\.state\(\)/.test(mainL.split('function _listenWindow')[1].split('ipcMain.on')[0]) && /_speech\.isBusy\(\)/.test(mainL.split('function _listenWindow')[1].split('ipcMain.on')[0]) && /fs\.unlinkSync\(tmp\)/.test(mainL.split("ipcMain.on('voice:listen-window-done'")[1].split('} catch {}')[0]), 'the app\'s listen door is gated on the camera switch, mic.ambient, the voice guard and her speech, and deletes the audio');
+  ok(/onListenWindow: \(cb\) => ipcRenderer\.on\('voice:listen-window'/.test(preL) && /listenWindowDone: \(id, audioBuf, reason\) => ipcRenderer\.send\('voice:listen-window-done'/.test(preL) && /window\.sq\.onListenWindow\(async \(\{ id, ms \}\)/.test(chatL) && /listening \(ambient/.test(chatL) && /if \(micRecording \|\| sending\) \{ try \{ window\.sq\.listenWindowDone\(id, null, 'busy'\)/.test(chatL), 'the renderer records the window with the indicator lit and refuses it while he is talking to her');
   // his word after p309 ("also speak to the person"): the model slow or failed → she still speaks, a plain line
   const bridge2 = C.create({ deps: { spawn: () => child, now: () => clock, log: () => {}, obsBus: { subscribe: () => {}, emit: () => {} }, speak: async (t) => { calls.speak.push(t); }, slowLoop: async (req) => ({ kind: 'percept', sense: 'answer', id: req.id, op: 'perform', ok: false, error: 'This operation was aborted' }), tickMs: 3600000 } });
   await bridge2.handle({ kind: 'reason', id: 3, op: 'perform', budget_ms: 20000, context: { act: 'ask' } });
@@ -125,7 +164,7 @@ function fakeLoop() {
   const fp = child.received.slice(before).find((m) => m.kind === 'percept' && m.sense === 'face');
   ok(fp && fp.match === 0.387 && fp.is_him === false, `the face percept carries the score against his enrollment (match ${fp && fp.match})`);
   const stats = bridge.stats();
-  ok(stats.acts === 3 && stats.reasons === 2 && stats.answers === 2 && stats.alive === true, `the ledger: ${JSON.stringify(stats)}`);
+  ok(stats.acts === 3 && stats.reasons === 3 && stats.answers === 3 && stats.alive === true, `the ledger: ${JSON.stringify(stats)}`);
   bridge.stop();
   ok(!bridge.alive(), 'stop() ends the child');
   // the app-side wiring

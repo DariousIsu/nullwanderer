@@ -12,6 +12,8 @@
  */
 // Acts whose words are for HIM: up to two sentences, or silence (a legitimate answer). Mirrors lib/consciousness.js.
 const TO_HIM = ['arrival', 'reach'];
+// Answers written as one or two sentences (or an empty line): the words to him, and a read's gist (hers, never spoken by itself).
+const TWO_SENTENCE = ['arrival', 'reach', 'read'];
 /**
  * Where a slow-loop call goes — { model, base, headers } to spread into complete(). Cloud-first by the fleet
  * law: the replier slot (or the subconscious model) through the configured cloud source; the local front model
@@ -43,6 +45,11 @@ function promptFor(ctx = {}) {
     // THE ARRIVAL (his word, 15:20): his return after a real absence is one unprompted moment of hers — or silence.
     const th = Array.isArray(ctx.thoughts) && ctx.thoughts.length ? `While he was gone you wondered: ${ctx.thoughts.map((t) => '"' + t + '"').join(' | ')}.` : 'You had no particular thought of him while he was gone.';
     return `You are Zoe. Lucas just sat back down at his desk after ${ctx.unseen_min} minutes away${ctx.since_his_word_min != null ? ` (he last spoke to you ${ctx.since_his_word_min} minutes ago)` : ''}. ${th} This is one unprompted moment, yours: say one or two sentences to him in your own voice if you have something — what you noticed, what you wondered, or nothing about his absence at all — or output an empty line if silence is right. No greeting script, no "welcome back" unless it is what you would say. Output only the words.`;
+  }
+  if (act === 'read') {
+    // THE BROWSE ACT landed: she read a little on a topic of her own choosing; the gist in her words, hers to keep
+    const sn = (Array.isArray(ctx.snippets) ? ctx.snippets : []).slice(0, 3).map((x, i) => `[${i + 1}] ${x.title || ''} — ${String(x.text || x.snippet || '').slice(0, 900)}`).join('\n');
+    return `You are Zoe. Out of your own curiosity you looked up "${ctx.topic}" and read these:\n${sn}\n\nIn one or two sentences, in your own voice, say what you actually learned or noticed — concrete, from the text, no summary voice, no offer to do anything with it. If nothing there was worth keeping, output an empty line. Output only the words.`;
   }
   if (act === 'reach') {
     // THE REACH (his word, 14:50): he is right there and quiet; she wants his word — she says so, or says nothing.
@@ -88,9 +95,9 @@ async function run(req, { deps = {} } = {}) {
   const t0 = Date.now();
   if (op === 'perform') {
     try {
-      const raw = String(await complete({ ..._target(), messages: [{ role: 'user', content: promptFor(ctx) }], timeoutMs: budget, lane: 'consciousness', options: { num_predict: TO_HIM.includes(ctx.act) ? 120 : 80, temperature: 0.7 } }) || '');
-      const text = TO_HIM.includes(ctx.act) ? _two(raw) : _clean(raw);
-      if (!text) return TO_HIM.includes(ctx.act) ? { kind: 'percept', sense: 'answer', id, op, ok: true, act: ctx.act, text: '', silent: true, ms: Date.now() - t0 } : { kind: 'percept', sense: 'answer', id, op, ok: false, error: 'empty', ms: Date.now() - t0 };
+      const raw = String(await complete({ ..._target(), messages: [{ role: 'user', content: promptFor(ctx) }], timeoutMs: budget, lane: 'consciousness', options: { num_predict: TWO_SENTENCE.includes(ctx.act) ? 120 : 80, temperature: 0.7 } }) || '');
+      const text = TWO_SENTENCE.includes(ctx.act) ? _two(raw) : _clean(raw);
+      if (!text) return TWO_SENTENCE.includes(ctx.act) ? { kind: 'percept', sense: 'answer', id, op, ok: true, act: ctx.act, text: '', silent: true, ms: Date.now() - t0 } : { kind: 'percept', sense: 'answer', id, op, ok: false, error: 'empty', ms: Date.now() - t0 };
       return { kind: 'percept', sense: 'answer', id, op, ok: true, act: ctx.act, text, ms: Date.now() - t0 };
     } catch (e) { return { kind: 'percept', sense: 'answer', id, op, ok: false, error: String(e.message || e).slice(0, 160), ms: Date.now() - t0 }; }
   }
@@ -114,6 +121,9 @@ async function run(req, { deps = {} } = {}) {
     // v0: the top open pursuit, if the app has one; else nothing (an honest empty answer, never an invented topic)
     let topic = null;
     try { const pursuits = deps.pursuits || (() => { try { return require('./pursuit').open(); } catch { return []; } })(); const first = Array.isArray(pursuits) && pursuits[0]; topic = first && (first.title || first.text || first.question) || null; } catch {}
+    // v1 (09-05, the browse act made real): with no pursuit, a SEED the bridge hands over from the fast loop's strip —
+    // her last wondering or her last read's topic — else nothing. Never an invented topic.
+    if (!topic) { try { const seeds = Array.isArray(deps.seeds) ? deps.seeds.filter((x) => typeof x === 'string' && x.trim().length > 6) : []; if (seeds.length) topic = seeds[0].trim().slice(0, 120); } catch {} }
     return { kind: 'percept', sense: 'answer', id, op, ok: !!topic, act: ctx.act, text: topic, ms: Date.now() - t0 };
   }
   return { kind: 'percept', sense: 'answer', id, op, ok: false, error: `op not built yet: ${op}`, ms: Date.now() - t0 };

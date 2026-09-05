@@ -271,6 +271,21 @@ def test_missing_needs_absence_in_the_room_it_is_wanting_his_word():
     assert C.appraisals(st3, 1000)["missing_him"] >= 0.9, "away by presence is absence too"
 
 
+def test_a_read_sates_curiosity_and_a_heard_window_is_something_new():
+    """The browse and listen acts as senses (design §5 item 3): what she read lowers the need to know and is kept for
+    the strip; what the room said is novelty when it had words, next to nothing when it was silence."""
+    st = C.initial_state(0)
+    st["drives"]["curiosity"] = 0.8; st["drives"]["stimulation"] = 0.3
+    st, _ = C.step(st, [{"kind": "percept", "sense": "read", "topic": "the Louisiana parish map", "text": "Parishes came from church districts."}], 1000)
+    assert st["drives"]["curiosity"] < 0.55 and st["drives"]["stimulation"] > 0.5, (st["drives"])
+    assert st["reads"][-1]["topic"] == "the Louisiana parish map" and C.strip(st, 1000)["reads"][-1]["text"].startswith("Parishes")
+    s0 = st["drives"]["stimulation"]
+    st, _ = C.step(st, [{"kind": "percept", "sense": "heard", "text": "", "words": 0}], 2000)
+    assert st["drives"]["stimulation"] - s0 < 0.05, "a silent window is barely anything"
+    st, _ = C.step(st, [{"kind": "percept", "sense": "heard", "text": "someone said the mower is out of gas", "words": 7}], 3000)
+    assert st["drives"]["stimulation"] - s0 >= 0.15 and st["heard"][-1]["text"].startswith("someone said") and C.strip(st, 3000)["heard"], "words in the room are something new, kept for the strip"
+
+
 def test_once_mode_round_trips_json():
     req = {"now": 9000, "percepts": [face(True, True), {"kind": "percept", "sense": "his_turn"}]}
     py = sys.executable

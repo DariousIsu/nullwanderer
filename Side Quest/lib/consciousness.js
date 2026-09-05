@@ -16,6 +16,8 @@
  */
 // Acts whose words are for HIM (spoken in the room AND logged as her say); silence is a legitimate answer to them.
 const TO_HIM = ['arrival', 'reach'];
+// THE LISTEN ACT's window: long enough for a sentence, short enough to be a glance with the ear.
+const LISTEN_WINDOW_MS = 10000;
 // The camera's score against his enrollment (face_sense: `confidence` is the cosine when enrolled, a detector score when not — `is_him` null then).
 const _match = (f) => (f && f.is_him !== null && f.is_him !== undefined && typeof f.confidence === 'number') ? f.confidence : null;
 const path = require('path');
@@ -76,6 +78,20 @@ function create({ deps = {} } = {}) {
         if (msg.act === 'shield') await (deps.shield || require('./shield')).cover({ who: msg.who || null });
         else if (msg.act === 'unshield') await (deps.shield || require('./shield')).uncover({});
         else if (msg.act === 'deliver') await (deps.deliver || ((o) => require('./delivery_router').deliver(o)))({ text: msg.text, source: 'consciousness' });
+        else if (msg.act === 'listen') {
+          // THE LISTEN ACT (design §4 acts; his word 09-05: boredom "should come with an autonomous need to … listen to
+          // the mic"): a short mic window through the app's door (main.js gates it: the camera switch this session, the
+          // mic.ambient meta, the voice guard, her own speech), transcribed locally; the TEXT is the percept — the
+          // audio never persists; silence is a percept too. Every use is logged.
+          const r = await (deps.listen || (() => ({ ok: false, reason: 'no listen door' })))({ ms: LISTEN_WINDOW_MS });
+          if (r && r.ok) {
+            const text = String(r.text || '').trim(), words = text ? text.split(/\s+/).filter(Boolean).length : 0;
+            log(`[consciousness] listen (${Math.round(LISTEN_WINDOW_MS / 1000)} s) → ${words ? `"${text.slice(0, 120)}" (${words} words)` : 'silence'}`);
+            try { (deps.obsBus || require('./obs_bus')).emit({ lane: 'consciousness', kind: 'heard', text: words ? text.slice(0, 200) : '(silence)', data: { words, text: words ? text.slice(0, 400) : '' } }); } catch {}
+            percept({ sense: 'heard', text: words ? text.slice(0, 400) : '', words });
+            if (words >= 3) { try { deps.logThought && deps.logThought(`I heard: ${text.slice(0, 240)}`); } catch {} }
+          } else log(`[consciousness] listen — not now (${(r && r.reason) || 'no answer'})`);
+        }
         else if (msg.act === 'look') { const r = await (deps.look || (() => require('./face_sense').look()))(); if (r && typeof r === 'object' && r.reading) percept({ sense: 'face', ...r.reading, match: _match(r.reading) }); }
       } catch (e) { log(`[consciousness] act ${msg.act} failed: ${e.message}`); }
       return;
@@ -86,7 +102,8 @@ function create({ deps = {} } = {}) {
       // MEASURE A DAY (design §5 item 6): every request and its outcome lands in obs_events with a timestamp
       const _ev = (kind, text, data) => { try { (deps.obsBus || require('./obs_bus')).emit({ lane: 'consciousness', kind, text, data }); } catch {} };
       _ev('reason', `${msg.op}#${msg.id}${(msg.context || {}).act ? ' ' + msg.context.act : ''}`, { op: msg.op, id: msg.id, act: (msg.context || {}).act || null, budget_ms: msg.budget_ms });
-      (deps.slowLoop || ((r) => require('./slow_loop').run(r, {})))(msg).then(async (ans) => {
+      const _seeds = (() => { try { const st = lastStrip || {}; return [...(st.thoughts_of_him || []).map((t) => t.text), ...(st.reads || []).map((r) => r.topic)].filter(Boolean).slice(-3).reverse(); } catch { return []; } })();
+      (deps.slowLoop || ((r) => require('./slow_loop').run(r, { deps: { seeds: _seeds } })))(msg).then(async (ans) => {
         stats.answers++;
         if (ans && ans.ok && ans.op === 'perform' && TO_HIM.includes(ans.act)) {
           // THE ARRIVAL and THE REACH: to him, in the room and in the chat — or silence, which is a legitimate answer
@@ -111,8 +128,35 @@ function create({ deps = {} } = {}) {
           try { await (deps.speak || (() => {}))(line); } catch (e) { log(`[consciousness] speak failed: ${e.message}`); }
         } else if (ans && !ans.ok) { log(`[consciousness] reason ${msg.op}#${msg.id} → ${ans.error}`); _ev('reason_fail', `${msg.op}#${msg.id}: ${ans.error}`, { op: msg.op, id: msg.id, error: String(ans.error || '').slice(0, 200) }); }
         percept({ sense: 'answer', id: msg.id, op: msg.op, ok: !!(ans && ans.ok), text: (ans && ans.text) || null });
+        // THE BROWSE ACT (design §4 acts; his word 09-05: boredom "should come with an autonomous need to … browse the
+        // web"): a chosen topic → a bounded read (search, the top pages, a few thousand chars) → her gist through the
+        // slow loop → a `read` percept (curiosity sated, something new) and a line in her thought lane. Under the
+        // anticipation boundary: research yes, delivery only on his word — a read is never sent to him.
+        if (msg.op === 'choose' && (msg.context || {}).act === 'browse' && ans && ans.ok && ans.text) {
+          try { await _browse(String(ans.text).trim()); } catch (e) { log(`[consciousness] browse failed: ${e.message}`); }
+        }
       }).catch((e) => log(`[consciousness] slow loop threw: ${e.message}`));
     }
+  }
+
+  async function _browse(topic) {
+    const t0 = deps.now ? deps.now() : Date.now();
+    const browse = deps.browse || (async (q) => {
+      const ws = require('./web_search');
+      const r = await ws.search(q, {});
+      const hits = ((r && r.results) || []).slice(0, 3);
+      const out = [];
+      for (const h of hits) { try { const pg = await ws.fetchPage(h.url, { maxChars: 2500, timeoutMs: 8000 }); out.push({ title: h.title || (pg && pg.title) || '', url: h.url, text: (pg && pg.ok && pg.text) || h.snippet || '' }); } catch { out.push({ title: h.title || '', url: h.url, text: h.snippet || '' }); } }
+      return out;
+    });
+    const snippets = await browse(topic);
+    if (!snippets || !snippets.length) { log(`[consciousness] browse "${topic}" — nothing found`); return; }
+    const ans = await (deps.slowLoop || ((r) => require('./slow_loop').run(r, {})))({ kind: 'reason', id: -1, op: 'perform', budget_ms: 20000, context: { act: 'read', topic, snippets } });
+    const gist = ans && ans.ok ? String(ans.text || '').trim() : '';
+    log(`[consciousness] browse "${topic}" → ${snippets.length} page(s) in ${(deps.now ? deps.now() : Date.now()) - t0} ms → ${gist ? `"${gist.slice(0, 160)}"` : 'nothing worth keeping'}`);   // every use is logged
+    try { (deps.obsBus || require('./obs_bus')).emit({ lane: 'consciousness', kind: 'read', text: `${topic}: ${gist || '(nothing kept)'}`, data: { topic, pages: snippets.map((s) => s.url).slice(0, 3), text: gist } }); } catch {}
+    percept({ sense: 'read', topic, text: gist, pages: snippets.length });
+    if (gist) { try { deps.logThought && deps.logThought(`I read about ${topic}: ${gist}`); } catch {} }
   }
 
   function tick() {
