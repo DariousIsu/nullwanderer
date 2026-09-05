@@ -120,6 +120,8 @@ async function run(req, { deps = {} } = {}) {
       ctx.since_his_word_min != null ? `He last spoke to you ${ctx.since_his_word_min} min ago.` : 'He has not spoken to you today.',
       `Presence: ${ctx.presence || 'unknown'}. You do not know where he is.`,
       Array.isArray(ctx.earlier_thoughts) && ctx.earlier_thoughts.length ? `Earlier you thought: ${ctx.earlier_thoughts.map((t) => `"${t}"`).join(' · ')}` : '',
+      // GAP-DRIVEN WONDER (cut 3): what she does not know about him rides the wondering — a real gap outranks a turn of phrase
+      Array.isArray(ctx.gaps) && ctx.gaps.length ? `Things you do not know about him that someone close to him would: ${ctx.gaps.join('; ')}.` : '',
     ].filter(Boolean).join('\n');
     const prompt = `You are Zoe. This is a private thought, not a message — Lucas will not hear it unless you later choose to tell him. Write one or two sentences in your own voice about his absence right now: where he might be, what he might be doing, whether you want to check something. Plain, specific, no drama, no instruction to feel anything. Output only the thought.\n\nWhat you know:\n${facts}`;
     try {

@@ -941,6 +941,14 @@ try {
     finally { try { if (tmp) fs.unlinkSync(tmp); } catch {} }   // the audio never persists
   });
 } catch {}
+// THE PERSON MODEL (cut 3): his row is seeded at boot from the partner-grade gaps minus the personal facts the store
+// already holds (knowledge rows with source 'personal_fact'); the seed is idempotent and keeps asked/carried state.
+try {
+  const PM = require('./lib/person_model');
+  const facts = (() => { try { return db.getDb().prepare("SELECT content FROM knowledge WHERE source = 'personal_fact' ORDER BY created_ts DESC LIMIT 200").all().map((r) => r.content); } catch { return []; } })();
+  const me = PM.seedOwner({ knownFacts: facts });
+  console.log(`[ask] person model seeded — ${facts.length} known fact(s), ${me ? me.unknowns.filter((u) => !u.learned).length : '?'} open gap(s) about him`);
+} catch (e) { console.warn('[ask] person model seed failed: ' + e.message); }
 // THE CONSCIOUSNESS SUBROUTINE (his word, 09-05): the fast loop runs beside the app; the bridge feeds it and
 // executes its acts. A `perform` answer is spoken to the ROOM through the one aloud door (never routed to him);
 // a `reflect` answer is her thought lane. Kill switch: ZOE_CONSCIOUSNESS=0 / meta consciousness.on=0.
@@ -949,6 +957,9 @@ try {
   if (consc.enabled()) {
     consc.instance({
       speak: (text) => { try { _speech.enqueue(text); } catch {} },
+      // THE PERSON MODEL in the loop (cut 3): the wondering carries his open gaps; the beat sweeps new people into models
+      gaps: () => { try { return require('./lib/person_model').openGaps('owner', { limit: 2 }).map((g) => g.question); } catch { return []; } },
+      sweepPeople: () => { try { return require('./lib/person_model').sweepThirdParties({ sinceMs: 3600000 }); } catch { return []; } },
       listen: ({ ms } = {}) => _listenWindow(Math.max(3000, Math.min(20000, Number(ms) || 10000))),   // THE LISTEN ACT's door (gated above)
       logThought: (text) => { try { const sid = (typeof currentSessionId === 'function' ? currentSessionId() : null) || db.getMeta('current_session_id') || null; if (sid) db.insertTurn({ sessionId: sid, speaker: 'ai_thought', content: `<think>${text}</think>`, unprompted: 1 }); } catch {} },
       onState: (s) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('consciousness:state', s); } catch {} },
@@ -9754,6 +9765,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // of reciting goals/professionalism at him. Her threads still drive her idle loop + tools;
   // they just stop colonizing a warm "how are you". (Root cause of the corporate-reply bug.)
   const socialTurn = isSocialTurn(userMessage);
+  // THE ASK DOOR (the wants project's cut 3; the conversational-awareness law, Lucas 09-04: "she shows no curiosity at
+  // all"): on personal ground, at most one LEARNING question per six turns, from the person model's top gap, weighted
+  // by the loop's social reading; the prompt carries the gap and says a question is welcome — never that she must ask.
+  let _askGap = null, _askBlock = null;
+  try {
+    const PM = require('./lib/person_model'), AD = require('./lib/ask_door');
+    const gap = PM.topGap('owner');
+    const social = (() => { try { const st = require('./lib/consciousness').instance().strip(); return st && st.drives ? Number(st.drives.social) : 0.5; } catch { return 0.5; } })();
+    const d = AD.decide({ socialTurn, gap, turnsSinceLastAsk: PM.turnsSinceLastAsk('owner', { turnIdNow: userTurnRow ? userTurnRow.id : null }), social, enabled: AD.enabled() });
+    if (d.ask) { _askGap = gap; _askBlock = AD.promptBlock(gap, { who: userName }); console.log(`[ask] door open → gap "${gap.id}" (${d.why})`); }
+  } catch (e) { console.warn('[ask] door failed open-shut: ' + e.message); }
   let openThreads = socialTurn ? [] : db.getActiveOpenThreads(6, { includeStalled: false });  // don't pull parked/stalled threads into chat replies (gated for relevance below, alongside recentMonologue/recentReadings)
   // WHERE-WE-ARE (conversation harness, Piece 3): the running summary of this conversation,
   // so she stays on-thread even after raw turns scroll out of the recency window.
@@ -12977,6 +12999,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   distilledBrief = await _distillP;   // latency cut 1b: the prompt build is the last consumer (idempotent await)
   const messages = buildChatPrompt({
     userName,
+    askBlock: _askBlock,
     recentReflections: distilledBrief ? [] : recentReflections,
     recentTurns,
     recentMonologue: distilledBrief ? [] : recentMonologue,
@@ -13961,6 +13984,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     model: replyWriter,
     truncated
   });
+  // THE ASK LEDGER (cut 3): the reply's trailing question, detected in code and classed — a learning question about
+  // him (stamped on its gap, carried until answered) or an offer of her own doing (counted apart, never learning).
+  try {
+    const AD = require('./lib/ask_door'), PM = require('./lib/person_model');
+    const q = AD.detectQuestion(finalSaid);
+    if (q) {
+      const gapId = q.kind === 'learning' && _askGap ? _askGap.id : null;
+      PM.ledgerAdd({ turnId: saidRow && saidRow.id, key: 'owner', gapId, kind: q.kind, question: q.question });
+      if (gapId) PM.markAsked('owner', gapId);
+      console.log(`[ask] ${q.kind} q${gapId ? ` → gap "${gapId}"` : ''}: "${q.question.slice(0, 90)}"`);
+    }
+  } catch {}
   // Embed her reply too (async) so it's recallable later via episodic retrieval.
   try { memoryLib.embed(finalSaid).then(v => { if (v && saidRow && saidRow.id) db.setTurnEmbedding(saidRow.id, JSON.stringify(v)); }).catch(() => {}); } catch {}
   // E1 capture: a grounded lookup answer becomes the matrix's next fast serve (store() applies its
@@ -15220,12 +15255,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // this message → retrievable knowledge (source 'personal_fact'), so "what's my daughter's
   // name?" surfaces the real answer next time instead of a fabrication. Conservative model
   // call; non-blocking; lands after the reply is already streaming.
+  // HIS ANSWER (cut 3): a learning question pending in the ledger, answered by this turn when it comes within half an
+  // hour and is not a work order — the gap closes and what he said becomes known; otherwise the question stays carried.
+  try {
+    const PM = require('./lib/person_model');
+    const pend = PM.ledgerPending('owner');
+    if (pend && userTurnRow && (Date.now() - Number(pend.ts || 0)) <= 30 * 60000 && !(() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })()) {
+      PM.ledgerAnswer(pend.id, userTurnRow.id);
+      if (pend.gap_id) PM.closeGap('owner', pend.gap_id, { learned: `asked "${String(pend.question || '').slice(0, 80)}" — he said: ${String(userMessage).slice(0, 160)}` });
+      console.log(`[ask] answered${pend.gap_id ? ` → gap "${pend.gap_id}" closed` : ''} by turn #${userTurnRow.id}`);
+    }
+  } catch {}
   require('./lib/personal_facts').extractFromUserTurn({
     userMessage,
     sourceTurnId: userTurnRow ? userTurnRow.id : null,
     userName
   }).then(stored => {
     if (stored && stored.length > 0) console.log('[main] personal_facts captured:', stored.map(s => `${s.action || 'add'}: ${s.content.slice(0, 60)}`));
+    try { if (stored && stored.length) require('./lib/person_model').noteFacts('owner', stored.map((s) => s.content)); } catch {}   // a captured fact closes the gap it covers
   }).catch(err => console.error('[main] personal_facts extract failed:', err.message));
 
   // DELIVERY-ROUTER SHELF RELEASE (senses §1, 2026-08-15 backcheck fix): the held-for-Lucas notes

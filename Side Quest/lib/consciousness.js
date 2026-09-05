@@ -103,6 +103,9 @@ function create({ deps = {} } = {}) {
       const _ev = (kind, text, data) => { try { (deps.obsBus || require('./obs_bus')).emit({ lane: 'consciousness', kind, text, data }); } catch {} };
       _ev('reason', `${msg.op}#${msg.id}${(msg.context || {}).act ? ' ' + msg.context.act : ''}`, { op: msg.op, id: msg.id, act: (msg.context || {}).act || null, budget_ms: msg.budget_ms });
       const _seeds = (() => { try { const st = lastStrip || {}; return [...(st.thoughts_of_him || []).map((t) => t.text), ...(st.reads || []).map((r) => r.topic)].filter(Boolean).slice(-3).reverse(); } catch { return []; } })();
+      // GAP-DRIVEN WONDER (cut 3): a reflect request carries the person model's open gaps about him — the live
+      // instance injects the person model (main.js); the bridge itself never opens the database
+      if (msg.op === 'reflect') { try { const gaps = (deps.gaps || (() => []))(); if (gaps && gaps.length) msg.context = { ...(msg.context || {}), gaps }; } catch {} }
       (deps.slowLoop || ((r) => require('./slow_loop').run(r, { deps: { seeds: _seeds } })))(msg).then(async (ans) => {
         stats.answers++;
         if (ans && ans.ok && ans.op === 'perform' && ans.act === 'reach_away') {
@@ -171,7 +174,17 @@ function create({ deps = {} } = {}) {
     if (gist) { try { deps.logThought && deps.logThought(`I read about ${topic}: ${gist}`); } catch {} }
   }
 
+  let _sweepAt = 0;
+  function _sweepPeople() {
+    // THIRD PARTIES (cut 3): every ten minutes, whoever entered through conversation gets a model with the standing gap
+    const t = now();
+    if (t - _sweepAt < 10 * 60000) return;
+    _sweepAt = t;
+    try { const minted = (deps.sweepPeople || (() => []))(); if (minted && minted.length) log(`[consciousness] people: ${minted.length} new model(s) — ${minted.slice(0, 3).join(', ')}`); } catch {}
+  }
+
   function tick() {
+    _sweepPeople();
     if (stopped) return;
     if (!child) spawnChild();
     if (!child || !ready) return;

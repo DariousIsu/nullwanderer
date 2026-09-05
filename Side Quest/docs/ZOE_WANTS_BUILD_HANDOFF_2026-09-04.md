@@ -86,6 +86,9 @@ Smoke shape: a temp DB via `process.env.SQ_DB_PATH`, `const ok = (c, t) => …` 
 
 ### Cut 3. Conversational awareness
 
+**BUILT 09-05 evening (v1), folded into the consciousness subroutine — see docs/ZOE_PRESENCE_DESIGN_2026-09-05.md §5 (19:20).** Not yet: the register gate as a drive beyond the ask block; the encounter model's relation claims are read by claim_key guesses (relation/relationship/role) until the graph names them; the CRM pursuit of a third party's relation is the sweep's read, not a directed lookup.
+
+
 **His words.** "She is still just an LLM call and response chat bot for the most part that doesn't earnestly try to learn more about the user or about other people she interacts with, she shows no curiosity at all."
 **Class.** Regular. The ask door speaks only inside a prompted reply; it is not unprompted speech.
 **Measure first.** The design's section 6 table; plus: how many distinct people his turns name in 30 days, how many have a CRM row, how many an encounter, how many she ever asked about (0 expected).
