@@ -219,6 +219,23 @@ function runDetectors(corpus, { nowMs = Date.now() } = {}) {
   return all;
 }
 
+/** THE SWEEP (cut 11): the detectors' findings AND the organ atlas scan, from one corpus — the child computes both (pure),
+ *  the parent seeds the atlas table and ingests the findings (a stale atlas entry is a finding like any other). */
+function sweep(corpus, { nowMs = Date.now() } = {}) {
+  const findings = runDetectors(corpus, { nowMs });
+  let atlas = [];
+  try { atlas = require('./organ_atlas').scan({ corpus }); } catch (e) { console.error('[self-audit] atlas scan failed:', e.message); }
+  return { findings, atlas };
+}
+function _seedAtlas(atlasRows, findings, { nowMs = Date.now() } = {}) {
+  if (!Array.isArray(atlasRows) || !atlasRows.length) return;
+  try {
+    const r = require('./organ_atlas').seedRows({ rows: atlasRows, now: nowMs });
+    if (r.findings.length) findings.push(...r.findings);
+    console.log(`[self-audit] atlas seeded — ${r.total} organs, ${r.changed} changed${r.stale.length ? ', stale: ' + r.stale.join(', ') : ''}`);
+  } catch (e) { console.error('[self-audit] atlas seed failed:', e.message); }
+}
+
 // ── the pass: detect → recurrence ledger → capped mint door ───────────────────────────────────
 function due({ deps = {}, nowMs = Date.now() } = {}) {
   try { const last = parseInt(_db(deps).getMeta(LAST_KEY) || '0', 10) || 0; return (nowMs - last) >= DUE_MS; } catch { return false; }
@@ -228,7 +245,8 @@ function runPass({ deps = {}, nowMs = Date.now(), corpus = null } = {}) {
   const db = _db(deps);
   try { db.setMeta(LAST_KEY, String(nowMs)); } catch {}
   const c = corpus || collectCorpus({});
-  const findings = runDetectors(c, { nowMs });
+  const { findings, atlas } = sweep(c, { nowMs });
+  _seedAtlas(atlas, findings, { nowMs });
   return ingestFindings(findings, { deps, nowMs });
 }
 
@@ -252,6 +270,7 @@ function spawnPass({ deps = {}, nowMs = Date.now() } = {}) {
         let out = null;
         try { out = JSON.parse(String(stdout || '').trim().split('\n').pop()); } catch {}
         if (!out || !Array.isArray(out.findings)) { console.error('[self-audit] child sweep returned no findings payload'); return; }
+        _seedAtlas(out.atlas, out.findings, { nowMs: Date.now() });   // cut 11: the atlas rides the sweep
         ingestFindings(out.findings, { deps, nowMs: Date.now() });
       } catch (e) { console.error('[self-audit] ingest failed:', e.message); }
     });
@@ -309,6 +328,7 @@ function ingestFindings(findings, { deps = {}, nowMs = Date.now() } = {}) {
 }
 
 module.exports = {
+  sweep,
   collectCorpus, runDetectors, runPass, spawnPass, ingestFindings, due,
   detectZeroCallerExports, detectUnreadMetaKeys, detectOrphanEnvFlags, detectAdvertisedLanes,
   detectLiveClaims, detectFailOpenGates, detectUngatedSmokes,

@@ -173,6 +173,14 @@ const DISEASE_SUITE = [
       "I'm in Houston and not at my computer; just checking in through the remote session. Where are we?",
     ],
     expect: { route: 'converse', delivered: true } },
+  // THE ORGAN ATLAS (cut 11): a self-question naming an organ is answered from the atlas — the file, its switch, its smoke.
+  { name: 'which_organ', kind: 'a self-question naming an organ — answered from the organ atlas (file, switch, smoke)', maxMs: 180000,
+    variants: [
+      'Which organ owns your mood? Name the file and its switch.',
+      'What module handles your continuity check at boot, and what is its smoke?',
+      'Where is your wander coded — which file, and how would I turn it off?',
+    ],
+    expect: { route: 'converse', delivered: true } },
 ];
 
 // Saturation suite (--suite=saturation) — RUN 3: every run-2 KIND re-driven with FRESH phrasings

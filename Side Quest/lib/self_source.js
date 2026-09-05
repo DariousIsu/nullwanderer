@@ -134,6 +134,8 @@ function _mapCore({ maxChars = 9000, focus = '' } = {}) {
   const inbound = new Map();   // distinct requiring MODULES ("used by N"), not raw require() occurrences
   for (const meta of metas.values()) for (const t of new Set(meta.requires)) inbound.set(t, (inbound.get(t) || 0) + 1);
   const focusToks = String(focus || '').toLowerCase().match(/[a-z0-9]{3,}/g) || [];
+  // THE ORGAN ATLAS (cut 11): the organ a focus names leads the map, whatever its inbound rank.
+  const organBoost = (() => { try { return focus ? require('./organ_atlas').rankBoost(focus) : null; } catch { return null; } })();
   const rows = [];
   for (const [abs, meta] of metas) {
     const rel = path.relative(ROOT, abs).replace(/\\/g, '/');
@@ -146,6 +148,7 @@ function _mapCore({ maxChars = 9000, focus = '' } = {}) {
       const hay = (rel + ' ' + meta.header).toLowerCase();
       for (const t of focusToks) if (hay.includes(t)) score += 25;
     }
+    if (organBoost && rel === organBoost.rel) score += organBoost.boost;
     rows.push({ rel, meta, score, used: inbound.get(abs) || 0 });
   }
   rows.sort((a, b) => b.score - a.score || a.rel.localeCompare(b.rel));
@@ -292,7 +295,9 @@ const _REVIEW_VERB = /\b(?:re-?view\w*|evaluat\w*|audit\w*|analy[sz]\w*|assess\w
 function isSelfCodeReview(msg) {
   const s = String(msg || '');
   if (s.length < 6) return false;
-  return _REVIEW_VERB.test(s) && (_SELF_CODE.test(s) || _BARE_CODE.test(s));
+  if (_REVIEW_VERB.test(s) && (_SELF_CODE.test(s) || _BARE_CODE.test(s))) return true;
+  // THE ORGAN ATLAS (cut 11): "which organ owns my mood" is a self-question too — answered from the atlas through the same door.
+  try { return require('./organ_atlas').detectOrganQuestion(s); } catch { return false; }
 }
 
 module.exports = { ROOT, ALLOW_DIRS, resolveSafe, sourceMap, readSource, searchSource, sourceOutline, selfTest, allSourceFiles: _allSourceFiles, isSelfCodeReview };

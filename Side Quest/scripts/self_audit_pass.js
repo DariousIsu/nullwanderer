@@ -8,8 +8,8 @@
 try {
   const sa = require(require('path').join(__dirname, '..', 'lib', 'self_audit'));
   const corpus = sa.collectCorpus({});
-  const findings = sa.runDetectors(corpus, { nowMs: Date.now() });
-  console.log(JSON.stringify({ findings }));
+  const { findings, atlas } = sa.sweep(corpus, { nowMs: Date.now() });   // cut 11: the organ atlas rides the sweep
+  console.log(JSON.stringify({ findings, atlas }));
 } catch (e) {
   console.log(JSON.stringify({ findings: null, error: e.message }));
 }

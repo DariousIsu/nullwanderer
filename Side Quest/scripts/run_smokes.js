@@ -836,6 +836,8 @@ const smokes = [
   'smoke_wander.js',
   // OWNED GROWTH (cut 8, 09-05): the self_changes ledger (revise keeps the prior, retire never deletes, a position needs a citation, the announce once), the exploration organ's cure, the rail
   'smoke_self_changes.js',
+  // THE ORGAN ATLAS (cut 11, 09-05): the scan, the seeded table, stale entries as findings, which-organ lookups, the rank boost, the wiring
+  'smoke_organ_atlas.js',
   'smoke_core_dataset.js',
   // The core's probe (design §6/§8/§16): scores a candidate local model on the frozen holdout — the loose
   // JSON parser, the agreement scorer, the voice contract, the one-shot prompt — with an injected call.
