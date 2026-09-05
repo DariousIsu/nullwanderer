@@ -820,6 +820,8 @@ const smokes = [
   'smoke_ollama_entropy.js',
   // The core's dataset builder (docs/ZOE_CORE_SML_DESIGN_2026-09-05.md §5/§14): filters, the think/say
   // contract, the frozen holdout, the index — against a synthetic store, no DB file, no model.
+  // MEASURE A DAY (design §5 item 6, 09-05): the ledger over the persisted day — pure fixtures + source pins on the emitters
+  'smoke_day_measure.js',
   'smoke_core_dataset.js',
   // The core's probe (design §6/§8/§16): scores a candidate local model on the frozen holdout — the loose
   // JSON parser, the agreement scorer, the voice contract, the one-shot prompt — with an injected call.

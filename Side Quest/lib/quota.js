@@ -96,9 +96,11 @@ const EXPANSION_TIERS = new Set(['research', 'idle']);
 const LANE_TIER = { consciousness: 'presence', autonomy: 'presence' };
 function tierOf(lane) { const l = String(lane || ''); return TIER[l] != null ? l : (LANE_TIER[l] || 'idle'); }
 // THE PRESENCE CAP: a presence call is refused above this many tokens — the tier is cheap because its prompts
-// are bounded, never because the gate trusts the caller. (The autonomy tick measures ~5.5k; the loop's words
-// ~1k.) Measured 09-05: the whole tier's day is under 1% of the pool.
-const PRESENCE_MAX_TOKENS = 8192;
+// are bounded, never because the gate trusts the caller. Measured on boot_p315 (16:25): the autonomy tick's WHOLE
+// prompt (manifest + history + the decision contract) estimates at ~9.5k tokens, so the first cap of 8,192 refused
+// the decider it was built to admit ("presence prompt over its cap (~9,503 tokens > 8192)"). 12,288 admits the
+// tick as it is; a leaner tick is its own cut. The loop's words are ~1k. The tier's day stays under 2% of the pool.
+const PRESENCE_MAX_TOKENS = 12288;
 // Fraction of the pool each tier is allowed to consume. Interactive keeps a reserve nothing else can
 // touch: at 99% spent she must still be able to answer.
 const TIER_FLOOR = { interactive: 0.00, directed: 0.03, presence: 0.01, development: 0.05, research: 0.10, idle: 0.15 };

@@ -389,6 +389,7 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
   let _spent = 0, _budgetHit = false;
   const _tok = (u) => { try { return require('./usage_meter').tokensOf(u) || 0; } catch { return 0; } };
   const _done = (v) => {
+    if (_spent > 0) { try { require('./obs_bus').emit({ lane: 'operator', kind: 'run_spend', text: `${_spent} tokens over ${steps.length} step(s)${_budgetHit ? ' — budget reached' : ''}`, data: { tokens: _spent, steps: steps.length, turnCap: _turnCap, runBudget: _runBudget, hit: _budgetHit, lane: lane || null } }); } catch {} }
     if (_spent > 0) console.log(`[operator] run spend: ${_spent.toLocaleString()} tokens over ${steps.length} step(s) · turn cap ${_turnCap.toLocaleString()} · run budget ${_runBudget.toLocaleString()}${_budgetHit ? ' — REACHED, the final was compiled from the work gathered' : ''}${lane ? ` · lane ${lane}` : ''}`);
     return v;
   };

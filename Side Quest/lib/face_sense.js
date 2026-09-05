@@ -197,6 +197,7 @@ async function onFrame(frameB64, { deps = {} } = {}) {
         const agree = !!(pf && pg && pf.expression && pf.expression === pg.expression);
         if (agree) _abAgree++;
         (deps.log || console.log)(`[face] describe A/B ${_abPairs}/${abLimit} — face=${vm.face} "${pf ? `${pf.expression || '?'}: ${pf.note || ''}` : `failed (${(d && d.reason) || 'no answer'})`}" | global=${vm.global} "${pg ? `${pg.expression || '?'}: ${pg.note || ''}` : `failed (${(g && g.reason) || 'no answer'})`}" — ${agree ? 'AGREE' : 'differ'}`);
+        try { (deps.obsBus || require('./obs_bus')).emit({ lane: 'presence', kind: 'face_ab', text: `${_abPairs}/${abLimit} ${agree ? 'agree' : 'differ'}`, data: { pair: _abPairs, agree, face: vm.face, global: vm.global, fexpr: pf ? pf.expression : null, gexpr: pg ? pg.expression : null } }); } catch {}
         if (_abPairs >= abLimit) (deps.log || console.log)(`[face] describe A/B done — ${_abAgree}/${abLimit} agreed on the expression label; the face read stays on ${vm.face} (meta model.vision.face decides; camera.describe_ab=0 silences the trial)`);
         if ((!d || !d.ok) && g && g.ok) d = g;   // the cheap read failed → the global's line is the reading this once
       }

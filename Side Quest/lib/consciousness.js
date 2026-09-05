@@ -83,19 +83,25 @@ function create({ deps = {} } = {}) {
     if (msg.kind === 'reason') {
       stats.reasons++;
       log(`[consciousness] reason ${msg.op}#${msg.id} (${msg.budget_ms} ms) ${JSON.stringify(msg.context).slice(0, 120)}`);
+      // MEASURE A DAY (design §5 item 6): every request and its outcome lands in obs_events with a timestamp
+      const _ev = (kind, text, data) => { try { (deps.obsBus || require('./obs_bus')).emit({ lane: 'consciousness', kind, text, data }); } catch {} };
+      _ev('reason', `${msg.op}#${msg.id}${(msg.context || {}).act ? ' ' + msg.context.act : ''}`, { op: msg.op, id: msg.id, act: (msg.context || {}).act || null, budget_ms: msg.budget_ms });
       (deps.slowLoop || ((r) => require('./slow_loop').run(r, {})))(msg).then(async (ans) => {
         stats.answers++;
         if (ans && ans.ok && ans.op === 'perform' && TO_HIM.includes(ans.act)) {
           // THE ARRIVAL and THE REACH: to him, in the room and in the chat — or silence, which is a legitimate answer
+          _ev('say', ans.text ? `${ans.act}: ${ans.text}` : `${ans.act}: (silence)`, { act: ans.act, text: ans.text || '', silent: !ans.text, id: msg.id });
           if (ans.text) { log(`[consciousness] ${ans.act} — she says: "${ans.text}"`); try { await (deps.speak || (() => {}))(ans.text); } catch (e) { log(`[consciousness] speak failed: ${e.message}`); } try { deps.logSay && deps.logSay(ans.text, ans.act); } catch {} }
           else log(`[consciousness] ${ans.act} — she chose silence`);
         } else if (ans && ans.ok && ans.op === 'perform' && ans.text) {
           log(`[consciousness] to the room: "${ans.text}"`);
+          _ev('say', `room: ${ans.text}`, { act: (msg.context || {}).act || 'room', text: ans.text, silent: false, id: msg.id });
           try { await (deps.speak || (() => {}))(ans.text); } catch (e) { log(`[consciousness] speak failed: ${e.message}`); }
           try { deps.logTurn && deps.logTurn(ans.text); } catch {}
         } else if (ans && ans.ok && ans.op === 'reflect' && ans.text) {
           // a wondering: her thought lane, never spoken by itself
           log(`[consciousness] she wonders: "${ans.text.slice(0, 160)}"`);
+          _ev('wonder', ans.text.slice(0, 200), { text: ans.text.slice(0, 400), id: msg.id });
           try { deps.logThought && deps.logThought(ans.text); } catch {}
         } else if (msg.op === 'perform' && (!ans || !ans.ok) && !TO_HIM.includes((msg.context || {}).act)) {
           // his word after p309 ("also speak to the person"): the model was slow or failed — she still speaks, a plain line
@@ -103,7 +109,7 @@ function create({ deps = {} } = {}) {
           const line = ctx.act === 'greet' && ctx.name ? `Hi ${ctx.name}. Lucas stepped away, so his screens are covered for now. How are you?` : 'Hi. Lucas is away and his screens are covered. Who are you, and how can I help?';
           log(`[consciousness] reason ${msg.op}#${msg.id} → ${(ans && ans.error) || 'no answer'} — the plain line instead: "${line}"`);
           try { await (deps.speak || (() => {}))(line); } catch (e) { log(`[consciousness] speak failed: ${e.message}`); }
-        } else if (ans && !ans.ok) log(`[consciousness] reason ${msg.op}#${msg.id} → ${ans.error}`);
+        } else if (ans && !ans.ok) { log(`[consciousness] reason ${msg.op}#${msg.id} → ${ans.error}`); _ev('reason_fail', `${msg.op}#${msg.id}: ${ans.error}`, { op: msg.op, id: msg.id, error: String(ans.error || '').slice(0, 200) }); }
         percept({ sense: 'answer', id: msg.id, op: msg.op, ok: !!(ans && ans.ok), text: (ans && ans.text) || null });
       }).catch((e) => log(`[consciousness] slow loop threw: ${e.message}`));
     }

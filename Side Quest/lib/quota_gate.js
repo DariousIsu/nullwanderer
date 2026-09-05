@@ -166,8 +166,8 @@ function _noteClosure(lane, allowed, now = Date.now()) {
     const db = require('./db');
     const key = `quota.closed_since.${String(lane)}`;
     const cur = db.getMeta(key);
-    if (!allowed && !cur) db.setMeta(key, String(now));
-    else if (allowed && cur) { db.setMeta(key, ''); console.log(`[quota] ${lane} lane REOPENED after ${Math.max(1, Math.round((now - (parseInt(cur, 10) || now)) / 60000))}m closed`); }
+    if (!allowed && !cur) { db.setMeta(key, String(now)); try { require('./obs_bus').emit({ lane: 'quota', kind: 'closed', text: `${lane} closed`, data: { lane: String(lane) } }); } catch {} }
+    else if (allowed && cur) { db.setMeta(key, ''); try { require('./obs_bus').emit({ lane: 'quota', kind: 'reopened', text: `${lane} reopened`, data: { lane: String(lane), closedMs: now - (parseInt(cur, 10) || now) } }); } catch {} console.log(`[quota] ${lane} lane REOPENED after ${Math.max(1, Math.round((now - (parseInt(cur, 10) || now)) / 60000))}m closed`); }
   } catch { /* streak accounting must never break the gate */ }
 }
 function closedSince(lane) {
