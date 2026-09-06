@@ -204,7 +204,7 @@ async function onFrame(frameB64, { deps = {} } = {}) {
   const everyMs = Number((() => { try { return db.getMeta('camera.describe_every_ms'); } catch { return null; } })()) || 20000;
   if (reading.present && describeOn && !_describing && now - _lastDescribeAt >= everyMs) {
     _describing = true; _lastDescribeAt = now;
-    const describe = deps.describe || ((b64, model) => require('./vision').describe({ imageBase64: b64, prompt: DESCRIBE_PROMPT, ...(model ? { model } : {}) }));
+    const describe = deps.describe || ((b64, model) => require('./vision').describe({ imageBase64: b64, prompt: DESCRIBE_PROMPT, ...(model ? { model } : {}), lane: 'presence' }));
     const vm = deps.visionModels || (() => { try { const v = require('./vision'); return { face: v.visionModelFor('face').model, global: v.visionModel() }; } catch { return { face: null, global: null }; } })();
     const abLimit = Number(deps.abPairs) > 0 ? Number(deps.abPairs) : AB_PAIRS;
     let abOn = false; try { abOn = db.getMeta('camera.describe_ab') !== '0' && !!vm.face && !!vm.global && vm.face !== vm.global && _abPairs < abLimit; } catch {}

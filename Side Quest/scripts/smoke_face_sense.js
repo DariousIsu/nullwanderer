@@ -62,6 +62,14 @@ FS.setDevice(null);
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/\[face\] camera ABSENT — \$\{i\.reason\}/.test(main) && /face_sense'\)\.setDevice\(/.test(main), 'main logs the device or the absence and hands it to the sense');
   ok(/_lastCamAbsent\.reason !== _absentKey \|\| Date\.now\(\) - _lastCamAbsent\.at > 10 \* 60000/.test(main), 'the same absence is logged once per 10 min, not on every 30 s look');
+  // THE EXPRESSION READ RIDES THE PRESENCE LANE (09-06): five cloud describes in p329's first two minutes at 100% of the pool
+  const sense = fs.readFileSync(path.join(__dirname, '..', 'lib', 'face_sense.js'), 'utf8');
+  ok(/DESCRIBE_PROMPT, \.\.\.\(model \? \{ model \} : \{\}\), lane: 'presence' \}\)/.test(sense), 'the face sense names its lane on every cloud describe');
+  const VZ = require(path.join(LIB, 'vision'));
+  let seenArgs = null;
+  VZ.describe({ imageBase64: 'data:image/jpeg;base64,xxx', lane: 'presence', source: { tier: 'local', base: 'http://127.0.0.1:1' }, completeFn: async (a) => { seenArgs = a; return 'neutral'; } })
+    .then((d) => ok(d.ok && seenArgs && seenArgs.lane === 'presence' && seenArgs.model, '⭐ vision.describe threads the lane into the cloud call, so the quota gate can hold the expression read at the edge of the pool'));
+
   const pre = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
   ok(/cameraState: \(on, info\) => ipcRenderer\.invoke\('camera:state', !!on, info \|\| null\)/.test(pre), 'preload carries the device info');
   const consc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'consciousness.js'), 'utf8');

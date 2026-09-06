@@ -58,7 +58,9 @@ function _pickSource(tier) {
 // ---- IN: see an image ----
 const DEFAULT_VISION_PROMPT = 'Look closely at this image and describe exactly what you see — objects, people, any text, layout, colors, and mood. Be concrete and specific; do not guess at things that are not visible.';
 
-async function describe({ imageBase64, prompt = null, model = null, tier = null, completeFn = null, source = null } = {}) {
+// `lane` (09-06): the caller's quota lane — the face sense's 20 s expression read rides 'presence' so the gate can hold it at the
+// pool's edge (an unlabeled call defaults to 'interactive', which is never deferred: at 100% used it would spend the last 0.9%).
+async function describe({ imageBase64, prompt = null, model = null, tier = null, completeFn = null, source = null, lane = null } = {}) {
   const img = _stripDataUrl(imageBase64);
   if (!img) return { ok: false, reason: 'no image data' };
   const src = source || _pickSource(tier || visionTier());
@@ -71,7 +73,7 @@ async function describe({ imageBase64, prompt = null, model = null, tier = null,
     // could truncate prompt+image silently. LOCAL keeps 8192 (the warm-load rule). Fail-safe: 8192.
     let numCtx = 8192;
     if (src.tier === 'cloud') { try { numCtx = (await require('./cloud_window').resolve({ model: m, base: src.base, token: src.token })).num_ctx; } catch {} }
-    const text = await call({ model: m, messages, base: src.base, headers: src.token ? { Authorization: `Bearer ${src.token}` } : {}, options: { temperature: 0.2, num_ctx: numCtx }, timeoutMs: 120000 });
+    const text = await call({ model: m, messages, base: src.base, headers: src.token ? { Authorization: `Bearer ${src.token}` } : {}, options: { temperature: 0.2, num_ctx: numCtx }, timeoutMs: 120000, ...(lane ? { lane } : {}) });
     const out = (text || '').trim();
     if (!out) return { ok: false, reason: `vision model '${m}' returned nothing (is it available on the ${src.tier} tier?)`, model: m, tier: src.tier };
     return { ok: true, text: out, model: m, tier: src.tier };
