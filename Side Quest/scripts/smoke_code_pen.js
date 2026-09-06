@@ -62,13 +62,16 @@ ok(pen.touchedFiles('diff --git a/lib/x.js b/lib/x.js\n--- a/lib/x.js\n+++ b/lib
 }
 
 // ── diff parsing ──
-const GOOD_DIFF = `--- a/lib/scheduler.js
-+++ b/lib/scheduler.js
-@@ -1,3 +1,4 @@
- line
-+added
- line2
-`;
+// THE FIT (pen #16, 09-05): git's own --check runs at the propose door now, so every fixture that files must FIT its
+// file — built from the file's REAL first two lines (context, one inserted line, context: old 2 / new 3, the shape the
+// normalization pins read), the @@ header deliberately lying (the recount is pinned below).
+const realDiff = (rel, { repo = 'sq', header = false, mark = '// pen smoke' } = {}) => {
+  const r = pen.readSource(rel, { repo });
+  if (!r.ok) throw new Error(`fixture read failed: ${rel} — ${r.why}`);
+  const ls = String(r.text).split(/\r?\n/);
+  return `${header ? `diff --git a/${rel} b/${rel}\n` : ''}--- a/${rel}\n+++ b/${rel}\n@@ -1,3 +1,4 @@\n ${ls[0]}\n+${mark}\n ${ls[1]}\n`;
+};
+const GOOD_DIFF = realDiff('lib/scheduler.js');
 ok(JSON.stringify(pen.touchedFiles(GOOD_DIFF)) === JSON.stringify(['lib/scheduler.js']), 'touchedFiles reads the unified headers');
 ok(pen.touchedFiles('--- a/x.js\n+++ b/y.js\n').length === 2, 'a rename/multi-file diff lists every touched file');
 ok(pen.touchedFiles('no diff here').length === 0, 'prose is not a diff');
@@ -87,7 +90,7 @@ ok(pen.touchedFiles('no diff here').length === 0, 'prose is not a diff');
   // re-anchor against the REAL tree: context from main.js, start line claimed as 1
   const mainLines = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n').split('\n');
   const i1 = mainLines.findIndex((l) => l.includes('async function _applyPenProposal'));
-  const i2 = mainLines.findIndex((l) => l.includes('pen.normalizeDiff ? pen.normalizeDiff'));
+  const i2 = mainLines.findIndex((l) => l.includes('const fit = pen.fitDiff(p.diff, { repo })'));
   ok(i1 > 0 && i2 > i1 + 3, 'fixture anchors exist in main.js (wiring pin doubles as anchor)');
   const fx = ['--- a/main.js', '+++ b/main.js',
     '@@ -1,999 +1,999 @@', ` ${mainLines[i1]}`, '+INSERTED', ` ${mainLines[i1 + 1]}`, ` ${mainLines[i1 + 2]}`,
@@ -118,7 +121,7 @@ ok(pen.decide(p1.id, 'yes').ok === false, 'a decided proposal is not re-decidabl
 // the apply holds for her yes; her no retires it; the landed apply fills the card and advances the manifest.
 {
   const PR = require('../lib/personality_register');
-  const MOOD_DIFF = GOOD_DIFF.replace(/lib\/scheduler\.js/g, 'lib/mood.js');
+  const MOOD_DIFF = realDiff('lib/mood.js');
   const pm = pen.propose({ title: 'a softer decay for her mood', rationale: 'the evening read: her mood snaps back too fast', diff: MOOD_DIFF, bornFrom: 'smoke' });
   ok(pm.ok && pm.registerCards.length === 1 && pen.registerCardsOf(pm.id).join() === String(pm.registerCards[0]), 'a proposal touching lib/mood.js mints ONE consent card at propose time');
   const card = PR.get(pm.registerCards[0]);
@@ -152,7 +155,8 @@ ok(pen.get(p2.id).status === 'applied' && /green/.test(pen.get(p2.id).gate_note)
 // ── open-count discipline ──
 {
   const ids = [];
-  for (let i = 0; i < pen.MAX_OPEN_PROPOSALS; i++) { const r = pen.propose({ title: `fill-${i}`, diff: GOOD_DIFF }); if (r.ok) ids.push(r.id); }
+  const fillFiles = ['lib/scheduler.js', 'lib/db.js', 'lib/config.js', 'lib/board.js'];   // one change per file at a time (pen #16) — distinct files fill the count
+  for (let i = 0; i < pen.MAX_OPEN_PROPOSALS; i++) { const r = pen.propose({ title: `fill-${i}`, diff: realDiff(fillFiles[i]) }); if (r.ok) ids.push(r.id); }
   const over = pen.propose({ title: 'one too many', diff: GOOD_DIFF });
   ok(over.ok === false && /open/.test(over.why), `open proposals cap at ${pen.MAX_OPEN_PROPOSALS} — one-change-at-a-time discipline`);
   for (const id of ids) pen.decide(id, 'no');
@@ -243,11 +247,11 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
   ok(/isEditIntent\(_pv\)/.test(main) && /seedPenWork\(/.test(main), '⭐ v1.1 wiring: the order backstop routes edit intents to pen work BEFORE the road');
   ok(/kind === 'pen'\) return runPenWorkPass/.test(main), 'v1.1 wiring: the dispatcher routes pen threads to the pen pass');
   ok(/code_pen'\)\.workQueue\(\)\) backgroundWorkerPass/.test(main), 'v1.1 wiring: the worker loop drives the pen queue even during his directed work');
-  ok(/MAX_PEN_PASSES/.test(main) && /'gate-failed' \|\| p\.status === 'apply-failed'\) && !st\.redrove/.test(main), 'v1.1 wiring: pass cap = honest stall; ONE re-drive on a gate OR apply failure (a stale diff is the most re-drivable miss), never a grind');
+  ok(/MAX_PEN_PASSES/.test(main) && /'gate-failed' \|\| p\.status === 'apply-failed' \|\| p\.status === 'stale'\) && !st\.redrove/.test(main), 'v1.1 wiring: pass cap = honest stall; ONE re-drive on a gate OR apply failure (a stale diff is the most re-drivable miss), never a grind');
   ok(/codeModel\(\), require\('\.\/lib\/config'\)\.subconsciousModel\(\)/.test(main),
     '⭐ the SPECIALIST leads the pen chain (his 08-06 order: all programming calls through the code model; kimi 3 = one .env line)');
-  ok(/pen\.normalizeDiff \? pen\.normalizeDiff\(p\.diff\)/.test(main),
-    '⭐ the apply seam normalizes too — rows filed BEFORE the propose-door recount (like #2) land without a live-DB rewrite');
+  ok(/const fit = pen\.fitDiff\(p\.diff, \{ repo \}\)/.test(main) && /const diffText = fit\.text/.test(main),
+    '⭐ the apply seam FITS the diff (pen #16: normalize + audit + top-level headers + the target file\'s line endings) — rows filed BEFORE the propose-door recount (like #2) land without a live-DB rewrite');
   ok(/_penSay\(`Approval received/.test(main),
     '⭐ v1.2 wiring: his ✓ is acknowledged IMMEDIATELY in her voice (deterministic pipeline line, never model-authored)');
   ok((main.match(/if \(_penGateQuiet\(\)\)/g) || []).length >= 9 && /pen\.gate_until/.test(main),
@@ -353,7 +357,7 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
 
   // auditDiff carries the repo + the constitutional verdict across the whole touched set.
   const echoDiff = 'diff --git a/echo/x.py b/echo/x.py\n--- a/echo/x.py\n+++ b/echo/x.py\n@@ -1 +1 @@\n-a\n+b\n';   // a MODIFICATION of a file that is not there (pen #15's shape)
-  const echoRealDiff = 'diff --git a/echo/auth.py b/echo/auth.py\n--- a/echo/auth.py\n+++ b/echo/auth.py\n@@ -1 +1 @@\n-a\n+b\n';   // a file that IS on the Echo shelf
+  const echoRealDiff = realDiff('echo/auth.py', { repo: 'echo', header: true, mark: '# pen smoke' });   // a file that IS on the Echo shelf — its real lines (pen #16: the door checks the fit)
   const echoCreateDiff = 'diff --git a/echo/x.py b/echo/x.py\n--- /dev/null\n+++ b/echo/x.py\n@@ -0,0 +1 @@\n+a\n';   // a CREATION — never asked to exist
   const ea = pen.auditDiff(echoDiff, { repo: 'echo' });
   ok(ea.ok === false && /not on the echo shelf/.test(ea.why), 'auditDiff({repo:echo}) refuses a diff that MODIFIES a file that is not there (pen #15: invented context against a phantom path)');
@@ -361,7 +365,7 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
   ok(eaReal.ok === true && eaReal.repo === 'echo' && eaReal.files.join() === 'echo/http_routes.py' && eaReal.constitutional === false, 'a diff against a real Echo file, even with the top-level prefix, audits ok and the files come back root-relative');
   ok(pen.auditDiff('diff --git a/echo/brand_new.py b/echo/brand_new.py\n--- /dev/null\n+++ b/echo/brand_new.py\n@@ -0,0 +1 @@\n+x\n', { repo: 'echo' }).ok === true, 'a diff that CREATES a file (--- /dev/null) is not asked to exist');
   ok(pen.auditDiff('diff --git a/config.toml b/config.toml\n--- a/config.toml\n+++ b/config.toml\n@@ -1 +1 @@\n-a\n+b\n', { repo: 'echo' }).ok === false, 'auditDiff refuses an Echo diff that touches config.toml');
-  const consDiff = 'diff --git a/lib/code_pen.js b/lib/code_pen.js\n--- a/lib/code_pen.js\n+++ b/lib/code_pen.js\n@@ -1 +1 @@\n-a\n+b\n';
+  const consDiff = realDiff('lib/code_pen.js', { header: true });
   ok(pen.auditDiff(consDiff).constitutional === true, 'auditDiff flags a diff that touches a constitutional file');
   // a path is always resolved against ITS declared repo — an echo/… path under repo:sq points inside the
   // SQ tree (contained, harmless: apply would just miss a nonexistent SQ file), NOT at the Echo repo.
@@ -392,6 +396,82 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
   ok(/pen\.allow_constitutional/.test(mainSrc) && /p\.constitutional/.test(mainSrc), 'apply holds a boundary change behind the explicit one-shot');
   const tpSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'test_port.js'), 'utf8');
   ok(/\/pen\/allow-constitutional/.test(tpSrc) && /setMeta\('pen\.allow_constitutional', '1'\)/.test(tpSrc), 'the /pen/allow-constitutional door arms the one-shot (out-of-band)');
+}
+
+// ── ⭐ THE FIT (pen #16, 09-05): the diff as git sees it from the jail, the door that refuses lines she never read,
+// one change per file at a time, and the boot sweep that retires a card the tree moved under ──
+{
+  const db = require('../lib/db');
+  // clear the open count left by the sections above (the cap is pinned there; the fit is pinned here)
+  for (const r of db.getDb().prepare("SELECT id, status FROM code_proposals WHERE status IN ('proposed','approved','applying')").all()) pen.setStatus(r.id, r.status === 'proposed' ? 'rejected' : 'applied', { gateNote: 'fixture: cleared for the fit pins' });
+  // this folder is itself a sub-directory of its repo (the Desktop is the repo; "Side Quest/" is the prefix — a SPACE in
+  // every header git sees, and git takes it), so the pin measures git rather than assuming a top-level jail
+  const sqPrefix = String(require('child_process').execFileSync('git', ['rev-parse', '--show-prefix'], { cwd: path.join(__dirname, '..') })).trim().replace(/\\/g, '/');
+  const pre = (rel) => (sqPrefix + rel).replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&');   // the top-level form of an SQ path, regex-escaped
+  ok(pen._gitPrefix('sq') === sqPrefix && (sqPrefix === '' || sqPrefix.endsWith('/')) && pen._gitPrefix('echo') === 'nx-echo/', `the git top-level prefix is MEASURED from git: '${sqPrefix}' for this folder, nx-echo/ for the Echo jail (its repo is the parent folder)`);
+  ok(pen._relIn('nx-echo/echo/auth.py', 'echo') === 'echo/auth.py' && pen._relIn('echo/auth.py', 'echo') === 'echo/auth.py' && pen._relIn('nx-echo/echo/x.py', 'sq') === 'nx-echo/echo/x.py', '_relIn strips the measured prefix for Echo only');
+  // headers → the top-level form (a jail-relative path under a diff --git header is SKIPPED by git from a sub-directory, exit 0, nothing applied)
+  const ef = pen.fitDiff(realDiff('echo/auth.py', { repo: 'echo', header: true, mark: '# pen smoke' }), { repo: 'echo' });
+  ok(ef.ok && /^diff --git a\/nx-echo\/echo\/auth\.py b\/nx-echo\/echo\/auth\.py\r?$/m.test(ef.text) && /^--- a\/nx-echo\/echo\/auth\.py\r?$/m.test(ef.text) && /^\+\+\+ b\/nx-echo\/echo\/auth\.py\r?$/m.test(ef.text) && ef.files.join() === 'echo/auth.py',
+    '⭐ fitDiff rewrites every Echo header to the git top-level form and returns the files jail-relative');
+  const ef2 = pen.fitDiff(realDiff('echo/auth.py', { repo: 'echo', header: true, mark: '# pen smoke' }).replace(/echo\/auth\.py/g, 'nx-echo/echo/auth.py'), { repo: 'echo' });
+  ok(ef2.ok && !/nx-echo\/nx-echo/.test(ef2.text) && ef2.files.join() === 'echo/auth.py', 'a diff that already carries the prefix is not doubled');
+  ok(pen.checkFit(realDiff('echo/auth.py', { repo: 'echo', header: true, mark: '# pen smoke' }), { repo: 'echo' }).ok === true, "⭐ git's own --check passes an Echo diff written in LF against Echo's CRLF working tree (the fit matched the endings)");
+  // line endings: each file section takes its TARGET file's endings
+  const crlfRel = 'scripts/pen_smoke_fixture_crlf.txt', lfRel = 'scripts/pen_smoke_fixture_lf.txt';
+  const crlfAbs = path.join(__dirname, '..', crlfRel), lfAbs = path.join(__dirname, '..', lfRel);
+  fs.writeFileSync(crlfAbs, 'one\r\ntwo\r\nthree\r\n');
+  fs.writeFileSync(lfAbs, 'one\ntwo\nthree\n');
+  const lfDiff = (rel) => `--- a/${rel}\n+++ b/${rel}\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n`;
+  try {
+    const fc = pen.fitDiff(lfDiff(crlfRel));
+    const fl = pen.fitDiff(lfDiff(lfRel));
+    ok(fc.ok && new RegExp('^--- a/' + pre(crlfRel) + '\\r\\n').test(fc.text) && /\n-two\r\n\+TWO\r\n three\r\n$/.test(fc.text), '⭐ an LF diff against a CRLF file is re-ended CRLF, headers and hunk alike (git refuses the mismatch; --ignore-whitespace would land LF lines inside a CRLF file)');
+    ok(fl.ok && !/\r/.test(fl.text), 'an LF diff against an LF file stays LF');
+    const two = pen.fitDiff(lfDiff(crlfRel) + lfDiff(lfRel));
+    ok(two.ok && /crlf\.txt\r\n/.test(two.text) && new RegExp('--- a/' + pre(lfRel) + '\\n\\+\\+\\+ b/' + pre(lfRel) + '\\n').test(two.text) && (two.text.match(/\r\n/g) || []).length === 7, 'a two-file diff takes each section\'s own endings');
+    ok(pen.checkFit(lfDiff(crlfRel)).ok === true && pen.checkFit(lfDiff(lfRel)).ok === true, 'both fit under git --check');
+    // the door: a diff against lines that are not in the file is refused where "read it first" belongs
+    const invented = `--- a/${crlfRel}\n+++ b/${crlfRel}\n@@ -1,3 +1,3 @@\n one\n-dos\n+TWO\n three\n`;
+    const cf = pen.checkFit(invented);
+    ok(cf.ok === false && /does not fit the tree/.test(cf.why) && /patch does not apply/.test(cf.why) && /Read the file first/.test(cf.why), '⭐ checkFit returns git\'s why and the read-first instruction');
+    const pInv = pen.propose({ title: 'invented context', rationale: 'x', diff: invented, bornFrom: 'test' });
+    ok(pInv.ok === false && /does not fit the tree/.test(pInv.why), '⭐ propose() REFUSES a diff whose context is not in the file (pen #15 and #16 both carried lines that were never there; git refused them at his ✓ — the door is where the why belongs)');
+    const pInvEcho = pen.propose({ title: 'invented echo', rationale: 'x', diff: '--- a/echo/auth.py\n+++ b/echo/auth.py\n@@ -1,3 +1,3 @@\n """\n-echo.auth — invented\n+x\n \n', repo: 'echo', bornFrom: 'test' });
+    ok(pInvEcho.ok === false && /does not fit the tree/.test(pInvEcho.why), 'the same door stands for the Echo repo');
+    // one change per file at a time
+    const a1 = pen.propose({ title: 'first on the fixture', rationale: 'x', diff: lfDiff(crlfRel), bornFrom: 'test' });
+    ok(a1.ok === true && pen.get(a1.id).status === 'proposed', 'a fitting proposal files');
+    const a2 = pen.propose({ title: 'twin on the fixture', rationale: 'x', diff: lfDiff(crlfRel).replace('+TWO', '+2'), bornFrom: 'test' });
+    ok(a2.ok === false && new RegExp(`proposal #${a1.id} already stands on ${crlfRel}`).test(a2.why), '⭐ a second proposal on a file an OPEN proposal already names is refused with the standing number (#16 was #15\'s twin: two cards, the same lines)');
+    const c1 = pen.propose({ title: 'control on the lf fixture', rationale: 'x', diff: lfDiff(lfRel), bornFrom: 'test' });
+    ok(c1.ok === true, 'a different file files beside it');
+    // the boot sweep: the tree moves under a waiting card
+    fs.writeFileSync(crlfAbs, 'one\r\nzwei\r\nthree\r\n');
+    const sc = pen.bootCheck();
+    ok(sc.checked >= 2 && sc.stale.join() === String(a1.id) && sc.fits.includes(c1.id), '⭐ bootCheck re-checks every waiting card against the tree: the one the tree moved under is marked, the one that still fits is not');
+    ok(pen.get(a1.id).status === 'stale' && /the tree moved under this card/.test(pen.get(a1.id).gate_note) && /patch does not apply/.test(pen.get(a1.id).gate_note), 'the stale row carries git\'s why');
+    ok(pen.get(c1.id).status === 'proposed', 'the fitting card still waits on his word');
+    ok(pen.decide(a1.id, 'yes').ok === false, '⭐ a stale card cannot be ✓\'d — no approval is offered for a dead diff');
+    ok(!pen.pending().some((x) => x.id === `pen-${a1.id}`), 'and it leaves the decidable bar');
+    ok(pen.pipelineItems().some((x) => x.id === `pen-${a1.id}` && x.status === 'stale'), 'it shows once as a finished run so the outcome is seen');
+    ok(pen.markSeen(a1.id).ok === true, 'his ✕ clears it');
+    ok(pen.propose({ title: 'after the stale', rationale: 'x', diff: `--- a/${crlfRel}\n+++ b/${crlfRel}\n@@ -1,3 +1,3 @@\n one\n-zwei\n+TWO\n three\n`, bornFrom: 'test' }).ok === true, 'a fresh diff against the moved file files — the stale row no longer stands on it');
+    pen.decide(c1.id, 'no');
+  } finally {
+    try { fs.unlinkSync(crlfAbs); } catch {}
+    try { fs.unlinkSync(lfAbs); } catch {}
+  }
+  // the wiring
+  const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/pen\.bootCheck\(\)/.test(mainSrc) && /boot stale sweep/.test(mainSrc), 'wiring: the boot recovery sweep runs the stale sweep after it restores wedged rows');
+  ok(/p\.status === 'stale'\) && !st\.redrove/.test(mainSrc) && /p\.status !== 'gate-failed' \? ' — RE-READ the file fresh/.test(mainSrc), 'wiring: a stale proposal is re-drivable like an apply failure — she re-reads fresh');
+  ok(/const _refusedLast = \/\^— propose-change refused\/\.test\(_lastNote\)/.test(mainSrc) && /st\.passes >= 3 && !_refusedLast/.test(mainSrc) && /YOUR LAST DIFF WAS REFUSED AT THE DOOR/.test(mainSrc), '⭐ wiring: a door refusal re-opens the reading phase — the forced-diff escalation never again makes her invent the lines (#16 was written on a pass whose reads never touched the file)');
+  ok(/JSON\.parse\(p\.files \|\| '\[\]'\)\.map\(\(f\) => pen\._relIn\(f, repo\)\)/.test(mainSrc), 'wiring: the apply resolves stored file names through _relIn (rows filed before #16 carry the top-level prefix)');
+  const chatSrc = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'chat.js'), 'utf8');
+  ok(/stale: '⏳ stale/.test(chatSrc) && /\['applied', 'gate-failed', 'apply-failed', 'stale'\]\.includes\(it\.status\)/.test(chatSrc), 'wiring: the bar names a stale run and lets him clear it');
+  const wbSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'work_board.js'), 'utf8');
+  ok(/s === 'stale'/.test(wbSrc) && /'apply-failed','stale'\)/.test(wbSrc) && /stale: '#/.test(wbSrc), 'wiring: the work board settles a stale lane');
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);

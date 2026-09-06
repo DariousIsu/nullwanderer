@@ -91,7 +91,27 @@ function _rel(p) { return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '
 // while the jail said ok, and the diff she wrote carried context that never existed in the file. The prefix is stripped
 // for the Echo repo, so the same path reads, audits and applies.
 const ECHO_TOPLEVEL_PREFIX = /^nx-echo\//;
-function _relIn(p, repo) { const r = _rel(p); return _repoOf(repo) === 'echo' ? r.replace(ECHO_TOPLEVEL_PREFIX, '') : r; }
+// PEN #16 (09-05): the prefix is MEASURED from git (`rev-parse --show-prefix` in the jail; the constant is the fallback).
+// git apply, run from the jail, takes a header-less diff's paths from the cwd but a `diff --git` header's paths from the
+// TOP-LEVEL — and a jail-relative path under that header is SKIPPED silently (exit 0, nothing applied). Every header the
+// pen hands to git is rewritten to the top-level form (fitDiff), so both shapes land on the same file.
+const _prefixCache = {};
+function _gitPrefix(repo) {
+  const rk = _repoOf(repo);
+  if (_prefixCache[rk] !== undefined) return _prefixCache[rk];
+  let pfx = rk === 'echo' ? 'nx-echo/' : '';
+  try {
+    pfx = String(require('child_process').execFileSync('git', ['rev-parse', '--show-prefix'], { cwd: REPOS[rk], timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }) || '').trim().replace(/\\/g, '/');
+  } catch { /* no git here — the constant stands */ }
+  _prefixCache[rk] = pfx;
+  return pfx;
+}
+function _relIn(p, repo) {
+  const r = _rel(p);
+  const pfx = _gitPrefix(repo);
+  if (pfx && r.startsWith(pfx)) return r.slice(pfx.length);
+  return _repoOf(repo) === 'echo' ? r.replace(ECHO_TOPLEVEL_PREFIX, '') : r;
+}
 function _repoOf(repo) { return (repo === 'echo') ? 'echo' : 'sq'; }
 
 /** Path jail: resolves inside the chosen repo root and clears that repo's denylist, or {ok:false, why}.
@@ -214,7 +234,7 @@ function touchedFiles(diff, { repo = 'sq' } = {}) { return auditDiff(diff, { rep
  * lines. Zero matches leaves the claim as-is: a truly stale read still fails honestly at the
  * apply-check with the real why.
  */
-function normalizeDiff(diff) {
+function normalizeDiff(diff, { repo = 'sq' } = {}) {
   const src = String(diff || '').replace(/\r\n/g, '\n');
   const lines = src.split('\n');
   if (lines.length && lines[lines.length - 1] === '') lines.pop(); // the final newline, not a blank line
@@ -231,9 +251,9 @@ function normalizeDiff(diff) {
         fileLines = null; delta = 0; searchFrom = 0;
         // the JAIL applies to the re-anchor read too — a diff naming .env or data/ must not
         // pull those bytes into memory here (propose refuses it later; sq.db would OOM first)
-        if (fh[1] !== '/dev/null' && pathAllowed(fh[1]).ok) {
+        if (fh[1] !== '/dev/null' && pathAllowed(fh[1], { repo }).ok) {
           try {
-            const fp = path.join(REPO_ROOT, _rel(fh[1]));
+            const fp = path.join(REPOS[_repoOf(repo)], _relIn(fh[1], repo));
             if (fs.statSync(fp).size <= 2 * 1024 * 1024) {
               fileLines = fs.readFileSync(fp, 'utf8').replace(/\r\n/g, '\n').split('\n');
             }
@@ -278,6 +298,84 @@ function normalizeDiff(diff) {
   return out.join('\n') + '\n';
 }
 
+/** THE FIT (pen #16, 09-05): the diff as git must see it from the jail. Proposals #15 and #16 both died at his ✓ with
+ *  "patch does not apply" — #16 was #15's twin, filed on a pursuit pass whose reads never touched the file, against lines
+ *  that were never there; and under them stood two holes the tests never crossed: (1) git apply, run from a jail that is a
+ *  SUB-DIRECTORY of its repo (Echo's top-level is the parent folder), resolves a `diff --git` header's paths from the
+ *  top-level and SKIPS a jail-relative one silently (exit 0, nothing applied — the gate would then bless an unchanged
+ *  tree); (2) Echo's working tree is CRLF (core.autocrlf), so is main.js, and she writes LF — git refuses the mismatch
+ *  outright, and --ignore-whitespace would land LF lines inside a CRLF file. fitDiff normalizes, audits, rewrites every
+ *  header to the top-level form, and re-ends each file section in its TARGET file's own line endings. Pure text work;
+ *  returns { ok, text, files, constitutional, repo, prefix } or { ok:false, why }. */
+function fitDiff(diff, { repo = 'sq' } = {}) {
+  const rk = _repoOf(repo);
+  const d = normalizeDiff(diff, { repo: rk });
+  const audit = auditDiff(d, { repo: rk });
+  if (!audit.ok) return { ok: false, why: audit.why, files: audit.files || [], repo: rk };
+  const pfx = _gitPrefix(rk);
+  const top = (p) => `${pfx}${_relIn(p, rk)}`;
+  const targetEol = (rel) => {
+    try {
+      const j = pathAllowed(rel, { repo: rk });
+      if (!j.ok) return '\n';
+      const head = fs.readFileSync(j.abs).slice(0, 64 * 1024).toString('latin1');
+      const crlf = (head.match(/\r\n/g) || []).length, lf = (head.match(/[^\r]\n/g) || []).length;
+      return crlf > lf ? '\r\n' : '\n';
+    } catch { return '\n'; }
+  };
+  const lines = d.split('\n');
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  const secs = [];   // { start, eol, hasHeaders } — one per file section
+  let cur = null;
+  const startSec = (i) => { cur = { start: i, eol: '\n', hasHeaders: false }; secs.push(cur); };
+  for (let i = 0; i < lines.length; i++) {
+    const g = /^diff --git a\/(\S+) b\/(\S+)\s*$/.exec(lines[i]);
+    if (g) { startSec(i); lines[i] = `diff --git a/${top(g[1])} b/${top(g[2])}`; continue; }
+    // a header PAIR (--- immediately followed by +++) — a lone column-0 "--- x" is hunk body (audit F26)
+    if (/^--- /.test(lines[i]) && i + 1 < lines.length && /^\+\+\+ /.test(lines[i + 1])) {
+      if (!cur || cur.hasHeaders) startSec(i);
+      cur.hasHeaders = true;
+      const hs = [i, i + 1].map((k) => /^(---|\+\+\+) (?:([ab]\/)(\S+)|(\/dev\/null))(\t[^\n]*)?$/.exec(lines[k]));
+      if (hs[0] && hs[1]) {
+        const target = hs[0][3] || hs[1][3] || null;   // the --- side is the file git reads; a creation has only the +++ side
+        cur.eol = target ? targetEol(target) : '\n';
+        for (let n = 0; n < 2; n++) { const h = hs[n]; if (!h[3]) continue; lines[i + n] = `${h[1]} ${h[2]}${top(h[3])}${h[5] || ''}`; }
+      }
+      i++;
+    }
+  }
+  let text = '';
+  if (!secs.length) text = lines.join('\n') + '\n';
+  else {
+    if (secs[0].start > 0) text = lines.slice(0, secs[0].start).join('\n') + '\n';   // a preamble stays LF
+    for (let si = 0; si < secs.length; si++) {
+      const end = si + 1 < secs.length ? secs[si + 1].start : lines.length;
+      for (let i = secs[si].start; i < end; i++) text += lines[i] + secs[si].eol;
+    }
+  }
+  return { ok: true, text, files: audit.files, constitutional: audit.constitutional, repo: rk, prefix: pfx };
+}
+
+/** git's own word on the fit: `git apply --check` from the jail on the fitted text (read-only, ~50 ms). A refusal carries
+ *  git's why and the read-first instruction — the propose door is where it belongs, not his ✓. */
+let _fitSeq = 0;   // the temp file's name is a counter, never entropy (the entropy firewall routes randomness through lib/entropy)
+function checkFit(diff, { repo = 'sq' } = {}) {
+  const rk = _repoOf(repo);
+  const fit = fitDiff(diff, { repo: rk });
+  if (!fit.ok) return fit;
+  const tmp = path.join(require('os').tmpdir(), `pen_fit_${process.pid}_${++_fitSeq}.diff`);
+  try {
+    fs.writeFileSync(tmp, fit.text, 'utf8');
+    const r = require('child_process').spawnSync('git', ['apply', '--check', '--whitespace=nowarn', tmp], { cwd: REPOS[rk], timeout: 30000, encoding: 'utf8', windowsHide: true });
+    if (r.error) return { ...fit, ok: false, why: `the fit check could not run git (${r.error.message}) — nothing filed` };
+    if (r.status !== 0) {
+      const err = String(r.stderr || r.stdout || '').split('\n').map((l) => l.trim()).filter((l) => /^error:/.test(l)).slice(0, 2).map((l) => l.replace(/^error:\s*/, '')).join(' · ') || `git apply --check exit ${r.status}`;
+      return { ...fit, ok: false, why: `the diff does not fit the tree — ${err}. Read the file first (<source-read>) and diff against the EXACT lines you receive; a diff against lines you have not read is a diff against an invention` };
+    }
+    return fit;
+  } finally { try { fs.unlinkSync(tmp); } catch {} }
+}
+
 // ── the proposal store ────────────────────────────────────────────────────────────────────────
 function _ensure() {
   db.getDb().prepare(`CREATE TABLE IF NOT EXISTS code_proposals (
@@ -319,6 +417,18 @@ function propose({ title, rationale = '', diff, bornFrom = '', repo = 'sq', nowM
   if (!files.length) return { ok: false, why: 'no file headers found — send a real unified diff (--- a/x / +++ b/x)' };
   const open = db.getDb().prepare("SELECT COUNT(*) n FROM code_proposals WHERE status IN ('proposed','approved','applying')").get().n;
   if (open >= MAX_OPEN_PROPOSALS) return { ok: false, why: `${open} proposal(s) already open — the pen is one-change-at-a-time discipline; wait for Lucas's word` };
+  // ONE change per file at a time (pen #16, 09-05: #16 was #15's twin — two cards, the same lines): a proposal that names a
+  // file an OPEN proposal already names is refused with the standing number. Stored names may carry the git top-level
+  // prefix (rows filed before #16), so both sides compare jail-relative.
+  for (const o of db.getDb().prepare("SELECT id, files FROM code_proposals WHERE status IN ('proposed','approved','applying') AND COALESCE(repo, 'sq') = ?").all(rk)) {
+    let of = []; try { of = JSON.parse(o.files || '[]'); } catch {}
+    const hit = of.map((f) => _relIn(f, rk)).find((f) => files.includes(f));
+    if (hit) return { ok: false, why: `proposal #${o.id} already stands on ${hit} — one change per file at a time; wait for Lucas's card on it` };
+  }
+  // THE FIT (pen #16): git's own --check from the jail, on the diff as git will see it. #15 and #16 both carried context
+  // that was never in the file; git refused them at his ✓ — the door is where "read it first" belongs.
+  const fit = checkFit(d, { repo: rk });
+  if (!fit.ok) return { ok: false, why: fit.why };
   const r = db.getDb().prepare('INSERT INTO code_proposals (title, rationale, diff, files, status, born_from, repo, constitutional, created_ts, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .run(t.slice(0, 160), String(rationale).slice(0, 1200), d, JSON.stringify(files), 'proposed', String(bornFrom).slice(0, 120), rk, audit.constitutional ? 1 : 0, nowMs, nowMs);
   // THE REGISTER SEAM (cut 1's pen seam, 09-05): a proposal that touches one of HER persona files (lib/personality_register
@@ -385,6 +495,25 @@ function setStatus(id, status, { gateNote = null, nowMs = Date.now() } = {}) {
   return get(id);
 }
 
+/** THE STALE SWEEP (pen #16, 09-05): the tree moves under a waiting card — #15's substance landed by hand at 20:50, #16
+ *  (its twin, filed at 20:44) waited on the bar, and his ✓ at 21:42 ran git into "patch does not apply". At every boot,
+ *  every proposal still waiting on his word is re-checked against the tree it would land on; one that no longer fits is
+ *  marked 'stale' with git's why — no ✓ is offered for a dead diff, and the work thread that filed it re-reads fresh
+ *  (main.js treats stale like an apply failure). Returns { checked, stale: [ids], fits: [ids] }. */
+function bootCheck({ nowMs = Date.now() } = {}) {
+  _ensure();
+  const rows = db.getDb().prepare("SELECT id, title, diff, repo FROM code_proposals WHERE status = 'proposed'").all();
+  const stale = [], fits = [];
+  for (const r of rows) {
+    const f = checkFit(r.diff, { repo: r.repo });
+    if (f.ok) { fits.push(r.id); continue; }
+    setStatus(r.id, 'stale', { gateNote: `stale — the tree moved under this card before it was applied: ${String(f.why).slice(0, 700)}`, nowMs });
+    stale.push(r.id);
+    console.warn(`[pen] #${r.id} STALE at boot — "${String(r.title).slice(0, 80)}" no longer fits the ${_repoOf(r.repo)} tree; no ✓ offered`);
+  }
+  return { checked: rows.length, stale, fits };
+}
+
 /** Lucas's card decision. yes → 'approved' (main.js runs the enforce pipeline); no → 'rejected'. */
 function decide(id, decision) {
   const p = get(id);
@@ -429,7 +558,7 @@ const RUN_WINDOW_MS = 15 * 60 * 1000;
 function pipelineItems(nowMs = Date.now()) {
   _ensure();
   return db.getDb().prepare(`SELECT id, title, rationale, diff, files, status, gate_note, born_from, repo, constitutional, updated_ts FROM code_proposals
-    WHERE status IN ('approved','applying') OR (status IN ('applied','gate-failed','apply-failed') AND updated_ts > ? AND COALESCE(seen, 0) = 0)
+    WHERE status IN ('approved','applying') OR (status IN ('applied','gate-failed','apply-failed','stale') AND updated_ts > ? AND COALESCE(seen, 0) = 0)
     ORDER BY id DESC LIMIT 4`).all(nowMs - RUN_WINDOW_MS)
     .map((r) => ({ id: `pen-${r.id}`, kind: 'pen-run', text: `${_tag(r)}${r.title}`, status: r.status, verdict: null, detail: _detail(r) }));
 }
@@ -440,7 +569,7 @@ function markSeen(id) {
   _ensure();
   const p = get(id);
   if (!p) return { ok: false, why: `no proposal #${id}` };
-  if (!['applied', 'gate-failed', 'apply-failed', 'rejected'].includes(p.status)) return { ok: false, why: `proposal #${id} is ${p.status} — only a finished run clears` };
+  if (!['applied', 'gate-failed', 'apply-failed', 'rejected', 'stale'].includes(p.status)) return { ok: false, why: `proposal #${id} is ${p.status} — only a finished run clears` };
   db.getDb().prepare('UPDATE code_proposals SET seen = 1 WHERE id = ?').run(Number(id) || 0);
   return { ok: true, id: p.id };
 }
@@ -553,8 +682,8 @@ live at the next cycle.`;
 module.exports = {
   registerCardsOf, registerHold, onRegisterVerdict, landRegisterCards,
   REPO_ROOT, ECHO_ROOT, REPOS, MAX_READ_BYTES, MAX_DIFF_BYTES, MAX_OPEN_PROPOSALS, DENY_RE, ECHO_DENY_RE, CONSTITUTIONAL, PEN_QUEUE_KEY,
-  pathAllowed, readSource, listSource, touchedFiles, auditDiff, normalizeDiff, _isConstitutional,
-  propose, get, setStatus, decide, pending, pipelineItems, stage, markSeen, RUN_WINDOW_MS,
+  pathAllowed, readSource, listSource, touchedFiles, auditDiff, normalizeDiff, fitDiff, checkFit, _isConstitutional, _gitPrefix, _relIn,
+  propose, get, setStatus, decide, pending, pipelineItems, stage, markSeen, bootCheck, RUN_WINDOW_MS,
   seedPenWork, workQueue, dropFromQueue, penState, setPenState, isEditIntent,
   parseTags, stripTags, dispatch, buildPromptBlock,
 };

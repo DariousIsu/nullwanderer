@@ -1406,7 +1406,7 @@ const approvalsBar = document.getElementById('approvals-bar');
 const _expandedCards = new Set();
 const _collapsedCards = new Set();   // a running pen card auto-opens; this remembers his explicit collapse
 let _lastApprovalItems = null;
-const PEN_RUN_CHIP = { approved: '⚙ queued', applying: '⚙ applying + gating', applied: '✅ landed', 'gate-failed': '⛔ gate red — reverted', 'apply-failed': '⛔ apply failed' };
+const PEN_RUN_CHIP = { approved: '⚙ queued', applying: '⚙ applying + gating', applied: '✅ landed', 'gate-failed': '⛔ gate red — reverted', 'apply-failed': '⛔ apply failed', stale: '⏳ stale — the tree moved under it' };
 let _lastApprovalSig = '';
 function renderApprovals(items) {
   if (!approvalsBar) return;
@@ -1442,7 +1442,7 @@ function renderApprovals(items) {
         ${it.verdict ? `<span class="approval-verdict ${it.verdict}">${it.verdict === 'verified' ? '✓ verified' : '✗ rejected'}</span>` : ''}
         <span class="approval-text">#${escapeHtml(String(it.id))} — ${escapeHtml(it.text)}</span>
         ${isRun
-    ? (['applied', 'gate-failed', 'apply-failed'].includes(it.status) ? '<span class="approval-actions"><button type="button" class="approval-seen" title="Clear this finished run from the bar">✕</button></span>' : '')
+    ? (['applied', 'gate-failed', 'apply-failed', 'stale'].includes(it.status) ? '<span class="approval-actions"><button type="button" class="approval-seen" title="Clear this finished run from the bar">✕</button></span>' : '')
     : `<span class="approval-actions">
           <button type="button" class="approval-yes" title="${it.kind === 'blocked' ? 'Done / unblocked — she re-checks it' : it.kind === 'pen' ? 'Yes — apply it: clean tree, full gate, commit on green, revert on red' : 'Yes — build it (back into the open queue with your blessing)'}">✓ yes</button>
           <button type="button" class="approval-no" title="No — retire it">✗ no</button>

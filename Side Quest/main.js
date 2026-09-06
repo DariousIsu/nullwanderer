@@ -4199,7 +4199,7 @@ async function _applyPenProposal(id) {
     _penApplyBusy = false; _pushApprovalsBar();
     return;
   }
-  const files = JSON.parse(p.files || '[]');
+  const files = JSON.parse(p.files || '[]').map((f) => pen._relIn(f, repo));   // rows filed before pen #16 carry the git top-level prefix on Echo paths; pathspecs from the jail's cwd need the jail form
   pen.setStatus(id, 'applying', { gateNote: 'stage: checking the tree is clean on the touched files…' });
   console.log(`[pen] APPLY #${id} "${p.title}" — ${files.length} file(s): ${files.join(', ')}`);
   _pushApprovalsBar();
@@ -4225,21 +4225,21 @@ async function _applyPenProposal(id) {
       return;
     }
     const tmp = require('path').join(require('os').tmpdir(), `pen_${id}.diff`);
-    // normalize at apply time too: rows filed before the propose-door recount (or hand-filed)
-    // carry model-counted @@ headers, and git refuses lying arithmetic as "corrupt patch"
-    const diffText = pen.normalizeDiff ? pen.normalizeDiff(p.diff) : p.diff;
-    // the audit stands at the apply seam too (audit F0/F1: rename/copy/mode sections and
-    // parse-divergent paths reach git apply through rows the propose door never audited)
-    if (pen.auditDiff) {
-      const audit = pen.auditDiff(diffText, { repo });
-      if (!audit.ok) {
-        pen.setStatus(id, 'apply-failed', { gateNote: `refused at the apply seam: ${audit.why}` });
-        console.warn(`[pen] #${id} REFUSED at the apply-seam audit: ${audit.why}`);
-        _penSay(`Proposal #${id} was refused at the apply seam — ${audit.why}. Nothing changed.`);
-        return;
-      }
-      scope = [...new Set([...files, ...audit.files])];
+    // THE FIT (pen #16, 09-05): the diff as git must see it from this jail — normalized (rows filed before the propose-door
+    // recount carry model-counted @@ headers), audited (rename/copy/mode sections and parse-divergent paths never reach
+    // git), headers in the git top-level form (Echo's jail is a sub-directory of its repo; a jail-relative path under a
+    // `diff --git` header is SKIPPED silently), and each file section in the TARGET file's own line endings (Echo's tree
+    // is CRLF, so is main.js; she writes LF — git refuses the mismatch). The propose door ran the same fit; the tree may
+    // have moved since, so git's --check below stays the last word.
+    const fit = pen.fitDiff(p.diff, { repo });
+    if (!fit.ok) {
+      pen.setStatus(id, 'apply-failed', { gateNote: `refused at the apply seam: ${fit.why}` });
+      console.warn(`[pen] #${id} REFUSED at the apply-seam audit: ${fit.why}`);
+      _penSay(`Proposal #${id} was refused at the apply seam — ${fit.why}. Nothing changed.`);
+      return;
     }
+    const diffText = fit.text;
+    scope = [...new Set([...files, ...fit.files])];
     preExisting = scope.filter((f) => { try { return require('fs').existsSync(require('path').join(baseDir, f)); } catch { return false; } });
     createdByPatch = scope.filter((f) => !preExisting.includes(f));
     require('fs').writeFileSync(tmp, diffText.endsWith('\n') ? diffText : diffText + '\n', 'utf8');
@@ -4346,6 +4346,13 @@ setTimeout(async () => {
       }
     }
     if (rows.length) _pushApprovalsBar();
+    // THE STALE SWEEP (pen #16, 09-05): every card still waiting on his word is re-checked against the tree it would land
+    // on — one the tree moved under is marked stale with git's why, and no ✓ is offered for it.
+    try {
+      const sc = pen.bootCheck();
+      if (sc.stale.length) { console.warn(`[pen] boot stale sweep — ${sc.stale.length} of ${sc.checked} waiting proposal(s) no longer fit the tree: #${sc.stale.join(', #')}`); _pushApprovalsBar(); }
+      else if (sc.checked) console.log(`[pen] boot stale sweep — ${sc.checked} waiting proposal(s) still fit the tree`);
+    } catch (e) { console.error('[pen] boot stale sweep failed:', e.message); }
   } catch (e) { console.error('[pen] boot recovery sweep failed:', e.message); }
 }, 20000);
 // Desktop companion: hide (keep the process/state, just tuck her away) + toggle (create/show or hide).
@@ -19195,12 +19202,12 @@ async function runPenWorkPass(focus) {
       } catch {}
       console.log(`[pen] work thread #${focus.id} RESOLVED — proposal #${p.id} applied`);
       return { action: 'done' };
-    } else if ((p.status === 'gate-failed' || p.status === 'apply-failed') && !st.redrove) {
+    } else if ((p.status === 'gate-failed' || p.status === 'apply-failed' || p.status === 'stale') && !st.redrove) {
       // apply-failed = the diff didn't fit the tree (first live ✓: she diffed against a 6000-char
       // truncated read of a 7075b file) — the MOST re-drivable failure: re-read fresh, re-diff.
       st.redrove = true; st.proposalId = null;
       st.passes = 0;   // a FRESH budget (audit F35): a proposal filed on the last pass got zero re-drive passes and stalled with a false 'no proposal produced' — the pursuit reset passes, the redrive forgot to
-      st.gateNote = `${p.status}: ${p.gate_note || ''}${p.status === 'apply-failed' ? ' — RE-READ the file fresh with <source-read> and diff against the EXACT lines you receive; your last diff did not match the tree.' : ''}`;
+      st.gateNote = `${p.status}: ${p.gate_note || ''}${p.status !== 'gate-failed' ? ' — RE-READ the file fresh with <source-read> and diff against the EXACT lines you receive; your last diff did not match the tree.' : ''}`;
       st.notes = [];   // stale reads caused this — start the re-drive clean
       pen.setPenState(focus.id, st);
       console.log(`[pen] work thread #${focus.id}: proposal #${p.id} ${p.status} — ONE re-drive with the why (notes cleared for fresh reads)`);
@@ -19245,14 +19252,20 @@ async function runPenWorkPass(focus) {
     }
   }
   pen.setPenState(focus.id, st);
+  // PEN #16 (09-05): a diff refused at the door ("does not fit — read the file first") re-opens the reading phase — the
+  // forced-diff escalation below otherwise made her invent the lines she never held (#16 was written on pass 3 of a
+  // pursuit whose two reads never touched the target file)
+  const _lastNote = String(((st.notes || []).slice(-1)[0]) || '');
+  const _refusedLast = /^— propose-change refused/.test(_lastNote);
   const notes = (st.notes || []).slice(-8).join('\n');
   const prompt = `${pen.buildPromptBlock()}\n\nTHE CODE-CHANGE ORDER (Lucas): ${String(focus.content || '').slice(0, 500)}\n\n` +
     (st.gateNote ? `YOUR LAST PROPOSAL FAILED THE GATE — fix exactly this and re-file:\n${String(st.gateNote).slice(0, 800)}\n\n` : '') +
+    (_refusedLast ? `YOUR LAST DIFF WAS REFUSED AT THE DOOR — ${_lastNote.slice(2, 600)}\nRe-read the exact file with <source-read> and diff against the lines you receive.\n\n` : '') +
     (notes ? `WHAT YOU HAVE READ SO FAR (re-reading these is a WASTED pass — they are already above):\n${notes}\n\n` : '') +
     `Pass ${st.passes} of ${MAX_PEN_PASSES}. YOUR ENTIRE REPLY MUST BE TAGS — no prose, no plan, no preamble; words outside tags are DISCARDED and the pass is wasted. ` +
     // ESCALATION (p224 passes 2-5: she found lib/voice_guard.js on pass 1 and RE-READ it four more
     // times — a retry loop without replan). Past the reading phase, the only legal reply is the diff.
-    ((st.passes >= 3 && (st.notes || []).some((n) => n.startsWith('— ') && !n.startsWith('— dir')))
+    ((st.passes >= 3 && !_refusedLast && (st.notes || []).some((n) => n.startsWith('— ') && !n.startsWith('— dir')))
       ? `THE READING PHASE IS OVER — you hold the file contents above. Your ENTIRE reply must be exactly ONE <propose-change title="..." rationale="...">unified diff</propose-change> against lines you HOLD above. No more reads.`
       : `Either emit 1-3 <source-read path="..."/> tags for the exact files whose lines you need next, or — once you have READ the lines you intend to change — exactly one <propose-change title="..." rationale="...">unified diff</propose-change>. An announced intention is not an act; the tag is the act.`);
   // ROAD-WRITER PATTERN (fix-forward, p222 passes 1-2: ZERO reads — the operator agent-loop's own

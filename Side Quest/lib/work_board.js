@@ -19,7 +19,7 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&':
 // stage → progress, derived from the row's own status and stage note (data, never vibes)
 function _penProgress(status, note) {
   const s = String(status || '');
-  if (s === 'applied' || s === 'gate-failed' || s === 'apply-failed' || s === 'rejected') return 1;
+  if (s === 'applied' || s === 'gate-failed' || s === 'apply-failed' || s === 'rejected' || s === 'stale') return 1;
   if (s === 'applying') return /FULL gate running/.test(String(note || '')) ? 0.65 : 0.35;
   if (s === 'approved') return 0.2;
   return 0.1;
@@ -31,7 +31,7 @@ function snapshot({ nowMs = Date.now() } = {}) {
   try {
     const pen = require('./code_pen');
     const rows = db.getDb().prepare(`SELECT id, title, status, gate_note, updated_ts FROM code_proposals
-      WHERE status IN ('approved','applying') OR (status IN ('applied','gate-failed','apply-failed') AND updated_ts > ?)
+      WHERE status IN ('approved','applying') OR (status IN ('applied','gate-failed','apply-failed','stale') AND updated_ts > ?)
       ORDER BY updated_ts DESC LIMIT 6`).all(nowMs - pen.RUN_WINDOW_MS);
     for (const r of rows) {
       lanes.push({ kind: 'pen', id: `pen-${r.id}`, label: `PEN #${r.id} — ${String(r.title || '').slice(0, 60)}`,
@@ -62,7 +62,7 @@ function snapshot({ nowMs = Date.now() } = {}) {
 }
 
 const LANE_COLORS = {
-  applied: '#3fb26f', 'gate-failed': '#e05b5b', 'apply-failed': '#e05b5b', rejected: '#9a9aa6',
+  applied: '#3fb26f', 'gate-failed': '#e05b5b', 'apply-failed': '#e05b5b', rejected: '#9a9aa6', stale: '#b08a3c',
   applying: '#d9a03c', approved: '#d9a03c', open: '#a78bfa', active: '#4c9df8',
 };
 
