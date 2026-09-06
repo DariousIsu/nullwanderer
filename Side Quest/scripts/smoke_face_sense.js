@@ -61,6 +61,7 @@ FS.setDevice(null);
   ok(/camAbsent\(`no physical camera is present/.test(chat) && /cameraState\(true, \{ label: camLabel/.test(chat), 'an absent camera is said and reported; a live one is named to main');
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/\[face\] camera ABSENT — \$\{i\.reason\}/.test(main) && /face_sense'\)\.setDevice\(/.test(main), 'main logs the device or the absence and hands it to the sense');
+  ok(/_lastCamAbsent\.reason !== _absentKey \|\| Date\.now\(\) - _lastCamAbsent\.at > 10 \* 60000/.test(main), 'the same absence is logged once per 10 min, not on every 30 s look');
   const pre = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
   ok(/cameraState: \(on, info\) => ipcRenderer\.invoke\('camera:state', !!on, info \|\| null\)/.test(pre), 'preload carries the device info');
   const consc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'consciousness.js'), 'utf8');

@@ -900,12 +900,19 @@ try {
   ipcMain.handle('face:enroll', async (_e, b64) => {
     try { return await require('./lib/face_sense').enroll(String(b64 || ''), {}); } catch (e) { return { ok: false, error: e.message }; }
   });
+  let _lastCamAbsent = { reason: null, at: 0 };
   ipcMain.handle('camera:state', async (_e, on, info) => {
     const i = (info && typeof info === 'object') ? info : {};
     // THE DEVICE IS NAMED (09-06): the renderer says which device the frames come from, or why there is none —
     // 18 hours of black frames from a virtual source read as "no one is here" while the C920 sat un-enumerated
     // after the 09-05 hard reset, and the log said only "camera ON".
-    console.log(on
+    // the renderer looks for a camera again every 30 s while one is absent — the same absence is logged once per
+    // 10 min (or when its reason changes), never on every look (p329: two lines in the first three minutes)
+    const _absentKey = on ? null : (i.reason ? String(i.reason) : null);
+    const _sayAbsent = !!_absentKey && (_lastCamAbsent.reason !== _absentKey || Date.now() - _lastCamAbsent.at > 10 * 60000);
+    if (_sayAbsent) _lastCamAbsent = { reason: _absentKey, at: Date.now() };
+    if (on) _lastCamAbsent = { reason: null, at: 0 };
+    if (on || !_absentKey || _sayAbsent) console.log(on
       ? `[face] camera ON — through ${i.label || 'an unnamed device'}${i.devices ? ` (${i.devices} video device(s))` : ''}; one frame / 2 s; nothing stored`
       : (i.reason ? `[face] camera ABSENT — ${i.reason}` : '[face] camera OFF'));
     if (!on) { try { require('./lib/face_match').resident().stop(); } catch {} try { require('./lib/face_sense')._reset(); } catch {} }
