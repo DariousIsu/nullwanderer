@@ -39,6 +39,7 @@ const ROWS_SQL =
           COALESCE(llm_model_name, 'unknown') AS model,
           COALESCE(llm_token_count_total,
                    COALESCE(llm_token_count_prompt, 0) + COALESCE(llm_token_count_completion, 0)) AS tokens,
+          COALESCE(llm_token_count_completion, 0) AS out,
           tags_json
    FROM agent_trajectory
    WHERE id > ?
@@ -84,7 +85,7 @@ function _fold(rows, { now, um, sm, wm }) {
     if (!r.tokens || r.tokens <= 0) continue;
     const ts = (r.asserted_at || 0) * 1000;               // agent_trajectory stamps SECONDS
     if (!ts || now - ts > MAX_AGE_MS) continue;           // ring-order protection (header note)
-    um.record(r.model, r.tokens, Math.min(ts, now), laneOf(r.tags_json));   // never stamp the future; the row's lane
+    um.record(r.model, r.tokens, Math.min(ts, now), laneOf(r.tags_json), r.out || 0);   // never stamp the future; the row's lane; the completion share rides
     folded++;
   }
   sm(META_KEY, String(maxId));                            // advance even when all rows were skipped

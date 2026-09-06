@@ -124,46 +124,68 @@ const BURST_AHEAD_MARGIN = 0.02;
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
-// COMPUTE WEIGHT per model, in billions of parameters — the size term of params x tokens.
-//
-// Read from the model's OWN NAME wherever it states its size ("gemma4:31b" -> 31, "gpt-oss:120b" ->
-// 120, "mistral-large-3:675b" -> 675). Parsing the name rather than keeping a table means a model we
-// have never seen still gets a real weight the first time it is used, instead of silently costing
-// whatever the default happens to be — and this fleet changes often.
-//
-// Names that do not state a size get NAMED_WEIGHTS, and anything still unknown gets DEFAULT_WEIGHT.
-// The default is deliberately NOT small: an unrecognised model is more likely to be a new frontier
-// model than a tiny one, and under-weighting it is the expensive direction of the error.
-const NAMED_WEIGHTS = {
-  // stated sizes are absent from these names; figures are order-of-magnitude, for pacing only
-  'deepseek-v4-flash': 100,   // "flash" is the small tier, but it out-consumes 3x its count in
-                              // gemma4:31b calls on the dashboard, so it is NOT a 31b-class cost
-  'deepseek-v4-pro': 400,
-  'minimax-m3': 200,
-  'kimi-k2.6': 300,
-  'kimi-k2.7-code': 300,
-  'glm-5.2': 300,             // 756B MoE — kimi-class pacing (replier trial, Lucas 08-21)
+// THE UNIT IS THE PROVIDER'S PRICE (2026-09-06, ollama.com/pricing — his link): "usage is measured in tokens at each
+// model's rates", monthly credits ($60 Pro · $300 Max), NOT parameters × tokens. The parameter weights this file carried
+// mis-paced the fleet both ways: gpt-oss:120b (120 by its name) is priced like gemma4 ($0.15 vs $0.14 per million
+// input tokens), and kimi-k3 (100 by default — its name states no size) is the dearest model on the list ($3.00 in,
+// $15.00 out). The weight is now the model's INPUT price on the old scale (gemma4 = 31), so every ledger, mark and
+// limit keeps its unit while the RATIOS become the dashboard's; costOf prices completion tokens at the OUTPUT rate
+// when the caller carries the split (a completion token is 3–5× an input token). Prices are dollars per million
+// tokens; deepseek doubles at the provider's peak (Mon–Fri 12:00–18:00 UTC). An unknown model is priced at the kimi
+// class — under-pricing a new frontier model is the expensive direction of the error.
+const PRICES = {   // family substring → { in, cached, out, peak? } in $/M tokens (the longest matching key wins)
+  'deepseek-v4-flash': { in: 0.22, cached: 0.007, out: 0.66, peak: 2 },
+  'deepseek-v4-pro':   { in: 0.66, cached: 0.022, out: 1.98, peak: 2 },
+  'glm-5.3-flash':     { in: 0.15, cached: 0.03,  out: 0.50 },
+  'glm-5.3':           { in: 1.40, cached: 0.26,  out: 4.40 },
+  'glm-5.2':           { in: 1.40, cached: 0.26,  out: 4.40 },
+  'glm-5.1':           { in: 1.00, cached: 0.20,  out: 3.20 },
+  'gpt-oss:120b':      { in: 0.15, cached: 0.014, out: 0.60 },
+  'gpt-oss:20b':       { in: 0.07, cached: 0.035, out: 0.30 },
+  'kimi-k3':           { in: 3.00, cached: 0.30,  out: 15.00 },
+  'kimi-k2.7-code':    { in: 0.95, cached: 0.19,  out: 4.00 },
+  'kimi-k2.6':         { in: 0.95, cached: 0.16,  out: 4.00 },
+  'minimax-m3':        { in: 0.60, cached: 0.12,  out: 2.40 },
+  'minimax-m2.7':      { in: 0.30, cached: 0.06,  out: 1.20 },
+  'mistral-large-3':   { in: 0.50, cached: null,  out: 1.50 },
+  'nemotron-3-nano':   { in: 0.06, cached: null,  out: 0.24 },
+  'nemotron-3-super':  { in: 0.015, cached: 0.015, out: 0.60 },
+  'nemotron-3-ultra':  { in: 0.10, cached: 0.10,  out: 3.00 },
+  'qwen3.5':           { in: 0.60, cached: null,  out: 3.60 },
+  'gemma4':            { in: 0.14, cached: 0.05,  out: 0.40 },
 };
-const DEFAULT_WEIGHT = 100;
-
-/** Compute weight for a model, in billions of parameters. Pure; never throws. */
-function weightFor(model) {
+const DEFAULT_PRICE = { in: 0.95, cached: 0.16, out: 4.00 };   // the kimi class — an unknown model is not assumed small
+const GEMMA_IN = 0.14, GEMMA_WEIGHT = 31;                      // the old scale's anchor: gemma4:31b stays 31
+const PEAK_MULT = 2;
+/** The provider's peak window: Mon–Fri 12:00–18:00 UTC (deepseek doubles there). */
+function isPeak(now = Date.now()) { const d = new Date(now); const wd = d.getUTCDay(), h = d.getUTCHours(); return wd >= 1 && wd <= 5 && h >= 12 && h < 18; }
+const _PRICE_KEYS = Object.keys(PRICES).sort((a, b) => b.length - a.length);
+/** The price row for a model ($/M tokens), the peak applied when its family has one. Pure; never throws. */
+function priceFor(model, { now = Date.now() } = {}) {
   const m = String(model || '').toLowerCase().trim();
-  if (!m) return DEFAULT_WEIGHT;
-  for (const [k, w] of Object.entries(NAMED_WEIGHTS)) if (m.includes(k)) return w;
-  // "…:31b", "…-675b", "…120b" — the size the model states about itself.
-  const hit = m.match(/(\d+(?:\.\d+)?)\s*b\b/);
-  if (hit) { const n = Number(hit[1]); if (Number.isFinite(n) && n > 0) return n; }
-  return DEFAULT_WEIGHT;
+  let row = null;
+  if (m) for (const k of _PRICE_KEYS) if (m.includes(k)) { row = PRICES[k]; break; }
+  const p = row || DEFAULT_PRICE;
+  const mult = (p.peak && isPeak(now)) ? p.peak : 1;
+  return { in: p.in * mult, cached: p.cached == null ? null : p.cached * mult, out: p.out * mult, peak: mult > 1, known: !!row };
 }
+/** The weight on the old scale: the INPUT price relative to gemma4 (= 31). The ratios are the dashboard's. */
+function weightFor(model, { now = Date.now() } = {}) { return +(priceFor(model, { now }).in / GEMMA_IN * GEMMA_WEIGHT).toFixed(1); }
+/** The OUTPUT-side weight on the same scale. */
+function weightOutFor(model, { now = Date.now() } = {}) { return +(priceFor(model, { now }).out / GEMMA_IN * GEMMA_WEIGHT).toFixed(1); }
+const DEFAULT_WEIGHT = +(DEFAULT_PRICE.in / GEMMA_IN * GEMMA_WEIGHT).toFixed(1);
 
 /**
- * Compute cost of one call, in weight-tokens (billions-of-params x thousands-of-tokens).
- * Scaled by 1e-3 on tokens so the numbers stay human-sized in logs.
+ * Cost of one call in the ledger's units (weight × thousands of tokens). `tokens` is the whole call; `out`, when the
+ * caller carries the split, is the completion share priced at the output rate, the rest at the input rate. Without
+ * the split every token is priced as input — the conservative shape the older ring entries keep.
  */
-function costOf({ model = '', tokens = 0 } = {}) {
-  return weightFor(model) * (Math.max(0, num(tokens)) / 1000);
+function costOf({ model = '', tokens = 0, out = 0, now = Date.now() } = {}) {
+  const t = Math.max(0, num(tokens)), o = Math.min(t, Math.max(0, num(out)));
+  return weightFor(model, { now }) * ((t - o) / 1000) + weightOutFor(model, { now }) * (o / 1000);
 }
+/** Units → dollars (31 units = 1,000 gemma4 input tokens = $0.00014). */
+function dollarsOf(units) { return Math.max(0, num(units)) / GEMMA_WEIGHT * GEMMA_IN / 1000; }
 
 /**
  * Where the pool stands.
@@ -332,4 +354,4 @@ function describe(st) {
     + `${st.hoursLeft.toFixed(1)}h to reset · sustainable ${Math.round(st.pacePerHour).toLocaleString()}/h`;
 }
 
-module.exports = { state, check, describe, weightFor, costOf, tierOf, TIER, TIER_FLOOR, LANE_TIER, EXPANSION_TIERS, CHEAP_WEIGHT, CHEAP_FLOOR, PRESENCE_MAX_TOKENS, HOUR, NAMED_WEIGHTS, DEFAULT_WEIGHT, WINDOW_H, BURST_AHEAD_MARGIN };
+module.exports = { state, check, describe, weightFor, weightOutFor, costOf, priceFor, dollarsOf, isPeak, PRICES, DEFAULT_PRICE, PEAK_MULT, tierOf, TIER, TIER_FLOOR, LANE_TIER, EXPANSION_TIERS, CHEAP_WEIGHT, CHEAP_FLOOR, PRESENCE_MAX_TOKENS, HOUR, DEFAULT_WEIGHT, WINDOW_H, BURST_AHEAD_MARGIN };

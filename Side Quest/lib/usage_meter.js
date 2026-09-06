@@ -38,18 +38,21 @@ function _prune(now) {
 // model and lane inside the same minute; `calls` keeps the count the summary reports. Only the tail
 // merges: the ring stays time-ordered (the fold replays past rows in id order — still tail-merged).
 const BUCKET_MS = 60 * 1000;
-function record(model, tokens, ts = Date.now(), lane = '?') {
+function record(model, tokens, ts = Date.now(), lane = '?', out = 0) {
   const t = Number(tokens);
   if (!Number.isFinite(t) || t <= 0) return;
   const now = Number(ts) || Date.now();
   // LANE TAG (#115, Lucas-approved): the ring carries which lane spent, so the quota pace can
   // charge background against BACKGROUND spend instead of the all-lane hour. '?' = untagged.
+  // THE SPLIT (09-06, the provider's price list): `out` is the completion share of `tokens` — a completion token
+  // costs 3–5× an input token, so the pace prices it at the output rate; entries without it price as input.
   const m = String(model || 'unknown'), l = String(lane || '?'), tk = Math.round(t);
+  const ok = Math.min(tk, Math.max(0, Math.round(Number(out) || 0)));
   const last = _log.length ? _log[_log.length - 1] : null;
   if (last && last.model === m && last.lane === l && now >= last.ts && now - last.ts < BUCKET_MS) {
-    last.tokens += tk; last.calls = (last.calls || 1) + 1;
+    last.tokens += tk; last.calls = (last.calls || 1) + 1; last.out = (last.out || 0) + ok;
   } else {
-    _log.push({ model: m, tokens: tk, ts: now, lane: l, calls: 1 });
+    _log.push({ model: m, tokens: tk, ts: now, lane: l, calls: 1, out: ok });
   }
   _prune(now);
   _dirty = true;   // main.js drives persist() on its periodic tick + on shutdown (keeps this hot path pure)
@@ -104,20 +107,27 @@ function restore(now = Date.now(), { getMeta } = {}) {
 function summary({ now = Date.now(), windowMs = DAY_MS, rateMs = HOUR_MS } = {}) {
   const since = now - windowMs;
   const rateSince = now - rateMs;
-  let total = 0, rate = 0, calls = 0;
-  const by = {};
+  let total = 0, rate = 0, calls = 0, out = 0;
+  const by = {}, byOut = {};
   for (const e of _log) {
     if (e.ts < since) continue;
-    total += e.tokens; calls += e.calls || 1;
+    total += e.tokens; calls += e.calls || 1; out += e.out || 0;
     by[e.model] = (by[e.model] || 0) + e.tokens;
+    byOut[e.model] = (byOut[e.model] || 0) + (e.out || 0);
     if (e.ts >= rateSince) rate += e.tokens;
   }
   const byModel = Object.fromEntries(Object.entries(by).sort((a, b) => b[1] - a[1]));
-  return { total, byModel, rate, calls, windowMs, rateMs, sinceTs: since };
+  return { total, byModel, byModelOut: byOut, out, rate, calls, windowMs, rateMs, sinceTs: since };
 }
 
 // Compute total tokens from any Ollama-ish usage object (both the normalized {prompt_tokens,eval_tokens}
 // and the raw {prompt_eval_count,eval_count} shapes). Returns 0 on anything unusable.
+/** The completion share of an Ollama-ish usage object (either shape). 0 on anything unusable. */
+function outOf(usage) {
+  if (!usage || typeof usage !== 'object') return 0;
+  const e = Number(usage.eval_tokens) || Number(usage.eval_count) || 0;
+  return Number.isFinite(e) && e > 0 ? Math.round(e) : 0;
+}
 function tokensOf(usage) {
   if (!usage || typeof usage !== 'object') return 0;
   const p = Number(usage.prompt_tokens) || Number(usage.prompt_eval_count) || 0;
@@ -138,4 +148,4 @@ function lastSeen(model, before = Date.now()) {
 function reset() { _log.length = 0; }
 function _size() { return _log.length; }
 
-module.exports = { record, summary, byModelSince, tokensOf, lastSeen, reset, persist, restore, _size, DAY_MS, HOUR_MS, RETAIN_MS };
+module.exports = { record, summary, byModelSince, tokensOf, outOf, lastSeen, reset, persist, restore, _size, DAY_MS, HOUR_MS, RETAIN_MS };

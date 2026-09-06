@@ -62,5 +62,20 @@ ok(um.tokensOf(null) === 0 && um.tokensOf({}) === 0, 'tokensOf: junk → 0');
   ok(um.byModelSince(t0 - 1000, t0 + 1000, { lanes: ['directed'] }).m1 === 100, 'the lane tag survives persist/restore');
 }
 
+// THE SPLIT (09-06, the provider's price list): the completion share rides the ring and the summary
+{
+  um.reset();
+  const T2 = 2_000_000_000_000;
+  um.record('glm-5.2', 1000, T2 - 60 * 1000, 'interactive', 300);
+  um.record('glm-5.2', 500, T2 - 50 * 1000, 'interactive', 100);   // same minute bucket → merged, out summed
+  um.record('gemma4:31b', 800, T2 - 30 * 1000, 'research');         // no split → out 0
+  const sp = um.summary({ now: T2 });
+  ok(sp.byModelOut['glm-5.2'] === 400 && sp.byModelOut['gemma4:31b'] === 0 && sp.out === 400 && sp.byModel['glm-5.2'] === 1500 && um._size() === 2,
+    '⭐ record() carries the completion share; a minute bucket sums it; summary reports it per model and in total');
+  ok(um.outOf({ eval_count: 42 }) === 42 && um.outOf({ eval_tokens: 7 }) === 7 && um.outOf({}) === 0 && um.outOf(null) === 0, 'outOf reads both usage shapes and never throws');
+  um.record('x', 100, T2, 'idle', 5000);
+  ok(um.summary({ now: T2 }).byModelOut.x === 100, 'out never exceeds the tokens of the call');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -191,7 +191,7 @@ async function streamChat({ model, messages, options = {}, onToken, onThinking, 
             onThinking(obj.message.thinking);
           }
           if (obj.done) {
-            try { const um = require('./usage_meter'); um.record(obj.model || (body && body.model), um.tokensOf({ prompt_eval_count: obj.prompt_eval_count, eval_count: obj.eval_count }), Date.now(), lane); } catch {}   // meter real spend, lane-tagged (#115)
+            try { const um = require('./usage_meter'); um.record(obj.model || (body && body.model), um.tokensOf({ prompt_eval_count: obj.prompt_eval_count, eval_count: obj.eval_count }), Date.now(), lane, um.outOf({ eval_count: obj.eval_count })); } catch {}   // meter real spend, lane-tagged (#115)
             // THE WINDOW-EDGE TRIPWIRE (overrun guard, 08-26; caps-history round 4): a prompt riding
             // its num_ctx is SILENT quality loss — just-under leaves a generation sliver, just-over
             // front-truncates to half the window. One historic caller shipped 72k tokens (94%
@@ -312,7 +312,7 @@ async function completeDetailed({ model, messages, options = {}, base = OLLAMA_B
     // subconscious budget) can account real spend instead of estimating. prompt_eval_count = input,
     // eval_count = output.
     const usage = { prompt_tokens: (obj && obj.prompt_eval_count) || 0, eval_tokens: (obj && obj.eval_count) || 0 };
-    try { const um = require('./usage_meter'); um.record((obj && obj.model) || model, um.tokensOf(usage), Date.now(), lane); } catch {}   // meter real spend, lane-tagged (#115) (canvas usage pill)
+    try { const um = require('./usage_meter'); um.record((obj && obj.model) || model, um.tokensOf(usage), Date.now(), lane, um.outOf(usage)); } catch {}   // meter real spend, lane-tagged (#115) (canvas usage pill)
     // THE WINDOW-EDGE TRIPWIRE, blocking twin (overrun guard 08-26 — see the streamChat site).
     try {
       const _ctx = (options && options.num_ctx) || 8192;

@@ -37,9 +37,9 @@ function _computeSince(since, now) {
   try {
     const um = require('./usage_meter');
     const s = um.summary({ now, windowMs: Math.max(1, now - since) });
-    const byModel = (s && s.byModel) || {};
+    const byModel = (s && s.byModel) || {}, byOut = (s && s.byModelOut) || {};
     let total = 0;
-    for (const [model, tokens] of Object.entries(byModel)) total += quota.costOf({ model, tokens });
+    for (const [model, tokens] of Object.entries(byModel)) total += quota.costOf({ model, tokens, out: byOut[model] || 0, now });
     return total;
   } catch { return 0; }
 }

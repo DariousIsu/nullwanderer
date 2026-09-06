@@ -27,13 +27,23 @@ const POOL = 10_354_420;   // compute units, derived from the dashboard (see the
 const live = q.state({ limit: POOL, markPct: 0.908, markAt: NOW, spentSince: 0, resetAt: NOW + 48 * H, now: NOW });
 
 // --- ⭐ COMPUTE WEIGHTS: the term both earlier units were missing ---------------------------------
-ok(q.weightFor('gemma4:31b') === 31 && q.weightFor('gpt-oss:120b') === 120 && q.weightFor('mistral-large-3:675b') === 675,
-  '⭐ a model that states its size in its name is weighted by it');
-ok(q.weightFor('deepseek-v4-flash') === 100, 'a name with no size falls back to a named weight');
+// THE UNIT IS THE PROVIDER'S PRICE (09-06, ollama.com/pricing): the weight is the input price on the gemma4 = 31 scale
+const OFF = Date.UTC(2026, 8, 6, 2), PEAK = Date.UTC(2026, 8, 7, 13);   // a Sunday 02:00 UTC · a Monday 13:00 UTC
+ok(q.weightFor('gemma4:31b') === 31 && q.weightFor('gpt-oss:120b') === 33.2 && q.weightFor('mistral-large-3:675b') === 110.7,
+  '⭐ the weight is the provider\'s INPUT price on the gemma4 = 31 scale: gpt-oss:120b is priced like gemma4, not like a 120B model; mistral-large-3 by its price, not its 675b name');
+ok(q.weightFor('deepseek-v4-flash', { now: OFF }) === 48.7 && q.weightFor('deepseek-v4-flash', { now: PEAK }) === 97.4 && q.priceFor('deepseek-v4-flash', { now: PEAK }).peak === true && q.priceFor('gemma4', { now: PEAK }).peak === false,
+  '⭐ deepseek doubles at the provider\'s peak (Mon–Fri 12:00–18:00 UTC); nothing else does');
+ok(q.weightFor('kimi-k3:cloud') === 664.3 && q.weightFor('glm-5.2:cloud') === 310 && q.weightFor('kimi-k2.6') === 210.4 && q.weightFor('deepseek-v4-pro', { now: OFF }) === 146.1 && q.weightFor('glm-5.3-flash') === 33.2,
+  'the heavy tier by price: kimi-k3 $3.00 · glm-5.2 $1.40 · kimi-k2.6 $0.95 · deepseek-v4-pro $0.66 — and glm-5.3-flash sits with gemma4');
+ok(q.priceFor('some-model-nobody-has-seen').known === false && q.priceFor('kimi-k3').known === true && q.priceFor('kimi-k3').out === 15, 'priceFor says whether the list knows the model; kimi-k3 output is $15/M');
 ok(q.weightFor('some-model-nobody-has-seen') === q.DEFAULT_WEIGHT && q.DEFAULT_WEIGHT >= 100,
   '⭐ an UNKNOWN model is weighted HIGH — under-costing a new frontier model is the expensive error');
-ok(q.costOf({ model: 'mistral-large-3:675b', tokens: 2000 }) > 20 * q.costOf({ model: 'gemma4:31b', tokens: 2000 }),
-  '⭐ a 675b call costs >20x a 31b call of the same length — the spread no unweighted counter can see');
+ok(q.costOf({ model: 'kimi-k3', tokens: 2000 }) > 20 * q.costOf({ model: 'gemma4:31b', tokens: 2000 }),
+  '⭐ a kimi-k3 call costs >20x a gemma4 call of the same length — the spread the parameter weights could not see (kimi-k3 sat at the default 100)');
+ok(Math.abs(q.costOf({ model: 'glm-5.2', tokens: 1000, out: 500, now: OFF }) - 642.15) < 1e-6 && q.costOf({ model: 'glm-5.2', tokens: 1000, now: OFF }) === 310 && q.costOf({ model: 'glm-5.2', tokens: 1000, out: 5000 }) === q.costOf({ model: 'glm-5.2', tokens: 1000, out: 1000 }),
+  '⭐ completion tokens are priced at the OUTPUT rate (glm-5.2: $4.40/M vs $1.40); without the split every token prices as input; out never exceeds tokens');
+ok(Math.abs(q.dollarsOf(q.costOf({ model: 'gemma4:31b', tokens: 1_000_000 })) - 0.14) < 1e-9 && Math.abs(q.dollarsOf(q.costOf({ model: 'kimi-k3', tokens: 1_000_000, out: 1_000_000 })) - 15) < 0.01,
+  'dollarsOf turns the ledger\'s units back into the provider\'s dollars (a million gemma4 input tokens = $0.14; a million kimi-k3 output tokens = $15)');
 ok(q.costOf({ model: 'gemma4:31b', tokens: 0 }) === 0 && q.costOf({}) === 0, 'no tokens, no cost; empty input never throws');
 
 // --- state: the arithmetic that was missing ----------------------------------------------------
@@ -207,7 +217,7 @@ console.log('\nthe usage law (four tiers, queued-above, the cheap fleet, burst 0
   const cheap = q.check({ lane: 'idle', st, spentLastHour: hot, spentLastHourBg: hot, queuedAbove: true, model: 'gemma4:31b-cloud' });
   ok(cheap.allow === true && cheap.cheap === true && /cheap model/.test(cheap.reason), '⭐ a cheap-model call (weight ≤ 35: gemma4:31b, the swarm) never trips the pace gate');
   ok(q.check({ lane: 'idle', st, spentLastHour: hot, spentLastHourBg: hot, queuedAbove: true, model: 'deepseek-v4-flash' }).allow === false, 'a heavy model on the same hot hour is paced');
-  ok(q.CHEAP_WEIGHT === 35 && q.weightFor('gemma4:31b-cloud') <= q.CHEAP_WEIGHT && q.weightFor('gpt-oss:120b') > q.CHEAP_WEIGHT, 'the cheap line sits at 35B: gemma4:31b is under it, gpt-oss:120b is not');
+  ok(q.CHEAP_WEIGHT === 35 && q.weightFor('gemma4:31b-cloud') <= q.CHEAP_WEIGHT && q.weightFor('gpt-oss:120b') <= q.CHEAP_WEIGHT && q.weightFor('deepseek-v4-flash', { now: OFF }) > q.CHEAP_WEIGHT, '⭐ the cheap line at 35 now admits gpt-oss:120b (33.2 — priced like gemma4, his "crazy token efficient") and refuses deepseek-v4-flash (48.7)');
   const st86 = q.state({ limit: 1_000_000, markPct: 0.86, markAt: NOW, spentSince: 0, resetAt: NOW + 84 * H, now: NOW });
   ok(q.check({ lane: 'idle', st: st86, spentLastHour: 0, spentLastHourBg: 0, queuedAbove: false, model: 'deepseek-v4-flash' }).allow === false, 'the FLOOR still stops idle at 85% for the paid fleet — queued or not (his chat reserve survives everything)');
   ok(q.check({ lane: 'idle', st: st86, spentLastHour: 0, spentLastHourBg: 0, queuedAbove: false, model: 'gemma4:31b-cloud' }).allow === true, 'the cheap fleet passes the 85% floor (Lucas 09-05: the autonomic lanes were dead a day and a half into the week); it stops at 97%');
@@ -258,7 +268,8 @@ console.log('\nquota_gate.queuedAbove (a hermetic store):');
     // ── THE PRESENCE TIER (Lucas 09-05 16:20: "yes build all three, presence tier first") ──────────────────
     ok(q.tierOf('consciousness') === 'presence' && q.tierOf('autonomy') === 'presence' && q.tierOf('presence') === 'presence' && q.tierOf('whatever') === 'idle' && q.tierOf('') === 'idle', 'the slow loop and the autonomy tick are the presence tier under their own lane names; an unknown lane is still idle');
     const deep = q.state({ limit: POOL, markPct: 0.91, markAt: NOW, spentSince: 0, resetAt: NOW + 29 * H, now: NOW });   // the pool as measured 09-05 15:30
-    ok(!q.check({ lane: 'idle', st: deep, spentLastHour: 0, estimate: 10, model: 'gpt-oss:120b-cloud' }).allow, 'at 91% idle is still stopped (the 85% floor)');
+    ok(!q.check({ lane: 'idle', st: deep, spentLastHour: 0, estimate: 10, model: 'glm-5.2:cloud' }).allow, 'at 91% idle is still stopped for the paid fleet (the 85% floor)');
+    ok(q.check({ lane: 'idle', st: deep, spentLastHour: 0, estimate: 10, model: 'gpt-oss:120b-cloud' }).allow === true, '⭐ at 91% gpt-oss:120b still rides the cheap floor (97%) — priced with gemma4 by the list (09-06), so the machinery can move to it');
     const p1 = q.check({ lane: 'consciousness', st: deep, spentLastHour: 500_000, estimate: q.costOf({ model: 'glm-5.2:cloud', tokens: 1200 }), model: 'glm-5.2:cloud' });
     ok(p1.allow && /presence/.test(p1.reason), `the arrival's words pass at 91% with a hot hour: ${p1.reason}`);
     const p2 = q.check({ lane: 'autonomy', st: deep, spentLastHour: 500_000, estimate: q.costOf({ model: 'gpt-oss:120b-cloud', tokens: 9600 }), model: 'gpt-oss:120b-cloud' });
