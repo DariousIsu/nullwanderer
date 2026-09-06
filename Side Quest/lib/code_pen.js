@@ -86,6 +86,12 @@ const CONSTITUTIONAL = {
 function _isConstitutional(repo, rel) { return (CONSTITUTIONAL[repo] || []).some((re) => re.test(String(rel || ''))); }
 
 function _rel(p) { return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '').trim(); }
+// PEN #15 (09-05): the Echo repo's git top-level is the PARENT folder (NX ECHO), so git-style paths she sees carry an
+// `nx-echo/` prefix that the jail (rooted at nx-echo) does not — her read of `nx-echo/echo/http_routes.py` failed ENOENT
+// while the jail said ok, and the diff she wrote carried context that never existed in the file. The prefix is stripped
+// for the Echo repo, so the same path reads, audits and applies.
+const ECHO_TOPLEVEL_PREFIX = /^nx-echo\//;
+function _relIn(p, repo) { const r = _rel(p); return _repoOf(repo) === 'echo' ? r.replace(ECHO_TOPLEVEL_PREFIX, '') : r; }
 function _repoOf(repo) { return (repo === 'echo') ? 'echo' : 'sq'; }
 
 /** Path jail: resolves inside the chosen repo root and clears that repo's denylist, or {ok:false, why}.
@@ -93,7 +99,7 @@ function _repoOf(repo) { return (repo === 'echo') ? 'echo' : 'sq'; }
 function pathAllowed(rel, { repo = 'sq' } = {}) {
   const rk = _repoOf(repo);
   const root = REPOS[rk];
-  const r = _rel(rel);
+  const r = _relIn(rel, rk);
   if (!r) return { ok: false, why: 'empty path' };
   const abs = path.resolve(root, r);
   const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
@@ -170,14 +176,22 @@ function auditDiff(diff, { repo = 'sq' } = {}) {
       i++;
     }
   }
+  // a diff that MODIFIES a file (a `--- a/<path>` header, not /dev/null) must name a file that is on the shelf — pen #15's
+  // diff was against a path that did not exist under the jail and carried invented context; git apply caught it, but
+  // the propose door is where the why belongs ("read it first")
+  const modifies = new Set();
+  for (let i = 0; i + 1 < lines.length; i++) { const m = /^--- a\/(\S+)/.exec(lines[i]); if (m && /^\+\+\+ /.test(lines[i + 1])) modifies.add(_rel(m[1])); }
   let constitutional = false;
+  const normalized = [];
   for (const f of files) {
     if (/(^|\/)\.\.(\/|$)/.test(f)) return bad(`path climbs upward (${f})`);
     const j = pathAllowed(f, { repo });
     if (!j.ok) return { ok: false, why: `touched file "${f}": ${j.why}`, files: done() };
+    if (modifies.has(f)) { let there = false; try { there = require('fs').existsSync(j.abs); } catch {} if (!there) return { ok: false, why: `touched file "${f}" is not on the ${_repoOf(repo)} shelf — a diff against a file that is not there is a diff against an invention; read the file first (its path from the repo root)`, files: done() }; }
+    normalized.push(j.rel);
     if (j.constitutional) constitutional = true;
   }
-  return { ok: true, files: done(), repo: _repoOf(repo), constitutional };
+  return { ok: true, files: normalized, repo: _repoOf(repo), constitutional };
 }
 
 /** Files a unified diff touches — the audit's COMPLETE set (diff --git + header pairs). Pure. */

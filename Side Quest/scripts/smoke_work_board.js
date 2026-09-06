@@ -22,7 +22,7 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.log('  ✗', m); } };
 
 // ── lanes come from REAL rows ──
-const pr = pen.propose({ title: 'wb smoke change', rationale: 'wb', diff: '--- a/lib/x.js\n+++ b/lib/x.js\n@@ -1 +1 @@\n-a\n+b\n' });
+const pr = pen.propose({ title: 'wb smoke change', rationale: 'wb', diff: '--- a/lib/board.js\n+++ b/lib/board.js\n@@ -1 +1 @@\n-a\n+b\n' });
 ok(pr.ok === true, 'fixture proposal filed through the real door');
 pen.setStatus(pr.id, 'applying', { gateNote: 'stage: diff applied — FULL gate running (≈595 suites)…' });
 const s1 = wb.snapshot({});

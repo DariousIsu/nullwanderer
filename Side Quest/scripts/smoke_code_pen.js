@@ -339,6 +339,10 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
   ok(pen.pathAllowed('.venv/Scripts/python.exe', { repo: 'echo' }).ok === false, 'the Echo venv is sealed');
   ok(pen.pathAllowed('uv.lock', { repo: 'echo' }).ok === false, 'the Echo dependency lock is sealed — a pin bump is deliberate, not a pen edit');
   ok(pen.pathAllowed('../nx-echo-secrets', { repo: 'echo' }).ok === false, 'the Echo jail holds — no climbing out of the Echo root');
+  // PEN #15 (09-05): the Echo git top-level is the parent folder, so a git-style path carries `nx-echo/`; the jail strips it
+  const ep = pen.pathAllowed('nx-echo/echo/http_routes.py', { repo: 'echo' });
+  ok(ep.ok === true && ep.rel === 'echo/http_routes.py' && pen.readSource('nx-echo/echo/http_routes.py', { repo: 'echo' }).ok === true, 'an nx-echo/-prefixed Echo path resolves to the file under the jail and READS (pen #15 read ENOENT here)');
+  ok(pen.pathAllowed('nx-echo/echo/x.py', { repo: 'sq' }).rel === 'nx-echo/echo/x.py', 'the prefix is Echo\'s alone — an SQ path keeps its letters');
 
   // The CONSTITUTIONAL set: allowed to read/propose, but FLAGGED so it can't land on the reflexive ✓.
   for (const f of ['lib/security_scope.js', 'lib/code_pen.js', 'lib/self_source.js', 'lib/unified_gate.js', 'scripts/boot_cycle.py']) {
@@ -348,19 +352,25 @@ ok(pen.isEditIntent({ intent: 'edit:x', confidence: 0.3 }) === false, 'low confi
   ok(pen.pathAllowed('lib/scheduler.js').constitutional === false, 'an ordinary file is NOT constitutional');
 
   // auditDiff carries the repo + the constitutional verdict across the whole touched set.
-  const echoDiff = 'diff --git a/echo/x.py b/echo/x.py\n--- a/echo/x.py\n+++ b/echo/x.py\n@@ -1 +1 @@\n-a\n+b\n';
+  const echoDiff = 'diff --git a/echo/x.py b/echo/x.py\n--- a/echo/x.py\n+++ b/echo/x.py\n@@ -1 +1 @@\n-a\n+b\n';   // a MODIFICATION of a file that is not there (pen #15's shape)
+  const echoRealDiff = 'diff --git a/echo/auth.py b/echo/auth.py\n--- a/echo/auth.py\n+++ b/echo/auth.py\n@@ -1 +1 @@\n-a\n+b\n';   // a file that IS on the Echo shelf
+  const echoCreateDiff = 'diff --git a/echo/x.py b/echo/x.py\n--- /dev/null\n+++ b/echo/x.py\n@@ -0,0 +1 @@\n+a\n';   // a CREATION — never asked to exist
   const ea = pen.auditDiff(echoDiff, { repo: 'echo' });
-  ok(ea.ok === true && ea.repo === 'echo' && ea.constitutional === false, 'auditDiff({repo:echo}) accepts an Echo diff, marks the repo');
+  ok(ea.ok === false && /not on the echo shelf/.test(ea.why), 'auditDiff({repo:echo}) refuses a diff that MODIFIES a file that is not there (pen #15: invented context against a phantom path)');
+  const eaReal = pen.auditDiff('diff --git a/nx-echo/echo/http_routes.py b/nx-echo/echo/http_routes.py\n--- a/nx-echo/echo/http_routes.py\n+++ b/nx-echo/echo/http_routes.py\n@@ -1 +1 @@\n-a\n+b\n', { repo: 'echo' });
+  ok(eaReal.ok === true && eaReal.repo === 'echo' && eaReal.files.join() === 'echo/http_routes.py' && eaReal.constitutional === false, 'a diff against a real Echo file, even with the top-level prefix, audits ok and the files come back root-relative');
+  ok(pen.auditDiff('diff --git a/echo/brand_new.py b/echo/brand_new.py\n--- /dev/null\n+++ b/echo/brand_new.py\n@@ -0,0 +1 @@\n+x\n', { repo: 'echo' }).ok === true, 'a diff that CREATES a file (--- /dev/null) is not asked to exist');
   ok(pen.auditDiff('diff --git a/config.toml b/config.toml\n--- a/config.toml\n+++ b/config.toml\n@@ -1 +1 @@\n-a\n+b\n', { repo: 'echo' }).ok === false, 'auditDiff refuses an Echo diff that touches config.toml');
   const consDiff = 'diff --git a/lib/code_pen.js b/lib/code_pen.js\n--- a/lib/code_pen.js\n+++ b/lib/code_pen.js\n@@ -1 +1 @@\n-a\n+b\n';
   ok(pen.auditDiff(consDiff).constitutional === true, 'auditDiff flags a diff that touches a constitutional file');
   // a path is always resolved against ITS declared repo — an echo/… path under repo:sq points inside the
   // SQ tree (contained, harmless: apply would just miss a nonexistent SQ file), NOT at the Echo repo.
-  const sqResolve = pen.auditDiff(echoDiff, { repo: 'sq' });
+  const sqResolve = pen.auditDiff(echoCreateDiff, { repo: 'sq' });
   ok(sqResolve.ok === true && sqResolve.repo === 'sq' && sqResolve.files[0] === 'echo/x.py', 'an echo path under repo:sq resolves inside SQ (the repo declares the root; the jail still contains it)');
 
   // propose() records the repo + the constitutional flag on the row.
-  const rp = pen.propose({ title: 'echo cure', rationale: 'x', diff: echoDiff, repo: 'echo', bornFrom: 'test' });
+  ok(pen.propose({ title: 'echo phantom', rationale: 'x', diff: echoDiff, repo: 'echo', bornFrom: 'test' }).ok === false, 'propose({repo:echo}) refuses a diff that modifies a file that is not on the shelf (pen #15)');
+  const rp = pen.propose({ title: 'echo cure', rationale: 'x', diff: echoRealDiff, repo: 'echo', bornFrom: 'test' });
   ok(rp.ok && rp.repo === 'echo' && rp.constitutional === false, 'propose({repo:echo}) files an Echo proposal');
   ok(pen.get(rp.id).repo === 'echo', 'the row carries repo=echo');
   const rc = pen.propose({ title: 'boundary change', rationale: 'x', diff: consDiff, repo: 'sq', bornFrom: 'test' });
