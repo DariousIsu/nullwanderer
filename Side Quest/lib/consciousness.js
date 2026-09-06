@@ -198,7 +198,7 @@ function create({ deps = {} } = {}) {
     stats.ticks++;
     const t = now();
     // the senses every beat: the camera reading (the loop dedups), the fused presence
-    try { const f = (deps.face || (() => require('./face_sense').current()))(); if (f) percept({ sense: 'face', present: !!f.present, is_him: f.is_him === true, known: f.known || null, expression: f.expression || null, match: _match(f) }); } catch {}
+    try { const f = (deps.face || (() => require('./face_sense').current()))(); if (f && !f.dark) percept({ sense: 'face', present: !!f.present, is_him: f.is_him === true, known: f.known || null, expression: f.expression || null, match: _match(f) }); } catch {}
     try { const p = (deps.presence || (() => require('./presence_state').stored()))(); if (p && p.state) percept({ sense: 'presence', state: p.state }); } catch {}
     for (const p of pending) send(p);
     pending = [];

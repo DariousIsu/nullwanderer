@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld('sq', {
   // THE CAMERA SENSE (the wants project, cut 13): a small frame → her face pass; his enrollment; his switch; the gaze → the companion
   faceFrame: (b64) => ipcRenderer.invoke('face:frame', b64),
   faceEnroll: (b64) => ipcRenderer.invoke('face:enroll', b64),
-  cameraState: (on) => ipcRenderer.invoke('camera:state', !!on),
+  cameraState: (on, info) => ipcRenderer.invoke('camera:state', !!on, info || null),
   faceStatus: () => ipcRenderer.invoke('face:status'),   // { enrolled, live } — for the one-time "tap 👤" nudge
   onCompanionGaze: (cb) => ipcRenderer.on('companion:gaze', (_e, g) => cb(g)),
   // THE LOOK WORDS (cut 13's gaze half): the chat page says when she speaks to him (at_him) or thinks (away); main

@@ -20,6 +20,13 @@ const FACE_KEY = 'presence.face';
 const SAME_FACE_THRESHOLD = 0.40;     // webcam frame vs his enrollment (same camera, same light) — a touch looser than the Puller's 0.45
 const MIN_FRAME_GAP_MS = 1500;
 const FRESH_MS = 12000;               // a reading older than this is not "now"
+// THE DARK FRAME (09-06; his words: "The camera is still not seeing when I sit back down"): the machine's hard reset
+// on 09-05 15:13 left the C920 un-enumerated on USB, a default getUserMedia picked a VIRTUAL source that streams
+// black, and 18 hours of "frames, no face" read as "no one is in front of the camera" — her reach went to Discord
+// while he sat at the desk. A frame whose mean luminance sits under this bar is DARK: it says nothing about who is
+// there, and the line says so.
+const DARK_MEAN = 8;
+let _device = null;                   // what the renderer looks through — { label, absent, reason, at } — or null before it says
 const EXPRESSIONS = ['neutral', 'focused', 'happy', 'amused', 'tired', 'frustrated', 'sad', 'surprised', 'thinking'];
 const DESCRIBE_PROMPT = 'This is one frame from a webcam of a person at a computer. In ONE line under 20 words, describe their facial expression and body language concretely (posture, gaze, mouth, brow). Then on a second line write exactly one word from this list that fits best: ' + EXPRESSIONS.join(', ') + '.';
 
@@ -54,10 +61,13 @@ function gazeFromBox(box, img) {
   return { x: +clamp((cx / img[0]) * 2 - 1, -0.9, 0.9).toFixed(3), y: +clamp((cy / img[1]) * 2 - 1, -0.9, 0.9).toFixed(3) };
 }
 
+/** A black frame: the sidecar's mean luminance (0..255) under the dark bar. No mean → not known to be dark. */
+function _dark(r) { const m = Number(r && r.mean); return Number.isFinite(m) && m < DARK_MEAN; }
+
 /** The pure reading from one sidecar result (the largest face) + his enrollment. */
 function readingFrom(result, { owner = null, threshold = SAME_FACE_THRESHOLD, now = Date.now() } = {}) {
   const r = result || null;
-  if (!r || !r.ok) return { present: false, is_him: false, looking_at_screen: false, gaze: null, confidence: 0, faces: (r && r.faces) || 0, at: now, reason: (r && r.reason) || 'no-result' };
+  if (!r || !r.ok) return { present: false, is_him: false, looking_at_screen: false, gaze: null, confidence: 0, faces: (r && r.faces) || 0, at: now, dark: _dark(r), reason: (r && r.reason) || 'no-result' };
   const sim = owner ? cosine(r.embedding, owner) : null;
   const look = lookingFromKps(r.kps);
   return {
@@ -69,6 +79,7 @@ function readingFrom(result, { owner = null, threshold = SAME_FACE_THRESHOLD, no
     confidence: owner ? +sim.toFixed(3) : +(Number(r.det) || 0).toFixed(3),
     faces: Number(r.faces) || 1,
     at: now,
+    dark: false,
   };
 }
 
@@ -92,7 +103,12 @@ function parseDescribe(text) {
 
 /** One sentence for her manifest, in the second person about him — a reading she may answer, never a rule. */
 function line(reading, { now = Date.now(), name = 'Lucas' } = {}) {
-  if (!reading || !reading.at || now - reading.at > FRESH_MS) return null;
+  if (!reading || !reading.at || now - reading.at > FRESH_MS) {
+    // no fresh frame: when the renderer has said the camera is ABSENT, say that — never "no one is here"
+    if (_device && _device.absent) return `Camera: none is connected right now (${_device.reason || 'no physical camera is enumerated'}) — I cannot see whether anyone is at the desk.`;
+    return null;
+  }
+  if (reading.dark) return `Camera: dark — the lens shows only black (covered, unplugged, or a virtual source), so I cannot see whether anyone is at the desk.`;
   if (!reading.present) return `Camera: no one is in front of the camera right now.`;
   const who = reading.is_him === true ? `${name} is in the room` : reading.is_him === false ? 'someone (not enrolled as him) is in front of the camera' : 'a face is in front of the camera (no enrollment yet — ask him to tap "that\'s me")';
   const look = reading.looking_at_screen === true ? 'looking at the screen' : reading.looking_at_screen === false ? 'turned away from the screen' : null;
@@ -101,7 +117,7 @@ function line(reading, { now = Date.now(), name = 'Lucas' } = {}) {
 }
 
 // ── the organ (state + doors), deps-injected ─────────────────────────────────────────────────────────
-let _last = null, _lastLogAt = 0, _lastFrameAt = 0, _lastDescribeAt = 0, _describing = false, _lastPersistAt = 0;
+let _last = null, _lastLogAt = 0, _lastFrameAt = 0, _lastDescribeAt = 0, _describing = false, _lastPersistAt = 0, _lastDarkLogAt = 0;
 // THE CAMERA SWITCH A/B (his word 09-05 17:05: "we can give that a try"; the eval law: a model change is measured):
 // while the face purpose model differs from the global vision model, the first AB_PAIRS reads of a boot go to BOTH,
 // side by side in the log with the expression labels' agreement; the face model's line is the reading (the global's
@@ -178,6 +194,10 @@ async function onFrame(frameB64, { deps = {} } = {}) {
   const r = res && res.ok && res.results && res.results[0];
   _lastFrameB64 = frameB64;   // for an enrollment by his word ("remember this face as …"); never written anywhere
   const reading = readingFrom(r || { ok: false, reason: (res && res.error) || 'sidecar' }, { owner: owner(deps), now });
+  if (reading.dark && now - _lastDarkLogAt > 10 * 60000) {
+    _lastDarkLogAt = now;
+    (deps.log || console.log)(`[face] CAMERA DARK — the frames are black (mean ${Number(r && r.mean).toFixed(1)}): a covered lens, an unplugged camera, or a virtual source; no presence is read from them`);
+  }
   if (reading.present && reading.is_him === false) { const k = knownFrom(r && r.embedding, deps.people || people(deps)); reading.known = k ? k.name : null; reading.known_relation = k ? k.relation : null; }
   // the expression: the cloud read on a slow cadence, only for a present face, only with the switch on
   let describeOn = true; try { describeOn = db.getMeta('camera.describe') !== '0'; } catch {}
@@ -215,7 +235,7 @@ async function onFrame(frameB64, { deps = {} } = {}) {
   _persist(db, reading, ch);
   if (ch || now - _lastLogAt > 30000) {
     _lastLogAt = now;
-    (deps.log || console.log)(`[face] present=${reading.present ? 1 : 0} him=${reading.is_him === null ? '?' : reading.is_him ? 1 : 0} looking=${reading.looking_at_screen === null ? '?' : reading.looking_at_screen ? 1 : 0} expr=${reading.expression || '-'} (${reading.confidence}) faces=${reading.faces}`);
+    (deps.log || console.log)(`[face] present=${reading.present ? 1 : 0} him=${reading.is_him === null ? '?' : reading.is_him ? 1 : 0} looking=${reading.looking_at_screen === null ? '?' : reading.looking_at_screen ? 1 : 0} expr=${reading.expression || '-'} (${reading.confidence}) faces=${reading.faces}${reading.dark ? ' DARK' : ''}`);
   }
   if (ch) _emit(deps, reading);
   if (reading.gaze && deps.onGaze) { try { deps.onGaze(reading.gaze); } catch {} }
@@ -248,13 +268,16 @@ function look({ deps = {}, now = Date.now() } = {}) {
 }
 /** The status door for the renderer's nudge: is his face enrolled; is a frame arriving. */
 function status({ deps = {}, now = Date.now() } = {}) {
-  return { enrolled: !!owner(deps), live: !!(_lastFrameAt && now - _lastFrameAt < 10000), reading: _last };
+  return { enrolled: !!owner(deps), live: !!(_lastFrameAt && now - _lastFrameAt < 10000), reading: _last, device: _device };
 }
+/** The renderer's word on the device the frames come from — { label, absent, reason } — or null to forget it. */
+function setDevice(d) { _device = d ? { label: d.label || null, absent: !!d.absent, reason: d.reason || null, at: Date.now() } : null; }
+function device() { return _device; }
 
 /** The stored reading (for a fresh process / the presence fuse). */
 function stored(deps = {}) { try { const v = _db(deps).getMeta(FACE_KEY); return v ? JSON.parse(v) : null; } catch { return null; } }
 function awarenessLine({ deps = {}, now = Date.now() } = {}) { return line(_last || stored(deps), { now }); }
-function _reset() { _last = null; _lastLogAt = 0; _lastFrameAt = 0; _lastDescribeAt = 0; _describing = false; _lastPersistAt = 0; _abPairs = 0; _abAgree = 0; }
+function _reset() { _last = null; _lastLogAt = 0; _lastDarkLogAt = 0; _lastFrameAt = 0; _lastDescribeAt = 0; _describing = false; _lastPersistAt = 0; _abPairs = 0; _abAgree = 0; }
 
-module.exports = { readingFrom, lookingFromKps, gazeFromBox, changed, parseDescribe, line, cosine, enroll, enrollPerson, people, knownFrom, onFrame, look, status, current, stored, owner, awarenessLine, enabled,
+module.exports = { readingFrom, lookingFromKps, gazeFromBox, changed, parseDescribe, line, cosine, enroll, enrollPerson, people, knownFrom, onFrame, look, status, current, stored, owner, setDevice, device, DARK_MEAN, awarenessLine, enabled,
   OWNER_KEY, FACE_KEY, PEOPLE_KEY, SAME_FACE_THRESHOLD, FRESH_MS, EXPRESSIONS, DESCRIBE_PROMPT, AB_PAIRS, _reset };

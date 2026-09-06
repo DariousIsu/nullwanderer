@@ -56,15 +56,18 @@ function readRemoteSession({ env = process.env, queryOut = null } = {}) {
 function fuse({ now = Date.now(), lastUserTurnTs = 0, guard = null, calendarBusy = false, remoteSession = null, face = null, hisWord = null, prev = null, idleAwayMs = IDLE_AWAY_MS, cameraAwayMs = CAMERA_AWAY_MS } = {}) {
   const idleMs = lastUserTurnTs ? Math.max(0, now - lastUserTurnTs) : Infinity;
   const faceFresh = face && face.at && now - face.at <= FACE_FRESH_MS;
-  const himHere = !!(faceFresh && face.present && face.is_him !== false);
+  // A DARK frame is not an empty chair (09-06: 18 hours of black frames from a virtual source read as "no one" and
+  // routed her reach to Discord while he sat at the desk) — a dark reading says nothing about who is there.
+  const usable = !!(faceFresh && !face.dark);
+  const himHere = !!(usable && face.present && face.is_him !== false);
   // THE EMPTY CHAIR (09-05): the camera is what knows he left. A fresh reading with no one in frame starts a
   // clock (emptySince, kept across ticks while the frame stays empty; any face resets it). It makes him AWAY only
   // at a high bar — no one for cameraAwayMs AND no chat turn for as long — because a false "away" would route a
   // Discord DM to a man sitting at his own desk (his law: only when he is genuinely not at the desk).
-  const nobody = !!(faceFresh && !face.present);
+  const nobody = !!(usable && !face.present);
   // the clock runs whenever the camera stops seeing HIM — an empty chair or someone else in it (boot_p306, 09:08:
   // a stranger at the desk at match 0.06–0.31 while he was out; "someone else" alone never started it before).
-  const notHim = !!(faceFresh && (!face.present || face.is_him === false));
+  const notHim = !!(usable && (!face.present || face.is_him === false));
   const emptySince = notHim ? ((prev && prev.emptySince) || now) : null;
   const location = (hisWord && hisWord.location) || (prev && prev.location) || null;
   let state, reason;
@@ -74,7 +77,7 @@ function fuse({ now = Date.now(), lastUserTurnTs = 0, guard = null, calendarBusy
   else if (remoteSession && remoteSession.active) { state = 'remote'; reason = `remote session (${remoteSession.source}: ${remoteSession.name})`; }
   else if (himHere) { state = 'here'; reason = face.looking_at_screen ? 'camera: him, looking at the screen' : 'camera: him'; }
   else if (notHim && now - emptySince >= cameraAwayMs && idleMs >= cameraAwayMs) { state = 'away'; reason = `camera: ${nobody ? 'no one' : 'someone else, not him,'} for ${Math.round((now - emptySince) / 60000)}m`; }
-  else if (faceFresh && face.present && face.is_him === false) { state = idleMs < idleAwayMs ? 'here' : 'away'; reason = 'camera: someone else is in front of the camera'; }
+  else if (usable && face.present && face.is_him === false) { state = idleMs < idleAwayMs ? 'here' : 'away'; reason = 'camera: someone else is in front of the camera'; }
   else if (idleMs < idleAwayMs) { state = 'here'; reason = `active ${Math.round(idleMs / 60000)}m ago${nobody ? ', no one on camera' : ''}`; }
   else { state = 'away'; reason = idleMs === Infinity ? 'no turn yet' : `idle ${Math.round(idleMs / 60000)}m${nobody ? ', no one on camera' : ''}`; }
   const since = prev && prev.state === state && prev.since ? prev.since : now;

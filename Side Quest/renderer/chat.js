@@ -1180,19 +1180,60 @@ if (convoBtn && !(window.sq && window.sq.sttTranscribe && window.sq.onVoiceSpeak
     cv.getContext('2d').drawImage(video, 0, 0, 320, 240);
     return cv.toDataURL('image/jpeg', 0.6);   // in memory; handed over IPC, then dropped
   }
-  async function cameraStart() {
+  // THE DEVICE IS CHOSEN, NOT DEFAULTED (09-06; his words: "The camera is still not seeing when I sit back down"): the
+  // machine's hard reset on 09-05 15:13 left the C920 un-enumerated on USB (Windows: code 45, not connected), and a
+  // default getUserMedia picked a VIRTUAL source (AMD Privacy View / OBS Virtual Camera) that streams black — 18
+  // hours of "frames, no face" read as "no one is here". Now a PHYSICAL camera is picked by label (a remembered one
+  // first), a virtual source is never watched, an absent camera is SAID (once per 10 min) and looked for again on
+  // the device-change event and every 30 s, and main is told which device the frames come from.
+  const VIRTUAL_RE = /virtual|privacy view|\bobs\b|snap camera|xsplit|manycam|droidcam|\bcamo\b|iriun|epoccam|\bndi\b|nvidia broadcast/i;
+  let camLabel = null, _absentTimer = null, _absentSaidAt = 0;
+  async function pickCamera() {
+    let all = [];
+    try { all = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput'); } catch { all = []; }
+    let remembered = ''; try { remembered = String((await window.sq.getMeta('camera.device_label')) || ''); } catch {}
+    const real = all.filter((d) => d.label && !VIRTUAL_RE.test(d.label));
+    const unlabeled = all.filter((d) => !d.label);   // before the first grant Chromium hides labels — pick blind, then read the track's label
+    const device = (remembered && real.find((d) => d.label === remembered)) || real[0] || unlabeled[0] || null;
+    return { device, all };
+  }
+  function camAbsent(reason) {
+    cameraOn = false; camLabel = null;
+    try { if (camStream) camStream.getTracks().forEach((t) => t.stop()); } catch {} camStream = null;
+    cameraBtn.textContent = CAM_LABEL_OFF; cameraBtn.classList.remove('recording'); onair.style.display = 'none';
+    if (Date.now() - _absentSaidAt > 10 * 60000) { _absentSaidAt = Date.now(); renderEphemeral(`— camera: ${reason}. I will look again when a camera appears. —`); }
+    try { window.sq.cameraState(false, { reason }); } catch {}
+    if (!_absentTimer) _absentTimer = setInterval(() => { if (alwaysOnCamera && !cameraOn) cameraStart(); }, 30000);
+  }
+  async function cameraStart(depth = 0) {
+    const { device, all } = await pickCamera();
+    const names = all.map((d) => d.label || '(unnamed)').join(', ');
+    if (all.length && !device) { camAbsent(`no physical camera is present — only virtual sources (${names}); is the C920 connected?`); return; }
     try {
-      camStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 320 }, height: { ideal: 240 }, facingMode: 'user' }, audio: false });
-    } catch (e) { renderEphemeral(`— camera: ${(e && e.message) || 'not available'} —`); return; }
+      camStream = await navigator.mediaDevices.getUserMedia({ video: { ...(device && device.deviceId ? { deviceId: { exact: device.deviceId } } : { facingMode: 'user' }), width: { ideal: 320 }, height: { ideal: 240 } }, audio: false });
+    } catch (e) { camAbsent(`${(e && e.message) || 'not available'}${all.length ? '' : ' — no camera is enumerated; is the C920 connected?'}`); return; }
+    const track = camStream.getVideoTracks()[0];
+    camLabel = (track && track.label) || (device && device.label) || '';
+    if (camLabel && VIRTUAL_RE.test(camLabel)) {   // picked blind before the labels arrived, and it is a virtual source
+      try { camStream.getTracks().forEach((t) => t.stop()); } catch {} camStream = null;
+      if (depth < 1) { const again = await pickCamera(); if (again.device && again.device.label && !VIRTUAL_RE.test(again.device.label)) return cameraStart(depth + 1); }
+      camAbsent(`only a virtual source is available (${camLabel}) — a physical camera is not enumerated; is the C920 connected?`);
+      return;
+    }
+    if (_absentTimer) { clearInterval(_absentTimer); _absentTimer = null; }
+    try { if (camLabel) await window.sq.setMeta('camera.device_label', camLabel); } catch {}
     video = video || document.createElement('video'); video.muted = true; video.playsInline = true; video.srcObject = camStream;
     try { await video.play(); } catch {}
     cameraOn = true; cameraBtn.textContent = CAM_LABEL_ON; cameraBtn.classList.add('recording'); onair.style.display = 'inline';
+    onair.title = `The camera (${camLabel || 'unnamed device'}) is sampling one frame every 2 seconds for her face sense (nothing is stored)`;
     if (faceEnrollBtn) faceEnrollBtn.style.display = '';
-    try { await window.sq.cameraState(true); } catch {}
+    try { await window.sq.cameraState(true, { label: camLabel || null, devices: all.length }); } catch {}
     camTimer = setInterval(async () => { const f = grab(); if (!f) return; try { await window.sq.faceFrame(f); } catch {} }, 2000);
   }
+  try { navigator.mediaDevices.addEventListener('devicechange', () => { if (alwaysOnCamera && !cameraOn) cameraStart(); }); } catch {}
   function cameraStop() {
     cameraOn = false; if (camTimer) { clearInterval(camTimer); camTimer = null; }
+    if (_absentTimer) { clearInterval(_absentTimer); _absentTimer = null; }
     try { if (camStream) camStream.getTracks().forEach((t) => t.stop()); } catch {}
     camStream = null; if (video) { try { video.srcObject = null; } catch {} }
     cameraBtn.textContent = CAM_LABEL_OFF; cameraBtn.classList.remove('recording'); onair.style.display = 'none';

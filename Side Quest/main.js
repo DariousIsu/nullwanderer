@@ -900,9 +900,16 @@ try {
   ipcMain.handle('face:enroll', async (_e, b64) => {
     try { return await require('./lib/face_sense').enroll(String(b64 || ''), {}); } catch (e) { return { ok: false, error: e.message }; }
   });
-  ipcMain.handle('camera:state', async (_e, on) => {
-    console.log(`[face] camera ${on ? 'ON (his switch, this session; one frame / 2 s; nothing stored)' : 'OFF'}`);
+  ipcMain.handle('camera:state', async (_e, on, info) => {
+    const i = (info && typeof info === 'object') ? info : {};
+    // THE DEVICE IS NAMED (09-06): the renderer says which device the frames come from, or why there is none —
+    // 18 hours of black frames from a virtual source read as "no one is here" while the C920 sat un-enumerated
+    // after the 09-05 hard reset, and the log said only "camera ON".
+    console.log(on
+      ? `[face] camera ON — through ${i.label || 'an unnamed device'}${i.devices ? ` (${i.devices} video device(s))` : ''}; one frame / 2 s; nothing stored`
+      : (i.reason ? `[face] camera ABSENT — ${i.reason}` : '[face] camera OFF'));
     if (!on) { try { require('./lib/face_match').resident().stop(); } catch {} try { require('./lib/face_sense')._reset(); } catch {} }
+    try { require('./lib/face_sense').setDevice(on ? { label: i.label || null, absent: false } : (i.reason ? { label: null, absent: true, reason: String(i.reason).slice(0, 200) } : null)); } catch {}
     try { require('./lib/presence_state').tick({ deps: _presenceDeps() }); } catch {}
     return { ok: true, on: !!on };
   });

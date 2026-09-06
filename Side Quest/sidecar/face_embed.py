@@ -64,6 +64,10 @@ def _process(app, items):
             if img is None:
                 results.append({"id": rid, "ok": False, "reason": "load-failed"})
                 continue
+            # the frame's mean luminance (0..255) rides every result: a BLACK frame (a covered lens, an unplugged
+            # camera, a virtual source) is not "no one is here" — the sense reads it as dark (09-06: 18 hours of
+            # black frames from a virtual camera while the C920 sat un-enumerated after a hard reset)
+            mean = round(float(img.mean()), 2) if getattr(img, "size", 0) else 0.0
             faces = app.get(img)
             if not faces:
                 # Tightly-cropped headshot / thumbnail? The SCRFD detector needs some margin — pad and retry.
@@ -76,7 +80,7 @@ def _process(app, items):
                         if getattr(f, "kps", None) is not None:
                             f.kps = f.kps - pad
             if not faces:
-                results.append({"id": rid, "ok": False, "reason": "no-face", "faces": 0,
+                results.append({"id": rid, "ok": False, "reason": "no-face", "faces": 0, "mean": mean,
                                 "img": [int(img.shape[1]), int(img.shape[0])]})
                 continue
             faces.sort(key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]), reverse=True)
@@ -84,7 +88,7 @@ def _process(app, items):
             emb = np.asarray(f0.normed_embedding, dtype=float).tolist()
             box = [float(v) for v in np.asarray(f0.bbox, dtype=float).tolist()]
             kps = [[float(x), float(y)] for x, y in np.asarray(f0.kps, dtype=float).tolist()] if getattr(f0, "kps", None) is not None else None
-            results.append({"id": rid, "ok": True, "embedding": emb, "faces": len(faces), "box": box, "kps": kps,
+            results.append({"id": rid, "ok": True, "embedding": emb, "faces": len(faces), "box": box, "kps": kps, "mean": mean,
                             "img": [int(img.shape[1]), int(img.shape[0])],
                             "det": float(getattr(f0, "det_score", 0.0) or 0.0)})
         except Exception as e:

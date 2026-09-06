@@ -36,6 +36,38 @@ const r3 = FS.readingFrom(face(HIM), { owner: null, now: 1000 });
 ok(r3.present && r3.is_him === null, 'no enrollment yet → is_him unknown (null), never asserted');
 const r4 = FS.readingFrom({ ok: false, reason: 'no-face', faces: 0 }, { owner: HIM, now: 1000 });
 ok(!r4.present && r4.is_him === false && r4.gaze === null, 'no face → not present');
+// ── ⭐ THE DARK FRAME (09-06): a black frame says nothing about who is there ──
+const r5 = FS.readingFrom({ ok: false, reason: 'no-face', faces: 0, mean: 0.3 }, { owner: HIM, now: 1000 });
+ok(!r5.present && r5.dark === true && r4.dark === false && FS.readingFrom({ ...face(HIM), mean: 92.5 }, { owner: HIM, now: 1000 }).dark === false && FS.DARK_MEAN === 8,
+  '⭐ a BLACK frame (mean luminance under the dark bar) reads DARK, never "no one is here"; a lit frame never does (18 hours of black frames from a virtual source)');
+ok(/Camera: dark/.test(FS.line(r5, { now: 2000 })) && /cannot see whether anyone is at the desk/.test(FS.line(r5, { now: 2000 })), 'the dark line says the lens shows only black, not that the room is empty');
+FS.setDevice({ label: null, absent: true, reason: 'no physical camera is present — only virtual sources (AMD Privacy View camera, OBS Virtual Camera)' });
+ok(/Camera: none is connected right now/.test(FS.line(null, { now: 2000 })) && /AMD Privacy View/.test(FS.line(r4, { now: 99999 })) && FS.status().device.absent === true,
+  'with no fresh frame and the camera reported ABSENT, the line names the absence and its reason; status carries the device');
+FS.setDevice({ label: 'HD Pro Webcam C920', absent: false });
+ok(FS.line(null, { now: 2000 }) === null && FS.status().device.label === 'HD Pro Webcam C920', 'a named live device: no frame → no line (nothing to claim); status names the device');
+FS.setDevice(null);
+{
+  const now = 10 * 3600000;
+  const dark = PS.fuse({ now, lastUserTurnTs: now - 3 * 3600000, face: { at: now, present: false, dark: true }, prev: { state: 'here', since: now - 4 * 3600000, emptySince: now - 3 * 3600000 } });
+  const empty = PS.fuse({ now, lastUserTurnTs: now - 3 * 3600000, face: { at: now, present: false }, prev: { state: 'here', since: now - 4 * 3600000, emptySince: now - 3 * 3600000 } });
+  ok(!/camera/.test(dark.reason) && dark.emptySince === null && /camera: no one/.test(empty.reason) && empty.state === 'away',
+    `⭐ a dark frame says nothing to presence (${dark.state}: ${dark.reason}); a truly empty chair still reads away by the camera`);
+}
+{
+  const chat = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'chat.js'), 'utf8');
+  ok(/const VIRTUAL_RE = \/virtual\|privacy view/.test(chat) && /deviceId: \{ exact: device\.deviceId \}/.test(chat) && /addEventListener\('devicechange'/.test(chat) && /camera\.device_label/.test(chat),
+    '⭐ the renderer picks a PHYSICAL camera by label (a remembered one first), never a virtual source, and looks again on device change');
+  ok(/camAbsent\(`no physical camera is present/.test(chat) && /cameraState\(true, \{ label: camLabel/.test(chat), 'an absent camera is said and reported; a live one is named to main');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/\[face\] camera ABSENT — \$\{i\.reason\}/.test(main) && /face_sense'\)\.setDevice\(/.test(main), 'main logs the device or the absence and hands it to the sense');
+  const pre = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
+  ok(/cameraState: \(on, info\) => ipcRenderer\.invoke\('camera:state', !!on, info \|\| null\)/.test(pre), 'preload carries the device info');
+  const consc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'consciousness.js'), 'utf8');
+  ok(/if \(f && !f\.dark\) percept\(\{ sense: 'face'/.test(consc), 'the fast loop takes no face percept from a dark frame');
+  const py = fs.readFileSync(path.join(__dirname, '..', 'sidecar', 'face_embed.py'), 'utf8');
+  ok(/"mean": mean/.test(py) && /img\.mean\(\)/.test(py), 'the sidecar rides the frame\'s mean luminance on every result');
+}
 ok(FS.changed(null, r1) && FS.changed(r1, r2) && !FS.changed(r1, { ...r1, confidence: 0.5, gaze: { x: 0.2, y: 0 } }) && FS.changed(r1, { ...r1, expression: 'amused' }), 'changed(): presence, identity, attention, expression — not confidence or gaze');
 const pd = FS.parseDescribe('Leaning back, arms crossed, brow slightly furrowed, eyes on the screen.\nFocused');
 ok(pd.expression === 'focused' && /arms crossed/.test(pd.note), 'the cloud description parses into a note + one expression word');
@@ -108,7 +140,7 @@ ok(/no enrollment yet/.test(FS.line(r3, { now: 2000 })), 'without an enrollment 
   const faceSrc = fs.readFileSync(path.join(LIB, 'face_sense.js'), 'utf8');
   ok(!/writeFileSync|createWriteStream|appendFileSync/.test(faceSrc), 'face_sense never writes a file (no frame persists)');
   const chat = scan('renderer/chat.js');
-  const camSection = chat.slice(chat.indexOf('THE CAMERA SENSE'), chat.indexOf('THE CAMERA SENSE') + 6000);
+  const camSection = chat.slice(chat.indexOf('THE CAMERA SENSE'), chat.indexOf('THE CAMERA SENSE') + 12000);   // the section grew with the device picker (09-06)
   ok(camSection.length > 100 && !/toBlob|download|localStorage\.setItem\([^)]*frame|indexedDB|writeFile/.test(camSection), 'the renderer sampler never stores a frame');
   ok(/camera-off|camera OFF|Turn camera off/i.test(scan('lib/teams_canvas.js')) && /camera/i.test(scan('lib/meet_canvas.js')), 'the meeting camera-off rail is untouched');
   ok(/always_on_camera/.test(camSection) && /await cameraStart\(\)/.test(camSection) && /pref !== '0'/.test(camSection) && /on-air|onair/i.test(camSection), 'ALWAYS ON like the mic: auto-starts unless he turned it off (persisted always_on_camera), with an on-air indicator');
