@@ -26,6 +26,10 @@ const FRESH_MS = 12000;               // a reading older than this is not "now"
 // while he sat at the desk. A frame whose mean luminance sits under this bar is DARK: it says nothing about who is
 // there, and the line says so.
 const DARK_MEAN = 8;
+// THE GATE'S HOLD IS NOT A READ (09-06, p330: at 100% of the pool every 20 s expression read came back "quota: presence
+// deferred", was counted as an A/B pair and logged twice) — a deferral counts no pair, is said once per 10 min, and backs
+// the cadence off to this long before the next try
+const DESCRIBE_DEFER_BACKOFF_MS = 5 * 60000;
 let _device = null;                   // what the renderer looks through — { label, absent, reason, at } — or null before it says
 const EXPRESSIONS = ['neutral', 'focused', 'happy', 'amused', 'tired', 'frustrated', 'sad', 'surprised', 'thinking'];
 const DESCRIBE_PROMPT = 'This is one frame from a webcam of a person at a computer. In ONE line under 20 words, describe their facial expression and body language concretely (posture, gaze, mouth, brow). Then on a second line write exactly one word from this list that fits best: ' + EXPRESSIONS.join(', ') + '.';
@@ -117,7 +121,7 @@ function line(reading, { now = Date.now(), name = 'Lucas' } = {}) {
 }
 
 // ── the organ (state + doors), deps-injected ─────────────────────────────────────────────────────────
-let _last = null, _lastLogAt = 0, _lastFrameAt = 0, _lastDescribeAt = 0, _describing = false, _lastPersistAt = 0, _lastDarkLogAt = 0;
+let _last = null, _lastLogAt = 0, _lastFrameAt = 0, _lastDescribeAt = 0, _describing = false, _lastPersistAt = 0, _lastDarkLogAt = 0, _lastDeferLogAt = 0;
 // THE CAMERA SWITCH A/B (his word 09-05 17:05: "we can give that a try"; the eval law: a model change is measured):
 // while the face purpose model differs from the global vision model, the first AB_PAIRS reads of a boot go to BOTH,
 // side by side in the log with the expression labels' agreement; the face model's line is the reading (the global's
@@ -210,6 +214,11 @@ async function onFrame(frameB64, { deps = {} } = {}) {
     let abOn = false; try { abOn = db.getMeta('camera.describe_ab') !== '0' && !!vm.face && !!vm.global && vm.face !== vm.global && _abPairs < abLimit; } catch {}
     Promise.resolve().then(() => describe(frameB64, vm.face || undefined)).then(async (d0) => {
       let d = d0;
+      if (d && !d.ok && /deferred/.test(String(d.reason || ''))) {   // the quota gate held it: no pair, one line per 10 min, a 5 min backoff
+        _describing = false; _lastDescribeAt = now + DESCRIBE_DEFER_BACKOFF_MS - everyMs;
+        if (now - _lastDeferLogAt > 10 * 60000) { _lastDeferLogAt = now; (deps.log || console.log)(`[face] describe(cloud) held by the quota gate — ${d.reason}; no expression is read until the pool has room (next try in ${Math.round(DESCRIBE_DEFER_BACKOFF_MS / 60000)} min)`); }
+        return;
+      }
       if (abOn) {
         let g = null; try { g = await describe(frameB64, vm.global); } catch (e) { g = { ok: false, reason: e.message }; }
         _abPairs++;
@@ -277,7 +286,7 @@ function device() { return _device; }
 /** The stored reading (for a fresh process / the presence fuse). */
 function stored(deps = {}) { try { const v = _db(deps).getMeta(FACE_KEY); return v ? JSON.parse(v) : null; } catch { return null; } }
 function awarenessLine({ deps = {}, now = Date.now() } = {}) { return line(_last || stored(deps), { now }); }
-function _reset() { _last = null; _lastLogAt = 0; _lastDarkLogAt = 0; _lastFrameAt = 0; _lastDescribeAt = 0; _describing = false; _lastPersistAt = 0; _abPairs = 0; _abAgree = 0; }
+function _reset() { _last = null; _lastLogAt = 0; _lastDarkLogAt = 0; _lastDeferLogAt = 0; _lastFrameAt = 0; _lastDescribeAt = 0; _describing = false; _lastPersistAt = 0; _abPairs = 0; _abAgree = 0; }
 
-module.exports = { readingFrom, lookingFromKps, gazeFromBox, changed, parseDescribe, line, cosine, enroll, enrollPerson, people, knownFrom, onFrame, look, status, current, stored, owner, setDevice, device, DARK_MEAN, awarenessLine, enabled,
+module.exports = { readingFrom, lookingFromKps, gazeFromBox, changed, parseDescribe, line, cosine, enroll, enrollPerson, people, knownFrom, onFrame, look, status, current, stored, owner, setDevice, device, DARK_MEAN, DESCRIBE_DEFER_BACKOFF_MS, awarenessLine, enabled,
   OWNER_KEY, FACE_KEY, PEOPLE_KEY, SAME_FACE_THRESHOLD, FRESH_MS, EXPRESSIONS, DESCRIBE_PROMPT, AB_PAIRS, _reset };

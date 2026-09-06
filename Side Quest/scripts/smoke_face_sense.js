@@ -197,6 +197,23 @@ ok(/no enrollment yet/.test(FS.line(r3, { now: 2000 })), 'without an enrollment 
   const pendingP = res.embed([{ id: 'f', b64: 'slow' }]); spawned[1].emit('exit', 1);
   ok(!(await pendingP).ok && /exited/.test((await pendingP).error), 'a sidecar exit fails the pending job honestly');
   res.stop();
+  // ── THE GATE'S HOLD IS NOT A READ (09-06): a deferred describe counts no A/B pair, is said once, and backs off ──
+  {
+    FS._reset();
+    const meta2 = {}; const db2 = { getMeta: (k) => meta2[k], setMeta: (k, v) => { meta2[k] = v; } };
+    const logs2 = []; let calls = 0;
+    const held = async () => { calls++; return { ok: false, reason: 'quota: presence deferred — presence stops at 99% of the pool (now 100%)' }; };
+    const deps2 = (now) => ({ db: db2, now, minGapMs: 0, embed: async () => ({ ok: true, results: [face(HIM)] }), describe: held, visionModels: { face: 'gemma4:31b-cloud', global: 'minimax-m3:cloud' }, log: (m) => logs2.push(m), obsBus: { emit: () => {} } });
+    meta2[FS.OWNER_KEY] = JSON.stringify(HIM);
+    const t0 = 1000000;
+    await FS.onFrame('f1', { deps: deps2(t0) }); await new Promise((r) => setTimeout(r, 20));
+    await FS.onFrame('f2', { deps: deps2(t0 + 25000) }); await new Promise((r) => setTimeout(r, 20));
+    ok(calls === 1 && !logs2.some((m) => /describe A\/B/.test(m)) && logs2.filter((m) => /held by the quota gate/.test(m)).length === 1,
+      `⭐ a deferred expression read counts NO A/B pair, is said once, and is not retried 25 s later (calls=${calls})`);
+    await FS.onFrame('f3', { deps: deps2(t0 + FS.DESCRIBE_DEFER_BACKOFF_MS + 1000) }); await new Promise((r) => setTimeout(r, 20));
+    ok(calls === 2 && logs2.filter((m) => /held by the quota gate/.test(m)).length === 1, 'after the backoff it tries again, and the same hold is not said twice inside 10 min');
+    FS._reset();
+  }
   console.log(`\nsmoke_face_sense: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error('smoke threw:', e); process.exit(1); });
